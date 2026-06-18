@@ -12,7 +12,8 @@
     "agent:init": "node packages/agent/src/cli.js init",
     "agent:hydrate": "node packages/agent/src/cli.js hydrate",
     "agent:sync": "node packages/agent/src/cli.js sync-once",
-    "agent:watch": "node packages/agent/src/cli.js watch"
+    "agent:watch": "node packages/agent/src/cli.js watch",
+    "agent:status": "node packages/agent/src/cli.js status-server"
   },
   "dependencies": {
     "@radix-ui/react-dropdown-menu": "^2.1.15",

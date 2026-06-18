@@ -24,7 +24,7 @@ import { cn } from '@/lib/utils'
 const folderColorMap: Record<string, string> = {
   hop: 'bg-hop/15 text-hop ring-hop/30',
   grape: 'bg-grape/15 text-grape ring-grape/30',
-  amber: 'bg-amber-star/15 text-amber-star ring-amber-star/30',
+  amber: 'bg-hop-amber/15 text-hop-amber ring-hop-amber/30',
   sky: 'bg-sky-500/15 text-sky-500 ring-sky-500/30',
 }
 
@@ -46,7 +46,7 @@ export function DriveSection() {
           >
             <span>Workspace</span>
             <ChevronRight className="size-3" />
-            <span className="font-medium text-foreground">Repository files</span>
+            <span className="font-medium text-foreground">Codebase files</span>
           </nav>
         </div>
 

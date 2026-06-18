@@ -6,15 +6,15 @@ import { ThemeProvider } from "@/components/hopit/theme-provider";
 export const metadata: Metadata = {
   title: "HopIt — Code & files. Together.",
   description:
-    "HopIt is a developer workspace that brings Git repositories and a shared file drive into one collaborative home.",
-  keywords: ["HopIt", "GitHub alternative", "Google Drive for code", "developer workspace", "code collaboration"],
+    "HopIt is a developer workspace that brings codebases, files, snapshots, and local sync into one collaborative home.",
+  keywords: ["HopIt", "developer workspace", "codebase collaboration", "file sync", "workspace snapshots"],
   authors: [{ name: "HopIt Labs" }],
   icons: {
     icon: "/logo.svg",
   },
   openGraph: {
     title: "HopIt — Code & files. Together.",
-    description: "Git repositories and a shared file drive, in one collaborative home.",
+    description: "Codebases, files, snapshots, and local sync in one collaborative home.",
     siteName: "HopIt",
     type: "website",
   },

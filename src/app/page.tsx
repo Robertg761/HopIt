@@ -26,7 +26,7 @@ export default function Home() {
             <div className="space-y-6">
               <StatsBar />
 
-              {/* Main split: repos + drive */}
+              {/* Main split: codebases + files */}
               <div className="grid gap-6 xl:grid-cols-2">
                 <ReposSection />
                 <DriveSection />

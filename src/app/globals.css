@@ -43,7 +43,7 @@
   --color-grape: var(--grape);
   --color-grape-foreground: var(--grape-foreground);
   --color-grape-soft: var(--grape-soft);
-  --color-amber-star: var(--amber-star);
+  --color-hop-amber: var(--hop-amber);
   --color-ink: var(--ink);
   --color-ink-foreground: var(--ink-foreground);
   --radius-sm: calc(var(--radius) - 4px);
@@ -86,7 +86,7 @@
   --border: oklch(0.91 0.008 140);
   --input: oklch(0.93 0.008 140);
   --ring: oklch(0.69 0.17 162);
-  --amber-star: oklch(0.78 0.16 75);
+  --hop-amber: oklch(0.78 0.16 75);
 
   /* Dark sidebar (HopIt hybrid signature) */
   --sidebar: oklch(0.18 0.02 250);
@@ -132,7 +132,7 @@
   --border: oklch(1 0 0 / 10%);
   --input: oklch(1 0 0 / 12%);
   --ring: oklch(0.74 0.17 162);
-  --amber-star: oklch(0.82 0.17 75);
+  --hop-amber: oklch(0.82 0.17 75);
   --sidebar: oklch(0.13 0.02 250);
   --sidebar-foreground: oklch(0.96 0.005 140);
   --sidebar-primary: oklch(0.74 0.17 162);

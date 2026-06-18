@@ -29,7 +29,7 @@ type NavItem = {
 
 const navItems: NavItem[] = [
   { id: 'home', label: 'Home', icon: Home, active: true },
-  { id: 'repos', label: 'Repositories', icon: Code2, badge: '6' },
+  { id: 'codebases', label: 'Codebases', icon: Code2, badge: '6' },
   { id: 'files', label: 'Files', icon: Folder, badge: '184' },
   { id: 'activity', label: 'Activity', icon: Clock, badge: '12' },
 ]
@@ -81,9 +81,9 @@ export function Sidebar({ open, onClose }: SidebarProps) {
             <Search className="size-4 shrink-0" />
             <input
               type="search"
-              placeholder="Jump to repo, file…"
+              placeholder="Jump to codebase, file…"
               className="w-full bg-transparent text-ink-foreground placeholder:text-ink-foreground/40 focus:outline-none"
-              aria-label="Search repositories and files"
+              aria-label="Search codebases and files"
             />
             <kbd className="hidden shrink-0 rounded border border-white/10 bg-white/5 px-1.5 py-0.5 font-mono text-[10px] text-ink-foreground/50 sm:inline">
               ⌘K

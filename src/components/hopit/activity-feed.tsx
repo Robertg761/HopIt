@@ -3,9 +3,8 @@
 import * as React from 'react'
 import { motion } from 'framer-motion'
 import {
-  GitCommitHorizontal,
-  GitPullRequest,
-  CircleDot,
+  History,
+  RotateCcw,
   Upload,
   MessageSquare,
 } from 'lucide-react'
@@ -14,15 +13,14 @@ import { cn } from '@/lib/utils'
 
 type PrototypeActivityType = Extract<
   ActivityItem['what'],
-  'commit' | 'pr' | 'issue' | 'upload' | 'comment'
+  'snapshot' | 'sync' | 'upload' | 'comment'
 >
 
 type PrototypeActivityItem = ActivityItem & { what: PrototypeActivityType }
 
 const prototypeActivityTypes = new Set<ActivityItem['what']>([
-  'commit',
-  'pr',
-  'issue',
+  'snapshot',
+  'sync',
   'upload',
   'comment',
 ])
@@ -33,33 +31,30 @@ const prototypeActivityFeed = activityFeed.filter(
 
 const iconMap = {
   ...activityIconMap,
-  commit: GitCommitHorizontal,
-  pr: GitPullRequest,
-  issue: CircleDot,
+  snapshot: History,
+  sync: RotateCcw,
   upload: Upload,
   comment: MessageSquare,
 } as const
 
 const accentMap: Record<PrototypeActivityType, string> = {
-  commit: 'text-hop bg-hop/10',
-  pr: 'text-grape bg-grape/10',
-  issue: 'text-destructive bg-destructive/10',
+  snapshot: 'text-hop bg-hop/10',
+  sync: 'text-grape bg-grape/10',
   upload: 'text-sky-500 bg-sky-500/10',
-  comment: 'text-amber-star bg-amber-star/10',
+  comment: 'text-hop-amber bg-hop-amber/10',
 }
 
 const verbMap: Record<PrototypeActivityType, string> = {
-  commit: 'pushed a commit to',
-  pr: 'opened a pull request in',
-  issue: 'opened an issue in',
+  snapshot: 'saved a snapshot in',
+  sync: 'synced',
   upload: 'uploaded',
   comment: 'commented on',
 }
 
 const filterTabs = [
   { id: 'all', label: 'All' },
-  { id: 'commit', label: 'Commits' },
-  { id: 'pr', label: 'PRs' },
+  { id: 'snapshot', label: 'Snapshots' },
+  { id: 'sync', label: 'Syncs' },
   { id: 'upload', label: 'Uploads' },
   { id: 'comment', label: 'Comments' },
 ] as const
@@ -82,7 +77,7 @@ export function ActivityFeed() {
             </span>
           </div>
           <p className="text-xs text-muted-foreground">
-            Unified timeline across repos, files, and discussions
+            Unified timeline across codebases, files, and discussions
           </p>
         </div>
         <div className="flex items-center gap-1 overflow-x-auto scroll-thin">

@@ -72,7 +72,7 @@ export function Header({ onOpenSidebar }: HeaderProps) {
           <Search className="size-4 shrink-0 text-muted-foreground" />
           <input
             type="search"
-            placeholder="Search repos, files, commits, people…"
+            placeholder="Search codebases, files, snapshots, people…"
             className="w-full bg-transparent placeholder:text-muted-foreground focus:outline-none"
             aria-label="Global search"
           />
@@ -97,7 +97,7 @@ export function Header({ onOpenSidebar }: HeaderProps) {
             <DropdownMenuContent align="end" className="w-52">
               <DropdownMenuItem>
                 <Code2 className="mr-2 size-4 text-hop" />
-                New repository
+                New codebase
               </DropdownMenuItem>
               <DropdownMenuItem>
                 <Upload className="mr-2 size-4 text-grape" />
@@ -122,7 +122,7 @@ export function Header({ onOpenSidebar }: HeaderProps) {
             aria-label="Toggle theme"
           >
             {activeTheme === 'dark' ? (
-              <Sun className="size-4 text-amber-star" />
+              <Sun className="size-4 text-hop-amber" />
             ) : (
               <Moon className="size-4" />
             )}

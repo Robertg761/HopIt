@@ -4,7 +4,7 @@ import { motion } from 'framer-motion'
 import {
   Code2,
   Folder,
-  GitCommitHorizontal,
+  History,
   Users,
 } from 'lucide-react'
 
@@ -18,7 +18,7 @@ type Stat = {
 
 const stats: Stat[] = [
   {
-    label: 'Repositories',
+    label: 'Codebases',
     value: '6',
     icon: Code2,
     accent: 'text-hop',
@@ -32,11 +32,11 @@ const stats: Stat[] = [
     bg: 'bg-grape/10',
   },
   {
-    label: 'Commits today',
+    label: 'Snapshots today',
     value: '47',
-    icon: GitCommitHorizontal,
-    accent: 'text-amber-star',
-    bg: 'bg-amber-star/10',
+    icon: History,
+    accent: 'text-hop-amber',
+    bg: 'bg-hop-amber/10',
   },
   {
     label: 'Collaborators online',

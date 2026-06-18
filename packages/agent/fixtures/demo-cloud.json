@@ -8,16 +8,25 @@
   "files": {
     "README.md": {
       "content": "# hopit-core\n\nThis file hydrates from the HopIt cloud graph.\n",
+      "scope": "shared",
       "revision": 1,
       "updatedAt": "2026-06-18T00:00:00.000Z"
     },
     "package.json": {
       "content": "{\n  \"name\": \"hopit-core\",\n  \"private\": true,\n  \"type\": \"module\"\n}\n",
+      "scope": "shared",
       "revision": 1,
       "updatedAt": "2026-06-18T00:00:00.000Z"
     },
     "src/presence.ts": {
       "content": "export function broadcastPresence(userId: string) {\n  return `presence:${userId}`\n}\n",
+      "scope": "shared",
+      "revision": 1,
+      "updatedAt": "2026-06-18T00:00:00.000Z"
+    },
+    ".private/agent-note.md": {
+      "content": "# Owner notes\n\nThis file hydrates and syncs with owner-private scope metadata.\n",
+      "scope": "owner-private",
       "revision": 1,
       "updatedAt": "2026-06-18T00:00:00.000Z"
     }
