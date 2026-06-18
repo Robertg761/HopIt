@@ -9,7 +9,7 @@ Build the smallest useful version of a GitHub alternative where projects are sha
 1. A user creates or imports a codebase.
 2. HopIt builds a cloud file graph and a Git-compatible baseline snapshot.
 3. A local sync agent watches file changes and streams deltas to the cloud.
-4. The web app shows live sync status, recent file activity, devices, collaborators, and branch/workspace state.
+4. The web app shows live sync status, recent file activity, devices, collaborators, and workspace state.
 5. Another device opens the same codebase and receives the latest workspace state.
 6. The user can publish a clean Git commit or share a review snapshot when ready.
 
@@ -17,11 +17,11 @@ Build the smallest useful version of a GitHub alternative where projects are sha
 
 ### Codebase
 
-The main object users interact with. It contains files, branches, workspace snapshots, collaborators, permissions, and sync devices.
+The main object users interact with. It contains files, workspace snapshots, collaborators, permissions, and sync devices.
 
 ### Workspace Snapshot
 
-An addressable cloud state for a codebase at a point in time. This can include uncommitted changes, branch metadata, device metadata, and conflict markers.
+An addressable cloud state for a codebase at a point in time. This can include uncommitted changes, device metadata, and conflict markers.
 
 ### Sync Agent
 
@@ -70,7 +70,7 @@ The durable representation of directories, files, blobs, revisions, and metadata
 
 - Import an existing Git repository.
 - Export a workspace snapshot to a Git commit.
-- Preserve branch names and commit ancestry where possible.
+- Preserve commit ancestry where possible.
 
 ## Deliberate Non-Goals For V1
 

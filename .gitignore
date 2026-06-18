@@ -1,5 +1,8 @@
 node_modules
 dist
+.next
+out
+artifacts
 .DS_Store
 *.local
 .env
@@ -8,3 +11,5 @@ dist
 npm-debug.log*
 pnpm-debug.log*
 yarn-debug.log*
+dev.log
+server.log

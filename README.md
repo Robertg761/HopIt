@@ -7,7 +7,7 @@ The first product bet is simple: editing code should feel closer to working in a
 ## Initial Scope
 
 - Cloud-backed codebase dashboard with live sync state.
-- Repository-style file graph, branch metadata, recent activity, and collaborator presence.
+- Repository-style file graph, sync metadata, recent activity, and collaborator presence.
 - Device-aware sync model for moving between computers, tablets, and cloud workspaces.
 - Clear path toward a local agent that watches a working directory and streams file deltas to HopIt.
 - Git compatibility as an import/export layer, not the only source of truth.
