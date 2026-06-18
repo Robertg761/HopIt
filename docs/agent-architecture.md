@@ -70,6 +70,29 @@ Each journal entry should include:
 
 The spike writes this as NDJSON at `.hopit-agent/journal.ndjson`.
 
+### Restart Recovery And Watch Loop
+
+Restart recovery and the background watch loop are explicit agent contracts, not demo-only behavior. The current spike exposes recovery through `npm run agent:recover`, and `npm run agent:watch` runs recovery before hydrating the workspace.
+
+Restart recovery expectations:
+
+- agent startup reads the safety journal before accepting new workspace writes
+- pending journal entries are replayed against the cloud file graph in creation order
+- acknowledged entries stay queryable for diagnostics but no longer count as pending work
+- failed entries remain durable, visible in status, and retried only when the failure is retryable
+- `.private/` scope is preserved during replay exactly as it was recorded in the journal
+- the agent never prunes or overwrites local content for an unacknowledged journal entry
+
+Watch-loop expectations:
+
+- `npm run agent:watch` runs recovery, hydrates the managed folder only when recovery is safe, starts watching for local changes, journals writes, and runs bounded sync attempts
+- file create, write, and delete detection should be idempotent across repeated scans
+- rapid editor saves should coalesce into stable journaled writes without losing the latest content
+- the loop should keep running after transient cloud or filesystem errors and surface the degraded state through status and events
+- the loop should treat the cloud file graph as the source of truth while preserving pending local edits until acknowledgement or conflict review
+
+Recovery should be safe before it is clever. If the agent is unsure whether the cloud accepted a write, it should keep the journal entry pending and expose that uncertainty through status instead of silently discarding local state.
+
 ### Status API
 
 The agent should expose a small local status API for the product UI, tray/menu UI, and diagnostics.
@@ -87,7 +110,7 @@ Suggested fields:
 - adapter type: managed folder, with optional research adapters later
 - recent error summary
 
-This can start as a local HTTP endpoint or CLI command. The important part is that status reads from agent state instead of guessing from files on disk.
+This can start as a local HTTP endpoint or CLI command. The current spike exposes the HTTP status surface with `npm run agent:status`; a direct CLI status command can use the same agent-state reader. The important part is that status reads from agent state instead of guessing from files on disk.
 
 ### Event Log
 
@@ -96,6 +119,7 @@ The event log is an append-only operational trace for development, debugging, an
 Important event types:
 
 - `workspace.ready`
+- `watch.started`
 - `file.hydrated`
 - `write.journaled`
 - `cloud.acknowledged`
@@ -140,37 +164,52 @@ If the cloud cannot acknowledge immediately, the journal entry remains pending a
 
 ## Next Milestones
 
-### 1. Stabilize The Managed-Folder Contract
+### 1. Lock The Managed-Folder Contracts
 
 - Keep the current deterministic demo working.
 - Treat cloud graph shape, journal entries, event names, and status fields as explicit contracts.
-- Add recovery behavior that replays pending journal entries after agent restart.
-- Add a status command or endpoint backed by agent state.
+- Align docs and examples with the actual spike commands: `npm run agent:demo`, `npm run agent:watch`, `npm run agent:sync`, and `npm run agent:status`.
+- Keep `.private/` as owner-private workspace scope, not an ignored or skipped path.
 
-### 2. Add Cloud-Service Boundaries
+### 2. Stabilize Restart Recovery
+
+- Persist pending writes durably before cloud acknowledgement.
+- Keep `npm run agent:recover` replaying pending journal entries in order before reporting a clean workspace.
+- Keep `npm run agent:watch` blocked when recovery cannot safely replay unacknowledged journal entries.
+- Keep acknowledged, pending, failed, and uncertain entries visible through status.
+- Preserve owner-private `.private/` scope during replay.
+- Expand focused recovery fixtures that simulate process exit after journal append and before cloud acknowledgement.
+
+### 3. Harden The Watch Loop
+
+- Make `npm run agent:watch` the primary continuous-agent proof path.
+- Debounce repeated editor saves without dropping the final content.
+- Keep the watch loop alive across transient sync failures.
+- Emit status and event-log evidence for started, degraded, recovered, sync-complete, and sync-failed states.
+- Keep clean cloud content, pending local edits, and failed writes distinguishable in status.
+
+### 4. Add Cloud-Service Boundaries
 
 - Replace the local cloud JSON file with a service-shaped interface.
 - Keep a local fixture implementation for tests and demos.
 - Model acknowledgements, validation failures, connectivity loss, and retry timing.
 - Preserve the same editor read/write flow from the managed-folder spike.
 
-### 3. Prove Two-Device Continuity
+### 5. Prove Two-Device Continuity
 
 - Run two agent sessions against the same cloud file graph.
 - Show that a write acknowledged from one session becomes visible to another.
 - Emit event-log entries for remote updates and cache invalidation.
 - Surface pending and acknowledged state through the status API.
 
-### 4. Tighten Managed-Folder Behavior
+### 6. Tighten Managed-Folder Behavior
 
 - Handle creates, writes, deletes, renames, and `.private/` visibility paths consistently.
-- Keep clean cloud content, pending local edits, and failed writes distinguishable in status.
 - Make local cache pruning explicit and conservative.
 - Preserve normal editor and terminal compatibility as the primary v1 constraint.
 
-### 5. Tighten Recovery And Conflict Handling
+### 7. Tighten Conflict Handling
 
-- Replay pending journal entries after crashes.
 - Detect writes based on stale cloud revisions.
 - Surface conflicts as reviewable workspace states through status and events.
 - Keep clean acknowledged content evictable while preserving unacknowledged local edits.

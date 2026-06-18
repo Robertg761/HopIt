@@ -28,8 +28,26 @@ Run the pieces manually:
 npm run agent:init
 npm run agent:hydrate
 npm run agent:sync
+npm run agent:recover
 npm run agent:watch
 ```
+
+Restart recovery is explicit and dependency-free. `recover` reads the append-only
+journal, the local cloud JSON graph, and the event log, then replays journal
+entries that do not yet have a `cloud.acknowledged` event. Writes are recovered
+from the cloud graph when the cloud already contains the journaled hash, or from
+the managed workspace when the on-disk file still matches the journal hash.
+Deletes are acknowledged when the cloud file is already gone or replayed into the
+cloud graph when it is still present.
+
+The command exits nonzero when any entry cannot be replayed. Failed entries are
+kept in the event-derived status so the next `recover` can retry them after the
+workspace or cloud state is fixed.
+
+`watch` runs recovery before hydrating the workspace. If any unacknowledged
+journal entry cannot be replayed, startup is blocked so hydrate does not overwrite
+local edits that still need to be recovered. Status reports journal entries as
+pending, failed, or acknowledged from the journal/events pair.
 
 Serve local agent status JSON:
 
@@ -37,7 +55,7 @@ Serve local agent status JSON:
 npm run agent:status
 ```
 
-The status server is dependency-free and listens on `127.0.0.1:4785` by default. It is read-only and reports `adapter: managed-folder`, `cacheMode: local-cache`, the workspace folder, local cloud graph summary, pending journal count, recent events, and the latest acknowledgement/sync events.
+The status server is dependency-free and listens on `127.0.0.1:4785` by default. It is read-only and reports `adapter: managed-folder`, `cacheMode: local-cache`, the workspace folder, local cloud graph summary, pending/failed/acknowledged journal counts, recent events, and the latest acknowledgement/sync/recovery events.
 
 Query it with curl:
 

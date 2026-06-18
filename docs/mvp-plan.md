@@ -106,31 +106,45 @@ Current spike:
 
 - `packages/agent` implements a managed-folder version of this lifecycle.
 - `npm run agent:demo` seeds a local cloud graph, hydrates a workspace, simulates an editor save, journals the write, and acknowledges the cloud revision.
-- The next technical step is hardening the managed-folder agent while preserving the same cloud graph and journal contracts.
+- `npm run agent:recover` replays unacknowledged journal entries into the cloud graph.
+- `npm run agent:watch` is the continuous managed-folder proof path.
+- `npm run agent:sync` runs one explicit scan/journal/acknowledgement pass.
+- `npm run agent:status` serves read-only local agent state for status, event, journal, and cloud inspection.
+- The next technical step is stabilizing restart recovery and watch-loop hardening while preserving the same cloud graph, `.private/` scope, and journal contracts.
 
 Next after the managed-folder spike:
 
-1. Stabilize the managed-folder contracts for graph shape, journal entries, event names, and status fields.
-2. Add restart recovery for pending journal entries and a local status command or API.
-3. Replace local cloud JSON reads with a service-shaped cloud file graph interface while keeping fixture-backed demos.
-4. Prove two-device continuity against one cloud file graph.
-5. Surface clean, pending, failed, and remote-update states through status and events.
+1. Lock the managed-folder contracts for graph shape, journal entries, event names, command names, and status fields.
+2. Stabilize restart recovery around `npm run agent:recover` and the watch startup recovery gate.
+3. Harden `npm run agent:watch` so it survives transient sync failures, coalesces rapid editor saves, blocks unsafe hydration, and surfaces degraded/recovered states.
+4. Replace local cloud JSON reads with a service-shaped cloud file graph interface while keeping fixture-backed demos.
+5. Prove two-session continuity against one cloud file graph.
+6. Surface clean, pending, failed, uncertain, and remote-update states through status and events.
 
-### Milestone 3: Safe Sync Prototype
+### Milestone 3: Recovery And Watch Loop
 
-- Add a local safety journal for writes awaiting cloud acknowledgement.
-- Stream write deltas to a local or hosted API.
-- Show live sync status in the web app.
-- Recover pending writes after restarting the agent.
+- Treat the safety journal as the durable recovery boundary for writes awaiting cloud acknowledgement.
+- Stabilize replay of pending journal entries after restarting the agent, preserving `.private/` owner-private scope.
+- Keep watch startup blocked when recovery cannot safely replay unacknowledged entries.
+- Keep failed and uncertain entries durable and visible through the status surface.
+- Make the watch loop resilient to transient filesystem and cloud errors.
+- Show live clean, pending, failed, degraded, and recovered sync states in the web app.
 
-### Milestone 4: Cloud File Graph
+### Milestone 4: Cloud Service Boundary
 
+- Replace the local cloud JSON file with a service-shaped file graph API.
 - Store blobs content-addressably.
 - Store file graph metadata and revisions.
 - Reconstruct a workspace snapshot from metadata and blobs.
-- Open the same codebase from a second device or second agent session.
 
-### Milestone 5: Git Compatibility
+### Milestone 5: Two-Session Continuity
+
+- Open the same codebase from a second device or second agent session.
+- Show that an acknowledged write from one session becomes visible to the other.
+- Preserve pending local edits until acknowledgement or conflict review.
+- Emit status and event-log evidence for remote updates.
+
+### Milestone 6: Git Compatibility
 
 - Import an existing Git repository into the cloud file graph.
 - Export a workspace snapshot to a Git commit.

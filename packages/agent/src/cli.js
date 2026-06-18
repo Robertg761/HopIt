@@ -50,6 +50,12 @@ async function main() {
     return
   }
 
+  if (command === 'recover') {
+    const recovery = await recoverJournal(options)
+    if (recovery.failed > 0) process.exitCode = 1
+    return
+  }
+
   if (command === 'watch') {
     await watchWorkspace(options)
     return
@@ -170,23 +176,12 @@ async function syncOnce(options) {
     await appendNdjson(options.journal, entry)
     await emit(options, 'write.journaled', entry)
 
-    cloud.revision += 1
-    cloud.files[relativePath] = {
+    const acknowledgement = applyJournalEntryToCloud(cloud, entry, {
       content,
-      hash: nextHash,
-      size: Buffer.byteLength(content),
-      scope,
-      revision: cloud.revision,
-      updatedAt: now,
-    }
-
-    await emit(options, 'cloud.acknowledged', {
-      id: entry.id,
-      type: entry.type,
-      path: relativePath,
-      scope,
-      revision: cloud.revision,
+      now,
     })
+    await writeJson(options.cloud, cloud)
+    await emit(options, 'cloud.acknowledged', acknowledgement)
 
     writeEvents.push(entry)
   }
@@ -205,16 +200,9 @@ async function syncOnce(options) {
     await appendNdjson(options.journal, entry)
     await emit(options, 'write.journaled', entry)
 
-    cloud.revision += 1
-    delete cloud.files[relativePath]
-
-    await emit(options, 'cloud.acknowledged', {
-      id: entry.id,
-      type: entry.type,
-      path: relativePath,
-      scope,
-      revision: cloud.revision,
-    })
+    const acknowledgement = applyJournalEntryToCloud(cloud, entry, { now })
+    await writeJson(options.cloud, cloud)
+    await emit(options, 'cloud.acknowledged', acknowledgement)
 
     writeEvents.push(entry)
   }
@@ -228,8 +216,70 @@ async function syncOnce(options) {
   })
 }
 
+async function recoverJournal(options) {
+  const cloud = await readJson(options.cloud)
+  normalizeCloudScopes(cloud)
+
+  const journalEntries = await readNdjson(options.journal)
+  const eventEntries = await readNdjson(options.events)
+  const journalState = classifyJournalEntries(journalEntries, eventEntries)
+  const candidates = journalState.entries.filter((entry) => entry.recoveryStatus !== 'acknowledged')
+  const result = {
+    totalJournalEntries: journalEntries.length,
+    attempted: 0,
+    acknowledged: 0,
+    failed: 0,
+    skipped: journalEntries.length - candidates.length,
+  }
+
+  for (const entry of candidates) {
+    result.attempted += 1
+    const now = new Date().toISOString()
+
+    try {
+      const recovery = await prepareRecovery(cloud, entry, options.workspace)
+      const acknowledgement = applyJournalEntryToCloud(cloud, entry, {
+        content: recovery.content,
+        now,
+      })
+      await writeJson(options.cloud, cloud)
+      await emit(options, 'cloud.acknowledged', {
+        ...acknowledgement,
+        recovered: true,
+        recoveryReason: recovery.reason,
+      })
+      result.acknowledged += 1
+    } catch (error) {
+      result.failed += 1
+      await emit(options, 'journal.recovery_failed', {
+        id: entry.id,
+        type: entry.type,
+        path: entry.path,
+        scope: entry.scope ?? scopeForPath(entry.path ?? ''),
+        reason: error.message,
+      })
+    }
+  }
+
+  await emit(options, 'journal.recovery_complete', {
+    ...result,
+    revision: cloud.revision,
+    scopeCounts: countCloudScopes(cloud),
+  })
+
+  return result
+}
+
 async function watchWorkspace(options) {
   if (!existsSync(options.cloud)) await initCloud(options)
+  const recovery = await recoverJournal(options)
+  if (recovery.failed > 0) {
+    await emit(options, 'watch.recovery_blocked', {
+      failed: recovery.failed,
+      attempted: recovery.attempted,
+    })
+    throw new Error('Watch startup blocked because pending journal entries could not be recovered.')
+  }
   await hydrateWorkspace(options)
   await emit(options, 'watch.started', {
     workspace: options.workspace,
@@ -360,18 +410,17 @@ async function readAgentState(options) {
   const cloud = await readOptionalJson(options.cloud)
   const journalEntries = await readNdjson(options.journal)
   const eventEntries = await readNdjson(options.events)
+  const journalState = classifyJournalEntries(journalEntries, eventEntries)
   const recentEvents = eventEntries.slice(-20)
   const lastAcknowledgement = findLastEvent(eventEntries, 'cloud.acknowledged')
   const lastSync = findLastEvent(eventEntries, 'sync.complete')
+  const lastRecovery = findLastEvent(eventEntries, 'journal.recovery_complete')
   const cloudFiles = cloud?.files ? Object.keys(cloud.files) : []
   const scopeCounts = countCloudScopes(cloud)
-  const acknowledgedIds = new Set(
-    eventEntries
-      .filter((entry) => entry.event === 'cloud.acknowledged' && entry.detail?.id)
-      .map((entry) => entry.detail.id),
-  )
-  const pendingJournalEntries = journalEntries.filter(
-    (entry) => entry.status === 'pending' && !acknowledgedIds.has(entry.id),
+  const pendingJournalEntries = journalState.entries.filter((entry) => entry.recoveryStatus === 'pending')
+  const failedJournalEntries = journalState.entries.filter((entry) => entry.recoveryStatus === 'failed')
+  const acknowledgedJournalEntries = journalState.entries.filter(
+    (entry) => entry.recoveryStatus === 'acknowledged',
   )
 
   const cloudSummary = {
@@ -393,10 +442,16 @@ async function readAgentState(options) {
     exists: existsSync(options.journal),
     totalEntries: journalEntries.length,
     pendingCount: pendingJournalEntries.length,
+    failedCount: failedJournalEntries.length,
+    acknowledgedCount: acknowledgedJournalEntries.length,
     scopeCounts: countEntryScopes(journalEntries),
     pendingScopeCounts: countEntryScopes(pendingJournalEntries),
+    failedScopeCounts: countEntryScopes(failedJournalEntries),
+    acknowledgedScopeCounts: countEntryScopes(acknowledgedJournalEntries),
     pendingEntries: pendingJournalEntries,
-    entries: journalEntries,
+    failedEntries: failedJournalEntries,
+    acknowledgedEntries: acknowledgedJournalEntries,
+    entries: journalState.entries,
   }
 
   const eventsSummary = {
@@ -406,11 +461,12 @@ async function readAgentState(options) {
     recent: recentEvents,
     lastAcknowledgement,
     lastSync,
+    lastRecovery,
   }
 
   return {
     status: {
-      ok: true,
+      ok: failedJournalEntries.length === 0,
       generatedAt: new Date().toISOString(),
       mode: workspaceMode,
       workspace: {
@@ -425,8 +481,12 @@ async function readAgentState(options) {
         exists: journalSummary.exists,
         totalEntries: journalSummary.totalEntries,
         pendingCount: journalSummary.pendingCount,
+        failedCount: journalSummary.failedCount,
+        acknowledgedCount: journalSummary.acknowledgedCount,
         scopeCounts: journalSummary.scopeCounts,
         pendingScopeCounts: journalSummary.pendingScopeCounts,
+        failedScopeCounts: journalSummary.failedScopeCounts,
+        acknowledgedScopeCounts: journalSummary.acknowledgedScopeCounts,
       },
       events: {
         path: eventsSummary.path,
@@ -435,6 +495,7 @@ async function readAgentState(options) {
         recent: eventsSummary.recent,
         lastAcknowledgement,
         lastSync,
+        lastRecovery,
       },
     },
     cloud: {
@@ -444,6 +505,137 @@ async function readAgentState(options) {
     journal: journalSummary,
     events: eventsSummary,
   }
+}
+
+async function prepareRecovery(cloud, entry, workspace) {
+  if (!entry.id) throw new Error('journal entry is missing id')
+  if (!entry.path) throw new Error('journal entry is missing path')
+
+  const scope = entry.scope ?? scopeForPath(entry.path)
+  const cloudFile = cloud.files?.[entry.path]
+
+  if (entry.type === 'delete') {
+    if (!cloudFile) return { reason: 'cloud_already_deleted' }
+    return { reason: 'cloud_delete_replayed' }
+  }
+
+  if (entry.type !== 'create' && entry.type !== 'write') {
+    throw new Error(`unsupported journal entry type: ${entry.type}`)
+  }
+
+  if (cloudFile?.hash === entry.hash && cloudFile.scope === scope) {
+    return { content: cloudFile.content, reason: 'cloud_already_matches' }
+  }
+
+  if (!existsSync(workspace)) {
+    throw new Error('workspace_missing')
+  }
+
+  const absolutePath = path.join(workspace, entry.path)
+  if (!existsSync(absolutePath)) {
+    throw new Error('workspace_file_missing')
+  }
+
+  const content = await fs.readFile(absolutePath, 'utf8')
+  const hash = hashContent(content)
+  if (hash !== entry.hash) {
+    throw new Error(`workspace_hash_mismatch: expected ${entry.hash}, got ${hash}`)
+  }
+
+  return { content, reason: 'workspace_replayed' }
+}
+
+function applyJournalEntryToCloud(cloud, entry, options = {}) {
+  const scope = entry.scope ?? scopeForPath(entry.path)
+  const now = options.now ?? new Date().toISOString()
+
+  if (!cloud.files) cloud.files = {}
+  if (!Number.isInteger(cloud.revision)) cloud.revision = 0
+
+  if (entry.type === 'delete') {
+    const current = cloud.files[entry.path]
+    if (current) {
+      cloud.revision += 1
+      delete cloud.files[entry.path]
+    }
+
+    return {
+      id: entry.id,
+      type: entry.type,
+      path: entry.path,
+      scope,
+      revision: cloud.revision,
+    }
+  }
+
+  const content = options.content
+  if (typeof content !== 'string') {
+    throw new Error(`Cannot apply ${entry.type} without file content.`)
+  }
+
+  const hash = hashContent(content)
+  if (entry.hash && hash !== entry.hash) {
+    throw new Error(`content_hash_mismatch: expected ${entry.hash}, got ${hash}`)
+  }
+
+  const current = cloud.files[entry.path]
+  if (current?.hash !== hash || current.scope !== scope) {
+    cloud.revision += 1
+    cloud.files[entry.path] = {
+      content,
+      hash,
+      size: Buffer.byteLength(content),
+      scope,
+      revision: cloud.revision,
+      updatedAt: now,
+    }
+  }
+
+  return {
+    id: entry.id,
+    type: entry.type,
+    path: entry.path,
+    scope,
+    revision: cloud.revision,
+  }
+}
+
+function classifyJournalEntries(journalEntries, eventEntries) {
+  const outcomesById = new Map()
+
+  for (const event of eventEntries) {
+    const id = event.detail?.id
+    if (!id) continue
+
+    if (event.event === 'cloud.acknowledged') {
+      outcomesById.set(id, {
+        recoveryStatus: 'acknowledged',
+        event,
+      })
+      continue
+    }
+
+    if (event.event === 'journal.recovery_failed') {
+      const current = outcomesById.get(id)
+      if (current?.recoveryStatus !== 'acknowledged') {
+        outcomesById.set(id, {
+          recoveryStatus: 'failed',
+          event,
+        })
+      }
+    }
+  }
+
+  const entries = journalEntries.map((entry) => {
+    const outcome = outcomesById.get(entry.id)
+    return {
+      ...entry,
+      recoveryStatus: outcome?.recoveryStatus ?? 'pending',
+      recoveryEvent: outcome?.event ?? null,
+    }
+  })
+
+  return { entries }
 }
 
 async function readWorkspaceFiles(root) {
@@ -585,6 +777,7 @@ Commands:
   init        Seed a local cloud file graph
   hydrate     Materialize cloud files into the managed workspace
   sync-once   Scan managed-folder writes, journal them, and acknowledge to cloud
+  recover     Replay unacknowledged journal entries into the cloud graph
   watch       Hydrate and watch the workspace for edits
   status      Print read-only local agent status JSON
   status-server Serve read-only local agent status JSON over HTTP
