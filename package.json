@@ -7,7 +7,12 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "agent:demo": "node packages/agent/src/cli.js demo",
+    "agent:init": "node packages/agent/src/cli.js init",
+    "agent:hydrate": "node packages/agent/src/cli.js hydrate",
+    "agent:sync": "node packages/agent/src/cli.js sync-once",
+    "agent:watch": "node packages/agent/src/cli.js watch"
   },
   "dependencies": {
     "@radix-ui/react-dropdown-menu": "^2.1.15",

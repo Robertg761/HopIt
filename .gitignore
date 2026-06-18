@@ -3,6 +3,8 @@ dist
 .next
 out
 artifacts
+.hopit-agent
+mounts
 .DS_Store
 *.local
 .env
