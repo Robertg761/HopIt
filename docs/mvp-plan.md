@@ -83,7 +83,7 @@ Optional future research. A true OS filesystem mount, macFUSE backend, or RAM-on
 - Sync service: agent-facing API for file graph reads, blob hydration, write acknowledgements, cache invalidation, and conflict responses.
 - Storage: object storage for file blobs plus Postgres for metadata, permissions, device state, and snapshot indexes.
 - Realtime: WebSocket or server-sent events for file changes, collaborator presence, sync status, and device handoff.
-- Local agent: managed-folder process with auth token storage, local cache, safety journal, retry queue, `.private/` visibility handling, and Git import/export/publish commands.
+- Local agent: managed-folder process with auth token storage, local cache, safety journal, retry queue, and `.private/` visibility handling. Git import/export/publish can stay as later snapshot interoperability, not the everyday sync model.
 
 The local agent contract is detailed in [Local Agent Architecture](agent-architecture.md). That document is the implementation guide for the cloud file graph, managed-folder adapter, local cache, safety journal, status API, event log, two-device simulation, and editor read/write acknowledgement flow.
 
@@ -107,7 +107,7 @@ Current spike:
 - `packages/agent` implements a managed-folder version of this lifecycle.
 - `npm run agent:demo` seeds a local cloud graph, hydrates a workspace, simulates an editor save, journals the write, and acknowledges the cloud revision.
 - `npm run agent:recover` replays unacknowledged journal entries into the cloud graph.
-- `npm run agent:watch` is the continuous managed-folder proof path.
+- `npm run agent:watch` is the continuous managed-folder proof path: it runs recovery before hydration, blocks safely when recovery cannot replay, and coalesces watch-triggered sync attempts.
 - `npm run agent:sync` runs one explicit scan/journal/acknowledgement pass.
 - `npm run agent:status` serves read-only local agent state for status, event, journal, and cloud inspection.
 - The next technical step is stabilizing restart recovery and watch-loop hardening while preserving the same cloud graph, `.private/` scope, and journal contracts.
@@ -116,7 +116,7 @@ Next after the managed-folder spike:
 
 1. Lock the managed-folder contracts for graph shape, journal entries, event names, command names, and status fields.
 2. Stabilize restart recovery around `npm run agent:recover` and the watch startup recovery gate.
-3. Harden `npm run agent:watch` so it survives transient sync failures, coalesces rapid editor saves, blocks unsafe hydration, and surfaces degraded/recovered states.
+3. Harden `npm run agent:watch` so it survives transient sync failures after startup, coalesces rapid editor saves, blocks unsafe hydration before startup, emits sync failure events, and surfaces failed/degraded/recovered status.
 4. Replace local cloud JSON reads with a service-shaped cloud file graph interface while keeping fixture-backed demos.
 5. Prove two-session continuity against one cloud file graph.
 6. Surface clean, pending, failed, uncertain, and remote-update states through status and events.
@@ -125,10 +125,11 @@ Next after the managed-folder spike:
 
 - Treat the safety journal as the durable recovery boundary for writes awaiting cloud acknowledgement.
 - Stabilize replay of pending journal entries after restarting the agent, preserving `.private/` owner-private scope.
-- Keep watch startup blocked when recovery cannot safely replay unacknowledged entries.
+- Keep watch startup blocked before hydration when recovery cannot safely replay unacknowledged entries.
 - Keep failed and uncertain entries durable and visible through the status surface.
-- Make the watch loop resilient to transient filesystem and cloud errors.
-- Show live clean, pending, failed, degraded, and recovered sync states in the web app.
+- Coalesce repeated editor saves into stable sync work without losing final file contents.
+- Make the watch loop resilient to transient filesystem and cloud errors after startup.
+- Emit `sync.failed` and `sync.complete` evidence so the web app can show live clean, pending, failed, degraded, and recovered sync states.
 
 ### Milestone 4: Cloud Service Boundary
 

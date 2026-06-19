@@ -86,9 +86,11 @@ Restart recovery expectations:
 Watch-loop expectations:
 
 - `npm run agent:watch` runs recovery, hydrates the managed folder only when recovery is safe, starts watching for local changes, journals writes, and runs bounded sync attempts
+- if recovery cannot replay an unacknowledged journal entry, watch startup emits `watch.recovery_blocked`, exits, and leaves the entry visible as failed status instead of hydrating over local edits
 - file create, write, and delete detection should be idempotent across repeated scans
-- rapid editor saves should coalesce into stable journaled writes without losing the latest content
-- the loop should keep running after transient cloud or filesystem errors and surface the degraded state through status and events
+- rapid editor saves should coalesce into stable journaled writes without losing the latest content; the spike currently debounces watch-triggered sync attempts by `250ms`
+- transient cloud or filesystem errors after startup should emit `sync.failed`, update status with the failed/degraded state, and leave the watch loop running so later saves or retries can recover
+- once a later sync succeeds, the agent should emit `sync.complete` and make the recovered/clean state visible through status
 - the loop should treat the cloud file graph as the source of truth while preserving pending local edits until acknowledgement or conflict review
 
 Recovery should be safe before it is clever. If the agent is unsure whether the cloud accepted a write, it should keep the journal entry pending and expose that uncertainty through status instead of silently discarding local state.
@@ -120,9 +122,12 @@ Important event types:
 
 - `workspace.ready`
 - `watch.started`
+- `watch.recovery_blocked`
 - `file.hydrated`
 - `write.journaled`
 - `cloud.acknowledged`
+- `journal.recovery_failed`
+- `journal.recovery_complete`
 - `sync.complete`
 - `sync.failed`
 - `cache.evicted`
@@ -175,7 +180,7 @@ If the cloud cannot acknowledge immediately, the journal entry remains pending a
 
 - Persist pending writes durably before cloud acknowledgement.
 - Keep `npm run agent:recover` replaying pending journal entries in order before reporting a clean workspace.
-- Keep `npm run agent:watch` blocked when recovery cannot safely replay unacknowledged journal entries.
+- Keep `npm run agent:watch` blocked before hydration when recovery cannot safely replay unacknowledged journal entries.
 - Keep acknowledged, pending, failed, and uncertain entries visible through status.
 - Preserve owner-private `.private/` scope during replay.
 - Expand focused recovery fixtures that simulate process exit after journal append and before cloud acknowledgement.
@@ -183,9 +188,10 @@ If the cloud cannot acknowledge immediately, the journal entry remains pending a
 ### 3. Harden The Watch Loop
 
 - Make `npm run agent:watch` the primary continuous-agent proof path.
-- Debounce repeated editor saves without dropping the final content.
-- Keep the watch loop alive across transient sync failures.
-- Emit status and event-log evidence for started, degraded, recovered, sync-complete, and sync-failed states.
+- Preserve the recovery-before-hydration startup gate.
+- Debounce and coalesce repeated editor saves without dropping the final content.
+- Keep the watch loop alive across transient sync failures after startup.
+- Emit status and event-log evidence for started, blocked, degraded, recovered, sync-complete, and sync-failed states.
 - Keep clean cloud content, pending local edits, and failed writes distinguishable in status.
 
 ### 4. Add Cloud-Service Boundaries

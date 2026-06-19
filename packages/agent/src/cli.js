@@ -146,7 +146,32 @@ async function hydrateWorkspace(options) {
   })
 }
 
-async function syncOnce(options) {
+async function syncOnce(options, context = {}) {
+  const unresolvedFailure = await hasUnresolvedSyncFailure(options)
+  const contextDetail = syncContextDetail(context)
+
+  await emit(options, 'sync.started', contextDetail)
+
+  try {
+    const result = await performSyncOnce(options, contextDetail)
+    if (unresolvedFailure) {
+      await emit(options, 'sync.recovered', {
+        ...contextDetail,
+        lastFailedSync: unresolvedFailure,
+        lastSuccessfulSync: result,
+      })
+    }
+    return result
+  } catch (error) {
+    await emit(options, 'sync.failed', {
+      ...contextDetail,
+      reason: error.message,
+    })
+    throw error
+  }
+}
+
+async function performSyncOnce(options, contextDetail = {}) {
   const cloud = await readJson(options.cloud)
   normalizeCloudScopes(cloud)
   const diskFiles = await readWorkspaceFiles(options.workspace)
@@ -208,12 +233,15 @@ async function syncOnce(options) {
   }
 
   await writeJson(options.cloud, cloud)
-  await emit(options, 'sync.complete', {
+  const result = {
+    ...contextDetail,
     writes: writeEvents.length,
     revision: cloud.revision,
     scopeCounts: countCloudScopes(cloud),
     journaledScopeCounts: countEntryScopes(writeEvents),
-  })
+  }
+  await emit(options, 'sync.complete', result)
+  return result
 }
 
 async function recoverJournal(options) {
@@ -275,31 +303,174 @@ async function watchWorkspace(options) {
   const recovery = await recoverJournal(options)
   if (recovery.failed > 0) {
     await emit(options, 'watch.recovery_blocked', {
+      state: 'blocked',
       failed: recovery.failed,
       attempted: recovery.attempted,
+      reason: 'pending journal entries could not be recovered',
     })
     throw new Error('Watch startup blocked because pending journal entries could not be recovered.')
   }
   await hydrateWorkspace(options)
   await emit(options, 'watch.started', {
+    state: 'watching',
     workspace: options.workspace,
     adapter: workspaceMode.adapter,
     cacheMode: workspaceMode.cacheMode,
   })
 
-  let timer
-  const scheduleSync = () => {
-    clearTimeout(timer)
-    timer = setTimeout(() => {
-      syncOnce(options).catch((error) => {
-        console.error(error)
-      })
-    }, 250)
+  const scheduleSync = createWatchSyncScheduler(options)
+  let watcher
+  let poller = null
+  const degradeToPolling = async (error) => {
+    if (!poller) {
+      poller = await createWorkspacePoller(options.workspace, scheduleSync)
+    }
+    await emit(options, 'watch.degraded', {
+      state: 'polling',
+      workspace: options.workspace,
+      reason: error.message,
+    })
   }
 
-  watch(options.workspace, { recursive: true }, scheduleSync)
+  try {
+    watcher = watch(options.workspace, { recursive: true }, (eventType, filename) => {
+      scheduleSync(eventType, normalizeWatchFilename(filename))
+    })
+  } catch (error) {
+    try {
+      await degradeToPolling(error)
+    } catch (pollError) {
+      await emit(options, 'watch.degraded', {
+        state: 'unavailable',
+        workspace: options.workspace,
+        reason: `${error.message}; polling fallback failed: ${pollError.message}`,
+      })
+      throw pollError
+    }
+  }
+
+  watcher?.on('error', (error) => {
+    try {
+      watcher.close()
+    } catch {
+      // The watcher may already be closed by the time Node surfaces the error.
+    }
+    watcher = null
+    degradeToPolling(error).catch((emitError) => {
+      console.error(emitError)
+    })
+  })
+
   console.log(`HopIt agent watching ${options.workspace}`)
   console.log('Press Ctrl+C to stop.')
+}
+
+function createWatchSyncScheduler(options, schedulerOptions = {}) {
+  const debounceMs = schedulerOptions.debounceMs ?? 250
+  let timer = null
+  let running = false
+  let queued = false
+  let queuedEvents = 0
+  let lastEvent = null
+
+  const drain = async () => {
+    if (running) return
+    running = true
+
+    try {
+      while (queued) {
+        const coalescedEvents = queuedEvents
+        const triggeringEvent = lastEvent
+        queued = false
+        queuedEvents = 0
+        lastEvent = null
+
+        try {
+          await syncOnce(options, {
+            trigger: 'watch',
+            coalescedEvents,
+            eventType: triggeringEvent?.eventType ?? null,
+            path: triggeringEvent?.path ?? null,
+          })
+        } catch (error) {
+          console.error(error)
+        }
+      }
+    } finally {
+      running = false
+    }
+  }
+
+  return (eventType, filename) => {
+    queued = true
+    queuedEvents += 1
+    lastEvent = {
+      eventType,
+      path: filename,
+    }
+
+    clearTimeout(timer)
+    timer = setTimeout(() => {
+      timer = null
+      drain().catch((error) => {
+        console.error(error)
+      })
+    }, debounceMs)
+  }
+}
+
+async function createWorkspacePoller(workspace, onChange, pollerOptions = {}) {
+  const intervalMs = pollerOptions.intervalMs ?? 1000
+  let previousSnapshot = await snapshotWorkspace(workspace)
+  let running = false
+
+  const interval = setInterval(() => {
+    if (running) return
+    running = true
+
+    snapshotWorkspace(workspace)
+      .then((nextSnapshot) => {
+        if (nextSnapshot !== previousSnapshot) {
+          previousSnapshot = nextSnapshot
+          onChange('poll', null)
+        }
+      })
+      .catch((error) => {
+        console.error(error)
+      })
+      .finally(() => {
+        running = false
+      })
+  }, intervalMs)
+
+  return {
+    close() {
+      clearInterval(interval)
+    },
+  }
+}
+
+async function snapshotWorkspace(root) {
+  const files = []
+
+  async function walk(dir) {
+    const entries = await fs.readdir(dir, { withFileTypes: true })
+    for (const entry of entries) {
+      const absolutePath = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        await walk(absolutePath)
+        continue
+      }
+      if (!entry.isFile()) continue
+
+      const stat = await fs.stat(absolutePath)
+      files.push(`${toCloudPath(path.relative(root, absolutePath))}:${stat.size}:${stat.mtimeMs}`)
+    }
+  }
+
+  await walk(root)
+  files.sort()
+  return files.join('\n')
 }
 
 async function serveStatus(options) {
@@ -414,7 +585,37 @@ async function readAgentState(options) {
   const recentEvents = eventEntries.slice(-20)
   const lastAcknowledgement = findLastEvent(eventEntries, 'cloud.acknowledged')
   const lastSync = findLastEvent(eventEntries, 'sync.complete')
+  const lastStartedSync = findLastEvent(eventEntries, 'sync.started')
+  const lastFailedSync = findLastEvent(eventEntries, 'sync.failed')
+  const lastRecoveredSync = findLastEvent(eventEntries, 'sync.recovered')
+  const latestSyncEvent = findLastEventOf(eventEntries, [
+    'sync.started',
+    'sync.complete',
+    'sync.failed',
+    'sync.recovered',
+  ])
+  const syncHealth = buildSyncHealth({
+    lastStartedSync,
+    lastSuccessfulSync: lastSync,
+    lastFailedSync,
+    lastRecoveredSync,
+    latestSyncEvent,
+  })
   const lastRecovery = findLastEvent(eventEntries, 'journal.recovery_complete')
+  const lastWatchStarted = findLastEvent(eventEntries, 'watch.started')
+  const lastWatchDegraded = findLastEvent(eventEntries, 'watch.degraded')
+  const lastWatchRecoveryBlocked = findLastEvent(eventEntries, 'watch.recovery_blocked')
+  const latestWatchEvent = findLastEventOf(eventEntries, [
+    'watch.started',
+    'watch.degraded',
+    'watch.recovery_blocked',
+  ])
+  const watchHealth = buildWatchHealth({
+    lastWatchStarted,
+    lastWatchDegraded,
+    lastWatchRecoveryBlocked,
+    latestWatchEvent,
+  })
   const cloudFiles = cloud?.files ? Object.keys(cloud.files) : []
   const scopeCounts = countCloudScopes(cloud)
   const pendingJournalEntries = journalState.entries.filter((entry) => entry.recoveryStatus === 'pending')
@@ -461,12 +662,20 @@ async function readAgentState(options) {
     recent: recentEvents,
     lastAcknowledgement,
     lastSync,
+    lastStartedSync,
+    lastFailedSync,
+    lastRecoveredSync,
+    latestSyncEvent,
     lastRecovery,
+    lastWatchStarted,
+    lastWatchDegraded,
+    lastWatchRecoveryBlocked,
+    latestWatchEvent,
   }
 
   return {
     status: {
-      ok: failedJournalEntries.length === 0,
+      ok: failedJournalEntries.length === 0 && syncHealth.state !== 'failed' && !watchHealth.state.endsWith('degraded') && watchHealth.state !== 'blocked',
       generatedAt: new Date().toISOString(),
       mode: workspaceMode,
       workspace: {
@@ -488,6 +697,8 @@ async function readAgentState(options) {
         failedScopeCounts: journalSummary.failedScopeCounts,
         acknowledgedScopeCounts: journalSummary.acknowledgedScopeCounts,
       },
+      sync: syncHealth,
+      watch: watchHealth,
       events: {
         path: eventsSummary.path,
         exists: eventsSummary.exists,
@@ -495,7 +706,15 @@ async function readAgentState(options) {
         recent: eventsSummary.recent,
         lastAcknowledgement,
         lastSync,
+        lastStartedSync,
+        lastFailedSync,
+        lastRecoveredSync,
+        latestSyncEvent,
         lastRecovery,
+        lastWatchStarted,
+        lastWatchDegraded,
+        lastWatchRecoveryBlocked,
+        latestWatchEvent,
       },
     },
     cloud: {
@@ -638,6 +857,103 @@ function classifyJournalEntries(journalEntries, eventEntries) {
   return { entries }
 }
 
+async function hasUnresolvedSyncFailure(options) {
+  const events = await readNdjson(options.events)
+  const lastSyncOutcome = findLastEventOf(events, ['sync.complete', 'sync.failed', 'sync.recovered'])
+  if (lastSyncOutcome?.event !== 'sync.failed') return null
+
+  return {
+    at: lastSyncOutcome.at,
+    reason: lastSyncOutcome.detail?.reason ?? null,
+  }
+}
+
+function syncContextDetail(context) {
+  const detail = {
+    trigger: context.trigger ?? 'manual',
+  }
+
+  if (Number.isInteger(context.coalescedEvents)) detail.coalescedEvents = context.coalescedEvents
+  if (context.eventType) detail.eventType = context.eventType
+  if (context.path) detail.path = context.path
+
+  return detail
+}
+
+function normalizeWatchFilename(filename) {
+  if (typeof filename === 'string') return toCloudPath(filename)
+  if (Buffer.isBuffer(filename)) return toCloudPath(filename.toString('utf8'))
+  return null
+}
+
+function buildSyncHealth(syncEvents) {
+  const { lastStartedSync, lastSuccessfulSync, lastFailedSync, lastRecoveredSync, latestSyncEvent } = syncEvents
+  let state = 'idle'
+
+  if (latestSyncEvent?.event === 'sync.failed') {
+    state = 'failed'
+  } else if (latestSyncEvent?.event === 'sync.started') {
+    state = 'syncing'
+  } else if (latestSyncEvent?.event === 'sync.complete' || latestSyncEvent?.event === 'sync.recovered') {
+    state = 'healthy'
+  }
+
+  return {
+    state,
+    lastStartedSync,
+    lastSuccessfulSync,
+    lastFailedSync,
+    lastRecoveredSync,
+    lastError: lastFailedSync?.detail?.reason ?? null,
+  }
+}
+
+function buildWatchHealth(watchEvents) {
+  const { lastWatchStarted, lastWatchDegraded, lastWatchRecoveryBlocked, latestWatchEvent } = watchEvents
+  const latestProblem = latestEvent([lastWatchDegraded, lastWatchRecoveryBlocked])
+  let state = 'unknown'
+
+  if (latestWatchEvent?.event === 'watch.recovery_blocked') {
+    state = 'blocked'
+  } else if (latestWatchEvent?.event === 'watch.degraded') {
+    if (lastWatchDegraded.detail?.state === 'unavailable') {
+      state = 'unavailable-degraded'
+    } else if (lastWatchDegraded.detail?.state === 'polling') {
+      state = 'polling-degraded'
+    } else {
+      state = 'degraded'
+    }
+  } else if (latestWatchEvent?.event === 'watch.started') {
+    state = 'watching'
+  }
+
+  return {
+    state,
+    lastStarted: lastWatchStarted,
+    lastDegraded: lastWatchDegraded,
+    lastRecoveryBlocked: lastWatchRecoveryBlocked,
+    lastError: latestProblem?.detail?.reason ?? null,
+  }
+}
+
+function latestEvent(events) {
+  return events.filter(Boolean).reduce((latest, event) => {
+    if (!latest || isEventAfter(event, latest)) return event
+    return latest
+  }, null)
+}
+
+function isEventAfter(event, reference) {
+  if (!event) return false
+  if (!reference) return true
+
+  const eventAt = Date.parse(event.at)
+  const referenceAt = Date.parse(reference.at)
+  if (Number.isNaN(eventAt) || Number.isNaN(referenceAt)) return false
+
+  return eventAt >= referenceAt
+}
+
 async function readWorkspaceFiles(root) {
   const result = {}
 
@@ -761,6 +1077,11 @@ async function emit(options, event, detail) {
 
 function findLastEvent(events, eventName) {
   return events.findLast((entry) => entry.event === eventName) ?? null
+}
+
+function findLastEventOf(events, eventNames) {
+  const names = new Set(eventNames)
+  return events.findLast((entry) => names.has(entry.event)) ?? null
 }
 
 function sendJson(response, statusCode, payload) {

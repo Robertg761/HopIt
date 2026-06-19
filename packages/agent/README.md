@@ -49,6 +49,19 @@ journal entry cannot be replayed, startup is blocked so hydrate does not overwri
 local edits that still need to be recovered. Status reports journal entries as
 pending, failed, or acknowledged from the journal/events pair.
 
+After successful recovery, `watch` hydrates the managed folder, starts the
+recursive filesystem watcher, and coalesces rapid filesystem notifications into a
+single `sync-once` attempt after a short debounce window. The current debounce is
+`250ms`, so repeated editor saves should settle into one journaled latest write
+rather than a burst of stale intermediate syncs.
+
+Watch-loop hardening should keep the process alive after transient sync failures.
+Those failures should be emitted as `sync.failed`, reflected in status as
+failed/degraded sync state, and followed by normal `sync.complete` evidence once a
+later attempt succeeds. Recovery failures are intentionally different: they block
+startup before hydration with `watch.recovery_blocked` because replaying the
+journal safely is required before the workspace can be refreshed from cloud state.
+
 Serve local agent status JSON:
 
 ```bash
@@ -84,4 +97,9 @@ Generated local agent state is demo/runtime state, not workspace content:
 
 ## Next Step
 
-Harden the managed-folder adapter around conflict handling, offline behavior, and background sync. A true virtual filesystem or RAM-only mount can remain future optional research against the same cloud graph, journal, and acknowledgement flow.
+Harden the managed-folder watch loop around debounced/coalesced sync,
+transient-failure events and status, retry-after-failure behavior, and safe
+startup blocking when recovery cannot replay. Conflict handling and offline
+behavior can build on the same cloud graph, journal, and acknowledgement flow. A
+true virtual filesystem or RAM-only mount remains future optional research, not
+the current product path.
