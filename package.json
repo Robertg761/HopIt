@@ -14,6 +14,8 @@
     "agent:refresh": "node packages/agent/src/cli.js refresh",
     "agent:sync": "node packages/agent/src/cli.js sync-once",
     "agent:recover": "node packages/agent/src/cli.js recover",
+    "agent:review": "node packages/agent/src/cli.js review-open",
+    "agent:merge": "node packages/agent/src/cli.js merge",
     "agent:watch": "node packages/agent/src/cli.js watch",
     "agent:status": "node packages/agent/src/cli.js status-server",
     "agent:test": "node --test packages/agent/test/*.test.js"

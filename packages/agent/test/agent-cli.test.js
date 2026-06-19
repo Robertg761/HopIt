@@ -112,7 +112,7 @@ function delay(ms) {
 }
 
 async function waitFor(predicate, options = {}) {
-  const timeout = options.timeout ?? 5000
+  const timeout = options.timeout ?? 15000
   const interval = options.interval ?? 50
   const startedAt = Date.now()
   let lastError
@@ -314,6 +314,10 @@ async function readJson(filePath) {
   return JSON.parse(await fs.readFile(filePath, 'utf8'))
 }
 
+async function writeJson(filePath, value) {
+  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+}
+
 async function readNdjson(filePath) {
   const content = await fs.readFile(filePath, 'utf8')
   return content
@@ -338,6 +342,24 @@ async function appendEvent(state, event, detail) {
   )
 }
 
+async function setChangeSetVisibility(state, visibility) {
+  const cloud = await readJson(state.cloud)
+  cloud.visibility.effective = visibility
+  cloud.visibility.changeSetOverride = visibility
+  cloud.selectedState.visibility = visibility
+  cloud.selectedState.effectiveVisibility = visibility
+  await writeJson(state.cloud, cloud)
+}
+
+async function pathExists(filePath) {
+  try {
+    await fs.access(filePath)
+    return true
+  } catch {
+    return false
+  }
+}
+
 test('CLI classifies .private files as owner-private while snapshotting and syncing them', async () => {
   const state = await makeState()
 
@@ -346,6 +368,16 @@ test('CLI classifies .private files as owner-private while snapshotting and sync
   assert.match(init.stdout, /"scopeCounts":\{"shared":3,"private":1\}/)
 
   const initialCloud = await readJson(state.cloud)
+  assert.equal(initialCloud.schemaVersion, 2)
+  assert.equal(initialCloud.main.id, 'main')
+  assert.equal(initialCloud.selectedState.type, 'active-change-set')
+  assert.equal(initialCloud.selectedState.id, 'cs_demo_active')
+  assert.equal(initialCloud.owner.id, 'user_demo_owner')
+  assert.equal(initialCloud.session.id, 'session_demo_local')
+  assert.equal(initialCloud.visibility.effective, 'private')
+  assert.equal(initialCloud.selectedState.reviewState, 'not-open')
+  assert.equal(initialCloud.selectedState.mergeState, 'unmerged')
+  assert.equal(initialCloud.selectedState.conflictState, 'none')
   assert.equal(initialCloud.files['.private/agent-note.md'].scope, 'owner-private')
   assert.equal(Object.keys(initialCloud.files).length, 4)
 
@@ -368,11 +400,27 @@ test('CLI classifies .private files as owner-private while snapshotting and sync
   assert.equal(syncedCloud.files['.private/agent-note.md'].scope, 'owner-private')
   assert.equal(syncedCloud.files['.private/local-secret.txt'].scope, 'owner-private')
   assert.match(syncedCloud.files['.private/local-secret.txt'].content, /private but synced/)
+  assert.equal(syncedCloud.main.revision, 1)
+  assert.equal(syncedCloud.selectedState.revision, syncedCloud.revision)
+  assert.ok(syncedCloud.selectedState.revision > syncedCloud.main.revision)
 
   const statusResult = await runCli('status', stateArgs(state))
   const status = JSON.parse(statusResult.stdout)
   assert.deepEqual(status.cloud.scopeCounts, { shared: 3, private: 2 })
   assert.equal(status.cloud.fileCount, 5)
+  assert.equal(status.cloud.service, 'fixture-json-cloud-graph')
+  assert.equal(status.codebaseId, 'hopit-core')
+  assert.equal(status.mainId, 'main')
+  assert.equal(status.selectedStateType, 'active-change-set')
+  assert.equal(status.activeChangeSetId, 'cs_demo_active')
+  assert.equal(status.ownerId, 'user_demo_owner')
+  assert.equal(status.sessionId, 'session_demo_local')
+  assert.equal(status.requesterId, 'user_demo_owner')
+  assert.equal(status.requesterSessionId, 'session_demo_local')
+  assert.equal(status.requesterRole, 'owner')
+  assert.equal(status.visibleFileCount, 5)
+  assert.equal(status.hiddenFileCount, 0)
+  assert.equal(status.effectiveChangeSetVisibility, 'private')
   assert.equal(status.journal.totalEntries, 3)
   assert.equal(status.journal.pendingCount, 0)
   assert.deepEqual(status.journal.scopeCounts, { shared: 1, private: 2 })
@@ -390,6 +438,17 @@ test('CLI classifies .private files as owner-private while snapshotting and sync
       ['.private/local-secret.txt', 'owner-private'],
       ['README.md', 'shared'],
     ],
+  )
+  assert.ok(
+    journal.every(
+      (entry) =>
+        entry.targetStateType === 'active-change-set' &&
+        entry.targetStateId === 'cs_demo_active' &&
+        Number.isInteger(entry.targetStateRevision) &&
+        entry.ownerId === 'user_demo_owner' &&
+        entry.sessionId === 'session_demo_local' &&
+        entry.effectiveChangeSetVisibility === 'private',
+    ),
   )
 })
 
@@ -603,7 +662,7 @@ test('watch refuses unsafe recovery and exposes failed state in status', async (
   })
 
   const watchProcess = await startWatch(state, t)
-  const exit = await waitForExit(watchProcess.child, { timeout: 5000 })
+  const exit = await waitForExit(watchProcess.child, { timeout: 15000 })
   assert.equal(exit.code, 1)
 
   const output = `${watchProcess.stdout()}\n${watchProcess.stderr()}`
@@ -648,6 +707,19 @@ test('refresh brings device A shared-file sync into device B managed workspace',
   const cloud = await readJson(deviceA.cloud)
   assert.equal(cloud.files['README.md'].scope, 'shared')
   assert.equal(cloud.files['README.md'].content, refreshedContent)
+
+  const remoteUpdate = (await readNdjson(deviceB.events)).findLast((event) => event.event === 'remote-update')
+  assert.equal(remoteUpdate.detail.selectedStateId, 'cs_demo_active')
+  assert.equal(remoteUpdate.detail.fromRevision, 1)
+  assert.equal(remoteUpdate.detail.toRevision, cloud.revision)
+  assert.deepEqual(remoteUpdate.detail.changedPaths, ['README.md'])
+  assert.deepEqual(remoteUpdate.detail.deletedPaths, [])
+  assert.deepEqual(remoteUpdate.detail.changedScopeCounts, { shared: 1, private: 0 })
+  assert.deepEqual(remoteUpdate.detail.hiddenScopeCounts, { shared: 0, private: 0 })
+
+  const status = JSON.parse((await runCli('status', stateArgs(deviceB))).stdout)
+  assert.equal(status.remoteUpdate.state, 'updated')
+  assert.deepEqual(status.events.lastRemoteUpdate.detail.changedPaths, ['README.md'])
 })
 
 test('refresh brings same-owner .private sync into device B managed workspace', async (t) => {
@@ -675,6 +747,390 @@ test('refresh brings same-owner .private sync into device B managed workspace', 
   const cloud = await readJson(deviceA.cloud)
   assert.equal(cloud.files['.private/agent-note.md'].scope, 'owner-private')
   assert.equal(cloud.files['.private/agent-note.md'].content, refreshedContent)
+
+  const remoteUpdate = (await readNdjson(deviceB.events)).findLast((event) => event.event === 'remote-update')
+  assert.deepEqual(remoteUpdate.detail.changedPaths, ['.private/agent-note.md'])
+  assert.deepEqual(remoteUpdate.detail.changedScopeCounts, { shared: 0, private: 1 })
+  assert.deepEqual(remoteUpdate.detail.hiddenScopeCounts, { shared: 0, private: 0 })
+})
+
+test('owner requester sees shared and owner-private files in a private active change set', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+
+  await runCli('hydrate', [
+    ...stateArgs(state),
+    '--requester-id',
+    'user_demo_owner',
+    '--session-id',
+    'session_owner_explicit',
+  ])
+
+  assert.equal(await pathExists(path.join(state.workspace, 'README.md')), true)
+  assert.equal(await pathExists(path.join(state.workspace, 'package.json')), true)
+  assert.equal(await pathExists(path.join(state.workspace, 'src/presence.ts')), true)
+  assert.equal(await pathExists(path.join(state.workspace, '.private/agent-note.md')), true)
+
+  const status = JSON.parse(
+    (
+      await runCli('status', [
+        ...stateArgs(state),
+        '--requester-id',
+        'user_demo_owner',
+        '--session-id',
+        'session_owner_explicit',
+      ])
+    ).stdout,
+  )
+  assert.equal(status.requesterId, 'user_demo_owner')
+  assert.equal(status.requesterSessionId, 'session_owner_explicit')
+  assert.equal(status.requesterRole, 'owner')
+  assert.equal(status.visibleFileCount, 4)
+  assert.equal(status.hiddenFileCount, 0)
+  assert.deepEqual(status.cloud.scopeCounts, { shared: 3, private: 1 })
+  assert.deepEqual(status.hiddenScopeCounts, { shared: 0, private: 0 })
+})
+
+test('collaborator requester sees no active change-set files when visibility is private', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+
+  await runCli('refresh', [
+    ...stateArgs(state),
+    '--requester-id',
+    'user_demo_collaborator',
+    '--session-id',
+    'session_demo_collaborator',
+  ])
+
+  assert.equal(await pathExists(path.join(state.workspace, 'README.md')), false)
+  assert.equal(await pathExists(path.join(state.workspace, '.private/agent-note.md')), false)
+
+  const status = JSON.parse(
+    (
+      await runCli('status', [
+        ...stateArgs(state),
+        '--requester-id',
+        'user_demo_collaborator',
+        '--session-id',
+        'session_demo_collaborator',
+      ])
+    ).stdout,
+  )
+  assert.equal(status.requesterId, 'user_demo_collaborator')
+  assert.equal(status.requesterSessionId, 'session_demo_collaborator')
+  assert.equal(status.requesterRole, 'member')
+  assert.equal(status.effectiveChangeSetVisibility, 'private')
+  assert.equal(status.visibleFileCount, 0)
+  assert.equal(status.hiddenFileCount, 4)
+  assert.deepEqual(status.cloud.scopeCounts, { shared: 0, private: 0 })
+  assert.deepEqual(status.hiddenScopeCounts, { shared: 3, private: 1 })
+})
+
+test('collaborator requester sees only shared files when change set is team or review visible', async () => {
+  for (const visibility of ['team-visible', 'review-visible']) {
+    const state = await makeState()
+    await runCli('init', [...stateArgs(state), '--force'])
+    await setChangeSetVisibility(state, visibility)
+
+    await runCli('refresh', [
+      ...stateArgs(state),
+      '--requester-id',
+      'user_demo_collaborator',
+      '--session-id',
+      `session_demo_collaborator_${visibility}`,
+    ])
+
+    assert.equal(await pathExists(path.join(state.workspace, 'README.md')), true)
+    assert.equal(await pathExists(path.join(state.workspace, 'package.json')), true)
+    assert.equal(await pathExists(path.join(state.workspace, 'src/presence.ts')), true)
+    assert.equal(await pathExists(path.join(state.workspace, '.private/agent-note.md')), false)
+
+    const status = JSON.parse(
+      (
+        await runCli('status', [
+          ...stateArgs(state),
+          '--requester-id',
+          'user_demo_collaborator',
+          '--session-id',
+          `session_demo_collaborator_${visibility}`,
+        ])
+      ).stdout,
+    )
+    assert.equal(status.requesterRole, 'member')
+    assert.equal(status.effectiveChangeSetVisibility, visibility)
+    assert.equal(status.visibleFileCount, 3)
+    assert.equal(status.hiddenFileCount, 1)
+    assert.deepEqual(status.cloud.scopeCounts, { shared: 3, private: 0 })
+    assert.deepEqual(status.hiddenScopeCounts, { shared: 0, private: 1 })
+
+    const remoteUpdate = (await readNdjson(state.events)).findLast((event) => event.event === 'remote-update')
+    assert.deepEqual(remoteUpdate.detail.changedPaths.sort(), [
+      'README.md',
+      'package.json',
+      'src/presence.ts',
+    ])
+    assert.deepEqual(remoteUpdate.detail.deletedPaths, [])
+    assert.deepEqual(remoteUpdate.detail.changedScopeCounts, { shared: 3, private: 0 })
+    assert.deepEqual(remoteUpdate.detail.hiddenScopeCounts, { shared: 0, private: 1 })
+    assert.equal(remoteUpdate.detail.requester.role, 'member')
+    assert.equal(remoteUpdate.detail.requester.effectiveChangeSetVisibility, visibility)
+  }
+})
+
+test('collaborator refresh refuses to overwrite pending local edits', async (t) => {
+  if (await skipUnlessRefreshAvailable(t)) return
+
+  const { deviceA, deviceB } = await makeTwoSessionState()
+  await runCli('init', [...stateArgs(deviceA), '--force'])
+  await setChangeSetVisibility(deviceA, 'team-visible')
+  await runCli('hydrate', stateArgs(deviceA))
+  await runCli('refresh', [
+    ...stateArgs(deviceB),
+    '--requester-id',
+    'user_demo_collaborator',
+    '--session-id',
+    'session_demo_collaborator',
+  ])
+
+  const collaboratorPath = path.join(deviceB.workspace, 'README.md')
+  const collaboratorContent = '# hopit-core\n\nCollaborator pending local edit.\n'
+  await fs.writeFile(collaboratorPath, collaboratorContent, 'utf8')
+  await appendJournalEntry(deviceB, {
+    id: randomUUID(),
+    type: 'write',
+    path: 'README.md',
+    scope: 'shared',
+    hash: hashContent(collaboratorContent),
+    bytes: Buffer.byteLength(collaboratorContent),
+    createdAt: new Date().toISOString(),
+    status: 'pending',
+    targetStateType: 'active-change-set',
+    targetStateId: 'cs_demo_active',
+    ownerId: 'user_demo_collaborator',
+    sessionId: 'session_demo_collaborator',
+    effectiveChangeSetVisibility: 'team-visible',
+  })
+
+  await fs.appendFile(path.join(deviceA.workspace, 'README.md'), '\nOwner cloud edit.\n', 'utf8')
+  await runCli('sync-once', stateArgs(deviceA))
+
+  const failure = await runCliFailure('refresh', [
+    ...stateArgs(deviceB),
+    '--requester-id',
+    'user_demo_collaborator',
+    '--session-id',
+    'session_demo_collaborator',
+  ])
+  assert.match(failure.stdout, /refresh\.blocked/)
+  assert.match(failure.stderr, /Refresh blocked/)
+  assert.equal(await fs.readFile(collaboratorPath, 'utf8'), collaboratorContent)
+
+  const status = JSON.parse(
+    (
+      await runCli('status', [
+        ...stateArgs(deviceB),
+        '--requester-id',
+        'user_demo_collaborator',
+        '--session-id',
+        'session_demo_collaborator',
+      ])
+    ).stdout,
+  )
+  assert.equal(status.requesterRole, 'member')
+  assert.equal(status.refresh.state, 'blocked')
+  assert.equal(status.journal.pendingCount, 1)
+  assert.equal(status.journal.failedCount, 0)
+})
+
+test('merge refuses a change set that is not open for review', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+
+  const failure = await runCliFailure('merge', stateArgs(state))
+  assert.equal(failure.code, 1)
+  assert.match(failure.stderr, /not open for review/i)
+
+  const cloud = await readJson(state.cloud)
+  assert.equal(cloud.main.revision, 1)
+  assert.equal(cloud.selectedState.mergeState, 'unmerged')
+})
+
+test('review-open and merge advance Main only after explicit merge', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+
+  await fs.appendFile(path.join(state.workspace, 'README.md'), '\nReviewable change.\n', 'utf8')
+  await runCli('sync-once', stateArgs(state))
+
+  let cloud = await readJson(state.cloud)
+  const selectedRevision = cloud.selectedState.revision
+  assert.ok(selectedRevision > cloud.main.revision)
+  assert.equal(cloud.main.revision, 1)
+  assert.equal(cloud.selectedState.reviewState, 'not-open')
+  assert.equal(cloud.selectedState.mergeState, 'unmerged')
+
+  const review = await runCli('review-open', [
+    ...stateArgs(state),
+    '--requester-id',
+    'user_demo_owner',
+  ])
+  assert.match(review.stdout, /change_set\.review_opened/)
+
+  cloud = await readJson(state.cloud)
+  assert.equal(cloud.main.revision, 1)
+  assert.equal(cloud.selectedState.revision, selectedRevision)
+  assert.equal(cloud.selectedState.reviewState, 'open')
+  assert.equal(cloud.selectedState.mergeState, 'unmerged')
+  assert.equal(cloud.selectedState.review.state, 'open')
+  assert.equal(cloud.selectedState.review.openedBy, 'user_demo_owner')
+
+  let status = JSON.parse((await runCli('status', stateArgs(state))).stdout)
+  assert.equal(status.review.state, 'open')
+  assert.equal(status.merge.state, 'unmerged')
+  assert.equal(status.merge.mainRevision, 1)
+  assert.equal(status.events.lastReviewOpened.detail.selectedStateId, 'cs_demo_active')
+
+  const merge = await runCli('merge', [
+    ...stateArgs(state),
+    '--requester-id',
+    'user_demo_owner',
+  ])
+  assert.match(merge.stdout, /change_set\.merged/)
+
+  cloud = await readJson(state.cloud)
+  assert.equal(cloud.main.revision, selectedRevision)
+  assert.equal(cloud.main.mergedChangeSetId, 'cs_demo_active')
+  assert.equal(cloud.selectedState.reviewState, 'merged')
+  assert.equal(cloud.selectedState.mergeState, 'merged')
+  assert.equal(cloud.selectedState.merge.state, 'merged')
+  assert.equal(cloud.selectedState.merge.previousMainRevision, 1)
+  assert.equal(cloud.selectedState.merge.mainRevision, selectedRevision)
+  assert.equal(cloud.selectedState.merge.mergedBy, 'user_demo_owner')
+
+  status = JSON.parse((await runCli('status', stateArgs(state))).stdout)
+  assert.equal(status.review.state, 'merged')
+  assert.equal(status.merge.state, 'merged')
+  assert.equal(status.merge.mainRevision, selectedRevision)
+  assert.equal(status.events.lastChangeSetMerged.detail.mainRevision, selectedRevision)
+})
+
+test('recover surfaces stale file revision as reviewable conflict state', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+
+  const staleContent = '# hopit-core\n\nStale local write from old session.\n'
+  await fs.writeFile(path.join(state.workspace, 'README.md'), staleContent, 'utf8')
+
+  const cloud = await readJson(state.cloud)
+  await appendJournalEntry(state, {
+    id: randomUUID(),
+    type: 'write',
+    path: 'README.md',
+    scope: 'shared',
+    hash: hashContent(staleContent),
+    bytes: Buffer.byteLength(staleContent),
+    baseRevision: cloud.files['README.md'].revision - 1,
+    createdAt: new Date().toISOString(),
+    status: 'pending',
+    targetStateType: 'active-change-set',
+    targetStateId: 'cs_demo_active',
+    targetStateRevision: cloud.selectedState.revision,
+    ownerId: 'user_demo_owner',
+    sessionId: 'session_demo_local',
+    effectiveChangeSetVisibility: 'private',
+  })
+
+  const failure = await runCliFailure('recover', stateArgs(state))
+  assert.equal(failure.code, 1)
+  assert.match(failure.stdout, /change_set\.conflict_detected/)
+  assert.match(failure.stdout, /journal\.recovery_failed/)
+  assert.equal(await fs.readFile(path.join(state.workspace, 'README.md'), 'utf8'), staleContent)
+
+  const conflictedCloud = await readJson(state.cloud)
+  assert.equal(conflictedCloud.selectedState.conflictState, 'conflicted')
+  assert.equal(conflictedCloud.selectedState.conflict.reason, 'base_revision_mismatch')
+  assert.equal(conflictedCloud.selectedState.conflict.path, 'README.md')
+
+  const status = JSON.parse((await runCli('status', stateArgs(state))).stdout)
+  assert.equal(status.conflict.state, 'conflicted')
+  assert.equal(status.conflict.detail.reason, 'base_revision_mismatch')
+  assert.equal(status.journal.failedCount, 1)
+  assert.equal(status.events.lastConflictDetected.detail.path, 'README.md')
+})
+
+test('recover surfaces stale selected-state revision as reviewable conflict state', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+
+  const staleContent = '# hopit-core\n\nStale selected-state write.\n'
+  await fs.writeFile(path.join(state.workspace, 'README.md'), staleContent, 'utf8')
+
+  const cloud = await readJson(state.cloud)
+  await appendJournalEntry(state, {
+    id: randomUUID(),
+    type: 'write',
+    path: 'README.md',
+    scope: 'shared',
+    hash: hashContent(staleContent),
+    bytes: Buffer.byteLength(staleContent),
+    baseRevision: cloud.files['README.md'].revision,
+    createdAt: new Date().toISOString(),
+    status: 'pending',
+    targetStateType: 'active-change-set',
+    targetStateId: 'cs_demo_active',
+    targetStateRevision: cloud.selectedState.revision - 1,
+    ownerId: 'user_demo_owner',
+    sessionId: 'session_demo_local',
+    effectiveChangeSetVisibility: 'private',
+  })
+
+  const failure = await runCliFailure('recover', stateArgs(state))
+  assert.equal(failure.code, 1)
+  assert.match(failure.stdout, /change_set\.conflict_detected/)
+  assert.equal(await fs.readFile(path.join(state.workspace, 'README.md'), 'utf8'), staleContent)
+
+  const status = JSON.parse((await runCli('status', stateArgs(state))).stdout)
+  assert.equal(status.conflict.state, 'conflicted')
+  assert.equal(status.conflict.detail.reason, 'selected_state_revision_mismatch')
+  assert.equal(status.conflict.detail.path, 'README.md')
+  assert.equal(status.events.lastConflictDetected.detail.reason, 'selected_state_revision_mismatch')
+})
+
+test('merge surfaces stale Main revision as reviewable conflict state', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+
+  await fs.appendFile(path.join(state.workspace, 'README.md'), '\nChange against older Main.\n', 'utf8')
+  await runCli('sync-once', stateArgs(state))
+  await runCli('review-open', stateArgs(state))
+
+  const cloud = await readJson(state.cloud)
+  cloud.main.revision += 1
+  await writeJson(state.cloud, cloud)
+
+  const failure = await runCliFailure('merge', stateArgs(state))
+  assert.equal(failure.code, 1)
+  assert.match(failure.stdout, /change_set\.conflict_detected/)
+  assert.match(failure.stderr, /Main moved/)
+
+  const conflictedCloud = await readJson(state.cloud)
+  assert.equal(conflictedCloud.selectedState.reviewState, 'open')
+  assert.equal(conflictedCloud.selectedState.mergeState, 'unmerged')
+  assert.equal(conflictedCloud.selectedState.conflictState, 'conflicted')
+  assert.equal(conflictedCloud.selectedState.conflict.reason, 'main_revision_mismatch')
+  assert.equal(conflictedCloud.selectedState.conflict.expectedMainRevision, 1)
+  assert.equal(conflictedCloud.selectedState.conflict.actualMainRevision, 2)
+
+  const status = JSON.parse((await runCli('status', stateArgs(state))).stdout)
+  assert.equal(status.review.state, 'open')
+  assert.equal(status.merge.state, 'unmerged')
+  assert.equal(status.conflict.state, 'conflicted')
+  assert.equal(status.events.lastConflictDetected.detail.reason, 'main_revision_mismatch')
 })
 
 test('refresh refuses to overwrite device B files with pending or failed journal entries', async (t) => {

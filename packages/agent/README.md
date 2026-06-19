@@ -31,6 +31,8 @@ npm run agent:refresh
 npm run agent:sync
 npm run agent:recover
 npm run agent:watch
+npm run agent:review
+npm run agent:merge
 ```
 
 `npm run agent:refresh` is the safe cloud-to-workspace command. It refuses to
@@ -101,11 +103,35 @@ separate local journals/events for each session. The first simulation target is:
 3. B runs `npm run agent:refresh`.
 4. B sees the non-private file and, because this simulation is the same owner, the
    `.private/` file with owner-private scope preserved.
+5. A collaborator requester can refresh the same active change set with
+   `--requester-id user_demo_collaborator --session-id session_demo_collaborator`
+   and sees only the files allowed by the change-set visibility rules.
 
-The current fixture does not yet model Main, active change-set id, owner identity,
-or change-set visibility. The next cloud-service boundary should add those fields
-so tests can distinguish same-owner device handoff from collaborator visibility
-and merge into Main.
+The current fixture models Main, the selected active change set, owner identity,
+session identity, and effective change-set visibility. The local implementation
+still stores that graph in JSON, but commands now reach it through a
+fixture-backed cloud graph service boundary. That keeps the demos dependency-free
+while giving tests and later API work a stable shape for same-owner handoff,
+collaborator visibility, review, and merge behavior.
+
+Requester-aware reads are fixture-only but explicit. Owner requesters see shared
+and `.private/` files. Collaborator requesters see no active change-set files when
+visibility is `private`, see shared files when visibility is `team-visible` or
+`review-visible`, and never see `.private/` files.
+
+Review and merge are also fixture-level commands. `npm run agent:review` opens
+the selected active change set for review and emits `change_set.review_opened`.
+`npm run agent:merge` merges that selected active change set into Main and emits
+`change_set.merged`. Local sync continues to acknowledge writes into the selected
+active change set; Main should remain stable until the explicit merge command
+advances it. Status should expose the selected change set's review state, merge
+state, and latest review/merge events so the product UI can distinguish synced
+draft work from accepted Main.
+
+Conflict handling is fixture-level as well. Stale selected-state or file/base
+revision recovery and stale Main revision merge attempts emit
+`change_set.conflict_detected`, persist conflict state on the selected active
+change set, and leave local unacknowledged edits in place for review.
 
 Serve local agent status JSON:
 
@@ -113,7 +139,7 @@ Serve local agent status JSON:
 npm run agent:status
 ```
 
-The status server is dependency-free and listens on `127.0.0.1:4785` by default. It is read-only and reports `adapter: managed-folder`, `cacheMode: local-cache`, the workspace folder, local cloud graph summary, pending/failed/acknowledged journal counts, recent events, and the latest acknowledgement/sync/recovery events.
+The status server is dependency-free and listens on `127.0.0.1:4785` by default. It is read-only and reports `adapter: managed-folder`, `cacheMode: local-cache`, the workspace folder, local cloud graph summary, requester identity and visibility-filtered file counts, pending/failed/acknowledged journal counts, recent events, and the latest acknowledgement/sync/recovery events.
 
 Query it with curl:
 
@@ -131,7 +157,9 @@ npm run agent:status -- \
   --cloud .hopit-agent/demo/cloud.json \
   --workspace .hopit-agent/demo/workspaces/hopit-core \
   --journal .hopit-agent/demo/journal.ndjson \
-  --events .hopit-agent/demo/events.ndjson
+  --events .hopit-agent/demo/events.ndjson \
+  --requester-id user_demo_collaborator \
+  --session-id session_demo_collaborator
 ```
 
 Generated local agent state is demo/runtime state, not workspace content:
@@ -142,10 +170,11 @@ Generated local agent state is demo/runtime state, not workspace content:
 
 ## Next Step
 
-Replace the fixture-backed local cloud JSON access with a service-shaped cloud
-file graph interface while keeping the same managed-folder, `.private/`, journal,
-refresh, and status contracts. That boundary should add Main, active change-set
-identity, owner/session identity, and change-set visibility. Conflict handling,
-review/merge, and offline behavior can build on that boundary. A true virtual
+Build Git compatibility on top of the fixture-backed graph contract. The
+same-owner, collaborator visibility, remote-update, review, merge, and conflict
+simulations now define how active change-set state becomes visible locally, how it
+becomes accepted Main, and how stale revisions become reviewable state. The next
+proof should import/export or publish snapshots without leaking `.private/`
+owner-only content. Offline behavior can build on that boundary. A true virtual
 filesystem or RAM-only mount remains future optional research, not the current
 product path.

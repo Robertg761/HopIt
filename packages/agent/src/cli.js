@@ -26,9 +26,19 @@ const workspaceMode = {
   sourceOfTruth: 'cloud',
 }
 
+const cloudServiceType = 'fixture-json-cloud-graph'
+
 const fileScope = {
   shared: 'shared',
   ownerPrivate: 'owner-private',
+}
+
+class ConflictError extends Error {
+  constructor(message, detail) {
+    super(message)
+    this.name = 'ConflictError'
+    this.detail = detail
+  }
 }
 
 async function main() {
@@ -58,6 +68,16 @@ async function main() {
   if (command === 'recover') {
     const recovery = await recoverJournal(options)
     if (recovery.failed > 0) process.exitCode = 1
+    return
+  }
+
+  if (command === 'review-open') {
+    await openChangeSetReview(options)
+    return
+  }
+
+  if (command === 'merge') {
+    await mergeChangeSet(options)
     return
   }
 
@@ -110,23 +130,27 @@ function parseOptions(args) {
 }
 
 async function initCloud(options) {
-  if (existsSync(options.cloud) && !options.force) {
+  const cloudService = createCloudGraphService(options)
+  if ((await cloudService.exists()) && !options.force) {
     await emit(options, 'cloud.exists', { cloud: options.cloud })
     return
   }
 
   const fixture = await readJson(fixturePath)
-  const cloud = withComputedMetadata(fixture)
-  await writeJson(options.cloud, cloud)
+  const cloud = await cloudService.initialize(fixture)
   await emit(options, 'cloud.initialized', {
     cloud: options.cloud,
+    service: cloudService.type,
     files: Object.keys(fixture.files).length,
+    contract: summarizeGraphContract(cloud),
     scopeCounts: countCloudScopes(cloud),
   })
 }
 
 async function hydrateWorkspace(options) {
-  const cloud = await readJson(options.cloud)
+  const cloudService = createCloudGraphService(options)
+  const cloud = await cloudService.readVisibleGraph(visibilityRequestFromOptions(options))
+  const requester = summarizeRequester(cloud.visibilityContext)
   await fs.mkdir(options.workspace, { recursive: true })
 
   for (const [relativePath, file] of Object.entries(cloud.files)) {
@@ -145,21 +169,37 @@ async function hydrateWorkspace(options) {
   await emit(options, 'workspace.ready', {
     workspace: options.workspace,
     revision: cloud.revision,
+    service: cloudService.type,
+    contract: summarizeGraphContract(cloud),
+    requester,
     adapter: workspaceMode.adapter,
     cacheMode: workspaceMode.cacheMode,
     scopeCounts: countCloudScopes(cloud),
+    hiddenScopeCounts: cloud.visibilityContext?.hiddenScopeCounts ?? { shared: 0, private: 0 },
   })
 }
 
 async function refreshWorkspace(options) {
-  const cloud = await readJson(options.cloud)
+  const cloudService = createCloudGraphService(options)
+  const visibilityRequest = visibilityRequestFromOptions(options)
+  const cloud = await cloudService.readVisibleGraph(visibilityRequest)
+  const eventEntries = await readNdjson(options.events)
+  const lastVisibleWorkspaceEvent = findLastEventOf(eventEntries, [
+    'workspace.ready',
+    'refresh.complete',
+    'remote-update',
+  ])
   const journalSafety = await readJournalSafety(options)
   const startedDetail = {
     workspace: options.workspace,
     revision: cloud.revision,
+    service: cloudService.type,
+    contract: summarizeGraphContract(cloud),
+    requester: summarizeRequester(cloud.visibilityContext),
     adapter: workspaceMode.adapter,
     cacheMode: workspaceMode.cacheMode,
     scopeCounts: countCloudScopes(cloud),
+    hiddenScopeCounts: cloud.visibilityContext?.hiddenScopeCounts ?? { shared: 0, private: 0 },
     journal: journalSafety.summary,
   }
 
@@ -180,6 +220,24 @@ async function refreshWorkspace(options) {
   }
 
   const result = await materializeCloudToWorkspace(options, cloud)
+  if (result.written > 0 || result.deleted > 0) {
+    await emit(options, 'remote-update', {
+      workspace: options.workspace,
+      service: cloudService.type,
+      contract: summarizeGraphContract(cloud),
+      requester: summarizeRequester(cloud.visibilityContext),
+      selectedStateId: cloud.selectedState?.id ?? null,
+      selectedStateType: cloud.selectedState?.type ?? null,
+      fromRevision: visibleRevisionFromEvent(lastVisibleWorkspaceEvent),
+      toRevision: cloud.revision,
+      changedPaths: result.changedPaths,
+      deletedPaths: result.deletedPaths,
+      changedScopeCounts: countPathScopes(result.changedPaths),
+      deletedScopeCounts: countPathScopes(result.deletedPaths),
+      scopeCounts: countPathScopes([...result.changedPaths, ...result.deletedPaths]),
+      hiddenScopeCounts: cloud.visibilityContext?.hiddenScopeCounts ?? { shared: 0, private: 0 },
+    })
+  }
   await emit(options, 'refresh.complete', {
     ...startedDetail,
     ...result,
@@ -191,6 +249,8 @@ async function materializeCloudToWorkspace(options, cloud) {
 
   const diskFiles = await readWorkspaceFiles(options.workspace)
   const cloudPaths = new Set(Object.keys(cloud.files ?? {}))
+  const changedPaths = []
+  const deletedPaths = []
   let written = 0
   let deleted = 0
   let unchanged = 0
@@ -210,6 +270,7 @@ async function materializeCloudToWorkspace(options, cloud) {
     }
 
     await fs.writeFile(absolutePath, content, 'utf8')
+    changedPaths.push(relativePath)
     written += 1
   }
 
@@ -218,6 +279,7 @@ async function materializeCloudToWorkspace(options, cloud) {
 
     await fs.rm(path.join(options.workspace, relativePath), { force: true })
     await removeEmptyAncestorDirectories(options.workspace, path.dirname(relativePath))
+    deletedPaths.push(relativePath)
     deleted += 1
   }
 
@@ -227,8 +289,11 @@ async function materializeCloudToWorkspace(options, cloud) {
     written,
     deleted,
     unchanged,
+    changedPaths,
+    deletedPaths,
     fileCount: cloudPaths.size,
     scopeCounts: countCloudScopes(cloud),
+    hiddenScopeCounts: cloud.visibilityContext?.hiddenScopeCounts ?? { shared: 0, private: 0 },
   }
 }
 
@@ -258,8 +323,8 @@ async function syncOnce(options, context = {}) {
 }
 
 async function performSyncOnce(options, contextDetail = {}) {
-  const cloud = await readJson(options.cloud)
-  normalizeCloudScopes(cloud)
+  const cloudService = createCloudGraphService(options)
+  const cloud = await cloudService.readGraph()
   const diskFiles = await readWorkspaceFiles(options.workspace)
   const cloudPaths = new Set(Object.keys(cloud.files))
   const writeEvents = []
@@ -280,18 +345,20 @@ async function performSyncOnce(options, contextDetail = {}) {
       scope,
       hash: nextHash,
       bytes: Buffer.byteLength(content),
+      baseRevision: current?.revision ?? null,
       createdAt: now,
       status: 'pending',
+      ...journalContextForCloud(cloud),
     }
 
     await appendNdjson(options.journal, entry)
     await emit(options, 'write.journaled', entry)
 
-    const acknowledgement = applyJournalEntryToCloud(cloud, entry, {
+    const acknowledgement = cloudService.applyJournalEntry(cloud, entry, {
       content,
       now,
     })
-    await writeJson(options.cloud, cloud)
+    await cloudService.writeGraph(cloud)
     await emit(options, 'cloud.acknowledged', acknowledgement)
 
     writeEvents.push(entry)
@@ -304,25 +371,29 @@ async function performSyncOnce(options, contextDetail = {}) {
       type: 'delete',
       path: relativePath,
       scope,
+      baseRevision: cloud.files[relativePath]?.revision ?? null,
       createdAt: now,
       status: 'pending',
+      ...journalContextForCloud(cloud),
     }
 
     await appendNdjson(options.journal, entry)
     await emit(options, 'write.journaled', entry)
 
-    const acknowledgement = applyJournalEntryToCloud(cloud, entry, { now })
-    await writeJson(options.cloud, cloud)
+    const acknowledgement = cloudService.applyJournalEntry(cloud, entry, { now })
+    await cloudService.writeGraph(cloud)
     await emit(options, 'cloud.acknowledged', acknowledgement)
 
     writeEvents.push(entry)
   }
 
-  await writeJson(options.cloud, cloud)
+  await cloudService.writeGraph(cloud)
   const result = {
     ...contextDetail,
     writes: writeEvents.length,
     revision: cloud.revision,
+    service: cloudService.type,
+    contract: summarizeGraphContract(cloud),
     scopeCounts: countCloudScopes(cloud),
     journaledScopeCounts: countEntryScopes(writeEvents),
   }
@@ -331,8 +402,8 @@ async function performSyncOnce(options, contextDetail = {}) {
 }
 
 async function recoverJournal(options) {
-  const cloud = await readJson(options.cloud)
-  normalizeCloudScopes(cloud)
+  const cloudService = createCloudGraphService(options)
+  const cloud = await cloudService.readGraph()
 
   const journalEntries = await readNdjson(options.journal)
   const eventEntries = await readNdjson(options.events)
@@ -352,11 +423,11 @@ async function recoverJournal(options) {
 
     try {
       const recovery = await prepareRecovery(cloud, entry, options.workspace)
-      const acknowledgement = applyJournalEntryToCloud(cloud, entry, {
+      const acknowledgement = cloudService.applyJournalEntry(cloud, entry, {
         content: recovery.content,
         now,
       })
-      await writeJson(options.cloud, cloud)
+      await cloudService.writeGraph(cloud)
       await emit(options, 'cloud.acknowledged', {
         ...acknowledgement,
         recovered: true,
@@ -365,6 +436,14 @@ async function recoverJournal(options) {
       result.acknowledged += 1
     } catch (error) {
       result.failed += 1
+      if (error instanceof ConflictError) {
+        const conflict = recordChangeSetConflict(cloud, {
+          ...error.detail,
+          detectedAt: new Date().toISOString(),
+        })
+        await cloudService.writeGraph(cloud)
+        await emit(options, 'change_set.conflict_detected', conflict)
+      }
       await emit(options, 'journal.recovery_failed', {
         id: entry.id,
         type: entry.type,
@@ -378,14 +457,107 @@ async function recoverJournal(options) {
   await emit(options, 'journal.recovery_complete', {
     ...result,
     revision: cloud.revision,
+    service: cloudService.type,
+    contract: summarizeGraphContract(cloud),
     scopeCounts: countCloudScopes(cloud),
   })
 
   return result
 }
 
+async function openChangeSetReview(options) {
+  const cloudService = createCloudGraphService(options)
+  const cloud = await cloudService.readGraph()
+  const now = new Date().toISOString()
+  const actorId = actorIdFromOptions(options, cloud)
+
+  ensureActiveChangeSet(cloud)
+
+  if (cloud.selectedState.mergeState === 'merged') {
+    throw new Error('Cannot open review because the selected change set is already merged.')
+  }
+
+  cloud.selectedState.reviewState = 'open'
+  cloud.selectedState.review = {
+    state: 'open',
+    openedAt: cloud.selectedState.review?.openedAt ?? now,
+    openedBy: cloud.selectedState.review?.openedBy ?? actorId,
+  }
+
+  await cloudService.writeGraph(cloud)
+  await emit(options, 'change_set.review_opened', {
+    selectedStateId: cloud.selectedState.id,
+    selectedStateType: cloud.selectedState.type,
+    selectedStateRevision: cloud.selectedState.revision,
+    mainId: cloud.main.id,
+    mainRevision: cloud.main.revision,
+    reviewState: cloud.selectedState.reviewState,
+    openedAt: cloud.selectedState.review.openedAt,
+    openedBy: cloud.selectedState.review.openedBy,
+  })
+}
+
+async function mergeChangeSet(options) {
+  const cloudService = createCloudGraphService(options)
+  const cloud = await cloudService.readGraph()
+  const now = new Date().toISOString()
+  const actorId = actorIdFromOptions(options, cloud)
+
+  ensureActiveChangeSet(cloud)
+
+  if (cloud.selectedState.reviewState !== 'open') {
+    throw new Error('Cannot merge because the selected change set is not open for review.')
+  }
+
+  if (cloud.selectedState.baseRevision !== cloud.main.revision) {
+    const conflict = recordChangeSetConflict(cloud, {
+      reason: 'main_revision_mismatch',
+      expectedMainRevision: cloud.selectedState.baseRevision,
+      actualMainRevision: cloud.main.revision,
+      selectedStateId: cloud.selectedState.id,
+      selectedStateRevision: cloud.selectedState.revision,
+      detectedAt: now,
+    })
+    await cloudService.writeGraph(cloud)
+    await emit(options, 'change_set.conflict_detected', conflict)
+    throw new Error(
+      `Cannot merge because Main moved from revision ${cloud.selectedState.baseRevision} to ${cloud.main.revision}.`,
+    )
+  }
+
+  const previousMainRevision = cloud.main.revision
+  cloud.main.revision = cloud.selectedState.revision
+  cloud.main.mergedChangeSetId = cloud.selectedState.id
+  cloud.main.updatedAt = now
+  cloud.selectedState.reviewState = 'merged'
+  cloud.selectedState.mergeState = 'merged'
+  cloud.selectedState.merge = {
+    state: 'merged',
+    mergedAt: cloud.selectedState.merge?.mergedAt ?? now,
+    mergedBy: cloud.selectedState.merge?.mergedBy ?? actorId,
+    mainId: cloud.main.id,
+    mainRevision: cloud.main.revision,
+    previousMainRevision,
+  }
+
+  await cloudService.writeGraph(cloud)
+  await emit(options, 'change_set.merged', {
+    selectedStateId: cloud.selectedState.id,
+    selectedStateType: cloud.selectedState.type,
+    selectedStateRevision: cloud.selectedState.revision,
+    mainId: cloud.main.id,
+    mainRevision: cloud.main.revision,
+    previousMainRevision,
+    mergedAt: cloud.selectedState.merge.mergedAt,
+    mergedBy: cloud.selectedState.merge.mergedBy,
+    reviewState: cloud.selectedState.reviewState,
+    mergeState: cloud.selectedState.mergeState,
+  })
+}
+
 async function watchWorkspace(options) {
-  if (!existsSync(options.cloud)) await initCloud(options)
+  const cloudService = createCloudGraphService(options)
+  if (!(await cloudService.exists())) await initCloud(options)
   const recovery = await recoverJournal(options)
   if (recovery.failed > 0) {
     await emit(options, 'watch.recovery_blocked', {
@@ -643,7 +815,7 @@ async function runDemo(options) {
 
   await syncOnce(demoOptions)
 
-  const cloud = await readJson(demoOptions.cloud)
+  const cloud = await createCloudGraphService(demoOptions).readGraph()
   const saved = cloud.files['README.md']?.content.includes('managed workspace folder')
   const privateSaved =
     cloud.files[privatePath]?.scope === fileScope.ownerPrivate &&
@@ -664,7 +836,8 @@ async function runDemo(options) {
 }
 
 async function readAgentState(options) {
-  const cloud = await readOptionalJson(options.cloud)
+  const cloudService = createCloudGraphService(options)
+  const cloud = await cloudService.readOptionalVisibleGraph(visibilityRequestFromOptions(options))
   const journalEntries = await readNdjson(options.journal)
   const eventEntries = await readNdjson(options.events)
   const journalState = classifyJournalEntries(journalEntries, eventEntries)
@@ -690,6 +863,7 @@ async function readAgentState(options) {
   const lastRefreshStarted = findLastEvent(eventEntries, 'refresh.started')
   const lastRefreshBlocked = findLastEvent(eventEntries, 'refresh.blocked')
   const lastRefreshComplete = findLastEvent(eventEntries, 'refresh.complete')
+  const lastRemoteUpdate = findLastEvent(eventEntries, 'remote-update')
   const latestRefreshEvent = findLastEventOf(eventEntries, [
     'refresh.started',
     'refresh.blocked',
@@ -726,11 +900,61 @@ async function readAgentState(options) {
 
   const cloudSummary = {
     path: path.resolve(options.cloud),
+    service: cloudService.type,
     exists: Boolean(cloud),
+    schemaVersion: cloud?.schemaVersion ?? null,
     codebase: cloud?.codebase
       ? {
           id: cloud.codebase.id ?? null,
           name: cloud.codebase.name ?? null,
+          ownerId: cloud.codebase.ownerId ?? null,
+        }
+      : null,
+    main: cloud?.main
+      ? {
+          id: cloud.main.id ?? null,
+          revision: cloud.main.revision ?? null,
+        }
+      : null,
+    selectedState: cloud?.selectedState
+      ? {
+          type: cloud.selectedState.type ?? null,
+          id: cloud.selectedState.id ?? null,
+          ownerId: cloud.selectedState.ownerId ?? null,
+          baseMainId: cloud.selectedState.baseMainId ?? null,
+          baseRevision: cloud.selectedState.baseRevision ?? null,
+          revision: cloud.selectedState.revision ?? null,
+          visibility: cloud.selectedState.visibility ?? null,
+          effectiveVisibility: cloud.selectedState.effectiveVisibility ?? null,
+          reviewState: cloud.selectedState.reviewState ?? null,
+          mergeState: cloud.selectedState.mergeState ?? null,
+          conflictState: cloud.selectedState.conflictState ?? null,
+          conflict: cloud.selectedState.conflict ?? null,
+          review: cloud.selectedState.review ?? null,
+          merge: cloud.selectedState.merge ?? null,
+        }
+      : null,
+    owner: cloud?.owner
+      ? {
+          id: cloud.owner.id ?? null,
+        }
+      : null,
+    session: cloud?.session
+      ? {
+          id: cloud.session.id ?? null,
+          deviceName: cloud.session.deviceName ?? null,
+    }
+      : null,
+    requester: cloud?.visibilityContext ? summarizeRequester(cloud.visibilityContext) : null,
+    hiddenFileCount: cloud?.visibilityContext?.hiddenFileCount ?? null,
+    hiddenScopeCounts: cloud?.visibilityContext?.hiddenScopeCounts ?? null,
+    visibility: cloud?.visibility
+      ? {
+          productDefault: cloud.visibility.productDefault ?? null,
+          globalUserDefault: cloud.visibility.globalUserDefault ?? null,
+          codebaseOverride: cloud.visibility.codebaseOverride ?? null,
+          changeSetOverride: cloud.visibility.changeSetOverride ?? null,
+          effective: cloud.visibility.effective ?? null,
         }
       : null,
     revision: cloud?.revision ?? null,
@@ -769,6 +993,10 @@ async function readAgentState(options) {
     lastRefreshStarted,
     lastRefreshBlocked,
     lastRefreshComplete,
+    lastRemoteUpdate,
+    lastReviewOpened: findLastEvent(eventEntries, 'change_set.review_opened'),
+    lastChangeSetMerged: findLastEvent(eventEntries, 'change_set.merged'),
+    lastConflictDetected: findLastEvent(eventEntries, 'change_set.conflict_detected'),
     latestRefreshEvent,
     lastRecovery,
     lastWatchStarted,
@@ -787,6 +1015,35 @@ async function readAgentState(options) {
         watchHealth.state !== 'blocked',
       generatedAt: new Date().toISOString(),
       mode: workspaceMode,
+      codebaseId: cloudSummary.codebase?.id ?? null,
+      codebaseName: cloudSummary.codebase?.name ?? null,
+      selectedStateType: cloudSummary.selectedState?.type ?? null,
+      activeChangeSetId:
+        cloudSummary.selectedState?.type === 'active-change-set' ? cloudSummary.selectedState.id : null,
+      mainId: cloudSummary.main?.id ?? null,
+      ownerId: cloudSummary.owner?.id ?? cloudSummary.codebase?.ownerId ?? null,
+      sessionId: cloudSummary.session?.id ?? null,
+      requesterId: cloudSummary.requester?.id ?? null,
+      requesterSessionId: cloudSummary.requester?.sessionId ?? null,
+      requesterRole: cloudSummary.requester?.role ?? null,
+      visibleFileCount: cloudSummary.fileCount,
+      hiddenFileCount: cloudSummary.hiddenFileCount,
+      hiddenScopeCounts: cloudSummary.hiddenScopeCounts,
+      effectiveChangeSetVisibility:
+        cloudSummary.selectedState?.effectiveVisibility ?? cloudSummary.visibility?.effective ?? null,
+      review: {
+        state: cloudSummary.selectedState?.reviewState ?? 'not-open',
+        detail: cloudSummary.selectedState?.review ?? null,
+      },
+      merge: {
+        state: cloudSummary.selectedState?.mergeState ?? 'unmerged',
+        detail: cloudSummary.selectedState?.merge ?? null,
+        mainRevision: cloudSummary.main?.revision ?? null,
+      },
+      conflict: {
+        state: cloudSummary.selectedState?.conflictState ?? 'none',
+        detail: cloudSummary.selectedState?.conflict ?? null,
+      },
       workspace: {
         path: path.resolve(options.workspace),
         exists: existsSync(options.workspace),
@@ -808,6 +1065,10 @@ async function readAgentState(options) {
       },
       sync: syncHealth,
       refresh: refreshHealth,
+      remoteUpdate: {
+        state: lastRemoteUpdate ? 'updated' : 'idle',
+        lastUpdate: lastRemoteUpdate,
+      },
       watch: watchHealth,
       events: {
         path: eventsSummary.path,
@@ -823,6 +1084,10 @@ async function readAgentState(options) {
         lastRefreshStarted,
         lastRefreshBlocked,
         lastRefreshComplete,
+        lastRemoteUpdate,
+        lastReviewOpened: eventsSummary.lastReviewOpened,
+        lastChangeSetMerged: eventsSummary.lastChangeSetMerged,
+        lastConflictDetected: eventsSummary.lastConflictDetected,
         latestRefreshEvent,
         lastRecovery,
         lastWatchStarted,
@@ -884,11 +1149,18 @@ function applyJournalEntryToCloud(cloud, entry, options = {}) {
 
   if (!cloud.files) cloud.files = {}
   if (!Number.isInteger(cloud.revision)) cloud.revision = 0
+  if (cloud.selectedState && !Number.isInteger(cloud.selectedState.revision)) {
+    cloud.selectedState.revision = cloud.revision
+  }
+
+  assertEntrySelectedStateRevision(cloud, entry)
+  assertEntryBaseRevision(cloud, entry)
 
   if (entry.type === 'delete') {
     const current = cloud.files[entry.path]
     if (current) {
       cloud.revision += 1
+      if (cloud.selectedState) cloud.selectedState.revision = cloud.revision
       delete cloud.files[entry.path]
     }
 
@@ -898,6 +1170,9 @@ function applyJournalEntryToCloud(cloud, entry, options = {}) {
       path: entry.path,
       scope,
       revision: cloud.revision,
+      selectedStateType: cloud.selectedState?.type ?? null,
+      selectedStateId: cloud.selectedState?.id ?? null,
+      selectedStateRevision: cloud.selectedState?.revision ?? null,
     }
   }
 
@@ -922,6 +1197,7 @@ function applyJournalEntryToCloud(cloud, entry, options = {}) {
       revision: cloud.revision,
       updatedAt: now,
     }
+    if (cloud.selectedState) cloud.selectedState.revision = cloud.revision
   }
 
   return {
@@ -930,7 +1206,55 @@ function applyJournalEntryToCloud(cloud, entry, options = {}) {
     path: entry.path,
     scope,
     revision: cloud.revision,
+    selectedStateType: cloud.selectedState?.type ?? null,
+    selectedStateId: cloud.selectedState?.id ?? null,
+    selectedStateRevision: cloud.selectedState?.revision ?? null,
   }
+}
+
+function assertEntrySelectedStateRevision(cloud, entry) {
+  if (!Object.hasOwn(entry, 'targetStateRevision') || entry.targetStateRevision === undefined) return
+
+  const actualRevision = cloud.selectedState?.revision ?? null
+  if (entry.targetStateRevision === actualRevision) return
+
+  throw new ConflictError(
+    `selected_state_revision_mismatch: expected ${entry.targetStateRevision}, got ${actualRevision}`,
+    {
+      reason: 'selected_state_revision_mismatch',
+      id: entry.id,
+      type: entry.type,
+      path: entry.path,
+      scope: entry.scope ?? scopeForPath(entry.path ?? ''),
+      expectedRevision: entry.targetStateRevision,
+      actualRevision,
+      selectedStateId: cloud.selectedState?.id ?? null,
+      selectedStateRevision: actualRevision,
+    },
+  )
+}
+
+function assertEntryBaseRevision(cloud, entry) {
+  if (!Object.hasOwn(entry, 'baseRevision') || entry.baseRevision === undefined) return
+
+  const current = cloud.files?.[entry.path]
+  const actualRevision = current?.revision ?? null
+  if (entry.baseRevision === actualRevision) return
+
+  throw new ConflictError(
+    `base_revision_mismatch: expected ${entry.baseRevision}, got ${actualRevision}`,
+    {
+      reason: 'base_revision_mismatch',
+      id: entry.id,
+      type: entry.type,
+      path: entry.path,
+      scope: entry.scope ?? scopeForPath(entry.path ?? ''),
+      expectedRevision: entry.baseRevision,
+      actualRevision,
+      selectedStateId: cloud.selectedState?.id ?? null,
+      selectedStateRevision: cloud.selectedState?.revision ?? null,
+    },
+  )
 }
 
 function classifyJournalEntries(journalEntries, eventEntries) {
@@ -1110,6 +1434,13 @@ function isEventAfter(event, reference) {
   return eventAt >= referenceAt
 }
 
+function visibleRevisionFromEvent(event) {
+  if (!event) return null
+  if (Number.isInteger(event.detail?.toRevision)) return event.detail.toRevision
+  if (Number.isInteger(event.detail?.revision)) return event.detail.revision
+  return null
+}
+
 async function readWorkspaceFiles(root) {
   const result = {}
 
@@ -1132,6 +1463,53 @@ async function readWorkspaceFiles(root) {
   return result
 }
 
+function createCloudGraphService(options) {
+  return new FixtureJsonCloudGraphService(options.cloud)
+}
+
+class FixtureJsonCloudGraphService {
+  constructor(cloudPath) {
+    this.path = cloudPath
+    this.type = cloudServiceType
+  }
+
+  async exists() {
+    return existsSync(this.path)
+  }
+
+  async initialize(fixture) {
+    const cloud = withComputedMetadata(fixture)
+    await this.writeGraph(cloud)
+    return cloud
+  }
+
+  async readGraph() {
+    return normalizeCloudGraph(await readJson(this.path))
+  }
+
+  async readVisibleGraph(request = {}) {
+    return filterVisibleGraphForRequester(await this.readGraph(), request)
+  }
+
+  async readOptionalGraph() {
+    if (!(await this.exists())) return null
+    return this.readGraph()
+  }
+
+  async readOptionalVisibleGraph(request = {}) {
+    if (!(await this.exists())) return null
+    return this.readVisibleGraph(request)
+  }
+
+  async writeGraph(cloud) {
+    await writeJson(this.path, normalizeCloudGraph(cloud))
+  }
+
+  applyJournalEntry(cloud, entry, options = {}) {
+    return applyJournalEntryToCloud(cloud, entry, options)
+  }
+}
+
 async function removeEmptyAncestorDirectories(root, relativeDir) {
   let current = relativeDir
 
@@ -1149,13 +1527,224 @@ async function removeEmptyAncestorDirectories(root, relativeDir) {
 }
 
 function withComputedMetadata(cloud) {
-  const next = structuredClone(cloud)
+  const next = normalizeCloudGraph(structuredClone(cloud))
   for (const [relativePath, file] of Object.entries(next.files)) {
     file.hash = hashContent(file.content)
     file.size = Buffer.byteLength(file.content)
     file.scope = scopeForPath(relativePath)
   }
   return next
+}
+
+function normalizeCloudGraph(cloud) {
+  if (!cloud || typeof cloud !== 'object') {
+    throw new Error('Cloud graph must be an object.')
+  }
+
+  if (!cloud.files || typeof cloud.files !== 'object') cloud.files = {}
+  if (!Number.isInteger(cloud.revision)) cloud.revision = 0
+
+  cloud.schemaVersion = cloud.schemaVersion ?? 2
+  cloud.codebase = cloud.codebase ?? {}
+  cloud.codebase.id = cloud.codebase.id ?? 'hopit-core'
+  cloud.codebase.name = cloud.codebase.name ?? cloud.codebase.id
+  cloud.owner = cloud.owner ?? {}
+  cloud.owner.id = cloud.owner.id ?? cloud.codebase.ownerId ?? 'user_demo_owner'
+  cloud.codebase.ownerId = cloud.codebase.ownerId ?? cloud.owner.id
+  cloud.collaborators = Array.isArray(cloud.collaborators) ? cloud.collaborators : []
+  cloud.main = cloud.main ?? {}
+  cloud.main.id = cloud.main.id ?? 'main'
+  cloud.main.revision = Number.isInteger(cloud.main.revision) ? cloud.main.revision : cloud.revision
+  cloud.main.updatedAt = cloud.main.updatedAt ?? null
+  cloud.main.mergedChangeSetId = cloud.main.mergedChangeSetId ?? null
+  cloud.selectedState = cloud.selectedState ?? {}
+  cloud.selectedState.type = cloud.selectedState.type ?? 'active-change-set'
+  cloud.selectedState.id = cloud.selectedState.id ?? 'cs_fixture_active'
+  cloud.selectedState.ownerId = cloud.selectedState.ownerId ?? cloud.owner.id
+  cloud.selectedState.baseMainId = cloud.selectedState.baseMainId ?? cloud.main.id
+  cloud.selectedState.baseRevision = Number.isInteger(cloud.selectedState.baseRevision)
+    ? cloud.selectedState.baseRevision
+    : cloud.main.revision
+  cloud.selectedState.revision = Number.isInteger(cloud.selectedState.revision)
+    ? cloud.selectedState.revision
+    : cloud.revision
+  cloud.selectedState.reviewState = cloud.selectedState.reviewState ?? 'not-open'
+  cloud.selectedState.mergeState = cloud.selectedState.mergeState ?? 'unmerged'
+  cloud.selectedState.conflictState = cloud.selectedState.conflictState ?? 'none'
+  cloud.selectedState.conflict = cloud.selectedState.conflict ?? null
+  cloud.selectedState.review = cloud.selectedState.review ?? null
+  cloud.selectedState.merge = cloud.selectedState.merge ?? null
+  cloud.session = cloud.session ?? {}
+  cloud.session.id = cloud.session.id ?? 'session_fixture_local'
+  cloud.session.deviceName = cloud.session.deviceName ?? 'fixture-device'
+  cloud.visibility = normalizeVisibilityContract(cloud.visibility)
+  cloud.selectedState.visibility = cloud.selectedState.visibility ?? cloud.visibility.effective
+  cloud.selectedState.effectiveVisibility = cloud.selectedState.effectiveVisibility ?? cloud.visibility.effective
+
+  normalizeCloudScopes(cloud)
+  return cloud
+}
+
+function visibilityRequestFromOptions(options) {
+  return {
+    requesterId: options['requester-id'] ?? options.requester,
+    sessionId: options['session-id'] ?? options['requester-session'],
+  }
+}
+
+function filterVisibleGraphForRequester(cloud, request = {}) {
+  const graph = normalizeCloudGraph(structuredClone(cloud))
+  const context = visibilityContextForGraph(graph, request)
+  const files = {}
+  const hiddenPaths = []
+
+  for (const [relativePath, file] of Object.entries(graph.files ?? {})) {
+    if (!canRequesterSeePath(context, relativePath)) {
+      hiddenPaths.push(relativePath)
+      continue
+    }
+    files[relativePath] = file
+  }
+
+  graph.files = files
+  graph.visibilityContext = {
+    ...context,
+    visibleFileCount: Object.keys(files).length,
+    hiddenFileCount: hiddenPaths.length,
+    hiddenScopeCounts: countPathScopes(hiddenPaths),
+  }
+
+  return graph
+}
+
+function visibilityContextForGraph(cloud, request = {}) {
+  const ownerId = cloud.owner?.id ?? cloud.codebase?.ownerId ?? null
+  const requesterId = request.requesterId ?? ownerId
+  const collaborator = (cloud.collaborators ?? []).find((entry) => entry.id === requesterId) ?? null
+  const isOwner = Boolean(ownerId && requesterId === ownerId)
+  const isCollaborator = Boolean(collaborator)
+  const effectiveVisibility = effectiveChangeSetVisibilityForCloud(cloud)
+
+  return {
+    id: requesterId,
+    sessionId: request.sessionId ?? (isOwner ? cloud.session?.id : null),
+    ownerId,
+    role: isOwner ? 'owner' : isCollaborator ? (collaborator.role ?? 'member') : 'guest',
+    isOwner,
+    isCollaborator,
+    selectedStateType: cloud.selectedState?.type ?? null,
+    selectedStateId: cloud.selectedState?.id ?? null,
+    effectiveChangeSetVisibility: effectiveVisibility,
+  }
+}
+
+function canRequesterSeePath(context, relativePath) {
+  if (context.isOwner) return true
+  if (scopeForPath(relativePath) === fileScope.ownerPrivate) return false
+  if (!context.isCollaborator) return false
+
+  if (context.selectedStateType === 'main') return true
+
+  return (
+    context.effectiveChangeSetVisibility === 'team-visible' ||
+    context.effectiveChangeSetVisibility === 'review-visible'
+  )
+}
+
+function effectiveChangeSetVisibilityForCloud(cloud) {
+  return cloud?.selectedState?.effectiveVisibility ?? cloud?.visibility?.effective ?? 'private'
+}
+
+function summarizeRequester(context) {
+  if (!context) return null
+
+  return {
+    id: context.id ?? null,
+    sessionId: context.sessionId ?? null,
+    role: context.role ?? null,
+    isOwner: Boolean(context.isOwner),
+    isCollaborator: Boolean(context.isCollaborator),
+    selectedStateId: context.selectedStateId ?? null,
+    effectiveChangeSetVisibility: context.effectiveChangeSetVisibility ?? null,
+    visibleFileCount: context.visibleFileCount ?? null,
+    hiddenFileCount: context.hiddenFileCount ?? null,
+    hiddenScopeCounts: context.hiddenScopeCounts ?? { shared: 0, private: 0 },
+  }
+}
+
+function normalizeVisibilityContract(visibility = {}) {
+  const productDefault = visibility.productDefault ?? 'private'
+  const effective =
+    visibility.changeSetOverride ??
+    visibility.codebaseOverride ??
+    visibility.globalUserDefault ??
+    visibility.effective ??
+    productDefault
+
+  return {
+    productDefault,
+    globalUserDefault: visibility.globalUserDefault ?? null,
+    codebaseOverride: visibility.codebaseOverride ?? null,
+    changeSetOverride: visibility.changeSetOverride ?? null,
+    effective,
+  }
+}
+
+function summarizeGraphContract(cloud) {
+  return {
+    schemaVersion: cloud?.schemaVersion ?? null,
+    codebaseId: cloud?.codebase?.id ?? null,
+    mainId: cloud?.main?.id ?? null,
+    selectedStateType: cloud?.selectedState?.type ?? null,
+    selectedStateId: cloud?.selectedState?.id ?? null,
+    selectedStateRevision: cloud?.selectedState?.revision ?? null,
+    ownerId: cloud?.owner?.id ?? cloud?.codebase?.ownerId ?? null,
+    sessionId: cloud?.session?.id ?? null,
+    effectiveChangeSetVisibility:
+      cloud?.selectedState?.effectiveVisibility ?? cloud?.visibility?.effective ?? null,
+  }
+}
+
+function journalContextForCloud(cloud) {
+  const contract = summarizeGraphContract(cloud)
+  return {
+    targetStateType: contract.selectedStateType,
+    targetStateId: contract.selectedStateId,
+    targetStateRevision: contract.selectedStateRevision,
+    ownerId: contract.ownerId,
+    sessionId: contract.sessionId,
+    effectiveChangeSetVisibility: contract.effectiveChangeSetVisibility,
+  }
+}
+
+function actorIdFromOptions(options, cloud) {
+  return options['requester-id'] ?? options.requester ?? cloud.owner?.id ?? cloud.codebase?.ownerId ?? null
+}
+
+function ensureActiveChangeSet(cloud) {
+  if (cloud.selectedState?.type !== 'active-change-set') {
+    throw new Error('Selected state must be an active change set.')
+  }
+  if (!cloud.selectedState.id) {
+    throw new Error('Selected active change set is missing id.')
+  }
+}
+
+function recordChangeSetConflict(cloud, detail) {
+  ensureActiveChangeSet(cloud)
+
+  const conflict = {
+    state: 'conflicted',
+    selectedStateId: cloud.selectedState.id,
+    selectedStateRevision: cloud.selectedState.revision,
+    mainId: cloud.main?.id ?? null,
+    mainRevision: cloud.main?.revision ?? null,
+    ...detail,
+  }
+
+  cloud.selectedState.conflictState = 'conflicted'
+  cloud.selectedState.conflict = conflict
+  return conflict
 }
 
 function normalizeCloudScopes(cloud) {
@@ -1210,11 +1799,6 @@ function toCloudPath(value) {
 async function readJson(filePath) {
   const content = await fs.readFile(filePath, 'utf8')
   return JSON.parse(content)
-}
-
-async function readOptionalJson(filePath) {
-  if (!existsSync(filePath)) return null
-  return readJson(filePath)
 }
 
 async function readNdjson(filePath) {
@@ -1272,6 +1856,8 @@ Commands:
   refresh     Update the managed workspace from cloud when the journal is safe
   sync-once   Scan managed-folder writes, journal them, and acknowledge to cloud
   recover     Replay unacknowledged journal entries into the cloud graph
+  review-open Open the selected active change set for review
+  merge       Merge the reviewed selected change set into Main
   watch       Hydrate and watch the workspace for edits
   status      Print read-only local agent status JSON
   status-server Serve read-only local agent status JSON over HTTP
@@ -1282,6 +1868,8 @@ Options:
   --workspace <path>  Managed workspace folder path
   --journal <path>    Pending write journal path
   --events <path>     Event log path
+  --requester-id <id> Requester identity for visibility-filtered reads
+  --session-id <id>   Requester session id for visibility-filtered reads
   --host <host>        Status server host, defaults to 127.0.0.1
   --port <port>        Status server port, defaults to 4785
   --force             Overwrite the cloud graph on init

@@ -57,6 +57,8 @@ The demo seeds a local cloud file graph that stands in for one selected active c
 
 For the local agent architecture, including the cloud file graph, managed-folder adapter, local cache, safety journal, status API, event log, and future optional filesystem research, see [docs/agent-architecture.md](docs/agent-architecture.md).
 
+For the current done/in-progress/next tracker with proof commands and milestone status, see [docs/progress.md](docs/progress.md).
+
 ## Repository Layout
 
 ```text
@@ -70,4 +72,5 @@ packages/
 docs/
   agent-architecture.md  local agent architecture and read/write acknowledgement flow
   mvp-plan.md  first-version product and architecture plan
+  progress.md  current milestone progress, evidence, and next work queue
 ```

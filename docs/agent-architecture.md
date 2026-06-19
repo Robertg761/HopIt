@@ -35,6 +35,13 @@ Active change-set visibility is user-configurable:
 
 The effective setting resolves in this order: per-change-set override, codebase override, global user default, product default. The product default should be private until shared or opened for review. `.private/` remains owner-only regardless of the change-set visibility setting.
 
+The fixture-backed agent exposes the minimal review/merge skeleton as explicit
+commands. Opening review updates the selected active change set and emits
+`change_set.review_opened`. Merging applies that selected active change set to
+Main, advances Main only at that point, records merge state, and emits
+`change_set.merged`. Sync acknowledgements before merge continue to advance the
+active change set, not Main.
+
 ### Workspace Adapter
 
 The workspace adapter is the boundary between normal local tools and HopIt state.
@@ -145,11 +152,17 @@ Suggested fields:
 - active change-set id when applicable
 - effective change-set visibility
 - owner/session id
+- requester id, requester session id, and requester role for visibility-filtered reads
+- visible and hidden file counts, with hidden scope counts that do not expose hidden paths
 - workspace path
 - cloud revision currently visible locally
 - last acknowledged revision
 - pending journal entry count
 - last cloud acknowledgement time
+- latest remote-update event and state
+- review state for the selected active change set
+- merge state and latest merge event for Main
+- conflict state and latest conflict event for stale file/base or Main revision mismatches
 - connectivity state
 - cache mode and approximate memory/disk use
 - adapter type: managed folder, with optional research adapters later
@@ -173,10 +186,12 @@ Important event types:
 - `change_set.visibility_changed`
 - `change_set.review_opened`
 - `change_set.merged`
+- `change_set.conflict_detected`
 - `journal.recovery_failed`
 - `journal.recovery_complete`
 - `sync.complete`
 - `sync.failed`
+- `remote-update`
 - `cache.evicted`
 - `connection.changed`
 
@@ -242,11 +257,11 @@ If the cloud cannot acknowledge immediately, the journal entry remains pending a
 - Emit status and event-log evidence for started, blocked, degraded, recovered, sync-complete, and sync-failed states.
 - Keep clean cloud content, pending local edits, and failed writes distinguishable in status.
 
-### 4. Add Cloud-Service Boundaries
+### 4. Extend Cloud-Service Boundaries
 
-- Replace the local cloud JSON file with a service-shaped interface.
-- Keep a local fixture implementation for tests and demos.
-- Model Main, active change sets, change-set visibility, acknowledgements, validation failures, connectivity loss, review, merge, and retry timing.
+- Keep the local fixture implementation behind the service-shaped cloud graph interface for tests and demos.
+- Preserve explicit contract names for Main, the selected active change set, owner/session identity, effective visibility, acknowledgements, and status summaries.
+- Extend the service boundary with validation failures, connectivity loss, review, merge, and retry timing.
 - Preserve the same editor read/write flow from the managed-folder spike.
 
 ### 5. Prove Two-Device Continuity
@@ -254,7 +269,7 @@ If the cloud cannot acknowledge immediately, the journal entry remains pending a
 - Run two agent sessions against the same active change set.
 - Show that writes acknowledged from device/session A become visible to same-owner device/session B after B performs the safe refresh flow.
 - Simulate A syncing both non-private content and `.private/` owner-private content, then B refreshing as the same owner and seeing both sets of files with their visibility metadata preserved.
-- Add collaborator visibility simulations: private change sets stay hidden, team-visible change sets expose non-private paths to permitted collaborators, and `.private/` remains owner-only in every mode.
+- Keep collaborator visibility simulations passing: private change sets stay hidden, team-visible and review-visible change sets expose non-private paths to permitted collaborators, and `.private/` remains owner-only in every mode.
 - Emit event-log entries for remote updates and cache invalidation.
 - Surface pending and acknowledged state through the status API.
 
@@ -266,13 +281,18 @@ If the cloud cannot acknowledge immediately, the journal entry remains pending a
 
 ### 7. Add Review And Merge
 
+Status: done for the fixture-backed skeleton.
+
 - Keep Main unchanged while an active change set syncs.
-- Open a change set for review.
-- Merge a reviewed change set into Main.
-- Emit review and merge events.
+- Open the selected active change set for review with an explicit agent command.
+- Merge the selected active change set into Main with an explicit agent command.
+- Emit `change_set.review_opened` and `change_set.merged`.
+- Surface review and merge state through status.
 - Preserve visibility settings and owner metadata in review/merge history.
 
 ### 8. Tighten Conflict Handling
+
+Status: done for the fixture-backed skeleton.
 
 - Detect writes based on stale selected-state or Main revisions.
 - Surface conflicts as reviewable workspace states through status and events.

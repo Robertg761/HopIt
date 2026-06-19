@@ -1,8 +1,51 @@
 {
-  "schemaVersion": 1,
+  "schemaVersion": 2,
   "codebase": {
     "id": "hopit-core",
-    "name": "hopit-core"
+    "name": "hopit-core",
+    "ownerId": "user_demo_owner"
+  },
+  "main": {
+    "id": "main",
+    "revision": 1,
+    "updatedAt": null,
+    "mergedChangeSetId": null
+  },
+  "selectedState": {
+    "type": "active-change-set",
+    "id": "cs_demo_active",
+    "ownerId": "user_demo_owner",
+    "baseMainId": "main",
+    "baseRevision": 1,
+    "revision": 1,
+    "visibility": "private",
+    "effectiveVisibility": "private",
+    "reviewState": "not-open",
+    "mergeState": "unmerged",
+    "conflictState": "none",
+    "conflict": null,
+    "review": null,
+    "merge": null
+  },
+  "owner": {
+    "id": "user_demo_owner"
+  },
+  "collaborators": [
+    {
+      "id": "user_demo_collaborator",
+      "role": "member"
+    }
+  ],
+  "session": {
+    "id": "session_demo_local",
+    "deviceName": "fixture-device"
+  },
+  "visibility": {
+    "productDefault": "private",
+    "globalUserDefault": null,
+    "codebaseOverride": null,
+    "changeSetOverride": null,
+    "effective": "private"
   },
   "revision": 1,
   "files": {

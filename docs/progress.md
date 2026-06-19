@@ -1,0 +1,633 @@
+# HopIt Progress Tracker
+
+Last updated: 2026-06-19
+
+This tracker is the working view of what is done, what is in progress, what is next, and what is still deliberately out of scope. The roadmap source remains [MVP Plan](mvp-plan.md), and the agent contract source remains [Local Agent Architecture](agent-architecture.md). This file turns those plans into a practical implementation ledger.
+
+## Status Legend
+
+- `Done`: implemented, documented, and covered by a repeatable proof command or deterministic test.
+- `Mostly done`: implemented enough for the current spike, with known gaps before it can be treated as a product contract.
+- `In progress`: partially implemented or recently started, but not yet fully proven.
+- `Next`: the next intended implementation target.
+- `Blocked`: cannot move safely without a design decision, dependency, or earlier milestone.
+- `Not started`: planned but no meaningful implementation yet.
+- `Later`: intentionally outside the current MVP path.
+
+## Current Snapshot
+
+HopIt has a working local managed-folder agent spike. The agent can seed a fixture-backed cloud graph, hydrate a normal folder, capture local writes, journal them durably, acknowledge them into the selected active change set, recover unacknowledged writes after restart, safely refresh a second same-owner workspace, and expose local status/event/journal/cloud state.
+
+The most recent implementation step added fixture-backed conflict handling for stale selected-state revisions, stale file/base revisions, and stale Main revisions. Conflicts are persisted on the selected active change set, emitted as `change_set.conflict_detected`, and surfaced through status while preserving local edits for review.
+
+Current proof commands:
+
+```bash
+npm run agent:test
+npm run lint
+```
+
+Current verified result:
+
+- `npm run agent:test`: 18 passing tests.
+- `npm run lint`: passes.
+
+## Executive Progress
+
+| Area | Status | Summary |
+| --- | --- | --- |
+| Product concept | Done | The repo has converged on cloud-native managed workspaces, active change sets, explicit Main, and `.private/` owner-only workspace scope. |
+| Web product shell | Mostly done | The prototype UI exists, but it is still static/mock-oriented and not yet wired to live agent or cloud state. |
+| Local managed-folder agent | Done for spike | The agent proves hydration, journaling, sync acknowledgement, recovery, watch startup gating, safe refresh, status, and same-owner continuity. |
+| `.private/` model | Done for spike | `.private/` files are synced/versioned and classified as owner-private; they are not ignored or skipped. |
+| Safety journal | Done for spike | Pending, acknowledged, and failed entries are derived from journal/events and exposed through status. |
+| Watch loop | Done for spike | Watch startup runs recovery before hydration, blocks unsafe recovery, and syncs later editor writes. |
+| Fixture cloud graph service boundary | Done | Commands now use a fixture-backed service boundary instead of direct command-level cloud JSON access. |
+| Main/change-set/owner/session/visibility contract | Done for fixture | The fixture graph and status surface include these identities and visibility fields. |
+| Same-owner two-session continuity | Done for spike | Device/session B can refresh acknowledged shared and `.private/` changes from device/session A. |
+| Collaborator visibility simulation | Done for fixture | Tests prove private change sets hide non-owner content, team/review-visible change sets expose non-private paths, and `.private/` remains owner-only. |
+| Remote-update events | Done for spike | Refresh emits first-class `remote-update` events and status exposes the latest update. |
+| Review and merge | Done for fixture | Fixture commands open the selected active change set for review, merge it into Main, emit review/merge events, and expose review/merge state through status. |
+| Conflict handling | Done for fixture | Stale selected-state, file/base, and Main revisions become reviewable conflict state. |
+| Git compatibility | Next | Import/export/publish is planned after review/merge, conflict, and snapshot behavior. |
+| Native mount/FUSE/RAM-only cache | Later | Explicitly not part of the current MVP path. |
+
+## Milestone Tracker
+
+### Milestone 1: Product Shell
+
+Status: `Mostly done`
+
+Goal: Build the logged-in product surface around codebases, files, active change sets, connected devices, sync state, collaborators, visibility, and recent activity, while removing GitHub-social concepts from the first prototype.
+
+Completed:
+
+- Product direction is documented in [MVP Plan](mvp-plan.md).
+- Core concepts are named: codebase, Main, active change set, managed workspace folder, HopIt agent, local cache, safety journal, workspace snapshot, workspace visibility, change-set visibility, and cloud file graph.
+- The app surface exists under `src/app` and `src/components/hopit`.
+- GitHub-social concepts are documented as non-goals for v1.
+- `.private/` is documented as owner-visible, snapshotted, synced, and versioned.
+- Change-set visibility resolution order is documented: per-change-set override, codebase override, global user default, product default.
+
+Current evidence:
+
+- `npm run lint` passes.
+- The product plan and README consistently describe the same product model.
+
+Remaining:
+
+- Wire the product shell to real local agent status instead of static data.
+- Show live codebase, active change set, sync, recovery, visibility, connected-device, and recent-event state.
+- Add UI states for clean, pending, failed, uncertain, refreshing, blocked, remote-update, review, and merge.
+- Decide whether the first live UI should read directly from the local status server or through a Next.js API route.
+
+Risks:
+
+- The UI can drift into a dashboard mock unless it consumes the real agent status contract soon.
+- Visibility UI should not imply `.private/` is an ignore mechanism.
+
+Next product-shell step:
+
+- Add a local-agent status adapter for the web app after collaborator visibility and remote-update event contracts are stable enough to display.
+
+### Milestone 2: Agent Managed-Folder Spike
+
+Status: `Done`
+
+Goal: Create a local agent that materializes a tiny cloud-backed file tree into a normal managed folder, hydrates from the cloud file graph, captures writes, and proves normal editor save behavior.
+
+Completed:
+
+- `packages/agent` implements the managed-folder spike.
+- `npm run agent:init` seeds the local fixture cloud graph.
+- `npm run agent:hydrate` materializes cloud files into the managed workspace.
+- `npm run agent:demo` runs init, hydrate, simulated editor saves, sync, and verification.
+- `npm run agent:sync` runs one explicit scan, journal, and acknowledgement pass.
+- The managed folder is a normal OS folder, not a FUSE mount or user-managed clone.
+- `.private/` paths are materialized and synced with owner-private scope.
+
+Current evidence:
+
+- `npm run agent:test` passes.
+- Test coverage includes shared and `.private/` write classification.
+- The demo verifies cloud acknowledgement for both shared and owner-private edits.
+
+Contract details currently proven:
+
+- File scope values:
+  - `shared`
+  - `owner-private`
+- Important event names:
+  - `cloud.initialized`
+  - `file.hydrated`
+  - `workspace.ready`
+  - `write.journaled`
+  - `cloud.acknowledged`
+  - `sync.started`
+  - `sync.complete`
+  - `demo.editor_saved`
+  - `demo.verified`
+- Important commands:
+  - `agent:init`
+  - `agent:hydrate`
+  - `agent:demo`
+  - `agent:sync`
+  - `agent:status`
+
+Remaining:
+
+- Add rename/move support.
+- Add explicit conflict handling for stale revisions.
+- Add cache pruning rules after clean acknowledged content is proven safe to evict.
+
+Risks:
+
+- Current sync scans the whole workspace and is fine for a spike, but will need bounded/incremental behavior later.
+- Large repo behavior is intentionally unproven.
+
+### Milestone 3: Recovery And Watch Loop
+
+Status: `Done for spike`
+
+Goal: Treat the safety journal as the durable recovery boundary for writes awaiting cloud acknowledgement, and make `watch` the primary continuous-agent proof path.
+
+Completed:
+
+- `npm run agent:recover` replays unacknowledged journal entries.
+- `npm run agent:watch` runs recovery before hydration.
+- Watch startup blocks when unacknowledged entries cannot be recovered safely.
+- Failed recovery entries stay visible through status.
+- Pending, failed, and acknowledged journal states are derived from the journal/events pair.
+- `.private/` scope is preserved during recovery.
+- Watch-triggered sync attempts are coalesced.
+- Transient sync failures emit `sync.failed`, and later success can emit recovered state.
+- Watch tests were hardened so the full suite no longer flakes on slower process scheduling.
+
+Current evidence:
+
+- `npm run agent:test` passes all recovery and watch-loop tests.
+- Recovery tests cover shared and owner-private pending writes.
+- Unsafe recovery test proves watch startup blocks before hydration overwrites local edits.
+
+Important event names:
+
+- `journal.recovery_failed`
+- `journal.recovery_complete`
+- `watch.started`
+- `watch.recovery_blocked`
+- `watch.degraded`
+- `sync.failed`
+- `sync.recovered`
+
+Important status fields:
+
+- `journal.pendingCount`
+- `journal.failedCount`
+- `journal.acknowledgedCount`
+- `journal.pendingScopeCounts`
+- `journal.failedScopeCounts`
+- `journal.acknowledgedScopeCounts`
+- `sync.state`
+- `refresh.state`
+- `watch.state`
+
+Remaining:
+
+- Add `uncertain` journal state for cases where cloud acknowledgement may have happened but cannot be confirmed.
+- Add retry classification so failed entries can distinguish retryable from terminal failures.
+- Add more explicit degraded-state tests for transient filesystem and cloud failures after watch startup.
+
+Risks:
+
+- The watch loop is still a managed-folder proof, not a production sync engine.
+- Recursive filesystem watch behavior can differ by platform; polling fallback exists, but cross-platform coverage is not complete.
+
+### Milestone 4: Cloud Service Boundary
+
+Status: `Done for fixture`
+
+Goal: Replace command-level local cloud JSON access with a service-shaped file graph boundary while keeping fixture-backed demos and tests.
+
+Completed:
+
+- Commands now call a fixture-backed cloud graph service.
+- The service exposes graph initialization, graph reads, graph writes, optional graph reads, existence checks, and journal-entry application.
+- The local persistence file is still JSON, but command code no longer treats that JSON file as the product API.
+- The fixture graph now includes:
+  - `schemaVersion`
+  - `codebase.id`
+  - `codebase.name`
+  - `codebase.ownerId`
+  - `main.id`
+  - `main.revision`
+  - `selectedState.type`
+  - `selectedState.id`
+  - `selectedState.ownerId`
+  - `selectedState.baseMainId`
+  - `selectedState.baseRevision`
+  - `selectedState.revision`
+  - `selectedState.visibility`
+  - `selectedState.effectiveVisibility`
+  - `owner.id`
+  - `session.id`
+  - `session.deviceName`
+  - `visibility.productDefault`
+  - `visibility.globalUserDefault`
+  - `visibility.codebaseOverride`
+  - `visibility.changeSetOverride`
+  - `visibility.effective`
+- Status now exposes top-level product-contract fields:
+  - `codebaseId`
+  - `codebaseName`
+  - `selectedStateType`
+  - `activeChangeSetId`
+  - `mainId`
+  - `ownerId`
+  - `sessionId`
+  - `effectiveChangeSetVisibility`
+- New journal entries carry:
+  - `targetStateType`
+  - `targetStateId`
+  - `ownerId`
+  - `sessionId`
+  - `effectiveChangeSetVisibility`
+- Cloud acknowledgements include selected-state identity and selected-state revision.
+- Acknowledged writes advance `selectedState.revision`, while `main.revision` stays stable.
+- Older/simple graph fixtures are normalized into the newer contract shape on read/write.
+
+Current evidence:
+
+- `npm run agent:test` passes.
+- Tests assert fixture contract fields exist.
+- Tests assert new journal entries include target state and identity fields.
+- Tests assert Main stays stable while the selected active change set advances.
+- `npm run lint` passes.
+
+Remaining:
+
+- Move service code out of the CLI file once it grows beyond the current spike size.
+- Add a formal graph schema or TypeScript types before integrating a real API.
+- Add validation failures and explicit cloud error simulation.
+- Add content-addressed blob storage abstraction.
+- Add snapshot reconstruction for Main and active change sets.
+
+Risks:
+
+- The fixture service is a boundary, not yet a distributed service.
+- JSON read/write is still single-process and not safe for real concurrent writers.
+- The graph shape is now explicit but not yet enforced by a schema validator.
+
+### Milestone 5: Two-Session Continuity
+
+Status: `Mostly done`
+
+Goal: Open the same codebase and active change set from a second same-owner device/session and see acknowledged writes without merging to Main.
+
+Completed:
+
+- Two-session test state uses one shared cloud graph and separate workspace, journal, and event paths per device/session.
+- Device/session A can edit and sync a shared file.
+- Device/session B can safely refresh and see the acknowledged shared file update.
+- Device/session A can edit and sync a `.private/` file.
+- Device/session B, as the same owner simulation, can safely refresh and see the owner-private file update.
+- Refresh refuses to overwrite device B files when device B has pending or failed journal entries.
+- Refresh emits `remote-update` when local files are written or deleted from cloud state.
+- Remote-update events include selected state, from/to revisions, changed paths, deleted paths, changed/deleted scope counts, requester context, and hidden scope counts.
+- Status exposes the latest remote update.
+- The fixture graph includes a permitted collaborator identity.
+- Visibility-filtered hydrate, refresh, and status reads can run with `--requester-id` and `--session-id`.
+- A collaborator sees no active change-set files when visibility is private.
+- A collaborator sees shared files when visibility is `team-visible` or `review-visible`.
+- `.private/` stays owner-only in private, team-visible, and review-visible modes.
+- Collaborator refresh refuses to overwrite pending local edits.
+
+Current evidence:
+
+- `npm run agent:test` passes two-session shared refresh tests.
+- `npm run agent:test` passes same-owner `.private/` refresh tests.
+- `npm run agent:test` passes same-owner remote-update event assertions for shared and `.private/` updates.
+- `npm run agent:test` passes collaborator remote-update assertions that expose shared paths while only reporting hidden `.private` scope counts.
+- `npm run agent:test` passes refresh-blocking tests for pending and failed device B journal entries.
+- `npm run agent:test` passes requester visibility tests for owner, collaborator/private, collaborator/team-visible, collaborator/review-visible, and collaborator pending refresh.
+
+Remaining:
+
+- Use remote-update events to drive the web app or tray/menu status.
+- Add remote-update behavior for future push-style live updates, not only explicit refresh.
+
+Risks:
+
+- Collaborator filtering is fixture-only and not backed by real authentication or durable permissions.
+- The fixture graph is still flattened around one selected active change set, so private collaborator reads show an empty file set rather than falling back to a separate Main snapshot.
+
+Next two-session step:
+
+- Use the review/merge skeleton as the boundary for conflict handling while preserving the same remote-update and visibility evidence.
+
+### Milestone 6: Review And Merge
+
+Status: `Done for fixture`
+
+Goal: Let a user open an active change set for review and merge a reviewed change set into Main while preserving visibility metadata.
+
+Completed:
+
+- Main and selected active change-set identities exist in the fixture graph.
+- Acknowledged writes advance the active change set rather than Main.
+- Review state is represented on the selected active change set.
+- The selected active change set can be opened for review with an explicit agent command.
+- The selected active change set can be merged into Main with an explicit agent command.
+- Main remains stable while the active change set syncs and advances only on explicit merge.
+- Review and merge operations emit `change_set.review_opened` and `change_set.merged`.
+- Status exposes review and merge state for the selected active change set and Main.
+
+Current evidence:
+
+- Tests assert `main.revision` stays stable while `selectedState.revision` advances.
+- `npm run agent:test` covers review open, merge, status state, event emission, and Main revision advancement only on merge.
+
+Remaining:
+
+- Add merge records/history.
+
+Risks:
+
+- Merge records are still fixture metadata rather than durable history.
+
+### Milestone 7: Git Compatibility
+
+Status: `Not started`
+
+Goal: Import an existing Git repository into the cloud file graph, export a workspace snapshot to a Git commit, and publish accepted Main or merged snapshots as Git history when requested.
+
+Completed:
+
+- Git is documented as compatibility/import/export/publish infrastructure, not the everyday continuity model.
+- GitHub-social concepts are documented as non-goals for v1.
+
+Current evidence:
+
+- Product docs consistently separate Git compatibility from live active change sets.
+
+Remaining:
+
+- Import Git tree into cloud file graph.
+- Preserve commit ancestry where possible.
+- Export a selected snapshot as a Git commit.
+- Publish Main or a merged snapshot as Git history.
+- Decide how `.private/` owner-only content behaves during export/publish.
+
+Risks:
+
+- Publishing must not leak `.private/` content.
+- Git compatibility can pull the product back toward branch/worktree concepts if the UX is not kept strict.
+
+### Future Optional: Native Mount Research
+
+Status: `Later`
+
+Goal: Explore true OS filesystem mounts, macFUSE, or RAM-only working sets only after the managed-folder product proves core value.
+
+Completed:
+
+- Documented as a non-goal for v1.
+- Managed-folder mode is the current default.
+
+Remaining:
+
+- None for current MVP.
+
+Risks:
+
+- This can become a distraction before the sync/product contract is proven.
+
+## Detailed Contract Tracker
+
+### Commands
+
+| Command | Status | Purpose | Current proof |
+| --- | --- | --- | --- |
+| `npm run agent:demo` | Done | Runs deterministic init, hydrate, edit, sync, verify flow. | Demo path covered indirectly by agent behavior tests. |
+| `npm run agent:init` | Done | Seeds fixture cloud graph. | Contract fields asserted in tests. |
+| `npm run agent:hydrate` | Done | Materializes graph files into workspace. | Used across tests. |
+| `npm run agent:sync` | Done | Scans workspace, journals writes, acknowledges to selected state. | Shared/private sync tests. |
+| `npm run agent:recover` | Done | Replays unacknowledged journal entries. | Recovery tests. |
+| `npm run agent:watch` | Done for spike | Runs recovery-before-hydration and watches for local edits. | Watch-loop tests. |
+| `npm run agent:refresh` | Done for spike | Safely mirrors selected cloud state into workspace when journal is clean. | Two-session and refresh-block tests. |
+| `npm run agent:status` | Done for spike | Serves read-only local state over HTTP. | Status fields asserted through CLI status command. |
+| `npm run agent:review` | Done for fixture | Opens the selected active change set for review. | Review-open tests. |
+| `npm run agent:merge` | Done for fixture | Merges the selected active change set into Main. | Merge tests. |
+
+### Event Names
+
+| Event | Status | Notes |
+| --- | --- | --- |
+| `cloud.initialized` | Done | Includes service type, contract summary, file count, scope counts. |
+| `cloud.exists` | Done | Emitted when init sees an existing cloud graph without `--force`. |
+| `file.hydrated` | Done | Emitted for hydrated files. |
+| `workspace.ready` | Done | Includes service type and contract summary. |
+| `write.journaled` | Done | New entries include target state and identity context. |
+| `cloud.acknowledged` | Done | Includes selected-state identity and revision. |
+| `sync.started` | Done | Used for sync health. |
+| `sync.complete` | Done | Includes service type, contract summary, revisions, and scope counts. |
+| `sync.failed` | Done for spike | Captures sync failures and status state. |
+| `sync.recovered` | Done for spike | Captures successful sync after unresolved failure. |
+| `journal.recovery_failed` | Done | Marks failed recovery entries. |
+| `journal.recovery_complete` | Done | Summarizes recovery attempts, acknowledgements, failures, revision, and scope counts. |
+| `watch.started` | Done | Marks continuous watch as active. |
+| `watch.recovery_blocked` | Done | Marks unsafe startup recovery failure. |
+| `watch.degraded` | Done for spike | Used for polling fallback/unavailable states. |
+| `refresh.started` | Done | Marks safe refresh attempt. |
+| `refresh.blocked` | Done | Blocks refresh with pending/failed journal entries. |
+| `refresh.complete` | Done | Summarizes written/deleted/unchanged/file counts. |
+| `remote-update` | Done for spike | Emitted when refresh writes/deletes local files from cloud state. |
+| `change_set.visibility_changed` | Not started | Needed for future user-driven visibility changes. |
+| `change_set.review_opened` | Done for fixture | Emitted when the selected active change set is opened for review. |
+| `change_set.merged` | Done for fixture | Emitted when the reviewed selected active change set is merged into Main. |
+| `change_set.conflict_detected` | Done for fixture | Emitted when stale selected-state, file/base, or Main revisions are detected. |
+| `cache.evicted` | Not started | Needed for safe cache pruning work. |
+| `connection.changed` | Not started | Needed for online/offline/retry state. |
+
+### Status Fields
+
+| Field | Status | Notes |
+| --- | --- | --- |
+| `ok` | Done | False when journal/sync/refresh/watch health is unsafe. |
+| `mode.adapter` | Done | Currently `managed-folder`. |
+| `mode.cacheMode` | Done | Currently `local-cache`. |
+| `codebaseId` | Done | Top-level product status field. |
+| `codebaseName` | Done | Top-level product status field. |
+| `selectedStateType` | Done | Currently `active-change-set` in fixture. |
+| `activeChangeSetId` | Done | Set when selected state is an active change set. |
+| `mainId` | Done | Top-level Main identity. |
+| `ownerId` | Done | Top-level owner identity. |
+| `sessionId` | Done | Top-level local session identity. |
+| `requesterId` | Done | Requester identity for visibility-filtered reads. |
+| `requesterSessionId` | Done | Requester session identity for visibility-filtered reads. |
+| `requesterRole` | Done | Fixture role: owner, member, or guest. |
+| `visibleFileCount` | Done | Count of files visible to the requester. |
+| `hiddenFileCount` | Done | Count of files hidden from the requester. |
+| `hiddenScopeCounts` | Done | Scope counts for hidden files without exposing hidden paths. |
+| `effectiveChangeSetVisibility` | Done | Top-level visibility field. |
+| `workspace.path` | Done | Absolute workspace path. |
+| `workspace.exists` | Done | Whether workspace exists locally. |
+| `cloud.service` | Done | Currently `fixture-json-cloud-graph`. |
+| `cloud.schemaVersion` | Done | Current fixture uses schema version 2. |
+| `cloud.codebase` | Done | Includes id/name/ownerId. |
+| `cloud.main` | Done | Includes id/revision. |
+| `cloud.selectedState` | Done | Includes active change-set identity, base Main, revision, and visibility. |
+| `cloud.owner` | Done | Includes owner id. |
+| `cloud.session` | Done | Includes session id/device name. |
+| `cloud.requester` | Done | Includes requester id, session id, role, ownership/collaborator flags, visibility, and visible/hidden counts. |
+| `cloud.visibility` | Done | Includes defaults, overrides, and effective value. |
+| `journal.*Counts` | Done | Pending/failed/acknowledged totals and scope counts. |
+| `sync.state` | Done | `idle`, `syncing`, `healthy`, or `failed`. |
+| `refresh.state` | Done | `idle`, `refreshing`, `healthy`, or `blocked`. |
+| `remoteUpdate.state` | Done | `idle` or `updated` depending on whether a remote update has been observed. |
+| `remoteUpdate.lastUpdate` | Done | Latest `remote-update` event for UI/tray evidence. |
+| `watch.state` | Done | `unknown`, `watching`, `blocked`, or degraded states. |
+| `recent error summary` | Mostly done | Exposed through sync/refresh/watch `lastError`; can be consolidated later. |
+| `connectivity state` | Not started | Needs service connectivity simulation. |
+| `cache size` | Not started | Needs cache accounting. |
+| `remote update state` | Done for spike | Latest remote-update event is available through status. |
+| `review state` | Done for fixture | Exposes whether the selected active change set is open for review. |
+| `merge state` | Done for fixture | Exposes whether the selected active change set has been merged into Main and the latest merge event. |
+| `conflict state` | Done for fixture | Exposes stale revision conflicts as reviewable selected change-set state. |
+
+### Graph Contract
+
+| Contract field | Status | Notes |
+| --- | --- | --- |
+| `schemaVersion` | Done | Version 2 fixture graph. |
+| `codebase.id` | Done | Fixture: `hopit-core`. |
+| `codebase.name` | Done | Fixture: `hopit-core`. |
+| `codebase.ownerId` | Done | Fixture owner identity. |
+| `main.id` | Done | Fixture: `main`. |
+| `main.revision` | Done | Stable while active change set changes. |
+| `selectedState.type` | Done | Fixture: `active-change-set`. |
+| `selectedState.id` | Done | Fixture: `cs_demo_active`. |
+| `selectedState.ownerId` | Done | Fixture owner identity. |
+| `selectedState.baseMainId` | Done | Fixture: `main`. |
+| `selectedState.baseRevision` | Done | Fixture base revision. |
+| `selectedState.revision` | Done | Advances on acknowledged writes. |
+| `selectedState.visibility` | Done | Fixture: `private`. |
+| `selectedState.effectiveVisibility` | Done | Fixture: `private`. |
+| `selectedState.reviewState` | Done for fixture | `not-open`, `open`, or `merged`. |
+| `selectedState.mergeState` | Done for fixture | `unmerged` or `merged`. |
+| `selectedState.conflictState` | Done for fixture | `none` or `conflicted`. |
+| `selectedState.review` | Done for fixture | Review metadata for the selected active change set. |
+| `selectedState.merge` | Done for fixture | Merge metadata including previous and resulting Main revisions. |
+| `selectedState.conflict` | Done for fixture | Conflict metadata for stale file/base or Main revision mismatches. |
+| `owner.id` | Done | Fixture owner identity. |
+| `collaborators[]` | Done | Fixture permitted collaborator identities and roles. |
+| `session.id` | Done | Fixture local session identity. |
+| `session.deviceName` | Done | Fixture device label. |
+| `visibility.productDefault` | Done | Fixture: `private`. |
+| `visibility.globalUserDefault` | Done | Nullable. |
+| `visibility.codebaseOverride` | Done | Nullable. |
+| `visibility.changeSetOverride` | Done | Nullable. |
+| `visibility.effective` | Done | Resolved effective visibility. |
+| file `content` | Done | Inline in fixture JSON for now. |
+| file `hash` | Done | Computed from content. |
+| file `size` | Done | Computed from content. |
+| file `scope` | Done | Derived from path; `.private/` becomes owner-private. |
+| file `revision` | Done | Updated on acknowledged write. |
+| content-addressed blob refs | Not started | Needed for production-style storage. |
+| snapshot indexes | Not started | Needed for review/merge/export. |
+| merge records | Not started | Needed for review/merge. |
+
+## Immediate Next Queue
+
+### 1. Review And Merge Skeleton
+
+Status: `Done for fixture`
+
+Definition of done:
+
+- Review state exists on the selected active change set.
+- Agent commands open review and merge the selected active change set into Main.
+- Main revision advances only on explicit merge.
+- Events include `change_set.review_opened` and `change_set.merged`.
+- Status surfaces review/merge state.
+- Fixture tests cover the command/event/status/Main-stability contract.
+
+### 2. Conflict Handling
+
+Status: `Done for fixture`
+
+Definition of done:
+
+- Detect stale selected-state, file/base, or Main revisions before recovery/merge.
+- Keep conflicted change sets reviewable instead of treating conflicts as terminal-only command failures.
+- Surface conflict state through status and events.
+- Preserve unacknowledged local edits and `.private/` visibility metadata during conflict review.
+- Fixture tests cover stale file/base revision recovery conflicts and stale Main revision merge conflicts.
+
+### 3. Git Compatibility
+
+Status: `Next`
+
+Definition of done:
+
+- Import Git history into the cloud file graph.
+- Export or publish Main and merged snapshots without leaking `.private/` owner-only content.
+- Keep Git compatibility separate from the everyday active change-set continuity model.
+
+## Known Gaps
+
+- No real authentication yet.
+- No real cloud API yet.
+- No real database or object/blob storage yet.
+- No content-addressed blob backend yet.
+- No schema validator yet.
+- No real auth-backed collaborator permission model yet; fixture-only requester filtering exists.
+- No push-style live remote-update delivery yet; remote-update is currently emitted by explicit refresh.
+- No conflict handling yet.
+- No Git import/export/publish yet.
+- No local cache pruning yet.
+- No offline mode yet.
+- No production installer or tray/menu agent wrapper yet.
+- No cross-platform watch behavior matrix yet.
+
+## Verification Checklist
+
+Run this before marking agent progress as done:
+
+```bash
+npm run agent:test
+npm run lint
+```
+
+For manual smoke testing:
+
+```bash
+npm run agent:demo
+npm run agent:status
+```
+
+For safe refresh debugging:
+
+```bash
+npm run agent:status -- \
+  --cloud .hopit-agent/demo/cloud.json \
+  --workspace .hopit-agent/demo/workspaces/hopit-core \
+  --journal .hopit-agent/demo/journal.ndjson \
+  --events .hopit-agent/demo/events.ndjson
+```
+
+Do not mark refresh behavior as done unless pending and failed journal states are still blocking refresh.
+
+## Completion Rules
+
+An item can move to `Done` only when all of these are true:
+
+- The implementation exists.
+- The behavior is documented.
+- A deterministic command or test proves the behavior.
+- `.private/` behavior is considered when file visibility is involved.
+- Main vs active change-set behavior is considered when state mutation is involved.
+- The status/event surface exposes enough evidence for a future UI to explain what happened.
+
+An item should stay `Mostly done` when it works only for same-owner, local-only, fixture-only, or happy-path cases.
+
+An item should stay `Later` if it is outside the current managed-folder MVP path, even if it is technically interesting.

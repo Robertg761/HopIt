@@ -102,6 +102,8 @@ Optional future research. A true OS filesystem mount, macFUSE backend, or RAM-on
 
 The local agent contract is detailed in [Local Agent Architecture](agent-architecture.md). That document is the implementation guide for the cloud file graph, managed-folder adapter, local cache, safety journal, status API, event log, two-device simulation, and editor read/write acknowledgement flow.
 
+For a detailed done/in-progress/next view with proof commands, milestone status, contract tracking, and known gaps, see [Progress Tracker](progress.md).
+
 ## MVP Milestones
 
 ### Milestone 1: Product Shell
@@ -126,15 +128,21 @@ Current spike:
 - `npm run agent:refresh` is the safe cloud-to-workspace path: it refuses pending or failed local journal state, then mirrors the cloud file graph into the managed folder when the journal is clean.
 - `npm run agent:sync` runs one explicit scan/journal/acknowledgement pass.
 - `npm run agent:status` serves read-only local agent state for status, event, journal, and cloud inspection.
-- The next technical step is replacing local cloud JSON access with a service-shaped cloud file graph interface while preserving the same managed-folder, `.private/`, refresh, and journal contracts.
+- The agent now reaches the fixture-backed cloud graph through a service-shaped boundary, while preserving the same managed-folder, `.private/`, refresh, and journal contracts.
+- The fixture graph now names Main, the selected active change set, owner identity, session identity, and effective change-set visibility. Acknowledged writes advance the selected active change set, while Main stays stable until the explicit merge command runs.
+- Requester-aware fixture reads now prove collaborator visibility rules: private change sets hide active work from collaborators, team-visible and review-visible change sets expose non-private paths, and `.private/` remains owner-only.
+- Minimal review/merge fixture commands open the selected active change set for review, merge it into Main, emit `change_set.review_opened` and `change_set.merged`, and surface review/merge state through status. Main stays stable until the explicit merge command runs.
+- Fixture conflict handling detects stale selected-state revisions, stale file/base revisions, and stale Main revisions, emits `change_set.conflict_detected`, and surfaces conflict state while preserving local edits for review.
 
 Next after the managed-folder spike:
 
 1. Lock the managed-folder contracts for graph shape, journal entries, event names, command names, and status fields.
 2. Introduce active change-set identity, Main identity, owner identity, and visibility metadata into the fixture graph.
 3. Replace local cloud JSON reads with a service-shaped cloud file graph interface while keeping fixture-backed demos.
-4. Prove remote-update events on top of the two-session refresh proof.
-5. Surface clean, pending, failed, uncertain, refreshing, blocked, remote-update, review, and merge states through status and events.
+4. Keep collaborator visibility simulations passing on top of the same-owner two-session refresh proof.
+5. Keep remote-update events passing on top of the two-session refresh proof.
+6. Keep review/merge status and events passing on top of the selected active change-set proof.
+7. Keep conflict handling for stale selected-state or Main revisions passing before moving into Git compatibility.
 
 ### Milestone 3: Recovery And Watch Loop
 
@@ -159,15 +167,18 @@ Next after the managed-folder spike:
 - Open the same codebase and active change set from a second device or second agent session owned by the same user.
 - Show that an acknowledged write from one session becomes visible to the other without merging to Main.
 - Use the same-owner simulation as the first proof: device/session A syncs a non-private file and a `.private/` owner-private file into the same active change set, then device/session B runs the safe refresh flow and sees both.
-- Add collaborator simulations that prove private change sets remain hidden, team-visible change sets expose non-private paths, and `.private/` stays owner-only in every mode.
+- Keep collaborator simulations passing: private change sets remain hidden, team-visible and review-visible change sets expose non-private paths, and `.private/` stays owner-only in every mode.
 - Preserve pending local edits until acknowledgement or conflict review.
-- Emit status and event-log evidence for remote updates.
+- Keep status and event-log evidence for remote updates.
 
 ### Milestone 6: Review And Merge
 
 - Let a user open an active change set for review.
 - Merge a reviewed change set into Main.
 - Keep Main stable until merge.
+- In the fixture-backed skeleton, `npm run agent:review` opens the selected active change set for review and emits `change_set.review_opened`.
+- In the fixture-backed skeleton, `npm run agent:merge` merges the selected active change set into Main and emits `change_set.merged`.
+- Surface review and merge state through the local agent status contract.
 - Surface conflicts as reviewable change-set states instead of terminal-only chores.
 - Preserve visibility settings in review and merge history.
 
