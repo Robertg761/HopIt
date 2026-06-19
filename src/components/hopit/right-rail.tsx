@@ -6,93 +6,27 @@ import {
   CheckCircle2,
   Cloud,
   Clock3,
+  FilePenLine,
   FileStack,
   FolderOpen,
   HardDrive,
+  GitMerge,
+  GitPullRequest,
   RotateCcw,
   ShieldCheck,
   UploadCloud,
+  WifiOff,
 } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-
-export type AgentEvent = {
-  id: string
-  label: string
-  detail: string
-  when: string
-  tone: 'ready' | 'syncing' | 'queued' | 'observed'
-}
-
-export type AgentStatusSnapshot = {
-  id: string
-  status: 'online' | 'syncing' | 'offline'
-  managedWorkspacePath: string
-  cloudRevision: string
-  fileCount: number
-  pendingWrites: number
-  lastSync: string
-  lastAck: string
-  cacheState: 'ready' | 'syncing' | 'offline'
-  privateScope: 'scoped' | 'none'
-  privateScopePath: string
-  events: AgentEvent[]
-}
-
-const sampleAgentStatus: AgentStatusSnapshot = {
-  id: 'local-hopit-agent',
-  status: 'online',
-  managedWorkspacePath: '~/HopIt/hopit-core',
-  cloudRevision: 'cloud-rev 1482',
-  fileCount: 184,
-  pendingWrites: 2,
-  lastSync: '24 sec ago',
-  lastAck: '18 sec ago',
-  cacheState: 'ready',
-  privateScope: 'scoped',
-  privateScopePath: '~/HopIt/hopit-core/.private/',
-  events: [
-    {
-      id: 'evt-1',
-      label: 'workspace:ready',
-      detail: 'Managed workspace folder is available locally',
-      when: 'now',
-      tone: 'ready',
-    },
-    {
-      id: 'evt-2',
-      label: 'private:scoped',
-      detail: '.private/ is included as the private workspace scope',
-      when: '12 sec',
-      tone: 'observed',
-    },
-    {
-      id: 'evt-3',
-      label: 'cache:ready',
-      detail: 'Local cache matches the latest cloud revision',
-      when: '18 sec',
-      tone: 'observed',
-    },
-    {
-      id: 'evt-4',
-      label: 'writes:pending',
-      detail: '2 local edits waiting for upload',
-      when: '31 sec',
-      tone: 'queued',
-    },
-    {
-      id: 'evt-5',
-      label: 'scan:complete',
-      detail: '184 files indexed from the managed workspace',
-      when: '1 min',
-      tone: 'syncing',
-    },
-  ],
-}
+import type { AgentStatusSnapshot } from '@/lib/agent-status'
+import type { AgentCommand, AgentCommandResult } from '@/hooks/use-agent-status'
 
 const cacheStateLabels: Record<AgentStatusSnapshot['cacheState'], string> = {
   ready: 'Ready',
   syncing: 'Syncing',
   offline: 'Offline',
+  blocked: 'Blocked',
 }
 
 const privateScopeLabels: Record<AgentStatusSnapshot['privateScope'], string> = {
@@ -105,18 +39,69 @@ const eventToneClasses: Record<AgentEvent['tone'], string> = {
   syncing: 'bg-sky-500/10 text-sky-500 ring-sky-500/20',
   queued: 'bg-hop-amber/10 text-hop-amber ring-hop-amber/20',
   observed: 'bg-grape/10 text-grape ring-grape/20',
+  blocked: 'bg-destructive/10 text-destructive ring-destructive/20',
 }
 
-export function RightRail() {
+type AgentEvent = AgentStatusSnapshot['events'][number]
+
+type RightRailProps = {
+  status: AgentStatusSnapshot
+  loading: boolean
+  runCommand: (command: AgentCommand) => Promise<void>
+  runningCommand: AgentCommand | null
+  commandResult: AgentCommandResult | null
+}
+
+const prototypeActions: Array<{
+  command: AgentCommand
+  label: string
+  icon: React.ComponentType<{ className?: string }>
+}> = [
+  { command: 'demo', label: 'Reset', icon: RotateCcw },
+  { command: 'edit', label: 'Edit', icon: FilePenLine },
+  { command: 'sync', label: 'Sync', icon: UploadCloud },
+  { command: 'refresh', label: 'Refresh', icon: Cloud },
+  { command: 'recover', label: 'Recover', icon: CheckCircle2 },
+  { command: 'review', label: 'Review', icon: GitPullRequest },
+  { command: 'merge', label: 'Merge', icon: GitMerge },
+]
+
+export function RightRail({
+  status,
+  loading,
+  runCommand,
+  runningCommand,
+  commandResult,
+}: RightRailProps) {
   return (
     <aside className="flex flex-col gap-4">
-      <AgentStatusPanel status={sampleAgentStatus} />
+      <AgentStatusPanel
+        status={status}
+        loading={loading}
+        runCommand={runCommand}
+        runningCommand={runningCommand}
+        commandResult={commandResult}
+      />
     </aside>
   )
 }
 
-function AgentStatusPanel({ status }: { status: AgentStatusSnapshot }) {
-  const isOnline = status.status === 'online'
+function AgentStatusPanel({
+  status,
+  loading,
+  runCommand,
+  runningCommand,
+  commandResult,
+}: {
+  status: AgentStatusSnapshot
+  loading: boolean
+  runCommand: (command: AgentCommand) => Promise<void>
+  runningCommand: AgentCommand | null
+  commandResult: AgentCommandResult | null
+}) {
+  const isOnline = status.state === 'online' || status.state === 'syncing'
+  const isBlocked = status.state === 'blocked'
+  const StatusIcon = status.state === 'offline' ? WifiOff : HardDrive
 
   return (
     <section className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm">
@@ -128,26 +113,37 @@ function AgentStatusPanel({ status }: { status: AgentStatusSnapshot }) {
               <span
                 className={cn(
                   'flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium capitalize',
-                  isOnline
-                    ? 'bg-hop/10 text-hop'
-                    : 'bg-muted text-muted-foreground',
+                  isBlocked
+                    ? 'bg-destructive/10 text-destructive'
+                    : isOnline
+                      ? 'bg-hop/10 text-hop'
+                      : 'bg-muted text-muted-foreground',
                 )}
               >
                 <span
                   className={cn(
                     'size-1.5 rounded-full',
-                    isOnline ? 'bg-hop live-pulse' : 'bg-muted-foreground/60',
+                    isBlocked
+                      ? 'bg-destructive'
+                      : isOnline
+                        ? 'bg-hop live-pulse'
+                        : 'bg-muted-foreground/60',
                   )}
                 />
-                {status.status}
+                {loading ? 'connecting' : status.healthLabel}
               </span>
             </div>
             <p className="mt-0.5 truncate text-[11px] text-muted-foreground">
               {status.id}
             </p>
           </div>
-          <div className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-hop/10 text-hop">
-            <HardDrive className="size-4.5" />
+          <div
+            className={cn(
+              'flex size-9 shrink-0 items-center justify-center rounded-lg',
+              isBlocked ? 'bg-destructive/10 text-destructive' : 'bg-hop/10 text-hop',
+            )}
+          >
+            <StatusIcon className="size-4.5" />
           </div>
         </div>
       </div>
@@ -172,7 +168,7 @@ function AgentStatusPanel({ status }: { status: AgentStatusSnapshot }) {
             />
             <StatusMetric
               icon={FileStack}
-              label="Files"
+              label="Visible files"
               value={status.fileCount.toLocaleString()}
             />
             <StatusMetric
@@ -188,8 +184,26 @@ function AgentStatusPanel({ status }: { status: AgentStatusSnapshot }) {
             />
             <StatusMetric
               icon={ShieldCheck}
-              label="Private scope"
-              value={status.privateScopePath}
+              label="Visibility"
+              value={status.visibility}
+            />
+            <StatusMetric
+              icon={GitPullRequest}
+              label="Review"
+              value={status.reviewState}
+              highlight={status.reviewState === 'open'}
+            />
+            <StatusMetric
+              icon={GitMerge}
+              label="Merge"
+              value={status.mergeState}
+              highlight={status.mergeState === 'merged'}
+            />
+            <StatusMetric
+              icon={Activity}
+              label="Conflict"
+              value={status.conflictState}
+              highlight={status.conflictState !== 'none' && status.conflictState !== 'Unavailable'}
             />
           </div>
         </div>
@@ -205,6 +219,52 @@ function AgentStatusPanel({ status }: { status: AgentStatusSnapshot }) {
             label="Last ack"
             value={status.lastAck}
           />
+        </div>
+
+        <div className="rounded-xl border border-border/60 bg-muted/20 p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h3 className="text-xs font-semibold">Prototype actions</h3>
+            {runningCommand ? (
+              <span className="text-[10.5px] text-muted-foreground">Running {runningCommand}</span>
+            ) : null}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            {prototypeActions.map((action) => {
+              const Icon = action.icon
+              const isRunning = runningCommand === action.command
+              return (
+                <Button
+                  key={action.command}
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={Boolean(runningCommand)}
+                  className="h-8 justify-start gap-1.5 rounded-lg px-2 text-xs"
+                  onClick={() => void runCommand(action.command)}
+                >
+                  <Icon className={cn('size-3.5 shrink-0', isRunning && 'animate-spin')} />
+                  <span className="truncate">{isRunning ? 'Running' : action.label}</span>
+                </Button>
+              )
+            })}
+          </div>
+          {commandResult ? (
+            <div
+              className={cn(
+                'mt-2 rounded-lg px-2.5 py-2 text-[11px] ring-1 ring-inset',
+                commandResult.ok
+                  ? 'bg-hop/10 text-hop ring-hop/20'
+                  : 'bg-destructive/10 text-destructive ring-destructive/20',
+              )}
+            >
+              <p className="font-medium">
+                {commandResult.ok ? 'Done' : 'Failed'}: {commandResult.label ?? commandResult.command}
+              </p>
+              <p className="mt-0.5 line-clamp-2 font-mono opacity-80">
+                {commandResult.stderr || commandResult.stdout || commandResult.error?.message || 'No output'}
+              </p>
+            </div>
+          ) : null}
         </div>
 
         <div>

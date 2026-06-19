@@ -10,6 +10,7 @@ import {
 } from 'lucide-react'
 import { activityFeed, activityIconMap, type ActivityItem } from './data'
 import { cn } from '@/lib/utils'
+import type { AgentStatusSnapshot } from '@/lib/agent-status'
 
 type PrototypeActivityType = Extract<
   ActivityItem['what'],
@@ -61,9 +62,16 @@ const filterTabs = [
 
 type Filter = (typeof filterTabs)[number]['id']
 
-export function ActivityFeed() {
+type ActivityFeedProps = {
+  status: AgentStatusSnapshot
+}
+
+export function ActivityFeed({ status }: ActivityFeedProps) {
   const [filter, setFilter] = React.useState<Filter>('all')
-  const items = prototypeActivityFeed.filter((a) => filter === 'all' || a.what === filter)
+  const liveItems = status.events.some((event) => event.label !== 'agent:offline')
+    ? status.events.map(agentEventToActivity)
+    : prototypeActivityFeed
+  const items = liveItems.filter((a) => filter === 'all' || a.what === filter)
 
   return (
     <section className="flex flex-col rounded-2xl border border-border/60 bg-card shadow-sm">
@@ -77,7 +85,7 @@ export function ActivityFeed() {
             </span>
           </div>
           <p className="text-xs text-muted-foreground">
-            Unified timeline across codebases, files, and discussions
+            Live agent events and workspace activity
           </p>
         </div>
         <div className="flex items-center gap-1 overflow-x-auto scroll-thin">
@@ -160,4 +168,23 @@ export function ActivityFeed() {
       </div>
     </section>
   )
+}
+
+function agentEventToActivity(event: AgentStatusSnapshot['events'][number], index: number): PrototypeActivityItem {
+  const what = activityTypeForEvent(event.label)
+  return {
+    id: event.id,
+    who: { name: 'HopIt Agent', handle: 'agent', color: '#10b981' },
+    what,
+    target: event.label,
+    detail: event.detail,
+    when: event.when,
+  }
+}
+
+function activityTypeForEvent(label: string): PrototypeActivityType {
+  if (label.includes('sync') || label.includes('acknowledged') || label.includes('journal')) return 'sync'
+  if (label.includes('merge') || label.includes('review')) return 'snapshot'
+  if (label.includes('hydrated') || label.includes('refresh')) return 'upload'
+  return 'snapshot'
 }

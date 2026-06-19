@@ -20,6 +20,7 @@ import {
   type DriveFile,
 } from './data'
 import { cn } from '@/lib/utils'
+import type { AgentFile, AgentStatusSnapshot } from '@/lib/agent-status'
 
 const folderColorMap: Record<string, string> = {
   hop: 'bg-hop/15 text-hop ring-hop/30',
@@ -28,8 +29,16 @@ const folderColorMap: Record<string, string> = {
   sky: 'bg-sky-500/15 text-sky-500 ring-sky-500/30',
 }
 
-export function DriveSection() {
+type DriveSectionProps = {
+  status: AgentStatusSnapshot
+}
+
+export function DriveSection({ status }: DriveSectionProps) {
   const [view, setView] = React.useState<'grid' | 'list'>('grid')
+  const liveFiles = status.files.length > 0 ? status.files.map(agentFileToDriveFile) : driveFiles
+  const liveFolders = status.files.length > 0 ? agentFoldersFromFiles(status.files) : driveFolders
+  const fileCountLabel = status.files.length > 0 ? `${status.files.length} files` : '184 files'
+
   return (
     <section className="flex flex-col rounded-2xl border border-border/60 bg-card shadow-sm">
       <div className="flex flex-col gap-3 border-b border-border/60 p-4 sm:flex-row sm:items-center sm:justify-between">
@@ -37,7 +46,7 @@ export function DriveSection() {
           <div className="flex items-center gap-2">
             <h2 className="text-base font-semibold tracking-tight">Files</h2>
             <span className="rounded-full bg-grape/10 px-1.5 py-0.5 text-[10px] font-medium text-grape">
-              184 files
+              {fileCountLabel}
             </span>
           </div>
           <nav
@@ -46,7 +55,7 @@ export function DriveSection() {
           >
             <span>Workspace</span>
             <ChevronRight className="size-3" />
-            <span className="font-medium text-foreground">Codebase files</span>
+            <span className="font-medium text-foreground">{status.codebaseName}</span>
           </nav>
         </div>
 
@@ -89,7 +98,7 @@ export function DriveSection() {
           Folders
         </p>
         <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {driveFolders.map((f, i) => (
+          {liveFolders.map((f, i) => (
             <motion.button
               key={f.id}
               initial={{ opacity: 0, y: 6 }}
@@ -128,9 +137,9 @@ export function DriveSection() {
           </button>
         </div>
         {view === 'grid' ? (
-          <FileGrid files={driveFiles} />
+          <FileGrid files={liveFiles} />
         ) : (
-          <FileList files={driveFiles} />
+          <FileList files={liveFiles} />
         )}
       </div>
 
@@ -145,6 +154,61 @@ export function DriveSection() {
       </div>
     </section>
   )
+}
+
+function agentFileToDriveFile(file: AgentFile): DriveFile {
+  return {
+    id: file.path,
+    name: file.path,
+    kind: 'file',
+    type: fileTypeForPath(file.path),
+    size: formatBytes(file.size),
+    modified: file.revision ? `rev ${file.revision}` : 'untracked',
+    modifiedBy: file.scope === 'owner-private' ? 'Owner private' : 'HopIt agent',
+    sharedWith: file.scope === 'owner-private' ? 1 : 2,
+  }
+}
+
+function agentFoldersFromFiles(files: AgentFile[]): DriveFile[] {
+  const folders = Array.from(new Set(files.map((file) => file.directory)))
+    .filter((directory) => directory !== '/')
+    .sort()
+
+  const rootFolder: DriveFile = {
+    id: 'workspace-root',
+    name: 'Workspace root',
+    kind: 'folder',
+    modified: 'live',
+    modifiedBy: 'HopIt agent',
+    sharedWith: files.filter((file) => file.directory === '/').length,
+    color: 'hop',
+  }
+
+  return [
+    rootFolder,
+    ...folders.map((directory) => ({
+      id: directory,
+      name: directory,
+      kind: 'folder' as const,
+      modified: 'live',
+      modifiedBy: 'HopIt agent',
+      sharedWith: files.filter((file) => file.directory === directory).length,
+      color: directory.startsWith('.private') ? 'amber' : 'grape',
+    })),
+  ]
+}
+
+function fileTypeForPath(filePath: string): DriveFile['type'] {
+  if (filePath.endsWith('.md')) return 'doc'
+  if (filePath.endsWith('.json')) return 'code'
+  if (filePath.endsWith('.ts') || filePath.endsWith('.tsx')) return 'code'
+  return 'doc'
+}
+
+function formatBytes(bytes: number | null) {
+  if (bytes === null) return 'unknown'
+  if (bytes < 1024) return `${bytes} B`
+  return `${(bytes / 1024).toFixed(1)} KB`
 }
 
 function FileGrid({ files }: { files: DriveFile[] }) {

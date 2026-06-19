@@ -55,6 +55,35 @@ npm run agent:demo
 
 The demo seeds a local cloud file graph that stands in for one selected active change set, hydrates a managed workspace, simulates an editor save, journals the write, and acknowledges it back into that selected cloud state.
 
+To run the live local prototype, start the agent status server against the demo state in one terminal:
+
+```bash
+npm run agent:demo
+npm run agent:status -- \
+  --cloud .hopit-agent/demo/cloud.json \
+  --workspace .hopit-agent/demo/workspaces/hopit-core \
+  --journal .hopit-agent/demo/journal.ndjson \
+  --events .hopit-agent/demo/events.ndjson
+```
+
+Then start the web app in another terminal:
+
+```bash
+npm run dev
+```
+
+The dashboard proxies `http://127.0.0.1:4785/status` through `/api/agent/status` and shows live local-agent state, including the managed workspace path, cloud/Main revisions, pending and failed journal counts, `.private/` visibility, review/merge/conflict state, codebase files, and recent events. Set `HOPIT_AGENT_BASE_URL` if the agent status server is listening somewhere else.
+
+The local agent panel also exposes prototype actions backed by a whitelisted local API route:
+
+- `Reset`: reseed the fixture-backed demo and run the deterministic demo edit/sync.
+- `Edit`: append a shared and `.private/` owner-only edit in the managed workspace.
+- `Sync`: journal and acknowledge local workspace edits into the active change set.
+- `Refresh`: safely mirror clean selected cloud state into the workspace.
+- `Recover`: replay pending journal entries.
+- `Review`: open the selected active change set for review.
+- `Merge`: merge the reviewed active change set into Main.
+
 For the local agent architecture, including the cloud file graph, managed-folder adapter, local cache, safety journal, status API, event log, and future optional filesystem research, see [docs/agent-architecture.md](docs/agent-architecture.md).
 
 For the current done/in-progress/next tracker with proof commands and milestone status, see [docs/progress.md](docs/progress.md).

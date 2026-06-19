@@ -7,6 +7,7 @@ import {
   History,
   Users,
 } from 'lucide-react'
+import type { AgentStatusSnapshot } from '@/lib/agent-status'
 
 type Stat = {
   label: string
@@ -16,38 +17,43 @@ type Stat = {
   bg: string
 }
 
-const stats: Stat[] = [
-  {
-    label: 'Codebases',
-    value: '6',
-    icon: Code2,
-    accent: 'text-hop',
-    bg: 'bg-hop/10',
-  },
-  {
-    label: 'Synced files',
-    value: '184',
-    icon: Folder,
-    accent: 'text-grape',
-    bg: 'bg-grape/10',
-  },
-  {
-    label: 'Snapshots today',
-    value: '47',
-    icon: History,
-    accent: 'text-hop-amber',
-    bg: 'bg-hop-amber/10',
-  },
-  {
-    label: 'Collaborators online',
-    value: '5',
-    icon: Users,
-    accent: 'text-sky-500',
-    bg: 'bg-sky-500/10',
-  },
-]
+type StatsBarProps = {
+  status: AgentStatusSnapshot
+  loading: boolean
+}
 
-export function StatsBar() {
+export function StatsBar({ status, loading }: StatsBarProps) {
+  const stats: Stat[] = [
+    {
+      label: 'Codebase',
+      value: loading ? '...' : status.codebaseName,
+      icon: Code2,
+      accent: 'text-hop',
+      bg: 'bg-hop/10',
+    },
+    {
+      label: 'Visible files',
+      value: loading ? '...' : status.fileCount.toLocaleString(),
+      icon: Folder,
+      accent: 'text-grape',
+      bg: 'bg-grape/10',
+    },
+    {
+      label: 'Pending writes',
+      value: loading ? '...' : status.pendingWrites.toString(),
+      icon: History,
+      accent: status.pendingWrites > 0 ? 'text-hop-amber' : 'text-hop',
+      bg: status.pendingWrites > 0 ? 'bg-hop-amber/10' : 'bg-hop/10',
+    },
+    {
+      label: 'Agent state',
+      value: loading ? '...' : status.healthLabel,
+      icon: Users,
+      accent: status.state === 'blocked' ? 'text-destructive' : 'text-sky-500',
+      bg: status.state === 'blocked' ? 'bg-destructive/10' : 'bg-sky-500/10',
+    },
+  ]
+
   return (
     <motion.section
       aria-label="Workspace summary"

@@ -1,0 +1,366 @@
+export type AgentEventTone = 'ready' | 'syncing' | 'queued' | 'observed' | 'blocked'
+
+export type AgentPanelState = 'online' | 'syncing' | 'offline' | 'blocked'
+
+export type AgentEvent = {
+  id: string
+  label: string
+  detail: string
+  when: string
+  tone: AgentEventTone
+}
+
+export type AgentStatusSnapshot = {
+  id: string
+  state: AgentPanelState
+  healthLabel: string
+  managedWorkspacePath: string
+  codebaseName: string
+  activeChangeSetId: string
+  mainId: string
+  cloudRevision: string
+  mainRevision: string
+  fileCount: number
+  hiddenFileCount: number
+  pendingWrites: number
+  failedWrites: number
+  acknowledgedWrites: number
+  lastSync: string
+  lastAck: string
+  cacheState: 'ready' | 'syncing' | 'offline' | 'blocked'
+  privateScope: 'scoped' | 'none'
+  privateScopePath: string
+  visibility: string
+  reviewState: string
+  mergeState: string
+  conflictState: string
+  remoteUpdateState: string
+  files: AgentFile[]
+  events: AgentEvent[]
+  rawUpdatedAt: string | null
+  unavailableReason?: string
+}
+
+export type AgentFile = {
+  path: string
+  name: string
+  directory: string
+  scope: 'shared' | 'owner-private'
+  revision: number | null
+  size: number | null
+  hash: string | null
+}
+
+type RawAgentResponse = {
+  status?: RawAgentStatus | null
+  cloud?: RawCloudResponse | null
+  events?: RawEventsResponse | null
+  error?: {
+    code?: string
+    message?: string
+    agentBaseUrl?: string
+  }
+}
+
+type RawCloudResponse = {
+  graph?: {
+    files?: Record<string, RawCloudFile>
+  } | null
+}
+
+type RawCloudFile = {
+  scope?: string
+  revision?: number
+  size?: number
+  hash?: string
+  content?: string
+}
+
+type RawEventsResponse = {
+  recent?: RawAgentEvent[]
+  lastAcknowledgement?: RawAgentEvent | null
+  lastSync?: RawAgentEvent | null
+}
+
+type RawAgentStatus = {
+  ok?: boolean
+  generatedAt?: string
+  codebaseName?: string | null
+  activeChangeSetId?: string | null
+  mainId?: string | null
+  visibleFileCount?: number | null
+  hiddenFileCount?: number | null
+  effectiveChangeSetVisibility?: string | null
+  workspace?: {
+    path?: string | null
+    cacheMode?: string | null
+  }
+  cloud?: {
+    revision?: number | null
+    main?: {
+      revision?: number | null
+    } | null
+    scopeCounts?: {
+      private?: number
+    }
+  }
+  journal?: {
+    pendingCount?: number
+    failedCount?: number
+    acknowledgedCount?: number
+  }
+  sync?: {
+    state?: string
+    lastSuccessfulAt?: string | null
+    lastAcknowledgementAt?: string | null
+  }
+  refresh?: {
+    state?: string
+  }
+  remoteUpdate?: {
+    state?: string
+  }
+  review?: {
+    state?: string
+  }
+  merge?: {
+    state?: string
+  }
+  conflict?: {
+    state?: string
+  }
+  events?: {
+    recent?: RawAgentEvent[]
+    lastAcknowledgement?: RawAgentEvent | null
+    lastSync?: RawAgentEvent | null
+  }
+}
+
+type RawAgentEvent = {
+  id?: string
+  type?: string
+  event?: string
+  timestamp?: string
+  at?: string
+  payload?: Record<string, unknown>
+  detail?: Record<string, unknown>
+}
+
+export function offlineAgentStatus(reason = 'Start the local HopIt agent status server.'): AgentStatusSnapshot {
+  return {
+    id: 'local-hopit-agent',
+    state: 'offline',
+    healthLabel: 'Offline',
+    managedWorkspacePath: 'Agent not connected',
+    codebaseName: 'No codebase',
+    activeChangeSetId: 'No active change set',
+    mainId: 'No Main state',
+    cloudRevision: 'Unavailable',
+    mainRevision: 'Unavailable',
+    fileCount: 0,
+    hiddenFileCount: 0,
+    pendingWrites: 0,
+    failedWrites: 0,
+    acknowledgedWrites: 0,
+    lastSync: 'Unavailable',
+    lastAck: 'Unavailable',
+    cacheState: 'offline',
+    privateScope: 'none',
+    privateScopePath: '.private/',
+    visibility: 'Unavailable',
+    reviewState: 'Unavailable',
+    mergeState: 'Unavailable',
+    conflictState: 'Unavailable',
+    remoteUpdateState: 'Unavailable',
+    files: [],
+    events: [
+      {
+        id: 'agent-offline',
+        label: 'agent:offline',
+        detail: reason,
+        when: 'now',
+        tone: 'blocked',
+      },
+    ],
+    rawUpdatedAt: null,
+    unavailableReason: reason,
+  }
+}
+
+export function mapAgentStatusResponse(response: unknown): AgentStatusSnapshot {
+  const wrappedResponse = isRawAgentResponse(response) ? response : null
+  const rawStatus = wrappedResponse?.status ?? (isRawAgentStatus(response) ? response : null)
+
+  if (!rawStatus) {
+    return offlineAgentStatus(wrappedResponse?.error?.message ?? 'Agent status endpoint is unavailable.')
+  }
+
+  const status = rawStatus
+  const pendingWrites = status.journal?.pendingCount ?? 0
+  const failedWrites = status.journal?.failedCount ?? 0
+  const syncState = status.sync?.state ?? 'idle'
+  const refreshState = status.refresh?.state ?? 'idle'
+  const conflictState = status.conflict?.state ?? 'none'
+  const isBlocked = failedWrites > 0 || refreshState === 'blocked' || conflictState === 'conflicted'
+  const isSyncing = syncState === 'syncing' || refreshState === 'refreshing' || pendingWrites > 0
+  const state: AgentPanelState = isBlocked ? 'blocked' : isSyncing ? 'syncing' : 'online'
+  const privateFiles = status.cloud?.scopeCounts?.private ?? 0
+  const events = wrappedResponse?.events ?? status.events
+  const recentEvents = events?.recent ?? []
+
+  return {
+    id: status.codebaseName ? `${status.codebaseName}-agent` : 'local-hopit-agent',
+    state,
+    healthLabel: status.ok === false ? 'Needs attention' : state === 'syncing' ? 'Syncing' : 'Online',
+    managedWorkspacePath: status.workspace?.path ?? 'Workspace unavailable',
+    codebaseName: status.codebaseName ?? 'Unknown codebase',
+    activeChangeSetId: status.activeChangeSetId ?? 'None',
+    mainId: status.mainId ?? 'None',
+    cloudRevision: formatRevision('cloud-rev', status.cloud?.revision),
+    mainRevision: formatRevision('main-rev', status.cloud?.main?.revision),
+    fileCount: status.visibleFileCount ?? 0,
+    hiddenFileCount: status.hiddenFileCount ?? 0,
+    pendingWrites,
+    failedWrites,
+    acknowledgedWrites: status.journal?.acknowledgedCount ?? 0,
+    lastSync: formatEventTime(events?.lastSync?.at ?? events?.lastSync?.timestamp ?? status.sync?.lastSuccessfulAt),
+    lastAck: formatEventTime(
+      events?.lastAcknowledgement?.at ??
+        events?.lastAcknowledgement?.timestamp ??
+        status.sync?.lastAcknowledgementAt,
+    ),
+    cacheState: isBlocked ? 'blocked' : isSyncing ? 'syncing' : 'ready',
+    privateScope: privateFiles > 0 ? 'scoped' : 'none',
+    privateScopePath: `${status.workspace?.path ?? 'workspace'}/.private/`,
+    visibility: status.effectiveChangeSetVisibility ?? 'Unknown',
+    reviewState: status.review?.state ?? 'not-open',
+    mergeState: status.merge?.state ?? 'unmerged',
+    conflictState,
+    remoteUpdateState: status.remoteUpdate?.state ?? 'idle',
+    files: mapCloudFiles(wrappedResponse?.cloud),
+    events: mapRecentEvents(recentEvents),
+    rawUpdatedAt: status.generatedAt ?? null,
+  }
+}
+
+function mapCloudFiles(cloud: RawCloudResponse | null | undefined): AgentFile[] {
+  const files = cloud?.graph?.files ?? {}
+
+  return Object.entries(files)
+    .map(([filePath, file]) => ({
+      path: filePath,
+      name: pathName(filePath),
+      directory: pathDirectory(filePath),
+      scope: fileScope(file.scope),
+      revision: typeof file.revision === 'number' ? file.revision : null,
+      size: typeof file.size === 'number' ? file.size : contentSize(file.content),
+      hash: typeof file.hash === 'string' ? file.hash : null,
+    }))
+    .sort((a, b) => a.path.localeCompare(b.path))
+}
+
+function fileScope(scope: string | undefined): AgentFile['scope'] {
+  return scope === 'owner-private' ? 'owner-private' : 'shared'
+}
+
+function pathName(filePath: string) {
+  return filePath.split('/').pop() ?? filePath
+}
+
+function pathDirectory(filePath: string) {
+  const parts = filePath.split('/')
+  parts.pop()
+  return parts.join('/') || '/'
+}
+
+function contentSize(content: string | undefined) {
+  return typeof content === 'string' ? new TextEncoder().encode(content).length : null
+}
+
+function isRawAgentResponse(response: unknown): response is RawAgentResponse {
+  return typeof response === 'object' && response !== null && ('status' in response || 'error' in response)
+}
+
+function isRawAgentStatus(response: unknown): response is RawAgentStatus {
+  return (
+    typeof response === 'object' &&
+    response !== null &&
+    ('ok' in response || 'generatedAt' in response || 'codebaseName' in response)
+  )
+}
+
+function mapRecentEvents(events: RawAgentEvent[]): AgentEvent[] {
+  if (events.length === 0) {
+    return [
+      {
+        id: 'agent-ready-empty',
+        label: 'agent:ready',
+        detail: 'Status endpoint is reachable and waiting for local activity.',
+        when: 'now',
+        tone: 'ready',
+      },
+    ]
+  }
+
+  return events
+    .slice(-5)
+    .reverse()
+    .map((event, index) => {
+      const label = event.event ?? event.type ?? 'agent.event'
+      const timestamp = event.at ?? event.timestamp
+      return {
+        id: event.id ?? `${label}-${timestamp ?? index}`,
+        label,
+        detail: describeEvent(event),
+        when: formatEventTime(timestamp),
+        tone: toneForEvent(label),
+      }
+    })
+}
+
+function describeEvent(event: RawAgentEvent) {
+  const payload = event.detail ?? event.payload ?? {}
+  const path = typeof payload.path === 'string' ? payload.path : null
+  const trigger = typeof payload.trigger === 'string' ? payload.trigger : null
+  const revision = typeof payload.revision === 'number' ? payload.revision : null
+  const writes = typeof payload.writes === 'number' ? payload.writes : null
+
+  if (path && revision !== null) return `${path} acknowledged at revision ${revision}`
+  if (path) return path
+  if (writes !== null) return `${writes} write${writes === 1 ? '' : 's'} processed`
+  if (trigger) return `Triggered by ${trigger}`
+
+  return 'Local agent state changed'
+}
+
+function toneForEvent(label: string): AgentEventTone {
+  if (label.includes('failed') || label.includes('blocked') || label.includes('conflict')) return 'blocked'
+  if (label.includes('started') || label.includes('sync') || label.includes('refresh')) return 'syncing'
+  if (label.includes('journaled') || label.includes('pending')) return 'queued'
+  if (label.includes('ready') || label.includes('acknowledged') || label.includes('complete')) return 'ready'
+  return 'observed'
+}
+
+function formatRevision(prefix: string, revision: number | null | undefined) {
+  return typeof revision === 'number' ? `${prefix} ${revision}` : 'Unavailable'
+}
+
+function formatEventTime(timestamp: string | null | undefined) {
+  if (!timestamp) return 'Unavailable'
+
+  const time = new Date(timestamp).getTime()
+  if (Number.isNaN(time)) return 'Unavailable'
+
+  const seconds = Math.max(0, Math.round((Date.now() - time) / 1000))
+  if (seconds < 5) return 'now'
+  if (seconds < 60) return `${seconds} sec ago`
+
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `${minutes} min ago`
+
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return `${hours} hr ago`
+
+  const days = Math.round(hours / 24)
+  return `${days} day${days === 1 ? '' : 's'} ago`
+}

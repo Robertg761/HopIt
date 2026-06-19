@@ -10,9 +10,11 @@ import { ActivityFeed } from '@/components/hopit/activity-feed'
 import { RightRail } from '@/components/hopit/right-rail'
 import { HopItLogo } from '@/components/hopit/logo'
 import { Cloud, ShieldCheck } from 'lucide-react'
+import { useAgentStatus } from '@/hooks/use-agent-status'
 
 export default function Home() {
   const [sidebarOpen, setSidebarOpen] = React.useState(false)
+  const agentStatus = useAgentStatus()
 
   return (
     <div className="flex min-h-screen bg-background text-foreground">
@@ -24,20 +26,26 @@ export default function Home() {
         <main className="flex-1">
           <div className="mx-auto max-w-[1600px] px-4 py-6 md:px-6 md:py-8">
             <div className="space-y-6">
-              <StatsBar />
+              <StatsBar status={agentStatus.status} loading={agentStatus.loading} />
 
               {/* Main split: codebases + files */}
               <div className="grid gap-6 xl:grid-cols-2">
-                <ReposSection />
-                <DriveSection />
+                <ReposSection status={agentStatus.status} />
+                <DriveSection status={agentStatus.status} />
               </div>
 
               {/* Activity + right rail */}
               <div className="grid gap-6 lg:grid-cols-3">
                 <div className="lg:col-span-2">
-                  <ActivityFeed />
+                  <ActivityFeed status={agentStatus.status} />
                 </div>
-                <RightRail />
+                <RightRail
+                  status={agentStatus.status}
+                  loading={agentStatus.loading}
+                  runCommand={agentStatus.runCommand}
+                  runningCommand={agentStatus.runningCommand}
+                  commandResult={agentStatus.commandResult}
+                />
               </div>
             </div>
           </div>

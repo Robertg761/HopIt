@@ -21,10 +21,16 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { codebases, type Codebase } from './data'
 import { cn } from '@/lib/utils'
+import type { AgentStatusSnapshot } from '@/lib/agent-status'
 
-export function ReposSection() {
+type ReposSectionProps = {
+  status: AgentStatusSnapshot
+}
+
+export function ReposSection({ status }: ReposSectionProps) {
   const [filter, setFilter] = React.useState<'all' | 'public' | 'private'>('all')
-  const filtered = codebases.filter((codebase) => {
+  const codebaseItems = codebasesWithLiveStatus(status)
+  const filtered = codebaseItems.filter((codebase) => {
     if (filter === 'public') return codebase.visibility === 'public'
     if (filter === 'private') return codebase.visibility === 'private'
     return true
@@ -38,6 +44,7 @@ export function ReposSection() {
       <SectionHeader
         title="Codebases"
         subtitle="Your team's code, organized."
+        count={codebaseItems.length}
         filter={filter}
         setFilter={setFilter}
       />
@@ -55,11 +62,13 @@ export function ReposSection() {
 function SectionHeader({
   title,
   subtitle,
+  count,
   filter,
   setFilter,
 }: {
   title: string
   subtitle: string
+  count: number
   filter: 'all' | 'public' | 'private'
   setFilter: (f: 'all' | 'public' | 'private') => void
 }) {
@@ -69,7 +78,7 @@ function SectionHeader({
         <div className="flex items-center gap-2">
           <h2 className="text-base font-semibold tracking-tight">{title}</h2>
           <Badge variant="secondary" className="rounded-full bg-hop/10 text-hop">
-            {codebases.length}
+            {count}
           </Badge>
         </div>
         <p className="text-xs text-muted-foreground">{subtitle}</p>
@@ -103,6 +112,37 @@ function SectionHeader({
       </div>
     </div>
   )
+}
+
+function codebasesWithLiveStatus(status: AgentStatusSnapshot): Codebase[] {
+  if (status.state === 'offline') return codebases
+
+  const fallback = codebases.find((codebase) => codebase.name === status.codebaseName) ?? codebases[0]
+  const liveCodebase: Codebase = {
+    ...fallback,
+    id: 'live-agent-codebase',
+    name: status.codebaseName,
+    owner: 'hopit',
+    description: `Active change set ${status.activeChangeSetId} backed by the local managed workspace.`,
+    snapshots: revisionNumber(status.cloudRevision),
+    syncedFiles: status.fileCount,
+    pendingSyncs: status.pendingWrites,
+    latestSnapshot: {
+      id: status.cloudRevision,
+      message: status.events[0]?.detail ?? 'Local agent status is live',
+      author: 'HopIt Agent',
+      when: status.events[0]?.when ?? 'now',
+    },
+    tags: Array.from(new Set([status.visibility, status.reviewState, status.mergeState].filter(Boolean))),
+    visibility: status.visibility === 'private' ? 'private' : 'public',
+  }
+
+  return [liveCodebase, ...codebases.filter((codebase) => codebase.name !== status.codebaseName)]
+}
+
+function revisionNumber(revision: string) {
+  const match = revision.match(/\d+/)
+  return match ? Number(match[0]) : 0
 }
 
 function CodebaseCard({ codebase, index }: { codebase: Codebase; index: number }) {
