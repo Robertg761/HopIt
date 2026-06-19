@@ -45,6 +45,11 @@ async function main() {
     return
   }
 
+  if (command === 'refresh') {
+    await refreshWorkspace(options)
+    return
+  }
+
   if (command === 'sync-once') {
     await syncOnce(options)
     return
@@ -144,6 +149,87 @@ async function hydrateWorkspace(options) {
     cacheMode: workspaceMode.cacheMode,
     scopeCounts: countCloudScopes(cloud),
   })
+}
+
+async function refreshWorkspace(options) {
+  const cloud = await readJson(options.cloud)
+  const journalSafety = await readJournalSafety(options)
+  const startedDetail = {
+    workspace: options.workspace,
+    revision: cloud.revision,
+    adapter: workspaceMode.adapter,
+    cacheMode: workspaceMode.cacheMode,
+    scopeCounts: countCloudScopes(cloud),
+    journal: journalSafety.summary,
+  }
+
+  await emit(options, 'refresh.started', startedDetail)
+
+  if (!journalSafety.safe) {
+    const blockedDetail = {
+      ...startedDetail,
+      state: 'blocked',
+      reason: 'journal_has_unresolved_entries',
+      pendingCount: journalSafety.pendingEntries.length,
+      failedCount: journalSafety.failedEntries.length,
+      pendingScopeCounts: countEntryScopes(journalSafety.pendingEntries),
+      failedScopeCounts: countEntryScopes(journalSafety.failedEntries),
+    }
+    await emit(options, 'refresh.blocked', blockedDetail)
+    throw new Error('Refresh blocked because the local journal has pending or failed entries.')
+  }
+
+  const result = await materializeCloudToWorkspace(options, cloud)
+  await emit(options, 'refresh.complete', {
+    ...startedDetail,
+    ...result,
+  })
+}
+
+async function materializeCloudToWorkspace(options, cloud) {
+  await fs.mkdir(options.workspace, { recursive: true })
+
+  const diskFiles = await readWorkspaceFiles(options.workspace)
+  const cloudPaths = new Set(Object.keys(cloud.files ?? {}))
+  let written = 0
+  let deleted = 0
+  let unchanged = 0
+
+  for (const [relativePath, file] of Object.entries(cloud.files ?? {})) {
+    if (typeof file.content !== 'string') {
+      throw new Error(`Cloud file is missing string content: ${relativePath}`)
+    }
+
+    const content = file.content
+    const absolutePath = path.join(options.workspace, relativePath)
+    await fs.mkdir(path.dirname(absolutePath), { recursive: true })
+
+    if (diskFiles[relativePath] === content) {
+      unchanged += 1
+      continue
+    }
+
+    await fs.writeFile(absolutePath, content, 'utf8')
+    written += 1
+  }
+
+  for (const relativePath of Object.keys(diskFiles)) {
+    if (cloudPaths.has(relativePath)) continue
+
+    await fs.rm(path.join(options.workspace, relativePath), { force: true })
+    await removeEmptyAncestorDirectories(options.workspace, path.dirname(relativePath))
+    deleted += 1
+  }
+
+  return {
+    workspace: options.workspace,
+    revision: cloud.revision,
+    written,
+    deleted,
+    unchanged,
+    fileCount: cloudPaths.size,
+    scopeCounts: countCloudScopes(cloud),
+  }
 }
 
 async function syncOnce(options, context = {}) {
@@ -601,6 +687,20 @@ async function readAgentState(options) {
     lastRecoveredSync,
     latestSyncEvent,
   })
+  const lastRefreshStarted = findLastEvent(eventEntries, 'refresh.started')
+  const lastRefreshBlocked = findLastEvent(eventEntries, 'refresh.blocked')
+  const lastRefreshComplete = findLastEvent(eventEntries, 'refresh.complete')
+  const latestRefreshEvent = findLastEventOf(eventEntries, [
+    'refresh.started',
+    'refresh.blocked',
+    'refresh.complete',
+  ])
+  const refreshHealth = buildRefreshHealth({
+    lastRefreshStarted,
+    lastRefreshBlocked,
+    lastRefreshComplete,
+    latestRefreshEvent,
+  })
   const lastRecovery = findLastEvent(eventEntries, 'journal.recovery_complete')
   const lastWatchStarted = findLastEvent(eventEntries, 'watch.started')
   const lastWatchDegraded = findLastEvent(eventEntries, 'watch.degraded')
@@ -666,6 +766,10 @@ async function readAgentState(options) {
     lastFailedSync,
     lastRecoveredSync,
     latestSyncEvent,
+    lastRefreshStarted,
+    lastRefreshBlocked,
+    lastRefreshComplete,
+    latestRefreshEvent,
     lastRecovery,
     lastWatchStarted,
     lastWatchDegraded,
@@ -675,7 +779,12 @@ async function readAgentState(options) {
 
   return {
     status: {
-      ok: failedJournalEntries.length === 0 && syncHealth.state !== 'failed' && !watchHealth.state.endsWith('degraded') && watchHealth.state !== 'blocked',
+      ok:
+        failedJournalEntries.length === 0 &&
+        syncHealth.state !== 'failed' &&
+        refreshHealth.state !== 'blocked' &&
+        !watchHealth.state.endsWith('degraded') &&
+        watchHealth.state !== 'blocked',
       generatedAt: new Date().toISOString(),
       mode: workspaceMode,
       workspace: {
@@ -698,6 +807,7 @@ async function readAgentState(options) {
         acknowledgedScopeCounts: journalSummary.acknowledgedScopeCounts,
       },
       sync: syncHealth,
+      refresh: refreshHealth,
       watch: watchHealth,
       events: {
         path: eventsSummary.path,
@@ -710,6 +820,10 @@ async function readAgentState(options) {
         lastFailedSync,
         lastRecoveredSync,
         latestSyncEvent,
+        lastRefreshStarted,
+        lastRefreshBlocked,
+        lastRefreshComplete,
+        latestRefreshEvent,
         lastRecovery,
         lastWatchStarted,
         lastWatchDegraded,
@@ -857,6 +971,27 @@ function classifyJournalEntries(journalEntries, eventEntries) {
   return { entries }
 }
 
+async function readJournalSafety(options) {
+  const journalEntries = await readNdjson(options.journal)
+  const eventEntries = await readNdjson(options.events)
+  const journalState = classifyJournalEntries(journalEntries, eventEntries)
+  const pendingEntries = journalState.entries.filter((entry) => entry.recoveryStatus === 'pending')
+  const failedEntries = journalState.entries.filter((entry) => entry.recoveryStatus === 'failed')
+
+  return {
+    safe: pendingEntries.length === 0 && failedEntries.length === 0,
+    pendingEntries,
+    failedEntries,
+    summary: {
+      totalEntries: journalEntries.length,
+      pendingCount: pendingEntries.length,
+      failedCount: failedEntries.length,
+      pendingScopeCounts: countEntryScopes(pendingEntries),
+      failedScopeCounts: countEntryScopes(failedEntries),
+    },
+  }
+}
+
 async function hasUnresolvedSyncFailure(options) {
   const events = await readNdjson(options.events)
   const lastSyncOutcome = findLastEventOf(events, ['sync.complete', 'sync.failed', 'sync.recovered'])
@@ -905,6 +1040,27 @@ function buildSyncHealth(syncEvents) {
     lastFailedSync,
     lastRecoveredSync,
     lastError: lastFailedSync?.detail?.reason ?? null,
+  }
+}
+
+function buildRefreshHealth(refreshEvents) {
+  const { lastRefreshStarted, lastRefreshBlocked, lastRefreshComplete, latestRefreshEvent } = refreshEvents
+  let state = 'idle'
+
+  if (latestRefreshEvent?.event === 'refresh.blocked') {
+    state = 'blocked'
+  } else if (latestRefreshEvent?.event === 'refresh.started') {
+    state = 'refreshing'
+  } else if (latestRefreshEvent?.event === 'refresh.complete') {
+    state = 'healthy'
+  }
+
+  return {
+    state,
+    lastStarted: lastRefreshStarted,
+    lastBlocked: lastRefreshBlocked,
+    lastComplete: lastRefreshComplete,
+    lastError: state === 'blocked' ? (lastRefreshBlocked?.detail?.reason ?? null) : null,
   }
 }
 
@@ -974,6 +1130,22 @@ async function readWorkspaceFiles(root) {
 
   await walk(root)
   return result
+}
+
+async function removeEmptyAncestorDirectories(root, relativeDir) {
+  let current = relativeDir
+
+  while (current && current !== '.') {
+    const absolutePath = path.join(root, current)
+
+    try {
+      await fs.rmdir(absolutePath)
+    } catch {
+      return
+    }
+
+    current = path.dirname(current)
+  }
 }
 
 function withComputedMetadata(cloud) {
@@ -1097,6 +1269,7 @@ function printHelp() {
 Commands:
   init        Seed a local cloud file graph
   hydrate     Materialize cloud files into the managed workspace
+  refresh     Update the managed workspace from cloud when the journal is safe
   sync-once   Scan managed-folder writes, journal them, and acknowledge to cloud
   recover     Replay unacknowledged journal entries into the cloud graph
   watch       Hydrate and watch the workspace for edits

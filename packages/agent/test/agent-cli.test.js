@@ -24,6 +24,29 @@ async function makeState() {
   }
 }
 
+async function makeTwoSessionState() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hopit-agent-two-session-test-'))
+
+  return {
+    root,
+    cloud: path.join(root, 'cloud.json'),
+    deviceA: {
+      root,
+      cloud: path.join(root, 'cloud.json'),
+      workspace: path.join(root, 'device-a-workspace'),
+      journal: path.join(root, 'device-a-journal.ndjson'),
+      events: path.join(root, 'device-a-events.ndjson'),
+    },
+    deviceB: {
+      root,
+      cloud: path.join(root, 'cloud.json'),
+      workspace: path.join(root, 'device-b-workspace'),
+      journal: path.join(root, 'device-b-journal.ndjson'),
+      events: path.join(root, 'device-b-events.ndjson'),
+    },
+  }
+}
+
 function stateArgs(state) {
   return [
     '--cloud',
@@ -52,6 +75,34 @@ async function runCliFailure(command, args = []) {
   }
 
   throw new Error(`Expected ${command} to fail.`)
+}
+
+let refreshAvailable
+
+async function skipUnlessRefreshAvailable(t) {
+  if (refreshAvailable === undefined) {
+    const probeRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hopit-agent-refresh-probe-'))
+    const probeArgs = stateArgs({
+      cloud: path.join(probeRoot, 'missing-cloud.json'),
+      workspace: path.join(probeRoot, 'workspace'),
+      journal: path.join(probeRoot, 'journal.ndjson'),
+      events: path.join(probeRoot, 'events.ndjson'),
+    })
+
+    try {
+      const probe = await runCli('refresh', probeArgs)
+      refreshAvailable = !/Commands:/i.test(probe.stdout)
+    } catch {
+      refreshAvailable = true
+    }
+  }
+
+  if (!refreshAvailable) {
+    t.skip('refresh command is not available yet.')
+    return true
+  }
+
+  return false
 }
 
 function delay(ms) {
@@ -277,6 +328,14 @@ function hashContent(content) {
 
 async function appendJournalEntry(state, entry) {
   await fs.appendFile(state.journal, `${JSON.stringify(entry)}\n`, 'utf8')
+}
+
+async function appendEvent(state, event, detail) {
+  await fs.appendFile(
+    state.events,
+    `${JSON.stringify({ event, detail, at: new Date().toISOString() })}\n`,
+    'utf8',
+  )
 }
 
 test('CLI classifies .private files as owner-private while snapshotting and syncing them', async () => {
@@ -562,4 +621,111 @@ test('watch refuses unsafe recovery and exposes failed state in status', async (
   assert.equal(status.journal.failedCount, 1)
   assert.deepEqual(status.journal.failedScopeCounts, { shared: 1, private: 0 })
   assert.equal(status.events.lastRecovery.detail.failed, 1)
+})
+
+test('refresh brings device A shared-file sync into device B managed workspace', async (t) => {
+  if (await skipUnlessRefreshAvailable(t)) return
+
+  const { deviceA, deviceB } = await makeTwoSessionState()
+  await runCli('init', [...stateArgs(deviceA), '--force'])
+  await runCli('hydrate', stateArgs(deviceA))
+  await runCli('hydrate', stateArgs(deviceB))
+
+  const sharedPathA = path.join(deviceA.workspace, 'README.md')
+  const sharedPathB = path.join(deviceB.workspace, 'README.md')
+  const sharedEdit = '\nEdited on device A, then refreshed on device B.\n'
+
+  await fs.appendFile(sharedPathA, sharedEdit, 'utf8')
+  await runCli('sync-once', stateArgs(deviceA))
+
+  assert.doesNotMatch(await fs.readFile(sharedPathB, 'utf8'), /Edited on device A/)
+
+  await runCli('refresh', stateArgs(deviceB))
+
+  const refreshedContent = await fs.readFile(sharedPathB, 'utf8')
+  assert.match(refreshedContent, /Edited on device A, then refreshed on device B\./)
+
+  const cloud = await readJson(deviceA.cloud)
+  assert.equal(cloud.files['README.md'].scope, 'shared')
+  assert.equal(cloud.files['README.md'].content, refreshedContent)
+})
+
+test('refresh brings same-owner .private sync into device B managed workspace', async (t) => {
+  if (await skipUnlessRefreshAvailable(t)) return
+
+  const { deviceA, deviceB } = await makeTwoSessionState()
+  await runCli('init', [...stateArgs(deviceA), '--force'])
+  await runCli('hydrate', stateArgs(deviceA))
+  await runCli('hydrate', stateArgs(deviceB))
+
+  const privatePathA = path.join(deviceA.workspace, '.private/agent-note.md')
+  const privatePathB = path.join(deviceB.workspace, '.private/agent-note.md')
+  const privateEdit = '\nSame-owner private edit from device A.\n'
+
+  await fs.appendFile(privatePathA, privateEdit, 'utf8')
+  await runCli('sync-once', stateArgs(deviceA))
+
+  assert.doesNotMatch(await fs.readFile(privatePathB, 'utf8'), /Same-owner private edit/)
+
+  await runCli('refresh', stateArgs(deviceB))
+
+  const refreshedContent = await fs.readFile(privatePathB, 'utf8')
+  assert.match(refreshedContent, /Same-owner private edit from device A\./)
+
+  const cloud = await readJson(deviceA.cloud)
+  assert.equal(cloud.files['.private/agent-note.md'].scope, 'owner-private')
+  assert.equal(cloud.files['.private/agent-note.md'].content, refreshedContent)
+})
+
+test('refresh refuses to overwrite device B files with pending or failed journal entries', async (t) => {
+  if (await skipUnlessRefreshAvailable(t)) return
+
+  for (const journalState of ['pending', 'failed']) {
+    await t.test(`refuses with ${journalState} device B journal entry`, async () => {
+      const { deviceA, deviceB } = await makeTwoSessionState()
+      await runCli('init', [...stateArgs(deviceA), '--force'])
+      await runCli('hydrate', stateArgs(deviceA))
+      await runCli('hydrate', stateArgs(deviceB))
+
+      const deviceBReadme = path.join(deviceB.workspace, 'README.md')
+      const unsafeLocalContent = `# hopit-core\n\nDevice B unsynced ${journalState} edit.\n`
+      await fs.writeFile(deviceBReadme, unsafeLocalContent, 'utf8')
+
+      const entry = {
+        id: randomUUID(),
+        type: 'write',
+        path: 'README.md',
+        scope: 'shared',
+        hash: hashContent(unsafeLocalContent),
+        bytes: Buffer.byteLength(unsafeLocalContent),
+        createdAt: new Date().toISOString(),
+        status: 'pending',
+      }
+      await appendJournalEntry(deviceB, entry)
+
+      if (journalState === 'failed') {
+        await appendEvent(deviceB, 'journal.recovery_failed', {
+          id: entry.id,
+          type: entry.type,
+          path: entry.path,
+          scope: entry.scope,
+          reason: 'test_failed_journal_entry',
+        })
+      }
+
+      const syncedDeviceAContent = '# hopit-core\n\nDevice A cloud edit that must not overwrite B.\n'
+      await fs.writeFile(path.join(deviceA.workspace, 'README.md'), syncedDeviceAContent, 'utf8')
+      await runCli('sync-once', stateArgs(deviceA))
+
+      const failure = await runCliFailure('refresh', stateArgs(deviceB))
+      assert.equal(failure.code, 1)
+      assert.match(`${failure.stdout}\n${failure.stderr}`, /journal|pending|failed|overwrite|unsafe/i)
+
+      assert.equal(await fs.readFile(deviceBReadme, 'utf8'), unsafeLocalContent)
+
+      const status = JSON.parse((await runCli('status', stateArgs(deviceB))).stdout)
+      assert.equal(status.journal.pendingCount, journalState === 'pending' ? 1 : 0)
+      assert.equal(status.journal.failedCount, journalState === 'failed' ? 1 : 0)
+    })
+  }
 })

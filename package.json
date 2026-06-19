@@ -11,6 +11,7 @@
     "agent:demo": "node packages/agent/src/cli.js demo",
     "agent:init": "node packages/agent/src/cli.js init",
     "agent:hydrate": "node packages/agent/src/cli.js hydrate",
+    "agent:refresh": "node packages/agent/src/cli.js refresh",
     "agent:sync": "node packages/agent/src/cli.js sync-once",
     "agent:recover": "node packages/agent/src/cli.js recover",
     "agent:watch": "node packages/agent/src/cli.js watch",

@@ -1,6 +1,6 @@
 # Local Agent Architecture
 
-HopIt's local agent materializes a cloud codebase into a managed workspace folder while keeping the cloud file graph as the source of truth. The v1 architecture should optimize for OS and editor compatibility: a normal local folder, an agent-owned local cache, a safety journal, a status API, and an event log. A true OS filesystem mount is future optional research, not the default product path.
+HopIt's local agent materializes a selected cloud codebase state into a managed workspace folder. For accepted project state that selected state can be Main; for day-to-day editing it is usually the user's active change set. The v1 architecture should optimize for OS and editor compatibility: a normal local folder, an agent-owned local cache, a safety journal, a status API, and an event log. A true OS filesystem mount is future optional research, not the default product path.
 
 ## Core Pieces
 
@@ -11,12 +11,29 @@ The cloud file graph is the durable model for a codebase:
 - directory and file paths
 - file revisions and metadata
 - content hashes and blob references
+- Main state
+- active change sets
+- owner and visibility metadata
 - workspace revision number
 - device/session sync state
 
-The spike stores this in `.hopit-agent/cloud.json`. A production service should split metadata into a database and content into blob storage, but expose the same graph-shaped API to the agent.
+The spike stores a simplified single selected state in `.hopit-agent/cloud.json`. A production service should split metadata into a database and content into blob storage, but expose the same graph-shaped API to the agent with explicit Main, active change-set, owner, and visibility fields.
 
-HopIt v1 does not have an ignore-file model. The graph should store visibility metadata for `.private/` paths: those files are snapshotted, synced, and versioned, but visible only to the owner. Files outside `.private/` are shared with the codebase's collaborators according to workspace permissions.
+HopIt v1 does not have an ignore-file model. The graph should store visibility metadata for `.private/` paths: those files are snapshotted, synced, and versioned, but visible only to the owner. Files outside `.private/` are governed by the active change set's effective visibility and the codebase's permissions.
+
+### Main And Active Change Sets
+
+Main is the accepted shared state of a codebase. It advances through explicit review/merge actions, not merely because an editor saved a file.
+
+An active change set is a cloud-backed working state created automatically when a user starts editing. The sync service should acknowledge writes into the active change set so the user's devices can hand off instantly without publishing directly to Main.
+
+Active change-set visibility is user-configurable:
+
+- global user default
+- per-codebase override
+- per-change-set override
+
+The effective setting resolves in this order: per-change-set override, codebase override, global user default, product default. The product default should be private until shared or opened for review. `.private/` remains owner-only regardless of the change-set visibility setting.
 
 ### Workspace Adapter
 
@@ -24,7 +41,7 @@ The workspace adapter is the boundary between normal local tools and HopIt state
 
 V1 managed-folder adapter:
 
-- materializes files into a managed workspace folder, such as `.hopit-agent/workspaces/<codebase>`
+- materializes files from Main or an active change set into a managed workspace folder, such as `.hopit-agent/workspaces/<codebase>`
 - lets editors, terminals, language servers, and test runners use normal OS file APIs
 - scans the folder for edits
 - translates file creates, writes, and deletes into journal entries
@@ -63,6 +80,8 @@ Each journal entry should include:
 - operation type: create, write, delete, move later
 - cloud path
 - visibility, including whether the path is under `.private/`
+- target state, such as active change-set id
+- owner/session id
 - content hash and byte size when content exists
 - base revision or known cloud revision
 - created timestamp
@@ -77,7 +96,7 @@ Restart recovery and the background watch loop are explicit agent contracts, not
 Restart recovery expectations:
 
 - agent startup reads the safety journal before accepting new workspace writes
-- pending journal entries are replayed against the cloud file graph in creation order
+- pending journal entries are replayed against the same selected cloud state, normally the active change set, in creation order
 - acknowledged entries stay queryable for diagnostics but no longer count as pending work
 - failed entries remain durable, visible in status, and retried only when the failure is retryable
 - `.private/` scope is preserved during replay exactly as it was recorded in the journal
@@ -91,9 +110,29 @@ Watch-loop expectations:
 - rapid editor saves should coalesce into stable journaled writes without losing the latest content; the spike currently debounces watch-triggered sync attempts by `250ms`
 - transient cloud or filesystem errors after startup should emit `sync.failed`, update status with the failed/degraded state, and leave the watch loop running so later saves or retries can recover
 - once a later sync succeeds, the agent should emit `sync.complete` and make the recovered/clean state visible through status
-- the loop should treat the cloud file graph as the source of truth while preserving pending local edits until acknowledgement or conflict review
+- the loop should treat the selected cloud state as the source of truth while preserving pending local edits until acknowledgement or conflict review
 
 Recovery should be safe before it is clever. If the agent is unsure whether the cloud accepted a write, it should keep the journal entry pending and expose that uncertainty through status instead of silently discarding local state.
+
+### Safe Refresh Contract
+
+A refresh means making the managed workspace folder match the latest selected cloud state that is safe for this device/session to see. That selected state may be Main, the user's active change set, or a visible review change set. It is a cloud-to-local operation, not a Git pull, branch checkout, fork sync, worktree update, wiki fetch, star/social feed update, or ignore-file evaluation.
+
+The current spike exposes `npm run agent:refresh` as the safe refresh command:
+
+1. Inspect the local safety journal through the same journal/event classification used by status.
+2. Refuse refresh if the local journal has pending or failed entries.
+3. Mirror the managed folder from the selected cloud state when the journal is clean.
+
+`npm run agent:watch` applies the same safety idea at startup: it runs recovery before hydration and emits `watch.recovery_blocked` instead of refreshing over unrecovered local writes. Bare `npm run agent:hydrate` is a low-level primitive and should only be used as a product refresh after the journal is known clean. If status shows pending or failed journal entries, run `npm run agent:recover` or resolve the entries before refreshing.
+
+Refresh expectations:
+
+- the selected cloud state remains the source of truth for clean content
+- the local safety journal is the source of truth for writes not yet acknowledged by the cloud
+- pending, failed, or uncertain journal entries block refresh until recovered, acknowledged, or explicitly resolved
+- failed entries stay visible through status and events; refresh must not hide them by hydrating over the workspace
+- `.private/` paths refresh like normal graph paths for the same owner, while retaining owner-private visibility metadata
 
 ### Status API
 
@@ -102,6 +141,10 @@ The agent should expose a small local status API for the product UI, tray/menu U
 Suggested fields:
 
 - codebase id and display name
+- selected state type: Main, active change set, or review change set
+- active change-set id when applicable
+- effective change-set visibility
+- owner/session id
 - workspace path
 - cloud revision currently visible locally
 - last acknowledged revision
@@ -126,6 +169,10 @@ Important event types:
 - `file.hydrated`
 - `write.journaled`
 - `cloud.acknowledged`
+- `change_set.created`
+- `change_set.visibility_changed`
+- `change_set.review_opened`
+- `change_set.merged`
 - `journal.recovery_failed`
 - `journal.recovery_complete`
 - `sync.complete`
@@ -141,7 +188,7 @@ The spike writes events to `.hopit-agent/events.ndjson`. A production agent can 
 Editor or tool
   -> Workspace adapter
   -> Local cache
-  -> Cloud file graph / blob API
+  -> Selected cloud state / blob API
   -> Safety journal for writes
   -> Cloud acknowledgement
   -> Status API and event log
@@ -151,8 +198,8 @@ Read path:
 
 1. An editor, language server, or command-line tool reads a path in the HopIt workspace.
 2. The OS reads a normal disk file in the managed workspace folder.
-3. The agent keeps that file aligned with the cloud graph revision it has made visible locally.
-4. On workspace open or remote change, the agent asks the cloud file graph for metadata and hydrates blob content into the local cache.
+3. The agent keeps that file aligned with the Main or active change-set revision it has made visible locally.
+4. On workspace open or remote change, the agent asks the cloud file graph for metadata about the selected state and hydrates blob content into the local cache.
 5. The agent emits `file.hydrated` or a remote-update event when local content changes.
 
 Write path:
@@ -160,10 +207,10 @@ Write path:
 1. An editor saves a file into the managed workspace folder.
 2. The agent computes the content hash and creates a durable safety journal entry before treating the write as locally accepted.
 3. The local cache records the visible content and pending write state.
-4. The agent streams the mutation to the cloud file graph service.
-5. The cloud validates the base revision, stores new content if needed, advances the file/workspace revision, and returns an acknowledgement.
+4. The agent streams the mutation to the selected active change set in the cloud file graph service.
+5. The cloud validates the base revision, stores new content if needed, advances the active change-set file/workspace revision, and returns an acknowledgement.
 6. The agent marks the journal entry acknowledged, updates local revision state, and emits `cloud.acknowledged`.
-7. The status API reports a clean workspace when no pending journal entries remain.
+7. The status API reports a clean workspace when no pending journal entries remain. Main is unchanged until the active change set is merged.
 
 If the cloud cannot acknowledge immediately, the journal entry remains pending and the status API should make that visible.
 
@@ -175,6 +222,7 @@ If the cloud cannot acknowledge immediately, the journal entry remains pending a
 - Treat cloud graph shape, journal entries, event names, and status fields as explicit contracts.
 - Align docs and examples with the actual spike commands: `npm run agent:demo`, `npm run agent:watch`, `npm run agent:sync`, and `npm run agent:status`.
 - Keep `.private/` as owner-private workspace scope, not an ignored or skipped path.
+- Add contract names for Main, active change-set id, owner/session id, and effective change-set visibility.
 
 ### 2. Stabilize Restart Recovery
 
@@ -198,13 +246,15 @@ If the cloud cannot acknowledge immediately, the journal entry remains pending a
 
 - Replace the local cloud JSON file with a service-shaped interface.
 - Keep a local fixture implementation for tests and demos.
-- Model acknowledgements, validation failures, connectivity loss, and retry timing.
+- Model Main, active change sets, change-set visibility, acknowledgements, validation failures, connectivity loss, review, merge, and retry timing.
 - Preserve the same editor read/write flow from the managed-folder spike.
 
 ### 5. Prove Two-Device Continuity
 
-- Run two agent sessions against the same cloud file graph.
-- Show that a write acknowledged from one session becomes visible to another.
+- Run two agent sessions against the same active change set.
+- Show that writes acknowledged from device/session A become visible to same-owner device/session B after B performs the safe refresh flow.
+- Simulate A syncing both non-private content and `.private/` owner-private content, then B refreshing as the same owner and seeing both sets of files with their visibility metadata preserved.
+- Add collaborator visibility simulations: private change sets stay hidden, team-visible change sets expose non-private paths to permitted collaborators, and `.private/` remains owner-only in every mode.
 - Emit event-log entries for remote updates and cache invalidation.
 - Surface pending and acknowledged state through the status API.
 
@@ -214,9 +264,17 @@ If the cloud cannot acknowledge immediately, the journal entry remains pending a
 - Make local cache pruning explicit and conservative.
 - Preserve normal editor and terminal compatibility as the primary v1 constraint.
 
-### 7. Tighten Conflict Handling
+### 7. Add Review And Merge
 
-- Detect writes based on stale cloud revisions.
+- Keep Main unchanged while an active change set syncs.
+- Open a change set for review.
+- Merge a reviewed change set into Main.
+- Emit review and merge events.
+- Preserve visibility settings and owner metadata in review/merge history.
+
+### 8. Tighten Conflict Handling
+
+- Detect writes based on stale selected-state or Main revisions.
 - Surface conflicts as reviewable workspace states through status and events.
 - Keep clean acknowledged content evictable while preserving unacknowledged local edits.
 
