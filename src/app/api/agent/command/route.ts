@@ -59,6 +59,7 @@ export async function POST(request: Request) {
         ok: result.exitCode === 0,
         command,
         label: commandConfig.label,
+        summary: summarizeCommandResult(command, result),
         ...result,
       },
       {
@@ -103,6 +104,7 @@ async function appendDemoEdit() {
       ok: true,
       command: 'edit',
       label: 'Edit demo files',
+      summary: 'Edited README.md and .private/agent-note.md',
       exitCode: 0,
       stdout: `Edited README.md and .private/agent-note.md at ${timestamp}`,
       stderr: '',
@@ -113,6 +115,46 @@ async function appendDemoEdit() {
       },
     },
   )
+}
+
+function summarizeCommandResult(
+  command: keyof typeof commandMap,
+  result: { exitCode: number | null; stdout: string; stderr: string },
+) {
+  if (result.exitCode !== 0) return result.stderr || 'Agent command failed.'
+
+  if (command === 'demo') return 'Reset demo state and synced 2 writes.'
+  if (command === 'sync') return summarizeSync(result.stdout)
+  if (command === 'refresh') return summarizeRefresh(result.stdout)
+  if (command === 'recover') return summarizeRecover(result.stdout)
+  if (command === 'review') return 'Opened the active change set for review.'
+  if (command === 'merge') return 'Merged the active change set into Main.'
+
+  return 'Agent command completed.'
+}
+
+function summarizeSync(stdout: string) {
+  const writes = matchNumber(stdout, /"writes":(\d+)/)
+  if (writes === null) return 'Synced local workspace changes.'
+  return `Synced ${writes} write${writes === 1 ? '' : 's'} into the active change set.`
+}
+
+function summarizeRefresh(stdout: string) {
+  const written = matchNumber(stdout, /"written":(\d+)/)
+  const deleted = matchNumber(stdout, /"deleted":(\d+)/)
+  if (written === null && deleted === null) return 'Refreshed the managed workspace.'
+  return `Refreshed workspace: ${written ?? 0} written, ${deleted ?? 0} deleted.`
+}
+
+function summarizeRecover(stdout: string) {
+  const failed = matchNumber(stdout, /"failed":(\d+)/)
+  if (failed && failed > 0) return `Recovery found ${failed} unresolved entr${failed === 1 ? 'y' : 'ies'}.`
+  return 'Recovered pending journal entries.'
+}
+
+function matchNumber(text: string, pattern: RegExp) {
+  const match = text.match(pattern)
+  return match ? Number(match[1]) : null
 }
 
 function runAgentCli(command: string) {

@@ -24,6 +24,7 @@ export type AgentCommandResult = {
   ok: boolean
   command: AgentCommand
   label?: string
+  summary?: string
   stdout?: string
   stderr?: string
   error?: {
