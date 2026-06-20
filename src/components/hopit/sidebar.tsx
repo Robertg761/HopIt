@@ -4,19 +4,16 @@ import * as React from 'react'
 import { motion } from 'framer-motion'
 import {
   Bell,
-  ChevronRight,
   Clock,
   Code2,
   Folder,
   Home,
   Search,
   Settings,
-  Sparkles,
   Users,
   X,
 } from 'lucide-react'
 import { HopItLogo } from './logo'
-import { collaborators } from './data'
 import { cn } from '@/lib/utils'
 
 type NavItem = {
@@ -29,9 +26,9 @@ type NavItem = {
 
 const navItems: NavItem[] = [
   { id: 'home', label: 'Home', icon: Home, active: true },
-  { id: 'codebases', label: 'Codebases', icon: Code2, badge: '6' },
-  { id: 'files', label: 'Files', icon: Folder, badge: '184' },
-  { id: 'activity', label: 'Activity', icon: Clock, badge: '12' },
+  { id: 'codebases', label: 'Codebases', icon: Code2 },
+  { id: 'files', label: 'Files', icon: Folder },
+  { id: 'activity', label: 'Activity', icon: Clock },
 ]
 
 type SidebarProps = {
@@ -102,50 +99,16 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         <div className="mt-auto px-5 py-4">
           <div className="mb-2 flex items-center justify-between">
             <p className="text-[11px] uppercase tracking-[0.18em] text-ink-foreground/40">
-              Online · {collaborators.length}
+              Online
             </p>
             <Users className="size-3.5 text-ink-foreground/40" />
           </div>
-          <div className="space-y-2">
-            {collaborators.slice(0, 4).map((c) => (
-              <div key={c.id} className="flex items-center gap-2.5">
-                <div className="relative">
-                  <div
-                    className="flex size-7 items-center justify-center rounded-full text-[11px] font-semibold text-white"
-                    style={{ backgroundColor: c.color }}
-                  >
-                    {c.name
-                      .split(' ')
-                      .map((n) => n[0])
-                      .join('')}
-                  </div>
-                  <span
-                    className={cn(
-                      'absolute -bottom-0.5 -right-0.5 size-2.5 rounded-full ring-2 ring-ink',
-                      c.status === 'active' && 'bg-hop live-pulse',
-                      c.status === 'viewing' && 'bg-amber-400',
-                      c.status === 'idle' && 'bg-muted-foreground/50',
-                    )}
-                  />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs font-medium text-ink-foreground/90">
-                    {c.name}
-                  </p>
-                  <p className="truncate text-[10.5px] text-ink-foreground/40">
-                    {c.location}
-                  </p>
-                </div>
-              </div>
-            ))}
+          <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-3">
+            <p className="text-xs text-ink-foreground/70">No live teammates connected</p>
+            <p className="mt-1 text-[10.5px] text-ink-foreground/40">
+              Presence will appear here after a real workspace session connects.
+            </p>
           </div>
-          <button className="mt-4 flex w-full items-center justify-between rounded-lg bg-hop/10 px-3 py-2 text-xs font-medium text-hop ring-1 ring-inset ring-hop/30 transition hover:bg-hop/20">
-            <span className="flex items-center gap-1.5">
-              <Sparkles className="size-3.5" />
-              Invite teammates
-            </span>
-            <ChevronRight className="size-3.5" />
-          </button>
         </div>
 
         {/* Bottom bar */}
@@ -155,7 +118,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
             aria-label="Notifications"
           >
             <Bell className="size-3.5" />
-            <span>3 new</span>
+            <span>Notifications</span>
           </button>
           <button
             className="text-ink-foreground/50 hover:text-ink-foreground/80"

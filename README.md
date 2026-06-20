@@ -41,29 +41,63 @@ npm install
 npm run dev
 ```
 
+Run the local workspace agent through the `hop` command:
+
+```bash
+npm exec -- hop help
+```
+
+For local development, `npm link` makes `hop` available globally from this checkout.
+
 Build the production bundle with:
 
 ```bash
 npm run build
 ```
 
-Run the local agent spike with:
+## Hosted Backend
+
+HopIt now supports a Convex-backed cloud graph for the real shared backend. The local JSON graph remains useful for offline development, but Convex is the intended shared source of truth when these variables are configured:
 
 ```bash
-npm run agent:demo
+HOPIT_CODEBASE_ID=hopit
+HOPIT_AGENT_TOKEN=replace-with-a-long-random-secret
+HOPIT_CONVEX_URL=https://your-convex-deployment.convex.cloud
+NEXT_PUBLIC_CONVEX_URL=https://your-convex-deployment.convex.cloud
 ```
 
-The demo seeds a local cloud file graph that stands in for one selected active change set, hydrates a managed workspace, simulates an editor save, journals the write, and acknowledges it back into that selected cloud state.
-
-To run the live local prototype, start the agent status server against the demo state in one terminal:
+Start Convex locally and link the project with:
 
 ```bash
-npm run agent:demo
-npm run agent:status -- \
-  --cloud .hopit-agent/demo/cloud.json \
-  --workspace .hopit-agent/demo/workspaces/hopit-core \
-  --journal .hopit-agent/demo/journal.ndjson \
-  --events .hopit-agent/demo/events.ndjson
+npm run convex:dev
+```
+
+That command prompts for Convex login/project setup, pushes the `convex/` backend functions, and writes the real deployment URL. Set the same `HOPIT_AGENT_TOKEN` in Convex with:
+
+```bash
+npx convex env set HOPIT_AGENT_TOKEN replace-with-a-long-random-secret
+```
+
+Import a real local project into the Convex backend with:
+
+```bash
+npm exec -- hop import --source /path/to/project --codebase-id hopit --convex-url "$HOPIT_CONVEX_URL" --agent-token "$HOPIT_AGENT_TOKEN" --force
+```
+
+For production hosting, deploy the Next.js app to Vercel and set `HOPIT_CODEBASE_ID`, `HOPIT_AGENT_TOKEN`, `HOPIT_CONVEX_URL`, and `NEXT_PUBLIC_CONVEX_URL` as Vercel environment variables. The hosted dashboard reads from Convex through `/api/agent/status`; local workspace commands still run through the local HopIt agent on your machine.
+
+Import a real local project into HopIt's managed workspace state with:
+
+```bash
+npm exec -- hop import --source /path/to/project --force
+```
+
+The import command scans text files from the source folder, skips generated folders and sensitive files such as `.git`, `.hopit-agent`, `.next`, `node_modules`, build outputs, and `.env*`, writes `.hopit-agent/cloud.json`, and hydrates `.hopit-agent/workspaces/hopit-core`.
+
+To run the live local prototype, start the agent status server in one terminal:
+
+```bash
+npm exec -- hop serve
 ```
 
 Then start the web app in another terminal:
@@ -74,10 +108,8 @@ npm run dev
 
 The dashboard proxies `http://127.0.0.1:4785/status` through `/api/agent/status` and shows live local-agent state, including the managed workspace path, cloud/Main revisions, pending and failed journal counts, `.private/` visibility, review/merge/conflict state, codebase files, and recent events. Set `HOPIT_AGENT_BASE_URL` if the agent status server is listening somewhere else.
 
-The local agent panel also exposes prototype actions backed by a whitelisted local API route:
+The local agent panel exposes real workspace actions backed by a whitelisted local API route:
 
-- `Reset`: reseed the fixture-backed demo and run the deterministic demo edit/sync.
-- `Edit`: append a shared and `.private/` owner-only edit in the managed workspace.
 - `Sync`: journal and acknowledge local workspace edits into the active change set.
 - `Refresh`: safely mirror clean selected cloud state into the workspace.
 - `Recover`: replay pending journal entries.

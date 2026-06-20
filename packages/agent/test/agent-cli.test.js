@@ -452,6 +452,78 @@ test('CLI classifies .private files as owner-private while snapshotting and sync
   )
 })
 
+test('import-local hydrates a real folder while skipping generated and sensitive files', async () => {
+  const state = await makeState()
+  const source = path.join(state.root, 'source-project')
+
+  await fs.mkdir(path.join(source, 'src'), { recursive: true })
+  await fs.mkdir(path.join(source, '.private'), { recursive: true })
+  await fs.mkdir(path.join(source, 'node_modules/pkg'), { recursive: true })
+  await fs.mkdir(path.join(source, 'mounts/demo'), { recursive: true })
+  await fs.mkdir(path.join(source, '.git'), { recursive: true })
+
+  await fs.writeFile(path.join(source, 'README.md'), '# Real project\n', 'utf8')
+  await fs.writeFile(path.join(source, 'src/app.ts'), 'export const app = true\n', 'utf8')
+  await fs.writeFile(path.join(source, '.private/note.md'), 'owner note\n', 'utf8')
+  await fs.writeFile(path.join(source, '.env'), 'SECRET=do-not-import\n', 'utf8')
+  await fs.writeFile(path.join(source, 'node_modules/pkg/index.js'), 'ignored\n', 'utf8')
+  await fs.writeFile(path.join(source, 'mounts/demo/README.md'), 'ignored\n', 'utf8')
+  await fs.writeFile(path.join(source, '.git/config'), 'ignored\n', 'utf8')
+
+  const result = await runCli('import-local', [
+    ...stateArgs(state),
+    '--source',
+    source,
+    '--codebase-id',
+    'real-project',
+    '--codebase-name',
+    'Real Project',
+    '--force',
+  ])
+  assert.match(result.stdout, /local\.imported/)
+  assert.match(result.stdout, /workspace\.ready/)
+
+  const cloud = await readJson(state.cloud)
+  assert.equal(cloud.codebase.id, 'real-project')
+  assert.equal(cloud.codebase.name, 'Real Project')
+  assert.equal(cloud.files['README.md'].scope, 'shared')
+  assert.equal(cloud.files['src/app.ts'].scope, 'shared')
+  assert.equal(cloud.files['.private/note.md'].scope, 'owner-private')
+  assert.equal(cloud.files['.env'], undefined)
+  assert.equal(cloud.files['node_modules/pkg/index.js'], undefined)
+  assert.equal(cloud.files['mounts/demo/README.md'], undefined)
+  assert.equal(cloud.files['.git/config'], undefined)
+
+  assert.equal(await pathExists(path.join(state.workspace, 'src/app.ts')), true)
+  assert.equal(await pathExists(path.join(state.workspace, '.private/note.md')), true)
+  assert.equal(await pathExists(path.join(state.workspace, '.env')), false)
+})
+
+test('CLI exposes product-facing command aliases', async () => {
+  const state = await makeState()
+  const source = path.join(state.root, 'source-project')
+
+  await fs.mkdir(source, { recursive: true })
+  await fs.writeFile(path.join(source, 'README.md'), '# Alias project\n', 'utf8')
+
+  const imported = await runCli('import', [
+    ...stateArgs(state),
+    '--source',
+    source,
+    '--codebase-id',
+    'alias-project',
+    '--force',
+  ])
+  assert.match(imported.stdout, /local\.imported/)
+
+  await fs.appendFile(path.join(state.workspace, 'README.md'), '\nAlias sync edit.\n', 'utf8')
+  const synced = await runCli('sync', stateArgs(state))
+  assert.match(synced.stdout, /sync\.complete/)
+
+  const reviewed = await runCli('review', stateArgs(state))
+  assert.match(reviewed.stdout, /change_set\.review_opened/)
+})
+
 test('recover replays pending shared and owner-private journal entries after restart', async () => {
   const state = await makeState()
   await runCli('init', [...stateArgs(state), '--force'])

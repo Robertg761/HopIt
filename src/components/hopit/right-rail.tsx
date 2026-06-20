@@ -3,11 +3,9 @@
 import { motion } from 'framer-motion'
 import {
   Activity,
-  Circle,
   CheckCircle2,
   Cloud,
   Clock3,
-  FilePenLine,
   FileStack,
   FolderOpen,
   HardDrive,
@@ -58,25 +56,11 @@ const prototypeActions: Array<{
   label: string
   icon: React.ComponentType<{ className?: string }>
 }> = [
-  { command: 'demo', label: 'Reset', icon: RotateCcw },
-  { command: 'edit', label: 'Edit', icon: FilePenLine },
   { command: 'sync', label: 'Sync', icon: UploadCloud },
   { command: 'refresh', label: 'Refresh', icon: Cloud },
   { command: 'recover', label: 'Recover', icon: CheckCircle2 },
   { command: 'review', label: 'Review', icon: GitPullRequest },
   { command: 'merge', label: 'Merge', icon: GitMerge },
-]
-
-const guideSteps: Array<{
-  command: AgentCommand
-  label: string
-  detail: string
-}> = [
-  { command: 'demo', label: 'Reset demo', detail: 'Seed a clean fixture graph' },
-  { command: 'edit', label: 'Edit files', detail: 'Append shared and private edits' },
-  { command: 'sync', label: 'Sync', detail: 'Journal and acknowledge writes' },
-  { command: 'review', label: 'Review', detail: 'Open active change set' },
-  { command: 'merge', label: 'Merge', detail: 'Advance Main explicitly' },
 ]
 
 export function RightRail({
@@ -236,40 +220,11 @@ function AgentStatusPanel({
 
         <div className="rounded-xl border border-border/60 bg-muted/20 p-3">
           <div className="mb-2 flex items-center justify-between gap-2">
-            <h3 className="text-xs font-semibold">Guided prototype</h3>
+            <h3 className="text-xs font-semibold">Workspace actions</h3>
             {runningCommand ? (
               <span className="text-[10.5px] text-muted-foreground">Running {runningCommand}</span>
             ) : null}
           </div>
-          <ol className="mb-3 space-y-1.5">
-            {guideSteps.map((step) => {
-              const state = guideStepState(step.command, status, commandResult, runningCommand)
-              const isActive = state === 'active'
-              const isDone = state === 'done'
-              const StepIcon = isDone ? CheckCircle2 : Circle
-              return (
-                <li key={step.command} className="flex items-start gap-2">
-                  <StepIcon
-                    className={cn(
-                      'mt-0.5 size-3.5 shrink-0',
-                      isDone ? 'text-hop' : isActive ? 'animate-pulse text-hop-amber' : 'text-muted-foreground/55',
-                    )}
-                  />
-                  <div className="min-w-0">
-                    <p
-                      className={cn(
-                        'truncate text-[11.5px] font-medium',
-                        isDone ? 'text-foreground' : 'text-muted-foreground',
-                      )}
-                    >
-                      {step.label}
-                    </p>
-                    <p className="truncate text-[10.5px] text-muted-foreground/80">{step.detail}</p>
-                  </div>
-                </li>
-              )
-            })}
-          </ol>
           <div className="grid grid-cols-2 gap-2">
             {prototypeActions.map((action) => {
               const Icon = action.icon
@@ -352,38 +307,6 @@ function AgentStatusPanel({
       </div>
     </section>
   )
-}
-
-function guideStepState(
-  command: AgentCommand,
-  status: AgentStatusSnapshot,
-  commandResult: AgentCommandResult | null,
-  runningCommand: AgentCommand | null,
-) {
-  if (runningCommand === command) return 'active'
-  if (commandResult?.ok && commandResult.command === command) return 'done'
-
-  if (command === 'demo') {
-    return status.state !== 'offline' && status.cloudRevision !== 'Unavailable' ? 'done' : 'idle'
-  }
-
-  if (command === 'edit') {
-    return status.events.some((event) => event.label === 'write.journaled') ? 'done' : 'idle'
-  }
-
-  if (command === 'sync') {
-    return status.lastSync !== 'Unavailable' && status.pendingWrites === 0 ? 'done' : 'idle'
-  }
-
-  if (command === 'review') {
-    return status.reviewState === 'open' || status.reviewState === 'merged' ? 'done' : 'idle'
-  }
-
-  if (command === 'merge') {
-    return status.mergeState === 'merged' ? 'done' : 'idle'
-  }
-
-  return 'idle'
 }
 
 type StatusMetricProps = {

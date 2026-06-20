@@ -6,6 +6,8 @@ import fs from 'node:fs/promises'
 import { createServer } from 'node:http'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { ConvexHttpClient } from 'convex/browser'
+import { anyApi } from 'convex/server'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -27,6 +29,7 @@ const workspaceMode = {
 }
 
 const cloudServiceType = 'fixture-json-cloud-graph'
+const convexCloudServiceType = 'convex-cloud-graph'
 
 const fileScope = {
   shared: 'shared',
@@ -42,11 +45,17 @@ class ConflictError extends Error {
 }
 
 async function main() {
-  const [command = 'help', ...args] = process.argv.slice(2)
+  const [rawCommand = 'help', ...args] = process.argv.slice(2)
+  const command = normalizeCommand(rawCommand)
   const options = parseOptions(args)
 
   if (command === 'init') {
     await initCloud(options)
+    return
+  }
+
+  if (command === 'import-local') {
+    await importLocalProject(options)
     return
   }
 
@@ -105,6 +114,20 @@ async function main() {
   printHelp()
 }
 
+function normalizeCommand(command) {
+  const aliases = {
+    '-h': 'help',
+    '--help': 'help',
+    import: 'import-local',
+    sync: 'sync-once',
+    review: 'review-open',
+    serve: 'status-server',
+    server: 'status-server',
+  }
+
+  return aliases[command] ?? command
+}
+
 function parseOptions(args) {
   const options = { ...defaultOptions }
 
@@ -145,6 +168,96 @@ async function initCloud(options) {
     contract: summarizeGraphContract(cloud),
     scopeCounts: countCloudScopes(cloud),
   })
+}
+
+async function importLocalProject(options) {
+  if (!options.source) {
+    throw new Error('Missing --source <path> for import.')
+  }
+
+  const source = path.resolve(options.source)
+  const stat = await fs.stat(source)
+  if (!stat.isDirectory()) {
+    throw new Error(`Import source is not a directory: ${source}`)
+  }
+
+  const cloudService = createCloudGraphService(options)
+  if ((await cloudService.exists()) && !options.force) {
+    await emit(options, 'import.exists', {
+      cloud: options.cloud,
+      source,
+      reason: 'Use --force to replace the current local HopIt graph.',
+    })
+    return
+  }
+
+  const now = new Date().toISOString()
+  const codebaseName = options['codebase-name'] ?? path.basename(source)
+  const codebaseId = options['codebase-id'] ?? slugify(codebaseName)
+  const importResult = await readImportableProjectFiles(source)
+  const files = importResult.files
+  const graph = {
+    schemaVersion: 2,
+    codebase: {
+      id: codebaseId,
+      name: codebaseName,
+      ownerId: options['owner-id'] ?? 'local-owner',
+    },
+    main: {
+      id: 'main',
+      revision: 1,
+      updatedAt: now,
+      mergedChangeSetId: null,
+    },
+    selectedState: {
+      type: 'active-change-set',
+      id: `cs_${codebaseId}_local`,
+      ownerId: options['owner-id'] ?? 'local-owner',
+      baseMainId: 'main',
+      baseRevision: 1,
+      revision: 1,
+      visibility: options.visibility ?? 'private',
+      effectiveVisibility: options.visibility ?? 'private',
+      reviewState: 'not-open',
+      mergeState: 'unmerged',
+      conflictState: 'none',
+      conflict: null,
+      review: null,
+      merge: null,
+    },
+    owner: {
+      id: options['owner-id'] ?? 'local-owner',
+    },
+    collaborators: [],
+    session: {
+      id: options['session-id'] ?? 'session_local',
+      deviceName: options['device-name'] ?? 'local-device',
+    },
+    visibility: {
+      productDefault: 'private',
+      globalUserDefault: null,
+      codebaseOverride: null,
+      changeSetOverride: null,
+      effective: options.visibility ?? 'private',
+    },
+    revision: 1,
+    files,
+  }
+
+  const cloud = await cloudService.initialize(graph)
+  await fs.rm(options.workspace, { recursive: true, force: true })
+  await fs.rm(options.journal, { force: true })
+  await fs.rm(options.events, { force: true })
+  await emit(options, 'local.imported', {
+    source,
+    cloud: options.cloud,
+    workspace: options.workspace,
+    files: Object.keys(files).length,
+    skipped: importResult.skipped,
+    contract: summarizeGraphContract(cloud),
+    scopeCounts: countCloudScopes(cloud),
+  })
+  await hydrateWorkspace(options)
 }
 
 async function hydrateWorkspace(options) {
@@ -899,7 +1012,7 @@ async function readAgentState(options) {
   )
 
   const cloudSummary = {
-    path: path.resolve(options.cloud),
+    path: cloudService.location ?? path.resolve(options.cloud),
     service: cloudService.type,
     exists: Boolean(cloud),
     schemaVersion: cloud?.schemaVersion ?? null,
@@ -1463,7 +1576,99 @@ async function readWorkspaceFiles(root) {
   return result
 }
 
+async function readImportableProjectFiles(root) {
+  const files = {}
+  let skipped = 0
+
+  async function walk(dir) {
+    const entries = await fs.readdir(dir, { withFileTypes: true })
+    for (const entry of entries) {
+      const absolutePath = path.join(dir, entry.name)
+      const relativePath = toCloudPath(path.relative(root, absolutePath))
+
+      if (shouldSkipImportPath(relativePath, entry)) {
+        skipped += 1
+        continue
+      }
+
+      if (entry.isDirectory()) {
+        await walk(absolutePath)
+        continue
+      }
+
+      if (!entry.isFile()) {
+        skipped += 1
+        continue
+      }
+
+      const content = await readImportableTextFile(absolutePath)
+      if (content === null) {
+        skipped += 1
+        continue
+      }
+
+      files[relativePath] = {
+        content,
+        scope: scopeForPath(relativePath),
+        revision: 1,
+        updatedAt: new Date().toISOString(),
+      }
+    }
+  }
+
+  await walk(root)
+  return { files, skipped }
+}
+
+async function readImportableTextFile(filePath) {
+  const maxBytes = 512 * 1024
+  const stat = await fs.stat(filePath)
+  if (stat.size > maxBytes) return null
+
+  const buffer = await fs.readFile(filePath)
+  if (buffer.includes(0)) return null
+
+  return buffer.toString('utf8')
+}
+
+function shouldSkipImportPath(relativePath, entry) {
+  const parts = relativePath.split('/')
+  const basename = parts.at(-1) ?? relativePath
+  const ignoredDirectories = new Set([
+    '.git',
+    '.hopit-agent',
+    '.next',
+    '.turbo',
+    '.vercel',
+    'node_modules',
+    'dist',
+    'build',
+    'out',
+    'coverage',
+    'artifacts',
+    'mounts',
+    'DerivedData',
+  ])
+
+  if (entry.isDirectory() && ignoredDirectories.has(basename)) return true
+  if (parts.some((part) => ignoredDirectories.has(part))) return true
+  if (basename === '.DS_Store') return true
+  if (basename === 'dev.log' || basename === 'server.log') return true
+  if (basename.endsWith('.local')) return true
+  if (basename === '.env' || basename.startsWith('.env.')) return true
+  if (basename.endsWith('.png') || basename.endsWith('.jpg') || basename.endsWith('.jpeg')) return true
+  if (basename.endsWith('.gif') || basename.endsWith('.webp') || basename.endsWith('.ico')) return true
+  if (basename.endsWith('.pdf') || basename.endsWith('.zip') || basename.endsWith('.gz')) return true
+  if (basename.endsWith('.mp3') || basename.endsWith('.mp4') || basename.endsWith('.mov')) return true
+
+  return false
+}
+
 function createCloudGraphService(options) {
+  if (convexUrlFromOptions(options)) {
+    return new ConvexCloudGraphService(options)
+  }
+
   return new FixtureJsonCloudGraphService(options.cloud)
 }
 
@@ -1471,6 +1676,7 @@ class FixtureJsonCloudGraphService {
   constructor(cloudPath) {
     this.path = cloudPath
     this.type = cloudServiceType
+    this.location = path.resolve(cloudPath)
   }
 
   async exists() {
@@ -1503,6 +1709,71 @@ class FixtureJsonCloudGraphService {
 
   async writeGraph(cloud) {
     await writeJson(this.path, normalizeCloudGraph(cloud))
+  }
+
+  applyJournalEntry(cloud, entry, options = {}) {
+    return applyJournalEntryToCloud(cloud, entry, options)
+  }
+}
+
+class ConvexCloudGraphService {
+  constructor(options) {
+    this.url = convexUrlFromOptions(options)
+    this.token = agentTokenFromOptions(options)
+    this.codebaseId = options['codebase-id'] || process.env.HOPIT_CODEBASE_ID || null
+    this.type = convexCloudServiceType
+    this.location = this.codebaseId ? `convex:${this.codebaseId}` : `convex:${this.url}`
+    this.client = new ConvexHttpClient(this.url, { logger: false })
+  }
+
+  async exists() {
+    return Boolean(await this.readOptionalGraph())
+  }
+
+  async initialize(fixture) {
+    const cloud = withComputedMetadata(fixture)
+    this.codebaseId = cloud.codebase.id
+    this.location = `convex:${this.codebaseId}`
+    await this.writeGraph(cloud)
+    return cloud
+  }
+
+  async readGraph() {
+    const graph = await this.readOptionalGraph()
+    if (!graph) {
+      throw new Error(`Convex graph not found for codebase ${this.codebaseId ?? '(unset)'}.`)
+    }
+    return graph
+  }
+
+  async readVisibleGraph(request = {}) {
+    return filterVisibleGraphForRequester(await this.readGraph(), request)
+  }
+
+  async readOptionalGraph() {
+    if (!this.codebaseId) return null
+
+    const args = { codebaseId: this.codebaseId }
+    if (this.token) args.token = this.token
+
+    const graph = await this.client.query(anyApi.agent.getGraph, args)
+    return graph ? normalizeCloudGraph(graph) : null
+  }
+
+  async readOptionalVisibleGraph(request = {}) {
+    const graph = await this.readOptionalGraph()
+    if (!graph) return null
+    return filterVisibleGraphForRequester(graph, request)
+  }
+
+  async writeGraph(cloud) {
+    const normalized = normalizeCloudGraph(cloud)
+    this.codebaseId = normalized.codebase.id
+    this.location = `convex:${this.codebaseId}`
+    const args = { graph: normalized }
+    if (this.token) args.token = this.token
+
+    await this.client.mutation(anyApi.agent.saveGraph, args)
   }
 
   applyJournalEntry(cloud, entry, options = {}) {
@@ -1796,6 +2067,13 @@ function toCloudPath(value) {
   return value.split(path.sep).join('/')
 }
 
+function slugify(value) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '') || 'local-project'
+}
+
 async function readJson(filePath) {
   const content = await fs.readFile(filePath, 'utf8')
   return JSON.parse(content)
@@ -1828,7 +2106,52 @@ async function emit(options, event, detail) {
     at: new Date().toISOString(),
   }
   await appendNdjson(options.events, payload)
+  await appendConvexEvent(options, payload)
   console.log(`${event} ${JSON.stringify(detail)}`)
+}
+
+async function appendConvexEvent(options, payload) {
+  const url = convexUrlFromOptions(options)
+  if (!url) return
+
+  const codebaseId = codebaseIdFromEvent(options, payload.detail)
+  if (!codebaseId) return
+
+  try {
+    const client = new ConvexHttpClient(url, { logger: false })
+    const args = {
+      codebaseId,
+      event: payload.event,
+      detail: payload.detail,
+      at: payload.at,
+      source: 'local-agent',
+    }
+    const token = agentTokenFromOptions(options)
+    if (token) args.token = token
+
+    await client.mutation(anyApi.agent.appendEvent, args)
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown Convex event error'
+    console.error(`convex.event_failed ${JSON.stringify({ event: payload.event, reason: message })}`)
+  }
+}
+
+function codebaseIdFromEvent(options, detail) {
+  return (
+    detail?.contract?.codebaseId ??
+    detail?.codebaseId ??
+    options['codebase-id'] ??
+    process.env.HOPIT_CODEBASE_ID ??
+    null
+  )
+}
+
+function convexUrlFromOptions(options) {
+  return options['convex-url'] ?? process.env.HOPIT_CONVEX_URL ?? process.env.CONVEX_URL ?? null
+}
+
+function agentTokenFromOptions(options) {
+  return options['agent-token'] ?? process.env.HOPIT_AGENT_TOKEN ?? null
 }
 
 function findLastEvent(events, eventName) {
@@ -1848,23 +2171,32 @@ function sendJson(response, statusCode, payload) {
 }
 
 function printHelp() {
-  console.log(`HopIt agent spike
+  console.log(`hop - HopIt local workspace agent
 
 Commands:
   init        Seed a local cloud file graph
+  import      Import a real local folder into the HopIt graph and hydrate it
   hydrate     Materialize cloud files into the managed workspace
   refresh     Update the managed workspace from cloud when the journal is safe
-  sync-once   Scan managed-folder writes, journal them, and acknowledge to cloud
+  sync        Scan managed-folder writes, journal them, and acknowledge to cloud
   recover     Replay unacknowledged journal entries into the cloud graph
-  review-open Open the selected active change set for review
+  review      Open the selected active change set for review
   merge       Merge the reviewed selected change set into Main
   watch       Hydrate and watch the workspace for edits
   status      Print read-only local agent status JSON
-  status-server Serve read-only local agent status JSON over HTTP
+  serve       Serve read-only local agent status JSON over HTTP
   demo        Run init, hydrate, edit, sync, and verify
 
+Compatibility aliases:
+  import-local, sync-once, review-open, status-server
+
 Options:
+  --source <path>     Source folder for import
+  --codebase-id <id>  Codebase id for import
+  --codebase-name <name> Codebase display name for import
   --cloud <path>      Cloud graph JSON path
+  --convex-url <url>  Convex deployment URL for the real cloud graph
+  --agent-token <token> Agent token for Convex mutations/queries
   --workspace <path>  Managed workspace folder path
   --journal <path>    Pending write journal path
   --events <path>     Event log path

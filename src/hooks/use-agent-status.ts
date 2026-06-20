@@ -18,7 +18,7 @@ type AgentStatusState = {
 
 const pollMs = 2500
 
-export type AgentCommand = 'demo' | 'edit' | 'sync' | 'refresh' | 'recover' | 'review' | 'merge'
+export type AgentCommand = 'sync' | 'refresh' | 'recover' | 'review' | 'merge'
 
 export type AgentCommandResult = {
   ok: boolean

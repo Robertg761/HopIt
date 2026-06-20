@@ -50,9 +50,13 @@ export function ReposSection({ status }: ReposSectionProps) {
       />
 
       <div className="grid gap-3 p-4 md:grid-cols-2">
-        {filtered.map((codebase, i) => (
-          <CodebaseCard key={codebase.id} codebase={codebase} index={i} />
-        ))}
+        {filtered.length > 0 ? (
+          filtered.map((codebase, i) => (
+            <CodebaseCard key={codebase.id} codebase={codebase} index={i} />
+          ))
+        ) : (
+          <EmptyCodebases />
+        )}
       </div>
 
     </section>
@@ -115,15 +119,15 @@ function SectionHeader({
 }
 
 function codebasesWithLiveStatus(status: AgentStatusSnapshot): Codebase[] {
-  if (status.state === 'offline') return codebases
+  if (status.state === 'offline' || status.codebaseName === 'No codebase') return codebases
 
-  const fallback = codebases.find((codebase) => codebase.name === status.codebaseName) ?? codebases[0]
   const liveCodebase: Codebase = {
-    ...fallback,
     id: 'live-agent-codebase',
     name: status.codebaseName,
-    owner: 'hopit',
+    owner: 'local',
     description: `Active change set ${status.activeChangeSetId} backed by the local managed workspace.`,
+    language: 'Local',
+    languageColor: '#10b981',
     snapshots: revisionNumber(status.cloudRevision),
     syncedFiles: status.fileCount,
     pendingSyncs: status.pendingWrites,
@@ -138,6 +142,17 @@ function codebasesWithLiveStatus(status: AgentStatusSnapshot): Codebase[] {
   }
 
   return [liveCodebase, ...codebases.filter((codebase) => codebase.name !== status.codebaseName)]
+}
+
+function EmptyCodebases() {
+  return (
+    <div className="md:col-span-2 rounded-xl border border-dashed border-border/70 bg-muted/20 p-6 text-center">
+      <p className="text-sm font-medium">No real codebase connected</p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Import a local folder with the HopIt agent, then start the status server to populate this view.
+      </p>
+    </div>
+  )
 }
 
 function revisionNumber(revision: string) {

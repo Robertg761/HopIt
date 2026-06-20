@@ -3,12 +3,18 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "bin": {
+    "hop": "./packages/agent/src/cli.js"
+  },
   "scripts": {
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
+    "convex:dev": "convex dev",
+    "convex:deploy": "convex deploy",
     "agent:demo": "node packages/agent/src/cli.js demo",
+    "agent:import": "node packages/agent/src/cli.js import-local",
     "agent:init": "node packages/agent/src/cli.js init",
     "agent:hydrate": "node packages/agent/src/cli.js hydrate",
     "agent:refresh": "node packages/agent/src/cli.js refresh",
@@ -26,6 +32,7 @@
     "@radix-ui/react-toast": "^1.2.14",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "convex": "^1.41.0",
     "framer-motion": "^12.23.2",
     "lucide-react": "^0.525.0",
     "next": "^16.1.1",

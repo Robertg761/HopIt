@@ -19,23 +19,48 @@ HopIt does not use ignore files as product sharing controls. Files under `.priva
 Run the full deterministic demo:
 
 ```bash
-npm run agent:demo
+npm exec -- hop demo
 ```
+
+Import a real local folder into the managed HopIt graph:
+
+```bash
+npm exec -- hop import --source /path/to/project --force
+```
+
+The import path skips `.git`, `.hopit-agent`, `node_modules`, build outputs,
+`.env*`, common logs, large files, and binary-ish assets, then hydrates the
+managed workspace from the imported cloud graph.
+
+Point the same import at the real Convex backend with:
+
+```bash
+npm exec -- hop import \
+  --source /path/to/project \
+  --codebase-id hopit \
+  --convex-url "$HOPIT_CONVEX_URL" \
+  --agent-token "$HOPIT_AGENT_TOKEN" \
+  --force
+```
+
+Any command can use `--convex-url` and `--agent-token`; when those are present,
+the selected cloud graph is read from and written to Convex instead of the local
+JSON file. Local journal and event files still exist as the device safety log.
 
 Run the pieces manually:
 
 ```bash
-npm run agent:init
-npm run agent:hydrate
-npm run agent:refresh
-npm run agent:sync
-npm run agent:recover
-npm run agent:watch
-npm run agent:review
-npm run agent:merge
+npm exec -- hop init
+npm exec -- hop hydrate
+npm exec -- hop refresh
+npm exec -- hop sync
+npm exec -- hop recover
+npm exec -- hop watch
+npm exec -- hop review
+npm exec -- hop merge
 ```
 
-`npm run agent:refresh` is the safe cloud-to-workspace command. It refuses to
+`hop refresh` is the safe cloud-to-workspace command. It refuses to
 touch the managed folder while the local journal has pending or failed entries,
 then mirrors the current selected cloud state into the workspace when the journal is
 clean. `watch` applies the same safety idea at startup by recovering before
@@ -61,7 +86,7 @@ pending, failed, or acknowledged from the journal/events pair.
 
 After successful recovery, `watch` hydrates the managed folder, starts the
 recursive filesystem watcher, and coalesces rapid filesystem notifications into a
-single `sync-once` attempt after a short debounce window. The current debounce is
+single `hop sync` attempt after a short debounce window. The current debounce is
 `250ms`, so repeated editor saves should settle into one journaled latest write
 rather than a burst of stale intermediate syncs.
 
@@ -75,20 +100,20 @@ journal safely is required before the workspace can be refreshed from cloud stat
 Safe refresh refuses pending or failed local journal state:
 
 ```bash
-npm run agent:status -- \
+npm exec -- hop status \
   --cloud .hopit-agent/demo/cloud.json \
   --workspace .hopit-agent/demo/workspaces/hopit-core \
   --journal .hopit-agent/demo/journal.ndjson \
   --events .hopit-agent/demo/events.ndjson
 
-npm run agent:refresh -- \
+npm exec -- hop refresh \
   --cloud .hopit-agent/demo/cloud.json \
   --workspace .hopit-agent/demo/workspaces/hopit-core \
   --journal .hopit-agent/demo/journal.ndjson \
   --events .hopit-agent/demo/events.ndjson
 ```
 
-Run `npm run agent:recover` first when status shows pending or failed journal
+Run `hop recover` first when status shows pending or failed journal
 entries that should be replayed before refreshing. Refresh treats the selected
 cloud state as source of truth when the journal is clean, so unjournaled local
 edits can be overwritten or removed.
@@ -99,8 +124,8 @@ separate local journals/events for each session. The first simulation target is:
 1. Device/session A and B point at the same `--cloud` file and use separate
    `--workspace`, `--journal`, and `--events` paths.
 2. A hydrates, edits a non-private file and a `.private/` file, then runs
-   `npm run agent:sync`.
-3. B runs `npm run agent:refresh`.
+   `hop sync`.
+3. B runs `hop refresh`.
 4. B sees the non-private file and, because this simulation is the same owner, the
    `.private/` file with owner-private scope preserved.
 5. A collaborator requester can refresh the same active change set with
@@ -110,18 +135,17 @@ separate local journals/events for each session. The first simulation target is:
 The current fixture models Main, the selected active change set, owner identity,
 session identity, and effective change-set visibility. The local implementation
 still stores that graph in JSON, but commands now reach it through a
-fixture-backed cloud graph service boundary. That keeps the demos dependency-free
-while giving tests and later API work a stable shape for same-owner handoff,
-collaborator visibility, review, and merge behavior.
+cloud graph service boundary. That keeps the demos dependency-free while also
+allowing the same command flow to target Convex for the real shared backend.
 
 Requester-aware reads are fixture-only but explicit. Owner requesters see shared
 and `.private/` files. Collaborator requesters see no active change-set files when
 visibility is `private`, see shared files when visibility is `team-visible` or
 `review-visible`, and never see `.private/` files.
 
-Review and merge are also fixture-level commands. `npm run agent:review` opens
+Review and merge are also fixture-level commands. `hop review` opens
 the selected active change set for review and emits `change_set.review_opened`.
-`npm run agent:merge` merges that selected active change set into Main and emits
+`hop merge` merges that selected active change set into Main and emits
 `change_set.merged`. Local sync continues to acknowledge writes into the selected
 active change set; Main should remain stable until the explicit merge command
 advances it. Status should expose the selected change set's review state, merge
@@ -136,7 +160,7 @@ change set, and leave local unacknowledged edits in place for review.
 Serve local agent status JSON:
 
 ```bash
-npm run agent:status
+npm exec -- hop serve
 ```
 
 The status server is dependency-free and listens on `127.0.0.1:4785` by default. It is read-only and reports `adapter: managed-folder`, `cacheMode: local-cache`, the workspace folder, local cloud graph summary, requester identity and visibility-filtered file counts, pending/failed/acknowledged journal counts, recent events, and the latest acknowledgement/sync/recovery events.
@@ -153,7 +177,7 @@ curl http://127.0.0.1:4785/cloud
 Use the same local-state options as the other commands when you want to inspect the demo state:
 
 ```bash
-npm run agent:status -- \
+npm exec -- hop status \
   --cloud .hopit-agent/demo/cloud.json \
   --workspace .hopit-agent/demo/workspaces/hopit-core \
   --journal .hopit-agent/demo/journal.ndjson \

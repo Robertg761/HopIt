@@ -13,8 +13,6 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import {
-  driveFiles,
-  driveFolders,
   fileTypeColorMap,
   fileTypeIconMap,
   type DriveFile,
@@ -35,9 +33,9 @@ type DriveSectionProps = {
 
 export function DriveSection({ status }: DriveSectionProps) {
   const [view, setView] = React.useState<'grid' | 'list'>('grid')
-  const liveFiles = status.files.length > 0 ? status.files.map(agentFileToDriveFile) : driveFiles
-  const liveFolders = status.files.length > 0 ? agentFoldersFromFiles(status.files) : driveFolders
-  const fileCountLabel = status.files.length > 0 ? `${status.files.length} files` : '184 files'
+  const liveFiles = status.files.map(agentFileToDriveFile)
+  const liveFolders = status.files.length > 0 ? agentFoldersFromFiles(status.files) : []
+  const fileCountLabel = `${status.files.length} files`
 
   return (
     <section className="flex flex-col rounded-2xl border border-border/60 bg-card shadow-sm">
@@ -84,47 +82,50 @@ export function DriveSection({ status }: DriveSectionProps) {
           </div>
           <Button
             size="sm"
+            disabled
             className="gap-1.5 rounded-lg bg-grape text-grape-foreground hover:bg-grape/90"
           >
             <CloudUpload className="size-3.5" />
-            Upload
+            Import
           </Button>
         </div>
       </div>
 
       {/* Folders */}
-      <div className="px-4 pt-4">
-        <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-          Folders
-        </p>
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-          {liveFolders.map((f, i) => (
-            <motion.button
-              key={f.id}
-              initial={{ opacity: 0, y: 6 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: i * 0.04, duration: 0.3 }}
-              className="group flex items-center gap-2.5 rounded-xl border border-border/60 bg-background/40 p-3 text-left transition hover:border-grape/40 hover:bg-grape/5"
-            >
-              <div
-                className={cn(
-                  'flex size-9 items-center justify-center rounded-lg ring-1',
-                  folderColorMap[f.color ?? 'hop'],
-                )}
+      {liveFolders.length > 0 ? (
+        <div className="px-4 pt-4">
+          <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            Folders
+          </p>
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {liveFolders.map((f, i) => (
+              <motion.button
+                key={f.id}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.04, duration: 0.3 }}
+                className="group flex items-center gap-2.5 rounded-xl border border-border/60 bg-background/40 p-3 text-left transition hover:border-grape/40 hover:bg-grape/5"
               >
-                <FolderGlyph />
-              </div>
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-xs font-medium">{f.name}</p>
-                <p className="text-[10.5px] text-muted-foreground">
-                  <Users className="mr-1 inline size-2.5" />
-                  {f.sharedWith} shared
-                </p>
-              </div>
-            </motion.button>
-          ))}
+                <div
+                  className={cn(
+                    'flex size-9 items-center justify-center rounded-lg ring-1',
+                    folderColorMap[f.color ?? 'hop'],
+                  )}
+                >
+                  <FolderGlyph />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-xs font-medium">{f.name}</p>
+                  <p className="text-[10.5px] text-muted-foreground">
+                    <Users className="mr-1 inline size-2.5" />
+                    {f.sharedWith} files
+                  </p>
+                </div>
+              </motion.button>
+            ))}
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {/* Files */}
       <div className="p-4">
@@ -136,23 +137,26 @@ export function DriveSection({ status }: DriveSectionProps) {
             Sort: Modified ↓
           </button>
         </div>
-        {view === 'grid' ? (
+        {liveFiles.length === 0 ? (
+          <EmptyFiles />
+        ) : view === 'grid' ? (
           <FileGrid files={liveFiles} />
         ) : (
           <FileList files={liveFiles} />
         )}
       </div>
-
-      {/* Upload dropzone */}
-      <div className="mx-4 mb-4 rounded-xl border border-dashed border-border/80 bg-muted/30 px-4 py-4 text-center transition hover:border-hop/50 hover:bg-hop/5">
-        <CloudUpload className="mx-auto size-5 text-muted-foreground" />
-        <p className="mt-1.5 text-xs text-muted-foreground">
-          Drop files here or{' '}
-          <button className="font-medium text-hop hover:underline">browse</button>{' '}
-          · up to 2 GB per file
-        </p>
-      </div>
     </section>
+  )
+}
+
+function EmptyFiles() {
+  return (
+    <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 p-6 text-center">
+      <p className="text-sm font-medium">No files loaded</p>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Import a real local project, then this panel will show the files in the managed workspace.
+      </p>
+    </div>
   )
 }
 

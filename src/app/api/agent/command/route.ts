@@ -1,5 +1,4 @@
 import { spawn } from 'node:child_process'
-import fs from 'node:fs/promises'
 import path from 'node:path'
 import { NextResponse } from 'next/server'
 
@@ -8,19 +7,24 @@ export const runtime = 'nodejs'
 
 const cwd = process.cwd()
 const agentCli = path.join(cwd, 'packages/agent/src/cli.js')
-const demoStateArgs = [
+const localStateArgs = [
   '--cloud',
-  '.hopit-agent/demo/cloud.json',
+  '.hopit-agent/cloud.json',
   '--workspace',
-  '.hopit-agent/demo/workspaces/hopit-core',
+  '.hopit-agent/workspaces/hopit-core',
   '--journal',
-  '.hopit-agent/demo/journal.ndjson',
+  '.hopit-agent/journal.ndjson',
   '--events',
-  '.hopit-agent/demo/events.ndjson',
+  '.hopit-agent/events.ndjson',
+]
+const remoteStateArgs = [
+  ...localStateArgs,
+  ...optionArg('--convex-url', process.env.HOPIT_CONVEX_URL ?? process.env.CONVEX_URL),
+  ...optionArg('--agent-token', process.env.HOPIT_AGENT_TOKEN),
+  ...optionArg('--codebase-id', process.env.HOPIT_CODEBASE_ID),
 ]
 
 const commandMap = {
-  demo: { label: 'Reset demo', cliCommand: 'demo' },
   sync: { label: 'Sync once', cliCommand: 'sync-once' },
   refresh: { label: 'Refresh', cliCommand: 'refresh' },
   recover: { label: 'Recover', cliCommand: 'recover' },
@@ -28,7 +32,7 @@ const commandMap = {
   merge: { label: 'Merge', cliCommand: 'merge' },
 } as const
 
-type AgentCommand = keyof typeof commandMap | 'edit'
+type AgentCommand = keyof typeof commandMap
 
 let activeCommand: string | null = null
 
@@ -42,13 +46,17 @@ export async function POST(request: Request) {
     return commandError('invalid_request', 'Expected a JSON body with a command field.', 400)
   }
 
-  if (command === 'edit') {
-    return runExclusiveCommand(command, appendDemoEdit)
-  }
-
   const commandConfig = commandMap[command]
   if (!commandConfig) {
     return commandError('unknown_command', 'Command is not allowed for the local prototype.', 400)
+  }
+
+  if (process.env.VERCEL && (process.env.HOPIT_CONVEX_URL || process.env.CONVEX_URL)) {
+    return commandError(
+      'local_agent_required',
+      'Hosted HopIt cannot run local workspace commands. Run the HopIt agent on your machine to sync this codebase.',
+      501,
+    )
   }
 
   return runExclusiveCommand(command, async () => {
@@ -89,41 +97,12 @@ async function runExclusiveCommand(command: AgentCommand, action: () => Promise<
   }
 }
 
-async function appendDemoEdit() {
-  const workspace = path.join(cwd, '.hopit-agent/demo/workspaces/hopit-core')
-  const readmePath = path.join(workspace, 'README.md')
-  const privatePath = path.join(workspace, '.private/agent-note.md')
-  const timestamp = new Date().toISOString()
-
-  await fs.mkdir(path.dirname(privatePath), { recursive: true })
-  await fs.appendFile(readmePath, `\nPrototype edit from HopIt UI at ${timestamp}.\n`, 'utf8')
-  await fs.appendFile(privatePath, `\nOwner-private UI edit at ${timestamp}.\n`, 'utf8')
-
-  return NextResponse.json(
-    {
-      ok: true,
-      command: 'edit',
-      label: 'Edit demo files',
-      summary: 'Edited README.md and .private/agent-note.md',
-      exitCode: 0,
-      stdout: `Edited README.md and .private/agent-note.md at ${timestamp}`,
-      stderr: '',
-    },
-    {
-      headers: {
-        'Cache-Control': 'no-store',
-      },
-    },
-  )
-}
-
 function summarizeCommandResult(
   command: keyof typeof commandMap,
   result: { exitCode: number | null; stdout: string; stderr: string },
 ) {
   if (result.exitCode !== 0) return result.stderr || 'Agent command failed.'
 
-  if (command === 'demo') return 'Reset demo state and synced 2 writes.'
   if (command === 'sync') return summarizeSync(result.stdout)
   if (command === 'refresh') return summarizeRefresh(result.stdout)
   if (command === 'recover') return summarizeRecover(result.stdout)
@@ -159,7 +138,7 @@ function matchNumber(text: string, pattern: RegExp) {
 
 function runAgentCli(command: string) {
   return new Promise<{ exitCode: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn(process.execPath, [agentCli, command, ...demoStateArgs], {
+    const child = spawn(process.execPath, [agentCli, command, ...remoteStateArgs], {
       cwd,
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -197,6 +176,10 @@ function runAgentCli(command: string) {
     stdout: '',
     stderr: error instanceof Error ? error.message : 'Agent command failed.',
   }))
+}
+
+function optionArg(name: string, value: string | undefined) {
+  return value ? [name, value] : []
 }
 
 function capOutput(output: string) {

@@ -8,7 +8,7 @@ import {
   Upload,
   MessageSquare,
 } from 'lucide-react'
-import { activityFeed, activityIconMap, type ActivityItem } from './data'
+import { type ActivityItem } from './data'
 import { cn } from '@/lib/utils'
 import type { AgentStatusSnapshot } from '@/lib/agent-status'
 
@@ -26,12 +26,7 @@ const prototypeActivityTypes = new Set<ActivityItem['what']>([
   'comment',
 ])
 
-const prototypeActivityFeed = activityFeed.filter(
-  (item): item is PrototypeActivityItem => prototypeActivityTypes.has(item.what),
-)
-
 const iconMap = {
-  ...activityIconMap,
   snapshot: History,
   sync: RotateCcw,
   upload: Upload,
@@ -70,7 +65,7 @@ export function ActivityFeed({ status }: ActivityFeedProps) {
   const [filter, setFilter] = React.useState<Filter>('all')
   const liveItems = status.events.some((event) => event.label !== 'agent:offline')
     ? status.events.map(agentEventToActivity)
-    : prototypeActivityFeed
+    : []
   const items = liveItems.filter((a) => filter === 'all' || a.what === filter)
 
   return (
@@ -112,7 +107,7 @@ export function ActivityFeed({ status }: ActivityFeedProps) {
           aria-hidden="true"
           className="absolute left-[28px] top-6 bottom-6 w-px bg-gradient-to-b from-border via-border/60 to-transparent"
         />
-        {items.map((item, i) => {
+        {items.length > 0 ? items.map((item, i) => {
           const Icon = iconMap[item.what]
           return (
             <motion.li
@@ -158,7 +153,14 @@ export function ActivityFeed({ status }: ActivityFeedProps) {
               </div>
             </motion.li>
           )
-        })}
+        }) : (
+          <li className="rounded-xl border border-dashed border-border/70 bg-muted/20 p-6 text-center">
+            <p className="text-sm font-medium">No real agent activity yet</p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Import a local project or start the agent status server to populate this feed.
+            </p>
+          </li>
+        )}
       </ol>
 
       <div className="border-t border-border/60 p-3 text-center">
