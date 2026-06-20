@@ -127,22 +127,20 @@ Current spike:
 - `npm run agent:watch` is the continuous managed-folder proof path: it runs recovery before hydration, blocks safely when recovery cannot replay, and coalesces watch-triggered sync attempts.
 - `npm run agent:refresh` is the safe cloud-to-workspace path: it refuses pending or failed local journal state, then mirrors the cloud file graph into the managed folder when the journal is clean.
 - `npm run agent:sync` runs one explicit scan/journal/acknowledgement pass.
-- `npm run agent:status` serves read-only local agent state for status, event, journal, and cloud inspection.
+- `npm run agent:status` prints read-only local agent state once, while `npm run agent:serve` starts the HTTP status server for status, event, journal, and cloud inspection.
 - The agent now reaches the fixture-backed cloud graph through a service-shaped boundary, while preserving the same managed-folder, `.private/`, refresh, and journal contracts.
 - The fixture graph now names Main, the selected active change set, owner identity, session identity, and effective change-set visibility. Acknowledged writes advance the selected active change set, while Main stays stable until the explicit merge command runs.
 - Requester-aware fixture reads now prove collaborator visibility rules: private change sets hide active work from collaborators, team-visible and review-visible change sets expose non-private paths, and `.private/` remains owner-only.
 - Minimal review/merge fixture commands open the selected active change set for review, merge it into Main, emit `change_set.review_opened` and `change_set.merged`, and surface review/merge state through status. Main stays stable until the explicit merge command runs.
 - Fixture conflict handling detects stale selected-state revisions, stale file/base revisions, and stale Main revisions, emits `change_set.conflict_detected`, and surfaces conflict state while preserving local edits for review.
+- The Next.js product shell now polls `/api/agent/status`, maps live local status/events/cloud data into the dashboard, and can read the Convex dashboard query when `HOPIT_CONVEX_URL` or `NEXT_PUBLIC_CONVEX_URL` is configured.
+- `/api/agent/command` exposes whitelisted local actions for sync, refresh, recover, review, and merge. Hosted Convex-backed deployments can read status but still require the local agent for workspace commands.
 
-Next after the managed-folder spike:
+Current next work:
 
-1. Lock the managed-folder contracts for graph shape, journal entries, event names, command names, and status fields.
-2. Introduce active change-set identity, Main identity, owner identity, and visibility metadata into the fixture graph.
-3. Replace local cloud JSON reads with a service-shaped cloud file graph interface while keeping fixture-backed demos.
-4. Keep collaborator visibility simulations passing on top of the same-owner two-session refresh proof.
-5. Keep remote-update events passing on top of the two-session refresh proof.
-6. Keep review/merge status and events passing on top of the selected active change-set proof.
-7. Keep conflict handling for stale selected-state or Main revisions passing before moving into Git compatibility.
+1. Move into Git compatibility by importing/exporting/publishing snapshots without leaking `.private/` owner-only content.
+2. Keep the live UI status adapter aligned with the local status server and Convex dashboard shapes.
+3. Add merge records/history and schema validation before treating the fixture graph as a durable product contract.
 
 ### Milestone 3: Recovery And Watch Loop
 

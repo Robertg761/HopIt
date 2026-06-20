@@ -36,29 +36,44 @@ export const dashboard = query({
       };
     }
 
-    const events = await ctx.db
+    const eventEntries = await ctx.db
       .query("agentEvents")
       .withIndex("by_codebase_at", (q) => q.eq("codebaseId", args.codebaseId))
       .order("desc")
       .take(20);
-    const recent = events.reverse().map((entry) => ({
-      id: entry._id,
-      event: entry.event,
-      type: entry.event,
-      at: entry.at,
-      timestamp: entry.at,
-      detail: entry.detail,
-      payload: entry.detail,
-    }));
-    const lastAcknowledgement = findLastEvent(recent, "cloud.acknowledged");
-    const lastSync = findLastEvent(recent, "sync.complete");
-    const lastStartedSync = findLastEvent(recent, "sync.started");
-    const lastFailedSync = findLastEvent(recent, "sync.failed");
-    const lastRecoveredSync = findLastEvent(recent, "sync.recovered");
-    const lastRefreshStarted = findLastEvent(recent, "refresh.started");
-    const lastRefreshBlocked = findLastEvent(recent, "refresh.blocked");
-    const lastRefreshComplete = findLastEvent(recent, "refresh.complete");
-    const lastRemoteUpdate = findLastEvent(recent, "remote-update");
+    const recent = eventEntries.reverse().map(mapAgentEvent);
+    const [
+      lastAcknowledgement,
+      lastSync,
+      lastStartedSync,
+      lastFailedSync,
+      lastRecoveredSync,
+      lastRefreshStarted,
+      lastRefreshBlocked,
+      lastRefreshComplete,
+      lastRemoteUpdate,
+    ] = await Promise.all([
+      readLatestEvent(ctx, args.codebaseId, "cloud.acknowledged"),
+      readLatestEvent(ctx, args.codebaseId, "sync.complete"),
+      readLatestEvent(ctx, args.codebaseId, "sync.started"),
+      readLatestEvent(ctx, args.codebaseId, "sync.failed"),
+      readLatestEvent(ctx, args.codebaseId, "sync.recovered"),
+      readLatestEvent(ctx, args.codebaseId, "refresh.started"),
+      readLatestEvent(ctx, args.codebaseId, "refresh.blocked"),
+      readLatestEvent(ctx, args.codebaseId, "refresh.complete"),
+      readLatestEvent(ctx, args.codebaseId, "remote-update"),
+    ]);
+    const latestSyncEvent = latestEventOf([
+      lastStartedSync,
+      lastSync,
+      lastFailedSync,
+      lastRecoveredSync,
+    ]);
+    const latestRefreshEvent = latestEventOf([
+      lastRefreshStarted,
+      lastRefreshBlocked,
+      lastRefreshComplete,
+    ]);
 
     return {
       status: buildStatus(graph, {
@@ -68,9 +83,11 @@ export const dashboard = query({
         lastStartedSync,
         lastFailedSync,
         lastRecoveredSync,
+        latestSyncEvent,
         lastRefreshStarted,
         lastRefreshBlocked,
         lastRefreshComplete,
+        latestRefreshEvent,
         lastRemoteUpdate,
       }),
       events: {
@@ -80,11 +97,13 @@ export const dashboard = query({
         lastStartedSync,
         lastFailedSync,
         lastRecoveredSync,
+        latestSyncEvent,
         lastRefreshStarted,
         lastRefreshBlocked,
         lastRefreshComplete,
+        latestRefreshEvent,
         lastRemoteUpdate,
-        totalEntries: events.length,
+        totalEntries: eventEntries.length,
       },
       cloud: {
         path: `convex:${args.codebaseId}`,
@@ -297,12 +316,11 @@ function normalizeGraph(graph: unknown) {
 function buildStatus(graph: any, events: Record<string, any>) {
   const filePaths = Object.keys(graph.files ?? {});
   const privateCount = filePaths.filter((filePath) => scopeForPath(filePath) === "owner-private").length;
-  const lastSync = events.lastSync;
-  const lastFailedSync = events.lastFailedSync;
-  const lastRefreshBlocked = events.lastRefreshBlocked;
+  const syncHealth = buildSyncHealth(events);
+  const refreshHealth = buildRefreshHealth(events);
 
   return {
-    ok: !lastFailedSync && !lastRefreshBlocked,
+    ok: syncHealth.state !== "failed" && refreshHealth.state !== "blocked",
     generatedAt: new Date().toISOString(),
     mode: {
       adapter: "managed-folder",
@@ -360,13 +378,11 @@ function buildStatus(graph: any, events: Record<string, any>) {
       acknowledgedCount: 0,
     },
     sync: {
-      state: lastFailedSync ? "failed" : lastSync ? "healthy" : "idle",
-      lastSuccessfulAt: lastSync?.at ?? null,
+      ...syncHealth,
+      lastSuccessfulAt: events.lastSync?.at ?? null,
       lastAcknowledgementAt: events.lastAcknowledgement?.at ?? null,
     },
-    refresh: {
-      state: lastRefreshBlocked ? "blocked" : events.lastRefreshComplete ? "healthy" : "idle",
-    },
+    refresh: refreshHealth,
     remoteUpdate: {
       state: events.lastRemoteUpdate ? "updated" : "idle",
       lastUpdate: events.lastRemoteUpdate ?? null,
@@ -375,8 +391,86 @@ function buildStatus(graph: any, events: Record<string, any>) {
   };
 }
 
-function findLastEvent(events: Array<{ event?: string }>, eventName: string) {
-  return events.findLast((entry) => entry.event === eventName) ?? null;
+async function readLatestEvent(ctx: any, codebaseId: string, eventName: string) {
+  const [event] = await ctx.db
+    .query("agentEvents")
+    .withIndex("by_codebase_at", (q) => q.eq("codebaseId", codebaseId))
+    .filter((q) => q.eq(q.field("event"), eventName))
+    .order("desc")
+    .take(1);
+
+  return event ? mapAgentEvent(event) : null;
+}
+
+function mapAgentEvent(entry: any) {
+  return {
+    id: entry._id,
+    event: entry.event,
+    type: entry.event,
+    at: entry.at,
+    timestamp: entry.at,
+    detail: entry.detail,
+    payload: entry.detail,
+  };
+}
+
+function latestEventOf(events: Array<{ at?: string | null } | null>) {
+  return events.reduce((latest, event) => {
+    if (!event) return latest;
+    if (!latest) return event;
+
+    return eventTime(event) >= eventTime(latest) ? event : latest;
+  }, null as { at?: string | null } | null);
+}
+
+function buildSyncHealth(events: Record<string, any>) {
+  const latestSyncEvent = events.latestSyncEvent;
+  let state = "idle";
+
+  if (latestSyncEvent?.event === "sync.failed") {
+    state = "failed";
+  } else if (latestSyncEvent?.event === "sync.started") {
+    state = "syncing";
+  } else if (latestSyncEvent?.event === "sync.complete" || latestSyncEvent?.event === "sync.recovered") {
+    state = "healthy";
+  }
+
+  return {
+    state,
+    lastStartedSync: events.lastStartedSync ?? null,
+    lastSuccessfulSync: events.lastSync ?? null,
+    lastFailedSync: events.lastFailedSync ?? null,
+    lastRecoveredSync: events.lastRecoveredSync ?? null,
+    latestSyncEvent: latestSyncEvent ?? null,
+    lastError: state === "failed" ? (events.lastFailedSync?.detail?.reason ?? null) : null,
+  };
+}
+
+function buildRefreshHealth(events: Record<string, any>) {
+  const latestRefreshEvent = events.latestRefreshEvent;
+  let state = "idle";
+
+  if (latestRefreshEvent?.event === "refresh.blocked") {
+    state = "blocked";
+  } else if (latestRefreshEvent?.event === "refresh.started") {
+    state = "refreshing";
+  } else if (latestRefreshEvent?.event === "refresh.complete") {
+    state = "healthy";
+  }
+
+  return {
+    state,
+    lastStarted: events.lastRefreshStarted ?? null,
+    lastBlocked: events.lastRefreshBlocked ?? null,
+    lastComplete: events.lastRefreshComplete ?? null,
+    latestRefreshEvent: latestRefreshEvent ?? null,
+    lastError: state === "blocked" ? (events.lastRefreshBlocked?.detail?.reason ?? null) : null,
+  };
+}
+
+function eventTime(event: { at?: string | null }) {
+  const time = new Date(event.at ?? "").getTime();
+  return Number.isNaN(time) ? 0 : time;
 }
 
 function scopeForPath(filePath: string) {

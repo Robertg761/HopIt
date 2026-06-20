@@ -48,12 +48,28 @@ npm exec -- hop help
 ```
 
 For local development, `npm link` makes `hop` available globally from this checkout.
+Use `npm run agent:status` for a one-shot local status JSON printout, and
+`npm run agent:serve` to start the read-only local agent status server.
 
 Build the production bundle with:
 
 ```bash
 npm run build
 ```
+
+Build a standalone `hop` artifact for the current macOS or Linux platform with:
+
+```bash
+npm run package:hop
+```
+
+The packager downloads the official Node runtime for the current `darwin` or
+`linux` `x64`/`arm64` host, bundles the HopIt agent CLI, writes an unpacked
+artifact to `artifacts/hop-<platform>-<arch>/`, and creates
+`artifacts/hop-<platform>-<arch>.tar.gz`. The packaged command runs as
+`./bin/hop` and does not require Node or npm on the target machine. Windows
+packaging exits unsupported until the packager handles Node's Windows `.zip`
+runtime archives. These artifacts are unsigned for now.
 
 ## Hosted Backend
 
@@ -97,7 +113,7 @@ The import command scans text files from the source folder, skips generated fold
 To run the live local prototype, start the agent status server in one terminal:
 
 ```bash
-npm exec -- hop serve
+npm run agent:serve
 ```
 
 Then start the web app in another terminal:

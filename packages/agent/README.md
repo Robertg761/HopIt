@@ -47,6 +47,18 @@ Any command can use `--convex-url` and `--agent-token`; when those are present,
 the selected cloud graph is read from and written to Convex instead of the local
 JSON file. Local journal and event files still exist as the device safety log.
 
+Build a Node/npm-free artifact for the current macOS or Linux platform with:
+
+```bash
+npm run package:hop
+```
+
+The output lives under `artifacts/hop-<platform>-<arch>/` with a compressed
+`.tar.gz` beside it. The packaged command is `./bin/hop`. Windows packaging
+currently exits unsupported instead of producing a broken artifact because the
+official Windows Node runtime is distributed as a `.zip`, not the `.tar.gz`
+runtime this packager handles.
+
 Run the pieces manually:
 
 ```bash
@@ -56,6 +68,8 @@ npm exec -- hop refresh
 npm exec -- hop sync
 npm exec -- hop recover
 npm exec -- hop watch
+npm exec -- hop status
+npm exec -- hop serve
 npm exec -- hop review
 npm exec -- hop merge
 ```
@@ -160,10 +174,16 @@ change set, and leave local unacknowledged edits in place for review.
 Serve local agent status JSON:
 
 ```bash
-npm exec -- hop serve
+npm run agent:serve
 ```
 
-The status server is dependency-free and listens on `127.0.0.1:4785` by default. It is read-only and reports `adapter: managed-folder`, `cacheMode: local-cache`, the workspace folder, local cloud graph summary, requester identity and visibility-filtered file counts, pending/failed/acknowledged journal counts, recent events, and the latest acknowledgement/sync/recovery events.
+The status server is dependency-free and listens on `127.0.0.1:4785` by default. It is read-only and reports `adapter: managed-folder`, `cacheMode: local-cache`, the workspace folder, local cloud graph summary, requester identity and visibility-filtered file counts, pending/failed/acknowledged journal counts, recent events, and the latest acknowledgement, sync, recovery, remote-update, review, merge, and conflict state.
+
+For a one-shot status JSON printout without starting the server, run:
+
+```bash
+npm run agent:status
+```
 
 Query it with curl:
 

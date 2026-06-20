@@ -452,6 +452,27 @@ test('CLI classifies .private files as owner-private while snapshotting and sync
   )
 })
 
+test('owner sync still journals and applies owner-private deletes', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+
+  await fs.rm(path.join(state.workspace, '.private/agent-note.md'), { force: true })
+
+  const sync = await runCli('sync-once', stateArgs(state))
+  assert.match(sync.stdout, /sync\.complete/)
+  assert.match(sync.stdout, /"journaledScopeCounts":\{"shared":0,"private":1\}/)
+
+  const cloud = await readJson(state.cloud)
+  assert.equal(cloud.files['.private/agent-note.md'], undefined)
+
+  const journal = await readNdjson(state.journal)
+  assert.equal(journal.length, 1)
+  assert.equal(journal[0].type, 'delete')
+  assert.equal(journal[0].path, '.private/agent-note.md')
+  assert.equal(journal[0].scope, 'owner-private')
+})
+
 test('import-local hydrates a real folder while skipping generated and sensitive files', async () => {
   const state = await makeState()
   const source = path.join(state.root, 'source-project')
@@ -948,6 +969,55 @@ test('collaborator requester sees only shared files when change set is team or r
     assert.equal(remoteUpdate.detail.requester.role, 'member')
     assert.equal(remoteUpdate.detail.requester.effectiveChangeSetVisibility, visibility)
   }
+})
+
+test('collaborator sync preserves hidden owner-private files after filtered hydrate', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await setChangeSetVisibility(state, 'team-visible')
+
+  await runCli('hydrate', [
+    ...stateArgs(state),
+    '--requester-id',
+    'user_demo_collaborator',
+    '--session-id',
+    'session_demo_collaborator',
+  ])
+
+  assert.equal(await pathExists(path.join(state.workspace, 'README.md')), true)
+  assert.equal(await pathExists(path.join(state.workspace, '.private/agent-note.md')), false)
+
+  await fs.appendFile(path.join(state.workspace, 'README.md'), '\nCollaborator visible edit.\n', 'utf8')
+
+  const sync = await runCli('sync-once', [
+    ...stateArgs(state),
+    '--requester-id',
+    'user_demo_collaborator',
+    '--session-id',
+    'session_demo_collaborator',
+  ])
+  assert.match(sync.stdout, /sync\.complete/)
+  assert.match(sync.stdout, /"journaledScopeCounts":\{"shared":1,"private":0\}/)
+
+  const cloud = await readJson(state.cloud)
+  assert.equal(cloud.files['.private/agent-note.md'].scope, 'owner-private')
+  assert.match(cloud.files['.private/agent-note.md'].content, /owner-private scope metadata/)
+  assert.match(cloud.files['README.md'].content, /Collaborator visible edit/)
+
+  const journal = await readNdjson(state.journal)
+  assert.equal(journal.length, 1)
+  assert.equal(journal[0].type, 'write')
+  assert.equal(journal[0].path, 'README.md')
+  assert.equal(journal[0].scope, 'shared')
+
+  const events = await readNdjson(state.events)
+  const hiddenPrivateDeletes = events.filter(
+    (event) =>
+      event.event === 'write.journaled' &&
+      event.detail.type === 'delete' &&
+      event.detail.path === '.private/agent-note.md',
+  )
+  assert.equal(hiddenPrivateDeletes.length, 0)
 })
 
 test('collaborator refresh refuses to overwrite pending local edits', async (t) => {

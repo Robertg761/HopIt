@@ -1,6 +1,6 @@
 # HopIt Progress Tracker
 
-Last updated: 2026-06-19
+Last updated: 2026-06-20
 
 This tracker is the working view of what is done, what is in progress, what is next, and what is still deliberately out of scope. The roadmap source remains [MVP Plan](mvp-plan.md), and the agent contract source remains [Local Agent Architecture](agent-architecture.md). This file turns those plans into a practical implementation ledger.
 
@@ -16,29 +16,34 @@ This tracker is the working view of what is done, what is in progress, what is n
 
 ## Current Snapshot
 
-HopIt has a working local managed-folder agent spike. The agent can seed a fixture-backed cloud graph, hydrate a normal folder, capture local writes, journal them durably, acknowledge them into the selected active change set, recover unacknowledged writes after restart, safely refresh a second same-owner workspace, and expose local status/event/journal/cloud state.
+HopIt has a working local managed-folder agent spike plus a live status path into the product shell. The agent can seed a fixture-backed cloud graph, hydrate a normal folder, capture local writes, journal them durably, acknowledge them into the selected active change set, recover unacknowledged writes after restart, safely refresh a second same-owner workspace, and expose local status/event/journal/cloud state.
 
-The most recent implementation step added fixture-backed conflict handling for stale selected-state revisions, stale file/base revisions, and stale Main revisions. Conflicts are persisted on the selected active change set, emitted as `change_set.conflict_detected`, and surfaced through status while preserving local edits for review.
+The web app polls `/api/agent/status`. In local mode that route reads the local agent status server's status/events/cloud endpoints; when Convex is configured, it reads the Convex `agent.dashboard` query instead. The local command route can run whitelisted sync, refresh, recover, review, and merge actions against the local agent, while hosted Convex-backed deployments remain read-only for workspace commands.
+
+Fixture-backed conflict handling is in place for stale selected-state revisions, stale file/base revisions, and stale Main revisions. Conflicts are persisted on the selected active change set, emitted as `change_set.conflict_detected`, and surfaced through status while preserving local edits for review.
 
 Current proof commands:
 
 ```bash
 npm run agent:test
 npm run lint
+npm run package:hop
 ```
 
 Current verified result:
 
-- `npm run agent:test`: 18 passing tests.
+- `npm run agent:test`: 23 passing tests.
 - `npm run lint`: passes.
+- `npm run package:hop`: builds the current macOS artifact and verifies `hop help`.
 
 ## Executive Progress
 
 | Area | Status | Summary |
 | --- | --- | --- |
 | Product concept | Done | The repo has converged on cloud-native managed workspaces, active change sets, explicit Main, and `.private/` owner-only workspace scope. |
-| Web product shell | Mostly done | The prototype UI exists, but it is still static/mock-oriented and not yet wired to live agent or cloud state. |
+| Web product shell | Mostly done | The prototype UI polls live local agent state through `/api/agent/status`, maps files/events/revisions/review/merge/conflict state, and can read Convex dashboard state when configured. |
 | Local managed-folder agent | Done for spike | The agent proves hydration, journaling, sync acknowledgement, recovery, watch startup gating, safe refresh, status, and same-owner continuity. |
+| Convex cloud graph | Mostly done | Convex functions persist graph, files, and agent events and expose a dashboard query, but auth, schema validation, blob storage, and durable permissions are still thin. |
 | `.private/` model | Done for spike | `.private/` files are synced/versioned and classified as owner-private; they are not ignored or skipped. |
 | Safety journal | Done for spike | Pending, acknowledged, and failed entries are derived from journal/events and exposed through status. |
 | Watch loop | Done for spike | Watch startup runs recovery before hydration, blocks unsafe recovery, and syncs later editor writes. |
@@ -49,7 +54,8 @@ Current verified result:
 | Remote-update events | Done for spike | Refresh emits first-class `remote-update` events and status exposes the latest update. |
 | Review and merge | Done for fixture | Fixture commands open the selected active change set for review, merge it into Main, emit review/merge events, and expose review/merge state through status. |
 | Conflict handling | Done for fixture | Stale selected-state, file/base, and Main revisions become reviewable conflict state. |
-| Git compatibility | Next | Import/export/publish is planned after review/merge, conflict, and snapshot behavior. |
+| Packaging | Mostly done | The current packager builds macOS/Linux `x64`/`arm64` tarballs with an embedded Node runtime and now fails explicitly on unsupported Windows hosts. |
+| Git compatibility | Next | Import/export/publish is the current product-contract next step after live status, review/merge, conflict, and packaging cleanup. |
 | Native mount/FUSE/RAM-only cache | Later | Explicitly not part of the current MVP path. |
 
 ## Milestone Tracker
@@ -65,6 +71,9 @@ Completed:
 - Product direction is documented in [MVP Plan](mvp-plan.md).
 - Core concepts are named: codebase, Main, active change set, managed workspace folder, HopIt agent, local cache, safety journal, workspace snapshot, workspace visibility, change-set visibility, and cloud file graph.
 - The app surface exists under `src/app` and `src/components/hopit`.
+- The app surface consumes `/api/agent/status` through `useAgentStatus`, maps live local status/events/cloud data into the dashboard, and falls back to offline state when the agent is unavailable.
+- The status API can read either the local status server or the Convex dashboard query, depending on environment configuration.
+- The command API exposes whitelisted local sync, refresh, recover, review, and merge actions for the prototype UI.
 - GitHub-social concepts are documented as non-goals for v1.
 - `.private/` is documented as owner-visible, snapshotted, synced, and versioned.
 - Change-set visibility resolution order is documented: per-change-set override, codebase override, global user default, product default.
@@ -73,22 +82,22 @@ Current evidence:
 
 - `npm run lint` passes.
 - The product plan and README consistently describe the same product model.
+- The app has local-agent and Convex status adapters in `src/lib/agent-status.ts`, `src/lib/convex-agent.ts`, and `/api/agent/status`.
 
 Remaining:
 
-- Wire the product shell to real local agent status instead of static data.
-- Show live codebase, active change set, sync, recovery, visibility, connected-device, and recent-event state.
-- Add UI states for clean, pending, failed, uncertain, refreshing, blocked, remote-update, review, and merge.
-- Decide whether the first live UI should read directly from the local status server or through a Next.js API route.
+- Add richer UI affordances for uncertain, degraded, retrying, remote-update, review, merge, and conflict detail.
+- Keep the UI mapper aligned as the local status server and Convex dashboard shape evolve.
+- Add production authentication and permission-aware command handling before exposing commands outside the local prototype.
 
 Risks:
 
-- The UI can drift into a dashboard mock unless it consumes the real agent status contract soon.
+- The UI can drift if its mapper lags behind the local status server or Convex dashboard contract.
 - Visibility UI should not imply `.private/` is an ignore mechanism.
 
 Next product-shell step:
 
-- Add a local-agent status adapter for the web app after collaborator visibility and remote-update event contracts are stable enough to display.
+- Harden the live UI/Convex status contract and use it to drive the Git compatibility import/export/publish flow.
 
 ### Milestone 2: Agent Managed-Folder Spike
 
@@ -133,11 +142,11 @@ Contract details currently proven:
   - `agent:demo`
   - `agent:sync`
   - `agent:status`
+  - `agent:serve`
 
 Remaining:
 
 - Add rename/move support.
-- Add explicit conflict handling for stale revisions.
 - Add cache pruning rules after clean acknowledged content is proven safe to evict.
 
 Risks:
@@ -211,8 +220,10 @@ Goal: Replace command-level local cloud JSON access with a service-shaped file g
 Completed:
 
 - Commands now call a fixture-backed cloud graph service.
+- Commands can target Convex with `--convex-url` and `--agent-token`, and the web app can read the Convex dashboard query for hosted status.
 - The service exposes graph initialization, graph reads, graph writes, optional graph reads, existence checks, and journal-entry application.
 - The local persistence file is still JSON, but command code no longer treats that JSON file as the product API.
+- Convex functions persist codebase graph metadata, files, and agent events for the current cloud-backed prototype.
 - The fixture graph now includes:
   - `schemaVersion`
   - `codebase.id`
@@ -414,7 +425,9 @@ Risks:
 | `npm run agent:recover` | Done | Replays unacknowledged journal entries. | Recovery tests. |
 | `npm run agent:watch` | Done for spike | Runs recovery-before-hydration and watches for local edits. | Watch-loop tests. |
 | `npm run agent:refresh` | Done for spike | Safely mirrors selected cloud state into workspace when journal is clean. | Two-session and refresh-block tests. |
-| `npm run agent:status` | Done for spike | Serves read-only local state over HTTP. | Status fields asserted through CLI status command. |
+| `npm run agent:status` | Done for spike | Prints one-shot read-only local status JSON. | Status fields asserted through CLI status command. |
+| `npm run agent:serve` | Done for spike | Serves read-only local state over HTTP. | Used by the live web app through `/api/agent/status`. |
+| `npm run agent:status-server` | Done for spike | Explicit alias for the HTTP status server. | Same CLI target as `hop serve`. |
 | `npm run agent:review` | Done for fixture | Opens the selected active change set for review. | Review-open tests. |
 | `npm run agent:merge` | Done for fixture | Merges the selected active change set into Main. | Merge tests. |
 
@@ -538,32 +551,7 @@ Risks:
 
 ## Immediate Next Queue
 
-### 1. Review And Merge Skeleton
-
-Status: `Done for fixture`
-
-Definition of done:
-
-- Review state exists on the selected active change set.
-- Agent commands open review and merge the selected active change set into Main.
-- Main revision advances only on explicit merge.
-- Events include `change_set.review_opened` and `change_set.merged`.
-- Status surfaces review/merge state.
-- Fixture tests cover the command/event/status/Main-stability contract.
-
-### 2. Conflict Handling
-
-Status: `Done for fixture`
-
-Definition of done:
-
-- Detect stale selected-state, file/base, or Main revisions before recovery/merge.
-- Keep conflicted change sets reviewable instead of treating conflicts as terminal-only command failures.
-- Surface conflict state through status and events.
-- Preserve unacknowledged local edits and `.private/` visibility metadata during conflict review.
-- Fixture tests cover stale file/base revision recovery conflicts and stale Main revision merge conflicts.
-
-### 3. Git Compatibility
+### 1. Git Compatibility
 
 Status: `Next`
 
@@ -573,20 +561,40 @@ Definition of done:
 - Export or publish Main and merged snapshots without leaking `.private/` owner-only content.
 - Keep Git compatibility separate from the everyday active change-set continuity model.
 
+### 2. Live UI And Convex Status Contract
+
+Status: `Next`
+
+Definition of done:
+
+- Keep `/api/agent/status`, `mapAgentStatusResponse`, and the Convex `agent.dashboard` response aligned as new status fields are added.
+- Add UI detail for remote-update, review, merge, and conflict evidence without losing the clean/pending/failed overview.
+- Decide which local-only command controls remain hidden or disabled in hosted Convex-backed deployments.
+
+### 3. Merge Records And Schema Validation
+
+Status: `Next`
+
+Definition of done:
+
+- Add durable merge records/history instead of only selected change-set metadata.
+- Add graph schema validation before treating the fixture/Convex graph as a product contract.
+- Keep `.private/` and active change-set visibility in the validation surface.
+
 ## Known Gaps
 
 - No real authentication yet.
-- No real cloud API yet.
-- No real database or object/blob storage yet.
+- Convex-backed graph storage exists, but there is no production auth-backed cloud API surface yet.
+- No production database/object-blob split yet; Convex stores prototype graph metadata, file content, and events.
 - No content-addressed blob backend yet.
 - No schema validator yet.
 - No real auth-backed collaborator permission model yet; fixture-only requester filtering exists.
 - No push-style live remote-update delivery yet; remote-update is currently emitted by explicit refresh.
-- No conflict handling yet.
+- No conflict resolution UI yet; fixture conflict detection/status exists.
 - No Git import/export/publish yet.
 - No local cache pruning yet.
 - No offline mode yet.
-- No production installer or tray/menu agent wrapper yet.
+- No signed production installer or tray/menu agent wrapper yet.
 - No cross-platform watch behavior matrix yet.
 
 ## Verification Checklist
@@ -604,6 +612,8 @@ For manual smoke testing:
 npm run agent:demo
 npm run agent:status
 ```
+
+Run `npm run agent:serve` in a separate terminal when smoke testing the live web UI against the local status server.
 
 For safe refresh debugging:
 

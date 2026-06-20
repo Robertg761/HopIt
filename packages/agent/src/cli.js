@@ -439,11 +439,16 @@ async function performSyncOnce(options, contextDetail = {}) {
   const cloudService = createCloudGraphService(options)
   const cloud = await cloudService.readGraph()
   const diskFiles = await readWorkspaceFiles(options.workspace)
-  const cloudPaths = new Set(Object.keys(cloud.files))
+  const visibilityContext = visibilityContextForGraph(cloud, visibilityRequestFromOptions(options))
+  const cloudPaths = new Set(
+    Object.keys(cloud.files).filter((relativePath) => canRequesterSeePath(visibilityContext, relativePath)),
+  )
   const writeEvents = []
   const now = new Date().toISOString()
 
   for (const [relativePath, content] of Object.entries(diskFiles)) {
+    if (!canRequesterSeePath(visibilityContext, relativePath)) continue
+
     const nextHash = hashContent(content)
     const current = cloud.files[relativePath]
     const scope = scopeForPath(relativePath)

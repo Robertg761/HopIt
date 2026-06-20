@@ -180,6 +180,15 @@ function AgentStatusPanel({
               value={cacheStateLabels[status.cacheState]}
             />
             <StatusMetric
+              icon={Cloud}
+              label="Remote update"
+              value={status.remoteUpdateState}
+              highlight={
+                status.remoteUpdateState !== 'idle' &&
+                status.remoteUpdateState !== 'Unavailable'
+              }
+            />
+            <StatusMetric
               icon={ShieldCheck}
               label="Visibility"
               value={status.visibility}

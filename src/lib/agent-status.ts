@@ -80,6 +80,15 @@ type RawEventsResponse = {
   recent?: RawAgentEvent[]
   lastAcknowledgement?: RawAgentEvent | null
   lastSync?: RawAgentEvent | null
+  lastStartedSync?: RawAgentEvent | null
+  lastFailedSync?: RawAgentEvent | null
+  lastRecoveredSync?: RawAgentEvent | null
+  latestSyncEvent?: RawAgentEvent | null
+  lastRefreshStarted?: RawAgentEvent | null
+  lastRefreshBlocked?: RawAgentEvent | null
+  lastRefreshComplete?: RawAgentEvent | null
+  latestRefreshEvent?: RawAgentEvent | null
+  lastRemoteUpdate?: RawAgentEvent | null
 }
 
 type RawAgentStatus = {
@@ -129,11 +138,7 @@ type RawAgentStatus = {
   conflict?: {
     state?: string
   }
-  events?: {
-    recent?: RawAgentEvent[]
-    lastAcknowledgement?: RawAgentEvent | null
-    lastSync?: RawAgentEvent | null
-  }
+  events?: RawEventsResponse
 }
 
 type RawAgentEvent = {
@@ -201,12 +206,17 @@ export function mapAgentStatusResponse(response: unknown): AgentStatusSnapshot {
   const syncState = status.sync?.state ?? 'idle'
   const refreshState = status.refresh?.state ?? 'idle'
   const conflictState = status.conflict?.state ?? 'none'
-  const isBlocked = failedWrites > 0 || refreshState === 'blocked' || conflictState === 'conflicted'
+  const isBlocked =
+    syncState === 'failed' ||
+    failedWrites > 0 ||
+    refreshState === 'blocked' ||
+    conflictState === 'conflicted'
   const isSyncing = syncState === 'syncing' || refreshState === 'refreshing' || pendingWrites > 0
   const state: AgentPanelState = isBlocked ? 'blocked' : isSyncing ? 'syncing' : 'online'
   const privateFiles = status.cloud?.scopeCounts?.private ?? 0
   const events = wrappedResponse?.events ?? status.events
   const recentEvents = events?.recent ?? []
+  const remoteUpdateState = status.remoteUpdate?.state ?? (events?.lastRemoteUpdate ? 'updated' : 'idle')
 
   return {
     id: status.codebaseName ? `${status.codebaseName}-agent` : 'local-hopit-agent',
@@ -236,7 +246,7 @@ export function mapAgentStatusResponse(response: unknown): AgentStatusSnapshot {
     reviewState: status.review?.state ?? 'not-open',
     mergeState: status.merge?.state ?? 'unmerged',
     conflictState,
-    remoteUpdateState: status.remoteUpdate?.state ?? 'idle',
+    remoteUpdateState,
     files: mapCloudFiles(wrappedResponse?.cloud),
     events: mapRecentEvents(recentEvents),
     rawUpdatedAt: status.generatedAt ?? null,
