@@ -51,7 +51,7 @@ export async function POST(request: Request) {
     return commandError('unknown_command', 'Command is not allowed for the local prototype.', 400)
   }
 
-  if (process.env.VERCEL && (process.env.HOPIT_CONVEX_URL || process.env.CONVEX_URL)) {
+  if (process.env.VERCEL) {
     return commandError(
       'local_agent_required',
       'Hosted HopIt cannot run local workspace commands. Run the HopIt agent on your machine to sync this codebase.',

@@ -72,6 +72,11 @@ npm exec -- hop status
 npm exec -- hop serve
 npm exec -- hop review
 npm exec -- hop merge
+npm exec -- hop validate
+npm exec -- hop export --output /path/to/git-export
+npm exec -- hop publish --output /path/to/git-publish
+npm exec -- hop service start --profile production --codebase-id hopit
+npm exec -- hop service status --profile production --codebase-id hopit
 ```
 
 `hop refresh` is the safe cloud-to-workspace command. It refuses to
@@ -171,6 +176,24 @@ revision recovery and stale Main revision merge attempts emit
 `change_set.conflict_detected`, persist conflict state on the selected active
 change set, and leave local unacknowledged edits in place for review.
 
+`hop validate` checks the configured cloud graph contract before dogfooding it:
+schema version, codebase/Main/active-change-set identity, visibility enums,
+review/merge/conflict states, file content/revisions, safe relative paths, and
+path-derived `.private/` owner-private scope.
+
+`hop export` and `hop publish` are the current Git escape hatch. They create a
+clean Git repository at `--output`, refuse outputs inside the managed workspace,
+and omit `.private/` owner-only files by default. `hop export --include-private`
+is available for an explicit owner-private backup. `hop publish` is stricter: it
+requires the selected active change set to be reviewed and merged, and it always
+omits `.private/`.
+
+`hop service start|stop|status|restart` runs the watcher and local status server
+as one background process. Use `--profile production` to keep agent state under
+the platform app-state directory and managed workspaces under `~/HopIt
+Workspaces` unless `HOPIT_AGENT_STATE_ROOT` or `HOPIT_WORKSPACE_ROOT` overrides
+those defaults.
+
 Serve local agent status JSON:
 
 ```bash
@@ -214,11 +237,12 @@ Generated local agent state is demo/runtime state, not workspace content:
 
 ## Next Step
 
-Build Git compatibility on top of the fixture-backed graph contract. The
-same-owner, collaborator visibility, remote-update, review, merge, and conflict
-simulations now define how active change-set state becomes visible locally, how it
-becomes accepted Main, and how stale revisions become reviewable state. The next
-proof should import/export or publish snapshots without leaking `.private/`
-owner-only content. Offline behavior can build on that boundary. A true virtual
-filesystem or RAM-only mount remains future optional research, not the current
-product path.
+Extend Git compatibility on top of the safe export/publish skeleton. The
+same-owner, collaborator visibility, remote-update, review, merge, conflict, and
+Git escape-hatch simulations now define how active change-set state becomes
+visible locally, how it becomes accepted Main, how stale revisions become
+reviewable state, and how accepted work can leave HopIt without leaking
+`.private/` owner-only content. The next proof should add Git history import,
+ancestry preservation, historical snapshot export, and remote publish. Offline
+behavior can build on that boundary. A true virtual filesystem or RAM-only mount
+remains future optional research, not the current product path.

@@ -41,24 +41,33 @@ export function useAgentStatus(): AgentStatusState {
   const [commandResult, setCommandResult] = React.useState<AgentCommandResult | null>(null)
 
   const refresh = React.useCallback(async () => {
-      try {
-        const response = await fetch('/api/agent/status', {
-          cache: 'no-store',
-        })
-        const body = await response.json()
+    try {
+      const response = await fetch('/api/agent/status', {
+        cache: 'no-store',
+      })
+      const body = await response.json()
 
-        setStatus(mapAgentStatusResponse(body))
-        setLoading(false)
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Agent status request failed.'
+      setStatus(mapAgentStatusResponse(body))
+      setLoading(false)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Agent status request failed.'
 
-        setStatus(offlineAgentStatus(message))
-        setLoading(false)
-      }
+      setStatus(offlineAgentStatus(message))
+      setLoading(false)
+    }
   }, [])
 
   const runCommand = React.useCallback(
     async (command: AgentCommand) => {
+      if (!status.commandsAvailable) {
+        setCommandResult({
+          ok: false,
+          command,
+          stderr: 'Workspace commands are only available from the local HopIt agent.',
+        })
+        return
+      }
+
       setRunningCommand(command)
       try {
         const response = await fetch('/api/agent/command', {
@@ -84,7 +93,7 @@ export function useAgentStatus(): AgentStatusState {
         await refresh()
       }
     },
-    [refresh],
+    [refresh, status.commandsAvailable],
   )
 
   React.useEffect(() => {

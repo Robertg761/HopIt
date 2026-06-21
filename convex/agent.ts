@@ -1,5 +1,13 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
+import type { DatabaseReader } from "./_generated/server";
+
+declare const process: {
+  env: {
+    HOPIT_AGENT_TOKEN?: string;
+    HOPIT_ALLOW_UNAUTHENTICATED_AGENT?: string;
+  };
+};
 
 const graphValidator = v.any();
 const detailValidator = v.any();
@@ -123,7 +131,9 @@ export const saveGraph = mutation({
   handler: async (ctx, args) => {
     requireAgentToken(args.token);
 
+    validateRawGraph(args.graph);
     const graph = normalizeGraph(args.graph);
+    validateGraph(graph);
     const codebaseId = graph.codebase.id;
     const now = new Date().toISOString();
     const existing = await ctx.db
@@ -227,7 +237,7 @@ export const appendEvent = mutation({
   },
 });
 
-async function readGraph(ctx: any, codebaseId: string) {
+async function readGraph(ctx: { db: DatabaseReader }, codebaseId: string) {
   const codebase = await ctx.db
     .query("codebases")
     .withIndex("by_codebase_id", (q) => q.eq("codebaseId", codebaseId))
@@ -253,7 +263,7 @@ async function readGraph(ctx: any, codebaseId: string) {
     ]),
   );
 
-  return {
+  const graph = {
     schemaVersion: codebase.schemaVersion,
     codebase: {
       id: codebase.codebaseId,
@@ -269,11 +279,17 @@ async function readGraph(ctx: any, codebaseId: string) {
     revision: codebase.revision,
     files: filesByPath,
   };
+  validateGraph(graph);
+  return graph;
 }
 
 function requireAgentToken(token: string | undefined) {
   const expected = process.env.HOPIT_AGENT_TOKEN;
-  if (expected && token !== expected) {
+  if (!expected) {
+    if (process.env.HOPIT_ALLOW_UNAUTHENTICATED_AGENT === "1") return;
+    throw new Error("HOPIT_AGENT_TOKEN must be configured for Convex HopIt access.");
+  }
+  if (token !== expected) {
     throw new Error("Unauthorized HopIt agent token.");
   }
 }
@@ -311,6 +327,90 @@ function normalizeGraph(graph: unknown) {
     revision: number;
     files: Record<string, unknown>;
   };
+}
+
+function validateRawGraph(graph: unknown) {
+  if (!graph || typeof graph !== "object") {
+    throw new Error("Expected a HopIt cloud graph object.");
+  }
+
+  const value = graph as Record<string, any>;
+  if (value.files !== undefined && (!value.files || typeof value.files !== "object" || Array.isArray(value.files))) {
+    throw new Error("HopIt graph files must be an object.");
+  }
+
+  for (const [filePath, file] of Object.entries(value.files ?? {})) {
+    assertSafeGraphPath(filePath);
+    const scope = (file as { scope?: unknown })?.scope;
+    if (typeof scope === "string" && scope !== scopeForPath(filePath)) {
+      throw new Error(`HopIt graph scope mismatch for ${filePath}: expected ${scopeForPath(filePath)}, got ${scope}.`);
+    }
+  }
+}
+
+function validateGraph(graph: ReturnType<typeof normalizeGraph>) {
+  const errors: string[] = [];
+  const visibilityValues = new Set(["private", "team-visible", "review-visible"]);
+  const reviewStates = new Set(["not-open", "open", "merged"]);
+  const mergeStates = new Set(["unmerged", "merged"]);
+  const conflictStates = new Set(["none", "conflicted"]);
+  const selectedState = graph.selectedState as any;
+  const main = graph.main as any;
+  const owner = graph.owner as any;
+  const session = graph.session as any;
+  const visibility = graph.visibility as any;
+
+  if (graph.schemaVersion !== 2) errors.push("schemaVersion must be 2.");
+  if (!isNonEmptyString(graph.codebase.id)) errors.push("codebase.id is required.");
+  if (!isNonEmptyString(graph.codebase.name)) errors.push("codebase.name is required.");
+  if (!isNonEmptyString(graph.codebase.ownerId)) errors.push("codebase.ownerId is required.");
+  if (!isNonEmptyString(owner?.id)) errors.push("owner.id is required.");
+  if (graph.codebase.ownerId !== owner?.id) errors.push("codebase.ownerId must match owner.id.");
+  if (!isNonEmptyString(main?.id)) errors.push("main.id is required.");
+  if (!Number.isInteger(main?.revision)) errors.push("main.revision must be an integer.");
+  if (selectedState?.type !== "active-change-set" && selectedState?.type !== "main") {
+    errors.push("selectedState.type must be active-change-set or main.");
+  }
+  if (!isNonEmptyString(selectedState?.id)) errors.push("selectedState.id is required.");
+  if (!Number.isInteger(selectedState?.revision)) errors.push("selectedState.revision must be an integer.");
+  if (!Number.isInteger(graph.revision)) errors.push("revision must be an integer.");
+  if (!visibilityValues.has(visibility?.effective)) errors.push("visibility.effective is invalid.");
+  if (!visibilityValues.has(selectedState?.effectiveVisibility)) errors.push("selectedState.effectiveVisibility is invalid.");
+  if (!reviewStates.has(selectedState?.reviewState)) errors.push("selectedState.reviewState is invalid.");
+  if (!mergeStates.has(selectedState?.mergeState)) errors.push("selectedState.mergeState is invalid.");
+  if (!conflictStates.has(selectedState?.conflictState)) errors.push("selectedState.conflictState is invalid.");
+  if (!isNonEmptyString(session?.id)) errors.push("session.id is required.");
+  if (!isNonEmptyString(session?.deviceName)) errors.push("session.deviceName is required.");
+
+  for (const [filePath, file] of Object.entries(graph.files)) {
+    const value = file as any;
+    try {
+      assertSafeGraphPath(filePath);
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+    if (typeof value.content !== "string") errors.push(`${filePath}.content must be a string.`);
+    if (value.scope !== scopeForPath(filePath)) errors.push(`${filePath}.scope must be ${scopeForPath(filePath)}.`);
+    if (!Number.isInteger(value.revision)) errors.push(`${filePath}.revision must be an integer.`);
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`Invalid HopIt cloud graph: ${errors.join(" ")}`);
+  }
+}
+
+function assertSafeGraphPath(filePath: string) {
+  if (!filePath || filePath.startsWith("/") || filePath === "." || filePath.includes("\0")) {
+    throw new Error(`Invalid HopIt graph path: ${filePath}`);
+  }
+  const parts = filePath.split("/");
+  if (parts.includes("..") || parts.includes("")) {
+    throw new Error(`Invalid HopIt graph path: ${filePath}`);
+  }
+}
+
+function isNonEmptyString(value: unknown) {
+  return typeof value === "string" && value.length > 0;
 }
 
 function buildStatus(graph: any, events: Record<string, any>) {
@@ -391,7 +491,7 @@ function buildStatus(graph: any, events: Record<string, any>) {
   };
 }
 
-async function readLatestEvent(ctx: any, codebaseId: string, eventName: string) {
+async function readLatestEvent(ctx: { db: DatabaseReader }, codebaseId: string, eventName: string) {
   const [event] = await ctx.db
     .query("agentEvents")
     .withIndex("by_codebase_at", (q) => q.eq("codebaseId", codebaseId))

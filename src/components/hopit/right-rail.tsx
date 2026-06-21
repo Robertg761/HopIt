@@ -234,26 +234,32 @@ function AgentStatusPanel({
               <span className="text-[10.5px] text-muted-foreground">Running {runningCommand}</span>
             ) : null}
           </div>
-          <div className="grid grid-cols-2 gap-2">
-            {prototypeActions.map((action) => {
-              const Icon = action.icon
-              const isRunning = runningCommand === action.command
-              return (
-                <Button
-                  key={action.command}
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  disabled={Boolean(runningCommand)}
-                  className="h-8 justify-start gap-1.5 rounded-lg px-2 text-xs"
-                  onClick={() => void runCommand(action.command)}
-                >
-                  <Icon className={cn('size-3.5 shrink-0', isRunning && 'animate-spin')} />
-                  <span className="truncate">{isRunning ? 'Running' : action.label}</span>
-                </Button>
-              )
-            })}
-          </div>
+          {status.commandsAvailable ? (
+            <div className="grid grid-cols-2 gap-2">
+              {prototypeActions.map((action) => {
+                const Icon = action.icon
+                const isRunning = runningCommand === action.command
+                return (
+                  <Button
+                    key={action.command}
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={Boolean(runningCommand)}
+                    className="h-8 justify-start gap-1.5 rounded-lg px-2 text-xs"
+                    onClick={() => void runCommand(action.command)}
+                  >
+                    <Icon className={cn('size-3.5 shrink-0', isRunning && 'animate-spin')} />
+                    <span className="truncate">{isRunning ? 'Running' : action.label}</span>
+                  </Button>
+                )
+              })}
+            </div>
+          ) : (
+            <div className="rounded-lg bg-muted/40 px-2.5 py-2 text-[11px] text-muted-foreground ring-1 ring-border/50">
+              Commands run from the local HopIt agent. This dashboard is currently reading {status.backend}.
+            </div>
+          )}
           {commandResult ? (
             <div
               className={cn(

@@ -16,9 +16,9 @@ This tracker is the working view of what is done, what is in progress, what is n
 
 ## Current Snapshot
 
-HopIt has a working local managed-folder agent spike plus a live status path into the product shell. The agent can seed a fixture-backed cloud graph, hydrate a normal folder, capture local writes, journal them durably, acknowledge them into the selected active change set, recover unacknowledged writes after restart, safely refresh a second same-owner workspace, and expose local status/event/journal/cloud state.
+HopIt has a working local managed-folder agent spike plus a live status path into the product shell. The agent can seed a fixture-backed cloud graph, hydrate a normal folder, capture local writes, journal them durably, acknowledge them into the selected active change set, recover unacknowledged writes after restart, safely refresh a second same-owner workspace, export/publish a clean Git escape hatch, and expose local status/event/journal/cloud state.
 
-The web app polls `/api/agent/status`. In local mode that route reads the local agent status server's status/events/cloud endpoints; when Convex is configured, it reads the Convex `agent.dashboard` query instead. The local command route can run whitelisted sync, refresh, recover, review, and merge actions against the local agent, while hosted Convex-backed deployments remain read-only for workspace commands.
+The web app polls `/api/agent/status`. In local mode that route reads the local agent status server's status/events/cloud endpoints; when Convex is configured, it reads the Convex `agent.dashboard` query instead. The local command route can run whitelisted sync, refresh, recover, review, and merge actions against the local agent, while hosted Convex-backed deployments remain read-only for workspace commands and require dashboard authentication.
 
 Fixture-backed conflict handling is in place for stale selected-state revisions, stale file/base revisions, and stale Main revisions. Conflicts are persisted on the selected active change set, emitted as `change_set.conflict_detected`, and surfaced through status while preserving local edits for review.
 
@@ -32,9 +32,9 @@ npm run package:hop
 
 Current verified result:
 
-- `npm run agent:test`: 23 passing tests.
+- `npm run agent:test`: 31 passing tests.
 - `npm run lint`: passes.
-- `npm run package:hop`: builds the current macOS artifact and verifies `hop help`.
+- `npm run package:hop`: builds the current macOS artifact and verifies `hop help` plus production-profile `hop status`.
 
 ## Executive Progress
 
@@ -43,7 +43,7 @@ Current verified result:
 | Product concept | Done | The repo has converged on cloud-native managed workspaces, active change sets, explicit Main, and `.private/` owner-only workspace scope. |
 | Web product shell | Mostly done | The prototype UI polls live local agent state through `/api/agent/status`, maps files/events/revisions/review/merge/conflict state, and can read Convex dashboard state when configured. |
 | Local managed-folder agent | Done for spike | The agent proves hydration, journaling, sync acknowledgement, recovery, watch startup gating, safe refresh, status, and same-owner continuity. |
-| Convex cloud graph | Mostly done | Convex functions persist graph, files, and agent events and expose a dashboard query, but auth, schema validation, blob storage, and durable permissions are still thin. |
+| Convex cloud graph | Mostly done | Convex functions persist graph, files, and agent events, require an agent token by default, validate graph contracts, and expose a dashboard query, but blob storage and durable user permissions are still thin. |
 | `.private/` model | Done for spike | `.private/` files are synced/versioned and classified as owner-private; they are not ignored or skipped. |
 | Safety journal | Done for spike | Pending, acknowledged, and failed entries are derived from journal/events and exposed through status. |
 | Watch loop | Done for spike | Watch startup runs recovery before hydration, blocks unsafe recovery, and syncs later editor writes. |
@@ -54,8 +54,8 @@ Current verified result:
 | Remote-update events | Done for spike | Refresh emits first-class `remote-update` events and status exposes the latest update. |
 | Review and merge | Done for fixture | Fixture commands open the selected active change set for review, merge it into Main, emit review/merge events, and expose review/merge state through status. |
 | Conflict handling | Done for fixture | Stale selected-state, file/base, and Main revisions become reviewable conflict state. |
-| Packaging | Mostly done | The current packager builds macOS/Linux `x64`/`arm64` tarballs with an embedded Node runtime and now fails explicitly on unsupported Windows hosts. |
-| Git compatibility | Next | Import/export/publish is the current product-contract next step after live status, review/merge, conflict, and packaging cleanup. |
+| Packaging | Mostly done | The current packager builds macOS/Linux `x64`/`arm64` tarballs with an embedded Node runtime, verifies help plus production-profile status, and now fails explicitly on unsupported Windows hosts. |
+| Git compatibility | In progress | Safe export/publish now creates clean Git repos while omitting `.private/` from publish, but ancestry preservation and remote publishing are still not started. |
 | Native mount/FUSE/RAM-only cache | Later | Explicitly not part of the current MVP path. |
 
 ## Milestone Tracker
@@ -367,7 +367,7 @@ Risks:
 
 ### Milestone 7: Git Compatibility
 
-Status: `Not started`
+Status: `In progress`
 
 Goal: Import an existing Git repository into the cloud file graph, export a workspace snapshot to a Git commit, and publish accepted Main or merged snapshots as Git history when requested.
 
@@ -375,18 +375,22 @@ Completed:
 
 - Git is documented as compatibility/import/export/publish infrastructure, not the everyday continuity model.
 - GitHub-social concepts are documented as non-goals for v1.
+- `hop export` creates a clean Git repo from the selected graph state and omits `.private/` by default.
+- `hop publish` requires the selected active change set to be reviewed and merged, creates a clean Git repo, and always omits `.private/`.
+- Export/publish refuse to write inside or around the managed workspace.
 
 Current evidence:
 
 - Product docs consistently separate Git compatibility from live active change sets.
+- `npm run agent:test` covers export, explicit owner-private export, publish gating, `.private/` omission, workspace-output refusal, and validation rejection for scope mismatches.
 
 Remaining:
 
 - Import Git tree into cloud file graph.
 - Preserve commit ancestry where possible.
-- Export a selected snapshot as a Git commit.
-- Publish Main or a merged snapshot as Git history.
-- Decide how `.private/` owner-only content behaves during export/publish.
+- Export a historical selected snapshot as a Git commit once snapshot indexes exist.
+- Push or publish Main/merged snapshots to a remote Git host.
+- Decide the long-term private backup UX for explicit owner-private export.
 
 Risks:
 
@@ -558,7 +562,7 @@ Status: `Next`
 Definition of done:
 
 - Import Git history into the cloud file graph.
-- Export or publish Main and merged snapshots without leaking `.private/` owner-only content.
+- Extend the new local export/publish commands into historical snapshot export, ancestry preservation, and remote publish.
 - Keep Git compatibility separate from the everyday active change-set continuity model.
 
 ### 2. Live UI And Convex Status Contract
@@ -591,7 +595,7 @@ Definition of done:
 - No real auth-backed collaborator permission model yet; fixture-only requester filtering exists.
 - No push-style live remote-update delivery yet; remote-update is currently emitted by explicit refresh.
 - No conflict resolution UI yet; fixture conflict detection/status exists.
-- No Git import/export/publish yet.
+- No Git history import, ancestry preservation, or remote publish yet.
 - No local cache pruning yet.
 - No offline mode yet.
 - No signed production installer or tray/menu agent wrapper yet.

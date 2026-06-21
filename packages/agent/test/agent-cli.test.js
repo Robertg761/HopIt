@@ -520,6 +520,71 @@ test('import-local hydrates a real folder while skipping generated and sensitive
   assert.equal(await pathExists(path.join(state.workspace, '.env')), false)
 })
 
+test('import-local refuses to use the source folder as the managed workspace', async () => {
+  const state = await makeState()
+  const source = path.join(state.root, 'source-project')
+  await fs.mkdir(source, { recursive: true })
+  await fs.writeFile(path.join(source, 'README.md'), '# Unsafe import\n', 'utf8')
+
+  const failure = await runCliFailure('import-local', [
+    '--cloud',
+    state.cloud,
+    '--workspace',
+    source,
+    '--journal',
+    state.journal,
+    '--events',
+    state.events,
+    '--source',
+    source,
+    '--force',
+  ])
+
+  assert.match(failure.stderr, /Refusing workspace\/source overlap/)
+})
+
+test('production profile derives agent state and workspace paths outside the checkout', async () => {
+  const state = await makeState()
+  const stateRoot = path.join(state.root, 'agent-state')
+  const workspaceRoot = path.join(state.root, 'managed-workspaces')
+
+  const result = await runCli('status', [
+    '--profile',
+    'production',
+    '--codebase-id',
+    'prod-demo',
+    '--state-root',
+    stateRoot,
+    '--workspace-root',
+    workspaceRoot,
+    '--allow-local-cloud',
+  ])
+  const status = JSON.parse(result.stdout)
+
+  assert.equal(status.ok, false)
+  assert.equal(status.readiness, 'not_initialized')
+  assert.equal(status.cloud.path, path.join(stateRoot, 'cloud', 'prod-demo.json'))
+  assert.equal(status.workspace.path, path.join(workspaceRoot, 'prod-demo'))
+  assert.equal(status.journal.path, path.join(stateRoot, 'journal', 'prod-demo.ndjson'))
+  assert.equal(status.events.path, path.join(stateRoot, 'events', 'prod-demo.ndjson'))
+})
+
+test('production profile refuses local JSON cloud unless explicitly allowed', async () => {
+  const state = await makeState()
+  const failure = await runCliFailure('status', [
+    '--profile',
+    'production',
+    '--codebase-id',
+    'prod-demo',
+    '--state-root',
+    path.join(state.root, 'agent-state'),
+    '--workspace-root',
+    path.join(state.root, 'managed-workspaces'),
+  ])
+
+  assert.match(failure.stderr, /Production profile requires --convex-url/)
+})
+
 test('CLI exposes product-facing command aliases', async () => {
   const state = await makeState()
   const source = path.join(state.root, 'source-project')
@@ -1156,6 +1221,73 @@ test('review-open and merge advance Main only after explicit merge', async () =>
   assert.equal(status.merge.state, 'merged')
   assert.equal(status.merge.mainRevision, selectedRevision)
   assert.equal(status.events.lastChangeSetMerged.detail.mainRevision, selectedRevision)
+})
+
+test('export writes a clean Git repo and omits owner-private files by default', async () => {
+  const state = await makeState()
+  await runCli('init', stateArgs(state))
+  const output = path.join(state.root, 'git-export')
+
+  const result = await runCli('export', [...stateArgs(state), '--output', output])
+  assert.match(result.stdout, /git\.exported/)
+
+  assert.equal(await pathExists(path.join(output, 'README.md')), true)
+  assert.equal(await pathExists(path.join(output, '.private/agent-note.md')), false)
+  assert.equal(await pathExists(path.join(output, '.git')), true)
+  const commit = await execFileAsync('git', ['-C', output, 'rev-parse', 'HEAD'], { encoding: 'utf8' })
+  assert.match(commit.stdout.trim(), /^[a-f0-9]{40}$/)
+})
+
+test('export can include owner-private files only when explicitly requested', async () => {
+  const state = await makeState()
+  await runCli('init', stateArgs(state))
+  const output = path.join(state.root, 'private-git-export')
+
+  await runCli('export', [...stateArgs(state), '--output', output, '--include-private'])
+
+  assert.equal(await pathExists(path.join(output, '.private/agent-note.md')), true)
+})
+
+test('publish requires a merged change set and still omits owner-private files', async () => {
+  const state = await makeState()
+  await runCli('init', stateArgs(state))
+  const unmergedOutput = path.join(state.root, 'unmerged-publish')
+
+  const failure = await runCliFailure('publish', [...stateArgs(state), '--output', unmergedOutput])
+  assert.match(failure.stderr, /requires the selected active change set/)
+
+  await runCli('review-open', stateArgs(state))
+  await runCli('merge', stateArgs(state))
+  const output = path.join(state.root, 'merged-publish')
+  await runCli('publish', [...stateArgs(state), '--output', output])
+
+  assert.equal(await pathExists(path.join(output, 'README.md')), true)
+  assert.equal(await pathExists(path.join(output, '.private/agent-note.md')), false)
+})
+
+test('export refuses to write inside the managed workspace', async () => {
+  const state = await makeState()
+  await runCli('init', stateArgs(state))
+  await runCli('hydrate', stateArgs(state))
+
+  const failure = await runCliFailure('export', [
+    ...stateArgs(state),
+    '--output',
+    path.join(state.workspace, 'git-export'),
+  ])
+
+  assert.match(failure.stderr, /managed workspace/)
+})
+
+test('validate rejects graph scope mismatches that could leak .private files', async () => {
+  const state = await makeState()
+  await runCli('init', stateArgs(state))
+  const cloud = await readJson(state.cloud)
+  cloud.files['.private/agent-note.md'].scope = 'shared'
+  await writeJson(state.cloud, cloud)
+
+  const failure = await runCliFailure('validate', stateArgs(state))
+  assert.match(failure.stderr, /scope mismatch/)
 })
 
 test('recover surfaces stale file revision as reviewable conflict state', async () => {

@@ -80,6 +80,10 @@ HOPIT_CODEBASE_ID=hopit
 HOPIT_AGENT_TOKEN=replace-with-a-long-random-secret
 HOPIT_CONVEX_URL=https://your-convex-deployment.convex.cloud
 NEXT_PUBLIC_CONVEX_URL=https://your-convex-deployment.convex.cloud
+HOPIT_DASHBOARD_USERNAME=hopit
+HOPIT_DASHBOARD_PASSWORD=replace-with-a-long-random-dashboard-password
+HOPIT_AGENT_STATE_ROOT=/Users/you/Library/Application Support/HopIt/Agent
+HOPIT_WORKSPACE_ROOT=/Users/you/HopIt Workspaces
 ```
 
 Start Convex locally and link the project with:
@@ -100,7 +104,28 @@ Import a real local project into the Convex backend with:
 npm exec -- hop import --source /path/to/project --codebase-id hopit --convex-url "$HOPIT_CONVEX_URL" --agent-token "$HOPIT_AGENT_TOKEN" --force
 ```
 
-For production hosting, deploy the Next.js app to Vercel and set `HOPIT_CODEBASE_ID`, `HOPIT_AGENT_TOKEN`, `HOPIT_CONVEX_URL`, and `NEXT_PUBLIC_CONVEX_URL` as Vercel environment variables. The hosted dashboard reads from Convex through `/api/agent/status`; local workspace commands still run through the local HopIt agent on your machine.
+For production hosting, deploy the Next.js app to Vercel and set `HOPIT_CODEBASE_ID`, `HOPIT_AGENT_TOKEN`, `HOPIT_CONVEX_URL`, `NEXT_PUBLIC_CONVEX_URL`, `HOPIT_DASHBOARD_USERNAME`, and `HOPIT_DASHBOARD_PASSWORD` as Vercel environment variables. The hosted dashboard reads from Convex through `/api/agent/status`; local workspace commands still run through the local HopIt agent on your machine and are refused on Vercel.
+
+Validate production configuration with:
+
+```bash
+npm run check:production-config
+```
+
+Run the local agent with production-profile paths outside the source checkout:
+
+```bash
+npm exec -- hop service start --profile production --codebase-id "$HOPIT_CODEBASE_ID"
+```
+
+Export or publish a clean Git escape hatch with:
+
+```bash
+npm exec -- hop export --profile production --codebase-id "$HOPIT_CODEBASE_ID" --output /path/to/export --force
+npm exec -- hop publish --profile production --codebase-id "$HOPIT_CODEBASE_ID" --output /path/to/publish --force
+```
+
+For the full one-person production setup, see [docs/personal-production.md](docs/personal-production.md).
 
 Import a real local project into HopIt's managed workspace state with:
 
@@ -149,5 +174,6 @@ packages/
 docs/
   agent-architecture.md  local agent architecture and read/write acknowledgement flow
   mvp-plan.md  first-version product and architecture plan
+  personal-production.md  one-person production setup and dogfood runbook
   progress.md  current milestone progress, evidence, and next work queue
 ```

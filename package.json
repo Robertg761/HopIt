@@ -11,6 +11,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
+    "check:production-config": "node scripts/check-production-config.mjs",
     "package:hop": "node scripts/package-hop.mjs",
     "convex:dev": "convex dev",
     "convex:deploy": "convex deploy",

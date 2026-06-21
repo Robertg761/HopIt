@@ -35,6 +35,8 @@ export type AgentStatusSnapshot = {
   mergeState: string
   conflictState: string
   remoteUpdateState: string
+  commandsAvailable: boolean
+  backend: 'local-agent' | 'convex' | 'unknown'
   files: AgentFile[]
   events: AgentEvent[]
   rawUpdatedAt: string | null
@@ -55,6 +57,11 @@ type RawAgentResponse = {
   status?: RawAgentStatus | null
   cloud?: RawCloudResponse | null
   events?: RawEventsResponse | null
+  capabilities?: {
+    backend?: string
+    hosted?: boolean
+    commands?: boolean
+  }
   error?: {
     code?: string
     message?: string
@@ -177,6 +184,8 @@ export function offlineAgentStatus(reason = 'Start the local HopIt agent status 
     mergeState: 'Unavailable',
     conflictState: 'Unavailable',
     remoteUpdateState: 'Unavailable',
+    commandsAvailable: false,
+    backend: 'unknown',
     files: [],
     events: [
       {
@@ -217,6 +226,7 @@ export function mapAgentStatusResponse(response: unknown): AgentStatusSnapshot {
   const events = wrappedResponse?.events ?? status.events
   const recentEvents = events?.recent ?? []
   const remoteUpdateState = status.remoteUpdate?.state ?? (events?.lastRemoteUpdate ? 'updated' : 'idle')
+  const backend = backendName(wrappedResponse?.capabilities?.backend)
 
   return {
     id: status.codebaseName ? `${status.codebaseName}-agent` : 'local-hopit-agent',
@@ -247,6 +257,8 @@ export function mapAgentStatusResponse(response: unknown): AgentStatusSnapshot {
     mergeState: status.merge?.state ?? 'unmerged',
     conflictState,
     remoteUpdateState,
+    commandsAvailable: Boolean(wrappedResponse?.capabilities?.commands),
+    backend,
     files: mapCloudFiles(wrappedResponse?.cloud),
     events: mapRecentEvents(recentEvents),
     rawUpdatedAt: status.generatedAt ?? null,
@@ -267,6 +279,11 @@ function mapCloudFiles(cloud: RawCloudResponse | null | undefined): AgentFile[] 
       hash: typeof file.hash === 'string' ? file.hash : null,
     }))
     .sort((a, b) => a.path.localeCompare(b.path))
+}
+
+function backendName(value: string | undefined): AgentStatusSnapshot['backend'] {
+  if (value === 'local-agent' || value === 'convex') return value
+  return 'unknown'
 }
 
 function fileScope(scope: string | undefined): AgentFile['scope'] {

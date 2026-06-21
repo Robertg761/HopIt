@@ -4,6 +4,7 @@ import { spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import { constants, createWriteStream } from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { build } from 'esbuild'
@@ -176,8 +177,11 @@ async function writeReadme() {
 
 Run:
   ./bin/hop help
-  ./bin/hop import --source /path/to/project --force
-  ./bin/hop serve
+  ./bin/hop import --profile production --source /path/to/project --codebase-id my-project --force
+  ./bin/hop service start --profile production --codebase-id my-project
+  ./bin/hop service status --profile production --codebase-id my-project
+  ./bin/hop export --output /path/to/export
+  ./bin/hop publish --output /path/to/publish
 
 This package includes its own Node runtime, so Node and npm are not required on
 the target machine. It is not signed or notarized yet.
@@ -217,13 +221,42 @@ function readPackageJson() {
 
 async function verifyRelease() {
   const launcherPath = path.join(binRoot, target.launcherName)
-  const result = spawnSync(launcherPath, ['help'], {
+  const helpResult = spawnSync(launcherPath, ['help'], {
     cwd: repoRoot,
     encoding: 'utf8',
   })
 
-  if (result.status !== 0 || !result.stdout.includes('hop - HopIt local workspace agent')) {
-    throw new Error(`Packaged hop verification failed: ${result.stderr || result.stdout}`)
+  if (helpResult.status !== 0 || !helpResult.stdout.includes('hop - HopIt local workspace agent')) {
+    throw new Error(`Packaged hop help verification failed: ${helpResult.stderr || helpResult.stdout}`)
+  }
+
+  const smokeRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hop-package-smoke-'))
+  const statusResult = spawnSync(
+    launcherPath,
+    [
+      'status',
+      '--profile',
+      'production',
+      '--codebase-id',
+      'package-smoke',
+      '--state-root',
+      path.join(smokeRoot, 'state'),
+      '--workspace-root',
+      path.join(smokeRoot, 'workspaces'),
+      '--allow-local-cloud',
+    ],
+    {
+      cwd: smokeRoot,
+      encoding: 'utf8',
+    },
+  )
+
+  if (
+    statusResult.status !== 0 ||
+    !statusResult.stdout.includes('"readiness": "not_initialized"') ||
+    !statusResult.stdout.includes('"ok": false')
+  ) {
+    throw new Error(`Packaged hop status verification failed: ${statusResult.stderr || statusResult.stdout}`)
   }
 }
 

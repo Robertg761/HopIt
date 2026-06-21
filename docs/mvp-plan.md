@@ -138,9 +138,9 @@ Current spike:
 
 Current next work:
 
-1. Move into Git compatibility by importing/exporting/publishing snapshots without leaking `.private/` owner-only content.
+1. Extend the safe local Git export/publish path into history import, ancestry preservation, historical snapshot export, and remote publish.
 2. Keep the live UI status adapter aligned with the local status server and Convex dashboard shapes.
-3. Add merge records/history and schema validation before treating the fixture graph as a durable product contract.
+3. Add merge records/history before treating the fixture graph as a durable product contract.
 
 ### Milestone 3: Recovery And Watch Loop
 
@@ -183,9 +183,10 @@ Current next work:
 ### Milestone 7: Git Compatibility
 
 - Import an existing Git repository into the cloud file graph.
-- Export a workspace snapshot to a Git commit.
-- Publish Main or a selected merged snapshot as Git history when the user chooses to publish.
+- Export a workspace snapshot to a Git commit. The current skeleton can export the selected graph state to a clean Git repo.
+- Publish Main or a selected merged snapshot as Git history when the user chooses to publish. The current skeleton can publish the reviewed and merged selected active change set to a clean Git repo.
 - Preserve commit ancestry where possible.
+- Never leak `.private/` owner-only content during publish.
 - Keep Git out of the everyday continuity model; no user-managed Git-style branch, fork, or worktree product surfaces in v1. Automatic active change sets are a HopIt product concept, not Git branch management.
 
 ## Deliberate Non-Goals For V1

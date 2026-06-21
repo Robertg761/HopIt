@@ -1,9 +1,11 @@
 #!/usr/bin/env node
 
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { existsSync, watch } from 'node:fs'
 import fs from 'node:fs/promises'
 import { createServer } from 'node:http'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ConvexHttpClient } from 'convex/browser'
@@ -18,6 +20,7 @@ const defaultOptions = {
   workspace: '.hopit-agent/workspaces/hopit-core',
   journal: '.hopit-agent/journal.ndjson',
   events: '.hopit-agent/events.ndjson',
+  pid: '.hopit-agent/hopit.pid',
   host: '127.0.0.1',
   port: '4785',
 }
@@ -45,8 +48,11 @@ class ConflictError extends Error {
 }
 
 async function main() {
-  const [rawCommand = 'help', ...args] = process.argv.slice(2)
+  const [rawCommand = 'help', ...rawArgs] = process.argv.slice(2)
   const command = normalizeCommand(rawCommand)
+  const args = [...rawArgs]
+  const serviceAction =
+    command === 'service' && args[0] && !args[0].startsWith('--') ? args.shift() : 'status'
   const options = parseOptions(args)
 
   if (command === 'init') {
@@ -90,6 +96,31 @@ async function main() {
     return
   }
 
+  if (command === 'export-git') {
+    await exportGitSnapshot(options, { requireMerged: false })
+    return
+  }
+
+  if (command === 'publish') {
+    await exportGitSnapshot(options, { requireMerged: true })
+    return
+  }
+
+  if (command === 'validate') {
+    await validateCloud(options)
+    return
+  }
+
+  if (command === 'service') {
+    await runServiceCommand(serviceAction, options)
+    return
+  }
+
+  if (command === 'service-run') {
+    await runServiceProcess(options)
+    return
+  }
+
   if (command === 'watch') {
     await watchWorkspace(options)
     return
@@ -121,6 +152,7 @@ function normalizeCommand(command) {
     import: 'import-local',
     sync: 'sync-once',
     review: 'review-open',
+    export: 'export-git',
     serve: 'status-server',
     server: 'status-server',
   }
@@ -130,14 +162,17 @@ function normalizeCommand(command) {
 
 function parseOptions(args) {
   const options = { ...defaultOptions }
+  const provided = new Set()
+  const booleanOptions = new Set(['force', 'allow-unsafe-workspace', 'allow-local-cloud', 'include-private'])
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]
     if (!arg.startsWith('--')) continue
 
     const key = arg.slice(2)
-    if (key === 'force') {
-      options.force = true
+    if (booleanOptions.has(key)) {
+      options[key] = true
+      provided.add(key)
       continue
     }
 
@@ -146,10 +181,64 @@ function parseOptions(args) {
       throw new Error(`Missing value for --${key}`)
     }
     options[key] = value
+    provided.add(key)
     i += 1
   }
 
+  return applyRuntimeDefaults(options, provided)
+}
+
+function applyRuntimeDefaults(options, provided) {
+  const profile = options.profile ?? process.env.HOPIT_PROFILE ?? 'development'
+  const codebaseId = options['codebase-id'] ?? process.env.HOPIT_CODEBASE_ID ?? 'hopit'
+  const productionProfile = profile === 'production'
+
+  options.profile = profile
+  if (!provided.has('codebase-id') && process.env.HOPIT_CODEBASE_ID) {
+    options['codebase-id'] = process.env.HOPIT_CODEBASE_ID
+  }
+
+  if (productionProfile) {
+    options['codebase-id'] = codebaseId
+    const stateRoot = options['state-root'] ?? process.env.HOPIT_AGENT_STATE_ROOT ?? defaultAgentStateRoot()
+    const workspaceRoot = options['workspace-root'] ?? process.env.HOPIT_WORKSPACE_ROOT ?? defaultWorkspaceRoot()
+    options['state-root'] = stateRoot
+    options['workspace-root'] = workspaceRoot
+
+    if (!provided.has('cloud')) {
+      options.cloud = path.join(stateRoot, 'cloud', `${codebaseId}.json`)
+    }
+    if (!provided.has('workspace')) {
+      options.workspace = path.join(workspaceRoot, codebaseId)
+    }
+    if (!provided.has('journal')) {
+      options.journal = path.join(stateRoot, 'journal', `${codebaseId}.ndjson`)
+    }
+    if (!provided.has('events')) {
+      options.events = path.join(stateRoot, 'events', `${codebaseId}.ndjson`)
+    }
+    if (!provided.has('pid')) {
+      options.pid = path.join(stateRoot, 'run', `${codebaseId}.pid`)
+    }
+  }
+
   return options
+}
+
+function defaultAgentStateRoot() {
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'HopIt', 'Agent')
+  }
+
+  if (process.platform === 'win32') {
+    return path.join(process.env.LOCALAPPDATA ?? path.join(os.homedir(), 'AppData', 'Local'), 'HopIt', 'Agent')
+  }
+
+  return path.join(process.env.XDG_STATE_HOME ?? path.join(os.homedir(), '.local', 'state'), 'hopit', 'agent')
+}
+
+function defaultWorkspaceRoot() {
+  return path.join(os.homedir(), 'HopIt Workspaces')
 }
 
 async function initCloud(options) {
@@ -180,6 +269,7 @@ async function importLocalProject(options) {
   if (!stat.isDirectory()) {
     throw new Error(`Import source is not a directory: ${source}`)
   }
+  await assertWorkspacePathSafe(options, { source })
 
   const cloudService = createCloudGraphService(options)
   if ((await cloudService.exists()) && !options.force) {
@@ -261,6 +351,7 @@ async function importLocalProject(options) {
 }
 
 async function hydrateWorkspace(options) {
+  await assertWorkspacePathSafe(options)
   const cloudService = createCloudGraphService(options)
   const cloud = await cloudService.readVisibleGraph(visibilityRequestFromOptions(options))
   const requester = summarizeRequester(cloud.visibilityContext)
@@ -268,7 +359,7 @@ async function hydrateWorkspace(options) {
 
   for (const [relativePath, file] of Object.entries(cloud.files)) {
     const scope = scopeForPath(relativePath)
-    const absolutePath = path.join(options.workspace, relativePath)
+    const absolutePath = workspaceFilePath(options.workspace, relativePath)
     await fs.mkdir(path.dirname(absolutePath), { recursive: true })
     await fs.writeFile(absolutePath, file.content, 'utf8')
     await emit(options, 'file.hydrated', {
@@ -293,6 +384,7 @@ async function hydrateWorkspace(options) {
 }
 
 async function refreshWorkspace(options) {
+  await assertWorkspacePathSafe(options)
   const cloudService = createCloudGraphService(options)
   const visibilityRequest = visibilityRequestFromOptions(options)
   const cloud = await cloudService.readVisibleGraph(visibilityRequest)
@@ -374,7 +466,7 @@ async function materializeCloudToWorkspace(options, cloud) {
     }
 
     const content = file.content
-    const absolutePath = path.join(options.workspace, relativePath)
+    const absolutePath = workspaceFilePath(options.workspace, relativePath)
     await fs.mkdir(path.dirname(absolutePath), { recursive: true })
 
     if (diskFiles[relativePath] === content) {
@@ -390,7 +482,7 @@ async function materializeCloudToWorkspace(options, cloud) {
   for (const relativePath of Object.keys(diskFiles)) {
     if (cloudPaths.has(relativePath)) continue
 
-    await fs.rm(path.join(options.workspace, relativePath), { force: true })
+    await fs.rm(workspaceFilePath(options.workspace, relativePath), { force: true })
     await removeEmptyAncestorDirectories(options.workspace, path.dirname(relativePath))
     deletedPaths.push(relativePath)
     deleted += 1
@@ -674,6 +766,7 @@ async function mergeChangeSet(options) {
 }
 
 async function watchWorkspace(options) {
+  await assertWorkspacePathSafe(options)
   const cloudService = createCloudGraphService(options)
   if (!(await cloudService.exists())) await initCloud(options)
   const recovery = await recoverJournal(options)
@@ -834,6 +927,7 @@ async function snapshotWorkspace(root) {
     for (const entry of entries) {
       const absolutePath = path.join(dir, entry.name)
       if (entry.isDirectory()) {
+        if (entry.name === '.git') continue
         await walk(absolutePath)
         continue
       }
@@ -906,6 +1000,170 @@ async function serveStatus(options) {
   console.log('Endpoints: /status, /events, /journal, /cloud')
 }
 
+async function runServiceCommand(action, options) {
+  if (action === 'start') {
+    await startService(options)
+    return
+  }
+  if (action === 'stop') {
+    await stopService(options)
+    return
+  }
+  if (action === 'restart') {
+    await stopService(options, { missingOk: true })
+    await startService(options)
+    return
+  }
+  if (action === 'status') {
+    console.log(JSON.stringify(await serviceStatus(options), null, 2))
+    return
+  }
+
+  throw new Error(`Unknown service action: ${action}`)
+}
+
+async function runServiceProcess(options) {
+  await watchWorkspace(options)
+  await serveStatus(options)
+}
+
+async function startService(options) {
+  await assertWorkspacePathSafe(options)
+  const existing = await serviceStatus(options)
+  if (existing.running) {
+    throw new Error(`HopIt service is already running with pid ${existing.pid}.`)
+  }
+
+  const pidPath = path.resolve(options.pid)
+  await fs.mkdir(path.dirname(pidPath), { recursive: true })
+  const logPath = path.join(path.dirname(pidPath), `${options['codebase-id'] ?? 'hopit'}.log`)
+  const logHandle = await fs.open(logPath, 'a')
+  const childEnv = {
+    ...process.env,
+  }
+  const token = agentTokenFromOptions(options)
+  if (token) childEnv.HOPIT_AGENT_TOKEN = token
+
+  const child = spawn(process.execPath, [__filename, 'service-run', ...runtimeArgsFromOptions(options)], {
+    cwd: process.cwd(),
+    detached: true,
+    env: childEnv,
+    stdio: ['ignore', logHandle.fd, logHandle.fd],
+  })
+  child.unref()
+  await logHandle.close()
+
+  const record = {
+    pid: child.pid,
+    startedAt: new Date().toISOString(),
+    codebaseId: options['codebase-id'] ?? null,
+    workspace: path.resolve(options.workspace),
+    statusUrl: `http://${options.host}:${options.port}/status`,
+    logPath,
+  }
+  await writeJson(pidPath, record)
+  console.log(JSON.stringify({ ok: true, ...record, pidPath }, null, 2))
+}
+
+async function stopService(options, stopOptions = {}) {
+  const pidPath = path.resolve(options.pid)
+  const record = await readServiceRecord(pidPath)
+  if (!record?.pid) {
+    if (stopOptions.missingOk) return
+    throw new Error(`No HopIt service pid file found at ${pidPath}.`)
+  }
+
+  if (isProcessRunning(record.pid)) {
+    process.kill(record.pid, 'SIGTERM')
+    await waitForProcessExit(record.pid, 2500)
+  }
+  await fs.rm(pidPath, { force: true })
+  console.log(JSON.stringify({ ok: true, stoppedPid: record.pid, pidPath }, null, 2))
+}
+
+async function serviceStatus(options) {
+  const pidPath = path.resolve(options.pid)
+  const record = await readServiceRecord(pidPath)
+  const pid = record?.pid ?? null
+  const running = typeof pid === 'number' && isProcessRunning(pid)
+  let agent = null
+  let error = null
+
+  if (running) {
+    let timeout
+    try {
+      const controller = new AbortController()
+      timeout = setTimeout(() => controller.abort(), 1000)
+      const response = await fetch(`http://${options.host}:${options.port}/status`, {
+        cache: 'no-store',
+        signal: controller.signal,
+      })
+      agent = response.ok ? await response.json() : null
+      if (!response.ok) error = `status endpoint returned ${response.status}`
+    } catch (statusError) {
+      error = statusError instanceof Error ? statusError.message : 'status endpoint unavailable'
+    } finally {
+      if (timeout) clearTimeout(timeout)
+    }
+  }
+
+  return {
+    ok: running && !error,
+    running,
+    pid,
+    pidPath,
+    statusUrl: `http://${options.host}:${options.port}/status`,
+    record,
+    agent,
+    error,
+  }
+}
+
+async function readServiceRecord(pidPath) {
+  if (!existsSync(pidPath)) return null
+  return readJson(pidPath)
+}
+
+function isProcessRunning(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function waitForProcessExit(pid, timeoutMs) {
+  const startedAt = Date.now()
+  while (Date.now() - startedAt < timeoutMs) {
+    if (!isProcessRunning(pid)) return
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+}
+
+function runtimeArgsFromOptions(options) {
+  const entries = [
+    ['--profile', options.profile],
+    ['--codebase-id', options['codebase-id']],
+    ['--cloud', options.cloud],
+    ['--workspace', options.workspace],
+    ['--journal', options.journal],
+    ['--events', options.events],
+    ['--pid', options.pid],
+    ['--host', options.host],
+    ['--port', options.port],
+    ['--convex-url', convexUrlFromOptions(options)],
+    ['--state-root', options['state-root']],
+    ['--workspace-root', options['workspace-root']],
+  ]
+  const args = []
+  for (const [name, value] of entries) {
+    if (!value) continue
+    args.push(name, value)
+  }
+  return args
+}
+
 async function runDemo(options) {
   const demoOptions = {
     ...options,
@@ -951,6 +1209,130 @@ async function runDemo(options) {
   if (!saved || !privateSaved) {
     throw new Error('Demo verification failed: cloud did not receive the shared and private edits.')
   }
+}
+
+async function exportGitSnapshot(options, exportOptions) {
+  if (!options.output) {
+    throw new Error('Missing --output <path> for Git export/publish.')
+  }
+
+  const cloudService = createCloudGraphService(options)
+  const cloud = await cloudService.readGraph()
+  validateCloudGraphContract(cloud)
+
+  if (exportOptions.requireMerged && cloud.selectedState?.mergeState !== 'merged') {
+    throw new Error('Publish requires the selected active change set to be reviewed and merged first.')
+  }
+  if (cloud.selectedState?.conflictState === 'conflicted') {
+    throw new Error('Cannot export or publish a conflicted change set.')
+  }
+
+  const output = path.resolve(options.output)
+  await assertExportOutputSafe(output, options)
+
+  const files = {}
+  const omittedPaths = []
+  for (const [relativePath, file] of Object.entries(cloud.files ?? {})) {
+    assertSafeCloudPath(relativePath)
+    const isOwnerPrivate = scopeForPath(relativePath) === fileScope.ownerPrivate || file.scope === fileScope.ownerPrivate
+    if (isOwnerPrivate && (exportOptions.requireMerged || !options['include-private'])) {
+      omittedPaths.push(relativePath)
+      continue
+    }
+    files[relativePath] = file
+  }
+
+  await prepareCleanOutputDirectory(output, options)
+  for (const [relativePath, file] of Object.entries(files)) {
+    if (typeof file.content !== 'string') {
+      throw new Error(`Cannot export non-text file content for ${relativePath}.`)
+    }
+    const absolutePath = workspaceFilePath(output, relativePath)
+    await fs.mkdir(path.dirname(absolutePath), { recursive: true })
+    await fs.writeFile(absolutePath, file.content, 'utf8')
+  }
+
+  runGit(['init'], output)
+  runGit(['config', 'user.name', 'HopIt'], output)
+  runGit(['config', 'user.email', 'agent@hopit.local'], output)
+  runGit(['add', '.'], output)
+  const message =
+    options.message ??
+    `${exportOptions.requireMerged ? 'Publish' : 'Export'} ${cloud.codebase?.name ?? cloud.codebase?.id ?? 'HopIt'} revision ${cloud.revision}`
+  runGit(['commit', '--allow-empty', '-m', message], output)
+  const commit = runGit(['rev-parse', 'HEAD'], output).stdout.trim()
+
+  const result = {
+    ok: true,
+    command: exportOptions.requireMerged ? 'publish' : 'export',
+    output,
+    commit,
+    files: Object.keys(files).length,
+    omittedScopeCounts: countPathScopes(omittedPaths),
+    omittedPrivatePaths: omittedPaths.length,
+    codebaseId: cloud.codebase?.id ?? null,
+    revision: cloud.revision,
+    mainRevision: cloud.main?.revision ?? null,
+    selectedStateId: cloud.selectedState?.id ?? null,
+    selectedStateRevision: cloud.selectedState?.revision ?? null,
+  }
+
+  await emit(options, exportOptions.requireMerged ? 'git.published' : 'git.exported', result)
+  console.log(JSON.stringify(result, null, 2))
+}
+
+async function validateCloud(options) {
+  const cloudService = createCloudGraphService(options)
+  const cloud = await cloudService.readGraph()
+  validateCloudGraphContract(cloud)
+  const result = {
+    ok: true,
+    service: cloudService.type,
+    location: cloudService.location,
+    contract: summarizeGraphContract(cloud),
+    fileCount: Object.keys(cloud.files ?? {}).length,
+    scopeCounts: countCloudScopes(cloud),
+  }
+  console.log(JSON.stringify(result, null, 2))
+}
+
+async function assertExportOutputSafe(output, options) {
+  const workspace = path.resolve(options.workspace)
+  const unsafeRoots = new Set([path.parse(output).root, os.homedir(), process.cwd()])
+  if (unsafeRoots.has(output)) {
+    throw new Error(`Refusing to export into unsafe output path: ${output}`)
+  }
+  if (pathsOverlap(output, workspace)) {
+    throw new Error(`Refusing to export into or around the managed workspace: ${output}`)
+  }
+}
+
+async function prepareCleanOutputDirectory(output, options) {
+  if (!existsSync(output)) {
+    await fs.mkdir(output, { recursive: true })
+    return
+  }
+
+  const entries = await fs.readdir(output)
+  if (entries.length > 0 && !options.force) {
+    throw new Error(`Export output is not empty: ${output}. Use --force to replace it.`)
+  }
+
+  await fs.rm(output, { recursive: true, force: true })
+  await fs.mkdir(output, { recursive: true })
+}
+
+function runGit(args, cwd) {
+  const result = spawnSync('git', args, {
+    cwd,
+    encoding: 'utf8',
+  })
+
+  if (result.status !== 0) {
+    throw new Error(`git ${args.join(' ')} failed: ${result.stderr || result.stdout}`)
+  }
+
+  return result
 }
 
 async function readAgentState(options) {
@@ -1015,6 +1397,8 @@ async function readAgentState(options) {
   const acknowledgedJournalEntries = journalState.entries.filter(
     (entry) => entry.recoveryStatus === 'acknowledged',
   )
+  const workspaceExists = existsSync(options.workspace)
+  const initialized = Boolean(cloud) && workspaceExists
 
   const cloudSummary = {
     path: cloudService.location ?? path.resolve(options.cloud),
@@ -1126,12 +1510,14 @@ async function readAgentState(options) {
   return {
     status: {
       ok:
+        initialized &&
         failedJournalEntries.length === 0 &&
         syncHealth.state !== 'failed' &&
         refreshHealth.state !== 'blocked' &&
         !watchHealth.state.endsWith('degraded') &&
         watchHealth.state !== 'blocked',
       generatedAt: new Date().toISOString(),
+      readiness: initialized ? 'ready' : 'not_initialized',
       mode: workspaceMode,
       codebaseId: cloudSummary.codebase?.id ?? null,
       codebaseName: cloudSummary.codebase?.name ?? null,
@@ -1162,9 +1548,9 @@ async function readAgentState(options) {
         state: cloudSummary.selectedState?.conflictState ?? 'none',
         detail: cloudSummary.selectedState?.conflict ?? null,
       },
-      workspace: {
-        path: path.resolve(options.workspace),
-        exists: existsSync(options.workspace),
+	      workspace: {
+	        path: path.resolve(options.workspace),
+	        exists: workspaceExists,
         adapter: workspaceMode.adapter,
         cacheMode: workspaceMode.cacheMode,
       },
@@ -1247,7 +1633,7 @@ async function prepareRecovery(cloud, entry, workspace) {
     throw new Error('workspace_missing')
   }
 
-  const absolutePath = path.join(workspace, entry.path)
+  const absolutePath = workspaceFilePath(workspace, entry.path)
   if (!existsSync(absolutePath)) {
     throw new Error('workspace_file_missing')
   }
@@ -1559,6 +1945,69 @@ function visibleRevisionFromEvent(event) {
   return null
 }
 
+async function assertWorkspacePathSafe(options, context = {}) {
+  if (options['allow-unsafe-workspace']) return
+
+  const workspace = path.resolve(options.workspace)
+  const unsafeRoots = new Set([path.parse(workspace).root, os.homedir(), process.cwd()])
+  if (unsafeRoots.has(workspace)) {
+    throw new Error(`Refusing to use unsafe workspace path: ${workspace}`)
+  }
+
+  if (context.source) {
+    const source = path.resolve(context.source)
+    if (pathsOverlap(workspace, source)) {
+      throw new Error(`Refusing workspace/source overlap: ${workspace} and ${source}`)
+    }
+  }
+
+  if (options.profile === 'production') {
+    const workspaceRoot = path.resolve(options['workspace-root'] ?? defaultWorkspaceRoot())
+    if (!isPathInside(workspace, workspaceRoot) && workspace !== workspaceRoot) {
+      throw new Error(
+        `Production profile workspace must live under ${workspaceRoot}. Use --workspace-root or --allow-unsafe-workspace to override.`,
+      )
+    }
+  }
+}
+
+function workspaceFilePath(workspace, relativePath) {
+  const cloudPath = assertSafeCloudPath(relativePath)
+  const root = path.resolve(workspace)
+  const absolutePath = path.resolve(root, cloudPath)
+
+  if (!isPathInside(absolutePath, root) && absolutePath !== root) {
+    throw new Error(`Refusing workspace path escape: ${relativePath}`)
+  }
+
+  return absolutePath
+}
+
+function assertSafeCloudPath(relativePath) {
+  if (typeof relativePath !== 'string' || relativePath.length === 0) {
+    throw new Error('Cloud path must be a non-empty string.')
+  }
+  if (path.isAbsolute(relativePath)) {
+    throw new Error(`Cloud path must be relative: ${relativePath}`)
+  }
+
+  const normalized = path.posix.normalize(relativePath)
+  if (normalized === '.' || normalized.startsWith('../') || normalized === '..') {
+    throw new Error(`Cloud path must stay inside the workspace: ${relativePath}`)
+  }
+
+  return normalized
+}
+
+function pathsOverlap(first, second) {
+  return isPathInside(first, second) || isPathInside(second, first) || path.resolve(first) === path.resolve(second)
+}
+
+function isPathInside(candidate, root) {
+  const relative = path.relative(path.resolve(root), path.resolve(candidate))
+  return Boolean(relative) && !relative.startsWith('..') && !path.isAbsolute(relative)
+}
+
 async function readWorkspaceFiles(root) {
   const result = {}
 
@@ -1665,6 +2114,7 @@ function shouldSkipImportPath(relativePath, entry) {
   if (basename.endsWith('.gif') || basename.endsWith('.webp') || basename.endsWith('.ico')) return true
   if (basename.endsWith('.pdf') || basename.endsWith('.zip') || basename.endsWith('.gz')) return true
   if (basename.endsWith('.mp3') || basename.endsWith('.mp4') || basename.endsWith('.mov')) return true
+  if (basename.endsWith('.tsbuildinfo')) return true
 
   return false
 }
@@ -1672,6 +2122,10 @@ function shouldSkipImportPath(relativePath, entry) {
 function createCloudGraphService(options) {
   if (convexUrlFromOptions(options)) {
     return new ConvexCloudGraphService(options)
+  }
+
+  if (options.profile === 'production' && !options['allow-local-cloud']) {
+    throw new Error('Production profile requires --convex-url or HOPIT_CONVEX_URL. Use --allow-local-cloud only for local dry runs.')
   }
 
   return new FixtureJsonCloudGraphService(options.cloud)
@@ -1695,7 +2149,7 @@ class FixtureJsonCloudGraphService {
   }
 
   async readGraph() {
-    return normalizeCloudGraph(await readJson(this.path))
+    return normalizeValidatedCloudGraph(await readJson(this.path))
   }
 
   async readVisibleGraph(request = {}) {
@@ -1713,7 +2167,7 @@ class FixtureJsonCloudGraphService {
   }
 
   async writeGraph(cloud) {
-    await writeJson(this.path, normalizeCloudGraph(cloud))
+    await writeJson(this.path, normalizeValidatedCloudGraph(cloud))
   }
 
   applyJournalEntry(cloud, entry, options = {}) {
@@ -1762,7 +2216,7 @@ class ConvexCloudGraphService {
     if (this.token) args.token = this.token
 
     const graph = await this.client.query(anyApi.agent.getGraph, args)
-    return graph ? normalizeCloudGraph(graph) : null
+    return graph ? normalizeValidatedCloudGraph(graph) : null
   }
 
   async readOptionalVisibleGraph(request = {}) {
@@ -1772,7 +2226,7 @@ class ConvexCloudGraphService {
   }
 
   async writeGraph(cloud) {
-    const normalized = normalizeCloudGraph(cloud)
+    const normalized = normalizeValidatedCloudGraph(cloud)
     this.codebaseId = normalized.codebase.id
     this.location = `convex:${this.codebaseId}`
     const args = { graph: normalized }
@@ -1809,7 +2263,15 @@ function withComputedMetadata(cloud) {
     file.size = Buffer.byteLength(file.content)
     file.scope = scopeForPath(relativePath)
   }
+  validateCloudGraphContract(next)
   return next
+}
+
+function normalizeValidatedCloudGraph(cloud) {
+  validateRawCloudGraphContract(cloud)
+  const normalized = normalizeCloudGraph(cloud)
+  validateCloudGraphContract(normalized)
+  return normalized
 }
 
 function normalizeCloudGraph(cloud) {
@@ -1859,6 +2321,83 @@ function normalizeCloudGraph(cloud) {
 
   normalizeCloudScopes(cloud)
   return cloud
+}
+
+function validateRawCloudGraphContract(cloud) {
+  if (!cloud || typeof cloud !== 'object') {
+    throw new Error('Cloud graph must be an object.')
+  }
+  if (cloud.files !== undefined && (!cloud.files || typeof cloud.files !== 'object' || Array.isArray(cloud.files))) {
+    throw new Error('Cloud graph files must be an object.')
+  }
+
+  for (const [relativePath, file] of Object.entries(cloud.files ?? {})) {
+    assertSafeCloudPath(relativePath)
+    if (file?.scope && file.scope !== scopeForPath(relativePath)) {
+      throw new Error(`Cloud graph scope mismatch for ${relativePath}: expected ${scopeForPath(relativePath)}, got ${file.scope}.`)
+    }
+  }
+}
+
+function validateCloudGraphContract(cloud) {
+  const errors = []
+  const visibilityValues = new Set(['private', 'team-visible', 'review-visible'])
+  const reviewStates = new Set(['not-open', 'open', 'merged'])
+  const mergeStates = new Set(['unmerged', 'merged'])
+  const conflictStates = new Set(['none', 'conflicted'])
+
+  if (cloud.schemaVersion !== 2) errors.push('schemaVersion must be 2.')
+  if (!isNonEmptyString(cloud.codebase?.id)) errors.push('codebase.id is required.')
+  if (!isNonEmptyString(cloud.codebase?.name)) errors.push('codebase.name is required.')
+  if (!isNonEmptyString(cloud.codebase?.ownerId)) errors.push('codebase.ownerId is required.')
+  if (!isNonEmptyString(cloud.owner?.id)) errors.push('owner.id is required.')
+  if (cloud.codebase?.ownerId !== cloud.owner?.id) errors.push('codebase.ownerId must match owner.id.')
+  if (!isNonEmptyString(cloud.main?.id)) errors.push('main.id is required.')
+  if (!Number.isInteger(cloud.main?.revision)) errors.push('main.revision must be an integer.')
+  if (!isNonEmptyString(cloud.selectedState?.type)) errors.push('selectedState.type is required.')
+  if (cloud.selectedState?.type !== 'active-change-set' && cloud.selectedState?.type !== 'main') {
+    errors.push('selectedState.type must be active-change-set or main.')
+  }
+  if (!isNonEmptyString(cloud.selectedState?.id)) errors.push('selectedState.id is required.')
+  if (!Number.isInteger(cloud.selectedState?.revision)) errors.push('selectedState.revision must be an integer.')
+  if (!Number.isInteger(cloud.revision)) errors.push('revision must be an integer.')
+  if (!visibilityValues.has(cloud.visibility?.effective)) errors.push('visibility.effective is invalid.')
+  if (!visibilityValues.has(cloud.selectedState?.effectiveVisibility)) {
+    errors.push('selectedState.effectiveVisibility is invalid.')
+  }
+  if (!reviewStates.has(cloud.selectedState?.reviewState)) errors.push('selectedState.reviewState is invalid.')
+  if (!mergeStates.has(cloud.selectedState?.mergeState)) errors.push('selectedState.mergeState is invalid.')
+  if (!conflictStates.has(cloud.selectedState?.conflictState)) errors.push('selectedState.conflictState is invalid.')
+  if (!isNonEmptyString(cloud.session?.id)) errors.push('session.id is required.')
+  if (!isNonEmptyString(cloud.session?.deviceName)) errors.push('session.deviceName is required.')
+
+  for (const [relativePath, file] of Object.entries(cloud.files ?? {})) {
+    try {
+      assertSafeCloudPath(relativePath)
+    } catch (error) {
+      errors.push(error.message)
+    }
+    if (!file || typeof file !== 'object') errors.push(`${relativePath} must be a file object.`)
+    if (typeof file?.content !== 'string') errors.push(`${relativePath}.content must be a string.`)
+    if (file?.scope !== scopeForPath(relativePath)) {
+      errors.push(`${relativePath}.scope must be ${scopeForPath(relativePath)}.`)
+    }
+    if (!Number.isInteger(file?.revision)) errors.push(`${relativePath}.revision must be an integer.`)
+    if (file?.hash !== undefined && file.hash !== null && typeof file.hash !== 'string') {
+      errors.push(`${relativePath}.hash must be a string when present.`)
+    }
+    if (file?.size !== undefined && file.size !== null && !Number.isInteger(file.size)) {
+      errors.push(`${relativePath}.size must be an integer when present.`)
+    }
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`Invalid HopIt cloud graph: ${errors.join(' ')}`)
+  }
+}
+
+function isNonEmptyString(value) {
+  return typeof value === 'string' && value.length > 0
 }
 
 function visibilityRequestFromOptions(options) {
@@ -2187,6 +2726,10 @@ Commands:
   recover     Replay unacknowledged journal entries into the cloud graph
   review      Open the selected active change set for review
   merge       Merge the reviewed selected change set into Main
+  export      Export the selected graph state to a clean Git repo
+  publish     Export a reviewed and merged change set to a clean Git repo
+  validate    Validate the configured cloud graph contract
+  service     Manage the local agent service: start, stop, restart, status
   watch       Hydrate and watch the workspace for edits
   status      Print read-only local agent status JSON
   serve       Serve read-only local agent status JSON over HTTP
@@ -2197,18 +2740,27 @@ Compatibility aliases:
 
 Options:
   --source <path>     Source folder for import
+  --output <path>     Output folder for Git export/publish
   --codebase-id <id>  Codebase id for import
   --codebase-name <name> Codebase display name for import
+  --profile <name>    development or production path profile
+  --state-root <path> Agent state root for production profile
+  --workspace-root <path> Managed workspace root for production profile
   --cloud <path>      Cloud graph JSON path
   --convex-url <url>  Convex deployment URL for the real cloud graph
   --agent-token <token> Agent token for Convex mutations/queries
   --workspace <path>  Managed workspace folder path
   --journal <path>    Pending write journal path
   --events <path>     Event log path
+  --pid <path>        Service pid file path
   --requester-id <id> Requester identity for visibility-filtered reads
   --session-id <id>   Requester session id for visibility-filtered reads
   --host <host>        Status server host, defaults to 127.0.0.1
   --port <port>        Status server port, defaults to 4785
+  --message <text>    Git commit message for export/publish
+  --include-private   Include .private files in export only; publish always omits them
+  --allow-unsafe-workspace Override workspace path safety checks
+  --allow-local-cloud Allow production profile to use local JSON cloud for dry runs
   --force             Overwrite the cloud graph on init
 `)
 }
