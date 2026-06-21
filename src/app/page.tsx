@@ -6,6 +6,9 @@ import { Header } from '@/components/hopit/header'
 import { StatsBar } from '@/components/hopit/stats-bar'
 import { ReposSection } from '@/components/hopit/repos-section'
 import { DriveSection } from '@/components/hopit/drive-section'
+import { CodeReviewSection } from '@/components/hopit/code-review-section'
+import { MembersInvitationsPanel } from '@/components/hopit/members-invitations-panel'
+import { CollaborationSection } from '@/components/hopit/collaboration-section'
 import { ActivityFeed } from '@/components/hopit/activity-feed'
 import { RightRail } from '@/components/hopit/right-rail'
 import { HopItLogo } from '@/components/hopit/logo'
@@ -33,6 +36,14 @@ export default function Home() {
                 <ReposSection status={agentStatus.status} />
                 <DriveSection status={agentStatus.status} />
               </div>
+
+              <CodeReviewSection status={agentStatus.status} />
+              <MembersInvitationsPanel
+                status={agentStatus.status}
+                loading={agentStatus.loading}
+                onRefreshStatus={agentStatus.refresh}
+              />
+              <CollaborationSection status={agentStatus.status} />
 
               {/* Activity + right rail */}
               <div className="grid gap-6 lg:grid-cols-3">

@@ -91,14 +91,15 @@ Optional later mode for travel or unreliable networks. The agent keeps enough lo
 
 Optional future research. A true OS filesystem mount, macFUSE backend, or RAM-only working set may become useful later for large repos or specialized workflows, but it is not the v1 default or next main milestone.
 
-## Suggested Architecture
+## Current Architecture
 
-- Web app: Next.js product shell for codebases, files, live sync state, active change sets, connected devices, recent activity, collaborators, review/merge state, and snapshots.
-- API: TypeScript service for auth, codebase metadata, change-set coordination, snapshot coordination, workspace sessions, visibility settings, review/merge actions, and realtime events.
-- Sync service: agent-facing API for file graph reads, blob hydration, active change-set write acknowledgements, cache invalidation, and conflict responses.
-- Storage: object storage for file blobs plus Postgres for metadata, permissions, device state, active change sets, visibility settings, merge records, and snapshot indexes.
-- Realtime: WebSocket or server-sent events for file changes, collaborator presence, sync status, visibility changes, review events, merge events, and device handoff.
-- Local agent: managed-folder process with auth token storage, local cache, safety journal, retry queue, and `.private/` visibility handling. Git import/export/publish can stay as later snapshot interoperability, not the everyday sync model.
+- Web app: Next.js product shell on Vercel for codebases, files, live sync state, active change sets, connected devices, recent activity, collaborators, review/merge state, and snapshots.
+- API: Next.js routes for hosted/local status and whitelisted local commands. Hosted deployments read Convex status and refuse local workspace commands.
+- Convex backend: production graph service for codebase metadata, files, agent events, graph validation, and dashboard reads.
+- Local agent: managed-folder process with auth token storage, local cache, safety journal, retry queue, service wrapper, and `.private/` visibility handling.
+- Storage today: Convex stores prototype graph metadata, file content, and events. A later production architecture may split file blobs into object storage or content-addressed blob storage when scale requires it.
+- Realtime today: polling through `/api/agent/status`. Push-style realtime remains future work for file changes, collaborator presence, sync status, visibility changes, review events, merge events, and device handoff.
+- Git interoperability: import/export/publish stays as snapshot interoperability, not the everyday sync model.
 
 The local agent contract is detailed in [Local Agent Architecture](agent-architecture.md). That document is the implementation guide for the cloud file graph, managed-folder adapter, local cache, safety journal, status API, event log, two-device simulation, and editor read/write acknowledgement flow.
 
@@ -138,9 +139,10 @@ Current spike:
 
 Current next work:
 
-1. Extend the safe local Git export/publish path into history import, ancestry preservation, historical snapshot export, and remote publish.
-2. Keep the live UI status adapter aligned with the local status server and Convex dashboard shapes.
-3. Add merge records/history before treating the fixture graph as a durable product contract.
+1. Replace product-level Basic Auth with real accounts and authenticated user identity.
+2. Add durable codebase memberships, roles, invitations, and server-side permission checks.
+3. Build the hosted code browser, diff/review/comment/history surface, then issues, projects, discussions, and releases.
+4. Keep the live UI status adapter aligned with the local status server and Convex dashboard shapes while these collaboration objects are added.
 
 ### Milestone 3: Recovery And Watch Loop
 
@@ -188,6 +190,18 @@ Current next work:
 - Preserve commit ancestry where possible.
 - Never leak `.private/` owner-only content during publish.
 - Keep Git out of the everyday continuity model; no user-managed Git-style branch, fork, or worktree product surfaces in v1. Automatic active change sets are a HopIt product concept, not Git branch management.
+
+### Milestone 8: GitHub-Lite Collaboration
+
+- Add real accounts/auth and map every user-facing request to a durable HopIt user.
+- Add codebase memberships, roles, invitations, and server-side permission checks.
+- Build a hosted web code browser for Convex-backed file graphs.
+- Add diff, review, inline comment, and merge-history records around active change sets and Main.
+- Add issues, projects, discussions, and releases as first-class codebase collaboration objects.
+- Keep local-agent service tokens separate from human user auth.
+- Keep `.private/` owner-only regardless of codebase role until a future explicit sharing model changes that.
+
+The detailed implementation sequence lives in [GitHub-Lite Collaboration Plan](github-lite-collaboration-plan.md).
 
 ## Deliberate Non-Goals For V1
 

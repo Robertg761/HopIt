@@ -1,6 +1,6 @@
 # HopIt Progress Tracker
 
-Last updated: 2026-06-20
+Last updated: 2026-06-21
 
 This tracker is the working view of what is done, what is in progress, what is next, and what is still deliberately out of scope. The roadmap source remains [MVP Plan](mvp-plan.md), and the agent contract source remains [Local Agent Architecture](agent-architecture.md). This file turns those plans into a practical implementation ledger.
 
@@ -16,17 +16,28 @@ This tracker is the working view of what is done, what is in progress, what is n
 
 ## Current Snapshot
 
-HopIt has a working local managed-folder agent spike plus a live status path into the product shell. The agent can seed a fixture-backed cloud graph, hydrate a normal folder, capture local writes, journal them durably, acknowledge them into the selected active change set, recover unacknowledged writes after restart, safely refresh a second same-owner workspace, export/publish a clean Git escape hatch, and expose local status/event/journal/cloud state.
+HopIt has a working local managed-folder agent spike plus a deployed personal production baseline. The agent can seed a cloud graph, hydrate a normal folder, capture local writes, journal them durably, acknowledge them into the selected active change set, recover unacknowledged writes after restart, safely refresh a second same-owner workspace, export/publish a clean Git escape hatch, and expose local status/event/journal/cloud state.
 
-The web app polls `/api/agent/status`. In local mode that route reads the local agent status server's status/events/cloud endpoints; when Convex is configured, it reads the Convex `agent.dashboard` query instead. The local command route can run whitelisted sync, refresh, recover, review, and merge actions against the local agent, while hosted Convex-backed deployments remain read-only for workspace commands and require dashboard authentication.
+The web app polls `/api/agent/status`. In local mode that route reads the local agent status server's status/events/cloud endpoints; in production it reads the Convex `agent.dashboard` query. The local command route can run whitelisted sync, refresh, recover, review, and merge actions against the local agent, while hosted Convex-backed deployments remain read-only for workspace commands and require dashboard authentication.
 
 Fixture-backed conflict handling is in place for stale selected-state revisions, stale file/base revisions, and stale Main revisions. Conflicts are persisted on the selected active change set, emitted as `change_set.conflict_detected`, and surfaced through status while preserving local edits for review.
+
+Current live deployment:
+
+- Vercel project: `robertg761s-projects/hopit`
+- Production URL: `https://hopit-ten.vercel.app`
+- Convex project: `robertgordon761/hopit`
+- Production Convex URL: `https://sincere-jaguar-17.convex.cloud`
+- Seeded codebase id: `hopit`
+- Seeded graph size: 58 source files
+- Production workspace: `/Users/robert/HopIt Workspaces/hopit`
 
 Current proof commands:
 
 ```bash
 npm run agent:test
 npm run lint
+npm run check:production-config
 npm run package:hop
 ```
 
@@ -34,6 +45,7 @@ Current verified result:
 
 - `npm run agent:test`: 31 passing tests.
 - `npm run lint`: passes.
+- `npm run check:production-config`: passes when `.env.local` is loaded.
 - `npm run package:hop`: builds the current macOS artifact and verifies `hop help` plus production-profile `hop status`.
 
 ## Executive Progress
@@ -43,6 +55,7 @@ Current verified result:
 | Product concept | Done | The repo has converged on cloud-native managed workspaces, active change sets, explicit Main, and `.private/` owner-only workspace scope. |
 | Web product shell | Mostly done | The prototype UI polls live local agent state through `/api/agent/status`, maps files/events/revisions/review/merge/conflict state, and can read Convex dashboard state when configured. |
 | Local managed-folder agent | Done for spike | The agent proves hydration, journaling, sync acknowledgement, recovery, watch startup gating, safe refresh, status, and same-owner continuity. |
+| Vercel/Convex production baseline | Done for personal dogfood | Vercel hosts the protected dashboard, Convex stores the seeded production graph, and the hosted API reads the graph successfully. |
 | Convex cloud graph | Mostly done | Convex functions persist graph, files, and agent events, require an agent token by default, validate graph contracts, and expose a dashboard query, but blob storage and durable user permissions are still thin. |
 | `.private/` model | Done for spike | `.private/` files are synced/versioned and classified as owner-private; they are not ignored or skipped. |
 | Safety journal | Done for spike | Pending, acknowledged, and failed entries are derived from journal/events and exposed through status. |
@@ -56,6 +69,9 @@ Current verified result:
 | Conflict handling | Done for fixture | Stale selected-state, file/base, and Main revisions become reviewable conflict state. |
 | Packaging | Mostly done | The current packager builds macOS/Linux `x64`/`arm64` tarballs with an embedded Node runtime, verifies help plus production-profile status, and now fails explicitly on unsupported Windows hosts. |
 | Git compatibility | In progress | Safe export/publish now creates clean Git repos while omitting `.private/` from publish, but ancestry preservation and remote publishing are still not started. |
+| Real accounts/auth | In progress | The repo now has Clerk sign-in routes, middleware, Convex auth config, `/api/me`, and provider-token forwarding; production still needs real Clerk env vars before Basic Auth can be retired. |
+| Permissions and invitations | In progress | Durable memberships, invitation tables, requester-aware dashboard filtering, owner claim, member management, and invite create/accept/revoke UI are in place; scoped agent-session tokens and complete permission coverage remain. |
+| Code browsing/reviews/issues/releases | In progress | The dashboard now has a read-only code-review browser slice plus issue/discussion/release UI backed by Convex; real diffs, review comments, routeable history, project-board UI, and immutable release publishing remain. |
 | Native mount/FUSE/RAM-only cache | Later | Explicitly not part of the current MVP path. |
 
 ## Milestone Tracker
@@ -555,44 +571,133 @@ Risks:
 
 ## Immediate Next Queue
 
-### 1. Git Compatibility
+The next major phase is tracked in [GitHub-Lite Collaboration Plan](github-lite-collaboration-plan.md). The detailed sub-plans are [Auth And Collaboration Plan](auth-collaboration-plan.md), [Code Browsing, Review, Comments, And History Plan](review-code-browser-plan.md), and [HopIt Work Items, Projects, Discussions, And Releases Plan](work-items-releases-plan.md). Git compatibility remains important, but the immediate product gap is now collaboration: accounts, permissions, code browsing, reviews, issues, projects, discussions, and releases.
 
-Status: `Next`
+### 1. Real Accounts And Auth
+
+Status: `In progress`
+
+Definition of done:
+
+- Hosted dashboard uses real user sign-in instead of product-level Basic Auth.
+- Convex user-facing queries and mutations resolve the requester to a durable user id.
+- Local agent service tokens remain separate from human user identity.
+- Docs cover provider setup, production env vars, local dev, and recovery.
+
+Current foundation:
+
+- Convex schema now includes `users` and `authIdentities`.
+- Convex exposes `viewer` and `upsertViewer`.
+- The Next app includes Clerk provider wrapping, sign-in/sign-up pages, protected middleware, `/api/me`, and server-side Clerk-to-Convex token forwarding.
+- The hosted dashboard still needs the real Clerk environment variables before the production deployment can move off Basic Auth.
+
+### 2. Multi-User Permissions And Invitations
+
+Status: `In progress`
+
+Definition of done:
+
+- Add durable users, memberships, roles, and invitations.
+- Enforce server-side role checks for codebase reads, review/merge actions, member management, and future issue/release writes.
+- Add invite creation, acceptance, expiry, and revocation.
+- Preserve `.private/` owner-only semantics independently from role-based codebase access.
+
+Current foundation:
+
+- Convex schema now includes `codebaseMembers`, `codebaseInvitations`, and `agentSessions`.
+- `saveGraph` seeds owner/collaborator membership rows from the graph during the bootstrap phase.
+- Owner claim, member list, suspend/remove, and invitation create/accept/revoke mutations exist, including duplicate pending-invite checks and verified-email acceptance.
+- The dashboard can filter visible graph files by requester role, with token-only reads still treated as the current owner bridge for personal dogfooding.
+- The dashboard has member/invite UI for owner claim, member list, pending invites, invite creation, invite acceptance, revocation, suspension, and removal.
+
+### 3. Web Code Browser
+
+Status: `In progress`
+
+Definition of done:
+
+- Browse folders and files from the Convex-backed graph.
+- Show visible file contents, revision, size, hash, scope, and path metadata.
+- Hide owner-private paths from non-owner requesters.
+- Add routeable file selection and safe large-file fallbacks.
+
+Current foundation:
+
+- The status mapper now carries capped content previews for shared visible files.
+- The dashboard renders a read-only `CodeReviewSection` with file selection, metadata, content preview, review readiness, and history signals.
+- Routeable file browsing, search, syntax highlighting, and dedicated file-read queries are still pending.
+
+### 4. Diffs, Reviews, Comments, And History
+
+Status: `In progress`
+
+Definition of done:
+
+- Add durable change-set, review, comment, and merge-history records.
+- Show diffs between Main and active change sets.
+- Support inline comments and resolved review threads.
+- Gate review/merge mutations by authenticated permissions.
+
+Current foundation:
+
+- The UI now surfaces current review, merge, conflict, file, and event state together.
+- Durable review/comment/merge-history records and a real diff API are still pending.
+
+### 5. Issues, Projects, And Discussions
+
+Status: `In progress`
+
+Definition of done:
+
+- Add durable issue, project, project-item, discussion, and comment records.
+- Add list/detail UI with state, assignee, label, and linked-code filters.
+- Enforce permission checks for create/edit/close/archive actions.
+
+Current foundation:
+
+- Convex schema now includes issue, project, project item, discussion, comment, and collaboration counter tables.
+- Permission-gated list/create/status/comment/project-item functions exist.
+- The dashboard can list/create/update issues and discussions, and draft/publish releases. Project-board UI is still pending.
+
+### 6. Releases
+
+Status: `In progress`
+
+Definition of done:
+
+- Add release records tied to Main revisions.
+- Add list/detail/create/publish/archive UI.
+- Gate release publishing by maintainer/owner permission.
+- Leave room for future Git export artifacts and binary artifacts.
+
+Current foundation:
+
+- Convex schema now includes releases and release assets.
+- Permission-gated list/create/publish/asset functions exist and validate the target codebase before creating releases.
+- The dashboard can draft releases and publish drafts. Immutable publish policy and artifact integration are still pending.
+
+### Later: Deeper Git Replacement Work
+
+Status: `Later`
 
 Definition of done:
 
 - Import Git history into the cloud file graph.
-- Extend the new local export/publish commands into historical snapshot export, ancestry preservation, and remote publish.
-- Keep Git compatibility separate from the everyday active change-set continuity model.
-
-### 2. Live UI And Convex Status Contract
-
-Status: `Next`
-
-Definition of done:
-
-- Keep `/api/agent/status`, `mapAgentStatusResponse`, and the Convex `agent.dashboard` response aligned as new status fields are added.
-- Add UI detail for remote-update, review, merge, and conflict evidence without losing the clean/pending/failed overview.
-- Decide which local-only command controls remain hidden or disabled in hosted Convex-backed deployments.
-
-### 3. Merge Records And Schema Validation
-
-Status: `Next`
-
-Definition of done:
-
-- Add durable merge records/history instead of only selected change-set metadata.
-- Add graph schema validation before treating the fixture/Convex graph as a product contract.
-- Keep `.private/` and active change-set visibility in the validation surface.
+- Preserve ancestry and historical snapshots.
+- Add remote Git publish and rollback.
+- Eventually design immutable/content-addressed history, clone/fetch/push equivalents, tags, releases, and offline-first sync.
 
 ## Known Gaps
 
-- No real authentication yet.
-- Convex-backed graph storage exists, but there is no production auth-backed cloud API surface yet.
+- Real account provider code exists, but production Clerk keys/issuer/owner email are not configured yet.
+- Durable membership, role, invitation, and hosted member/invite UI exist, but scoped agent-session tokens and complete permission coverage are not done yet.
+- Convex-backed graph storage and auth-backed user APIs exist for the first collaboration slice, but not every product command has moved to user-scoped auth yet.
 - No production database/object-blob split yet; Convex stores prototype graph metadata, file content, and events.
 - No content-addressed blob backend yet.
 - No schema validator yet.
-- No real auth-backed collaborator permission model yet; fixture-only requester filtering exists.
+- Requester-aware dashboard filtering exists, but the auth-backed collaborator permission model is not enforced across every user-facing write yet.
+- A first read-only code-review browser slice exists, but dedicated routeable code browsing, diff view, inline review comments, durable review records, and history UI are still pending.
+- Issue, discussion, and release product UI exists for the first slice; project-board UI, comment/detail pages, and richer filters are still pending.
 - No push-style live remote-update delivery yet; remote-update is currently emitted by explicit refresh.
 - No conflict resolution UI yet; fixture conflict detection/status exists.
 - No Git history import, ancestry preservation, or remote publish yet.

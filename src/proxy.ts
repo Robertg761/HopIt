@@ -1,10 +1,32 @@
-import { NextRequest, NextResponse } from 'next/server'
+import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
+import type { NextFetchEvent, NextRequest } from 'next/server'
+import { NextResponse } from 'next/server'
+import {
+  isClerkServerConfigured,
+  isHostedRuntime,
+  shouldAllowBasicAuthFallback,
+  shouldUseClerkAuth,
+} from '@/lib/auth-config'
 
 const AUTH_HEADER = 'WWW-Authenticate'
 const REALM = 'Basic realm="HopIt"'
+const isPublicRoute = createRouteMatcher(['/sign-in(.*)', '/sign-up(.*)'])
 
-export function proxy(request: NextRequest) {
+const clerkProxy = clerkMiddleware(async (auth, request) => {
+  if (isPublicRoute(request)) return NextResponse.next()
+
+  await auth.protect()
+  return NextResponse.next()
+})
+
+export function proxy(request: NextRequest, event: NextFetchEvent) {
+  if (shouldUseClerkAuth()) {
+    if (!isClerkServerConfigured()) return authProviderMissing()
+    return clerkProxy(request, event)
+  }
+
   if (!shouldRequireDashboardAuth()) return NextResponse.next()
+  if (!shouldAllowBasicAuthFallback()) return authProviderMissing()
 
   const expectedPassword = process.env.HOPIT_DASHBOARD_PASSWORD
   if (!expectedPassword) {
@@ -37,12 +59,16 @@ export function proxy(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico|robots.txt|logo.svg).*)'],
+  matcher: [
+    '/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)',
+    '/(api|trpc)(.*)',
+    '/__clerk/(.*)',
+  ],
 }
 
 function shouldRequireDashboardAuth() {
   if (process.env.HOPIT_DISABLE_DASHBOARD_AUTH === '1') return false
-  return process.env.VERCEL === '1' || process.env.HOPIT_REQUIRE_DASHBOARD_AUTH === '1'
+  return isHostedRuntime() || process.env.HOPIT_REQUIRE_DASHBOARD_AUTH === '1'
 }
 
 function readBasicCredentials(header: string | null) {
@@ -60,4 +86,13 @@ function readBasicCredentials(header: string | null) {
   } catch {
     return null
   }
+}
+
+function authProviderMissing() {
+  return new NextResponse('Hosted HopIt requires Clerk authentication configuration.', {
+    status: 503,
+    headers: {
+      'Cache-Control': 'no-store',
+    },
+  })
 }

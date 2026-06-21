@@ -2,6 +2,16 @@
 
 This runbook is the first real-use path for one-person HopIt dogfooding. It keeps the local JSON graph as a development fallback, but treats Convex as the canonical cloud graph and Vercel as a protected, read-only dashboard.
 
+## Current Deployment
+
+- Vercel production dashboard: `https://hopit-ten.vercel.app`
+- Vercel project: `robertg761s-projects/hopit`
+- Convex project: `robertgordon761/hopit`
+- Convex dev URL: `https://vibrant-ermine-445.convex.cloud`
+- Convex production URL: `https://sincere-jaguar-17.convex.cloud`
+- Seeded codebase id: `hopit`
+- Production workspace: `/Users/robert/HopIt Workspaces/hopit`
+
 ## Required Configuration
 
 Use long random secrets. Do not commit `.env.local`.
@@ -47,7 +57,7 @@ HOPIT_DASHBOARD_USERNAME
 HOPIT_DASHBOARD_PASSWORD
 ```
 
-Hosted HopIt requires Convex-backed status. The `/api/agent/command` route refuses local workspace commands on Vercel, and middleware requires Basic authentication when deployed on Vercel. Vercel Deployment Protection can be enabled as an additional account-level guard.
+Hosted HopIt requires Convex-backed status. The `/api/agent/command` route refuses local workspace commands on Vercel, and `src/proxy.ts` requires Basic authentication when deployed on Vercel. Vercel Deployment Protection can be enabled as an additional account-level guard.
 
 Pull Vercel envs locally only after the project is linked:
 
@@ -109,6 +119,7 @@ npm exec -- hop publish --profile production --codebase-id "$HOPIT_CODEBASE_ID" 
 ## Current Limits
 
 - Hosted dashboard commands are intentionally disabled; local workspace commands run through the local agent.
+- Basic Auth is only the current deployment guard. The repo now has Clerk-backed product auth, durable users, memberships, invitations, and first server-side permission checks, but the production deployment still needs real Clerk env vars before Basic Auth can be retired.
 - Convex stores prototype file content and metadata, not a split database/blob-storage production architecture yet.
 - Git export/publish creates a clean local Git repo; it does not push to a remote.
-- Conflict resolution UI, durable merge records, full auth-backed permissions, and push-style live updates remain future work.
+- The dashboard now has a first read-only code browser plus issue, discussion, release, and member/invite surfaces. Real diffs, inline review comments, durable merge records, project boards, richer release artifacts, and push-style live updates remain future work.

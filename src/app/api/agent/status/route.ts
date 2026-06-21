@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
 import { isConvexConfigured, readConvexAgentDashboard } from '@/lib/convex-agent'
+import { shouldUseClerkAuth } from '@/lib/auth-config'
+import { auth } from '@clerk/nextjs/server'
 
 export const dynamic = 'force-dynamic'
 
@@ -28,9 +30,11 @@ export async function GET() {
 
   if (isConvexConfigured()) {
     try {
+      const requester = await readRequester()
+
       return NextResponse.json(
         {
-          ...(await readConvexAgentDashboard()),
+          ...(await readConvexAgentDashboard(requester)),
           capabilities: agentCapabilities('convex'),
         },
         {
@@ -104,6 +108,16 @@ export async function GET() {
     )
   } finally {
     clearTimeout(timeout)
+  }
+}
+
+async function readRequester() {
+  if (!shouldUseClerkAuth()) return {}
+
+  const { userId, sessionId } = await auth()
+  return {
+    requesterUserId: userId,
+    requesterSessionId: sessionId,
   }
 }
 

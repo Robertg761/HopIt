@@ -2,6 +2,8 @@ export type AgentEventTone = 'ready' | 'syncing' | 'queued' | 'observed' | 'bloc
 
 export type AgentPanelState = 'online' | 'syncing' | 'offline' | 'blocked'
 
+export type AgentCodebaseRole = 'owner' | 'maintainer' | 'member' | 'viewer' | 'guest'
+
 export type AgentEvent = {
   id: string
   label: string
@@ -10,10 +12,35 @@ export type AgentEvent = {
   tone: AgentEventTone
 }
 
+export type AgentRequester = {
+  id: string | null
+  sessionId: string | null
+  role: AgentCodebaseRole
+  isOwner: boolean
+  isCollaborator: boolean
+  membershipSource: string
+  permissions: string[]
+  visibleFileCount: number | null
+  hiddenFileCount: number | null
+}
+
+export type AgentMember = {
+  id: string
+  name: string
+  email: string | null
+  role: Exclude<AgentCodebaseRole, 'guest'>
+  status: 'active' | 'suspended' | 'unknown'
+  source: string
+  isOwner: boolean
+  joinedAt: string | null
+  avatarUrl: string | null
+}
+
 export type AgentStatusSnapshot = {
   id: string
   state: AgentPanelState
   healthLabel: string
+  codebaseId: string | null
   managedWorkspacePath: string
   codebaseName: string
   activeChangeSetId: string
@@ -37,6 +64,8 @@ export type AgentStatusSnapshot = {
   remoteUpdateState: string
   commandsAvailable: boolean
   backend: 'local-agent' | 'convex' | 'unknown'
+  requester: AgentRequester
+  members: AgentMember[]
   files: AgentFile[]
   events: AgentEvent[]
   rawUpdatedAt: string | null
@@ -51,6 +80,8 @@ export type AgentFile = {
   revision: number | null
   size: number | null
   hash: string | null
+  contentPreview: string | null
+  contentPreviewTruncated: boolean
 }
 
 type RawAgentResponse = {
@@ -71,8 +102,43 @@ type RawAgentResponse = {
 
 type RawCloudResponse = {
   graph?: {
+    codebase?: {
+      id?: string | null
+      ownerId?: string | null
+    } | null
+    owner?: RawGraphMember | null
+    collaborators?: RawGraphMember[]
+    visibilityContext?: RawAccessContext | null
     files?: Record<string, RawCloudFile>
   } | null
+  access?: RawAccessContext | null
+}
+
+type RawGraphMember = {
+  id?: string | null
+  userId?: string | null
+  name?: string | null
+  displayName?: string | null
+  email?: string | null
+  primaryEmail?: string | null
+  avatarUrl?: string | null
+  role?: string | null
+  status?: string | null
+  source?: string | null
+  joinedAt?: string | null
+  createdAt?: string | null
+}
+
+type RawAccessContext = {
+  id?: string | null
+  sessionId?: string | null
+  role?: string | null
+  isOwner?: boolean
+  isCollaborator?: boolean
+  membershipSource?: string | null
+  permissions?: unknown[]
+  visibleFileCount?: number | null
+  hiddenFileCount?: number | null
 }
 
 type RawCloudFile = {
@@ -101,12 +167,18 @@ type RawEventsResponse = {
 type RawAgentStatus = {
   ok?: boolean
   generatedAt?: string
+  codebaseId?: string | null
   codebaseName?: string | null
   activeChangeSetId?: string | null
   mainId?: string | null
+  ownerId?: string | null
+  requesterId?: string | null
+  requesterSessionId?: string | null
+  requesterRole?: string | null
   visibleFileCount?: number | null
   hiddenFileCount?: number | null
   effectiveChangeSetVisibility?: string | null
+  access?: RawAccessContext | null
   workspace?: {
     path?: string | null
     cacheMode?: string | null
@@ -163,6 +235,7 @@ export function offlineAgentStatus(reason = 'Start the local HopIt agent status 
     id: 'local-hopit-agent',
     state: 'offline',
     healthLabel: 'Offline',
+    codebaseId: null,
     managedWorkspacePath: 'Agent not connected',
     codebaseName: 'No codebase',
     activeChangeSetId: 'No active change set',
@@ -186,6 +259,8 @@ export function offlineAgentStatus(reason = 'Start the local HopIt agent status 
     remoteUpdateState: 'Unavailable',
     commandsAvailable: false,
     backend: 'unknown',
+    requester: offlineRequester(),
+    members: [],
     files: [],
     events: [
       {
@@ -227,11 +302,14 @@ export function mapAgentStatusResponse(response: unknown): AgentStatusSnapshot {
   const recentEvents = events?.recent ?? []
   const remoteUpdateState = status.remoteUpdate?.state ?? (events?.lastRemoteUpdate ? 'updated' : 'idle')
   const backend = backendName(wrappedResponse?.capabilities?.backend)
+  const access = status.access ?? wrappedResponse?.cloud?.access ?? wrappedResponse?.cloud?.graph?.visibilityContext ?? null
+  const codebaseId = stringOrNull(status.codebaseId) ?? stringOrNull(wrappedResponse?.cloud?.graph?.codebase?.id)
 
   return {
     id: status.codebaseName ? `${status.codebaseName}-agent` : 'local-hopit-agent',
     state,
     healthLabel: status.ok === false ? 'Needs attention' : state === 'syncing' ? 'Syncing' : 'Online',
+    codebaseId,
     managedWorkspacePath: status.workspace?.path ?? 'Workspace unavailable',
     codebaseName: status.codebaseName ?? 'Unknown codebase',
     activeChangeSetId: status.activeChangeSetId ?? 'None',
@@ -259,25 +337,170 @@ export function mapAgentStatusResponse(response: unknown): AgentStatusSnapshot {
     remoteUpdateState,
     commandsAvailable: Boolean(wrappedResponse?.capabilities?.commands),
     backend,
+    requester: mapRequester(status, access),
+    members: mapGraphMembers(wrappedResponse?.cloud?.graph, access, status),
     files: mapCloudFiles(wrappedResponse?.cloud),
     events: mapRecentEvents(recentEvents),
     rawUpdatedAt: status.generatedAt ?? null,
   }
 }
 
+function mapRequester(status: RawAgentStatus, access: RawAccessContext | null): AgentRequester {
+  const role = roleName(access?.role ?? status.requesterRole)
+
+  return {
+    id: stringOrNull(access?.id) ?? stringOrNull(status.requesterId),
+    sessionId: stringOrNull(access?.sessionId) ?? stringOrNull(status.requesterSessionId),
+    role,
+    isOwner: Boolean(access?.isOwner) || role === 'owner',
+    isCollaborator: Boolean(access?.isCollaborator),
+    membershipSource: stringOrNull(access?.membershipSource) ?? (role === 'guest' ? 'none' : 'unknown'),
+    permissions: permissionsFromAccess(access, role),
+    visibleFileCount: numberOrNull(access?.visibleFileCount) ?? numberOrNull(status.visibleFileCount),
+    hiddenFileCount: numberOrNull(access?.hiddenFileCount) ?? numberOrNull(status.hiddenFileCount),
+  }
+}
+
+function offlineRequester(): AgentRequester {
+  return {
+    id: null,
+    sessionId: null,
+    role: 'guest',
+    isOwner: false,
+    isCollaborator: false,
+    membershipSource: 'none',
+    permissions: [],
+    visibleFileCount: null,
+    hiddenFileCount: null,
+  }
+}
+
+function permissionsFromAccess(access: RawAccessContext | null, role: AgentCodebaseRole) {
+  const rawPermissions = access?.permissions?.filter((permission): permission is string => typeof permission === 'string')
+  if (rawPermissions && rawPermissions.length > 0) return Array.from(new Set(rawPermissions))
+
+  if (role === 'owner') return ['read', 'write', 'invite', 'manage_members', 'review', 'merge', 'release']
+  if (role === 'maintainer') return ['read', 'write', 'invite', 'review', 'merge', 'release']
+  if (role === 'member') return ['read', 'write', 'review']
+  if (role === 'viewer') return ['read']
+  return []
+}
+
+function mapGraphMembers(
+  graph: RawCloudResponse['graph'] | null | undefined,
+  access: RawAccessContext | null,
+  status: RawAgentStatus,
+): AgentMember[] {
+  if (!graph) return []
+
+  const ownerId = stringOrNull(graph.owner?.id) ?? stringOrNull(graph.codebase?.ownerId) ?? stringOrNull(status.ownerId)
+  const members = new Map<string, AgentMember>()
+
+  if (ownerId) {
+    members.set(ownerId, {
+      id: ownerId,
+      name: memberDisplayName(graph.owner, ownerId),
+      email: stringOrNull(graph.owner?.email) ?? stringOrNull(graph.owner?.primaryEmail),
+      role: 'owner',
+      status: memberStatus(graph.owner?.status),
+      source: stringOrNull(graph.owner?.source) ?? 'owner',
+      isOwner: true,
+      joinedAt: stringOrNull(graph.owner?.joinedAt) ?? stringOrNull(graph.owner?.createdAt),
+      avatarUrl: stringOrNull(graph.owner?.avatarUrl),
+    })
+  }
+
+  for (const collaborator of graph.collaborators ?? []) {
+    const id = stringOrNull(collaborator.id) ?? stringOrNull(collaborator.userId)
+    if (!id || members.has(id)) continue
+
+    members.set(id, {
+      id,
+      name: memberDisplayName(collaborator, id),
+      email: stringOrNull(collaborator.email) ?? stringOrNull(collaborator.primaryEmail),
+      role: memberRole(collaborator.role),
+      status: memberStatus(collaborator.status),
+      source: stringOrNull(collaborator.source) ?? 'graph',
+      isOwner: false,
+      joinedAt: stringOrNull(collaborator.joinedAt) ?? stringOrNull(collaborator.createdAt),
+      avatarUrl: stringOrNull(collaborator.avatarUrl),
+    })
+  }
+
+  const requesterId = stringOrNull(access?.id) ?? stringOrNull(status.requesterId)
+  const requesterRole = roleName(access?.role ?? status.requesterRole)
+  if (requesterId && requesterRole !== 'guest' && !members.has(requesterId)) {
+    members.set(requesterId, {
+      id: requesterId,
+      name: requesterId,
+      email: null,
+      role: memberRole(requesterRole),
+      status: 'active',
+      source: stringOrNull(access?.membershipSource) ?? 'requester',
+      isOwner: requesterRole === 'owner',
+      joinedAt: null,
+      avatarUrl: null,
+    })
+  }
+
+  return Array.from(members.values()).sort((a, b) => {
+    if (a.isOwner !== b.isOwner) return a.isOwner ? -1 : 1
+    return a.name.localeCompare(b.name)
+  })
+}
+
+function memberDisplayName(member: RawGraphMember | null | undefined, fallback: string) {
+  return (
+    stringOrNull(member?.displayName) ??
+    stringOrNull(member?.name) ??
+    stringOrNull(member?.email) ??
+    stringOrNull(member?.primaryEmail) ??
+    fallback
+  )
+}
+
+function roleName(value: unknown): AgentCodebaseRole {
+  if (
+    value === 'owner' ||
+    value === 'maintainer' ||
+    value === 'member' ||
+    value === 'viewer' ||
+    value === 'guest'
+  ) {
+    return value
+  }
+  return 'guest'
+}
+
+function memberRole(value: unknown): Exclude<AgentCodebaseRole, 'guest'> {
+  const role = roleName(value)
+  return role === 'guest' ? 'member' : role
+}
+
+function memberStatus(value: unknown): AgentMember['status'] {
+  if (value === 'active' || value === 'suspended') return value
+  return 'active'
+}
+
 function mapCloudFiles(cloud: RawCloudResponse | null | undefined): AgentFile[] {
   const files = cloud?.graph?.files ?? {}
 
   return Object.entries(files)
-    .map(([filePath, file]) => ({
-      path: filePath,
-      name: pathName(filePath),
-      directory: pathDirectory(filePath),
-      scope: fileScope(file.scope),
-      revision: typeof file.revision === 'number' ? file.revision : null,
-      size: typeof file.size === 'number' ? file.size : contentSize(file.content),
-      hash: typeof file.hash === 'string' ? file.hash : null,
-    }))
+    .map(([filePath, file]) => {
+      const preview = contentPreview(file)
+
+      return {
+        path: filePath,
+        name: pathName(filePath),
+        directory: pathDirectory(filePath),
+        scope: fileScope(file.scope),
+        revision: typeof file.revision === 'number' ? file.revision : null,
+        size: typeof file.size === 'number' ? file.size : contentSize(file.content),
+        hash: typeof file.hash === 'string' ? file.hash : null,
+        contentPreview: preview.content,
+        contentPreviewTruncated: preview.truncated,
+      }
+    })
     .sort((a, b) => a.path.localeCompare(b.path))
 }
 
@@ -302,6 +525,32 @@ function pathDirectory(filePath: string) {
 
 function contentSize(content: string | undefined) {
   return typeof content === 'string' ? new TextEncoder().encode(content).length : null
+}
+
+function contentPreview(file: RawCloudFile) {
+  const maxPreviewCharacters = 2400
+
+  if (fileScope(file.scope) === 'owner-private' || typeof file.content !== 'string') {
+    return { content: null, truncated: false }
+  }
+
+  const normalizedContent = file.content.replace(/\r\n/g, '\n')
+
+  return {
+    content:
+      normalizedContent.length > maxPreviewCharacters
+        ? normalizedContent.slice(0, maxPreviewCharacters)
+        : normalizedContent,
+    truncated: normalizedContent.length > maxPreviewCharacters,
+  }
+}
+
+function stringOrNull(value: unknown) {
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function numberOrNull(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
 function isRawAgentResponse(response: unknown): response is RawAgentResponse {

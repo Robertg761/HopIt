@@ -231,6 +231,8 @@ If the cloud cannot acknowledge immediately, the journal entry remains pending a
 
 ## Next Milestones
 
+The local-agent contract is now good enough to support personal dogfooding. The next product phase should build GitHub-lite collaboration on top of the cloud graph instead of expanding the local agent first: real accounts, memberships, invitations, code browsing, diffs, reviews, comments, history, issues, projects, discussions, and releases. The detailed plan lives in [GitHub-Lite Collaboration Plan](github-lite-collaboration-plan.md).
+
 ### 1. Lock The Managed-Folder Contracts
 
 - Keep the current deterministic demo working.

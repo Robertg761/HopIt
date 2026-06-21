@@ -1,16 +1,40 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { DatabaseReader } from "./_generated/server";
-
-declare const process: {
-  env: {
-    HOPIT_AGENT_TOKEN?: string;
-    HOPIT_ALLOW_UNAUTHENTICATED_AGENT?: string;
-  };
-};
+import type { AccessContext, AuthIdentity } from "./access";
+import {
+  accessSourceFromGraph,
+  createInvitationToken,
+  filterGraphForAccessContext,
+  hashInvitationToken,
+  isNonEmptyString,
+  normalizeCodebaseRole,
+  normalizeEmail,
+  readCodebaseAccessContext,
+  readCodebaseById,
+  readUserById,
+  requireAgentToken,
+  requireCodebaseCapabilityForActor,
+  requireConfiguredOwnerEmail,
+  resolveReadActor,
+  resolveWriteActor,
+  scopeForPath,
+  stringOrNull,
+  summarizeAccessContext,
+  summarizeAuthIdentity,
+  syncGraphAccessRows,
+  upsertCodebaseMember,
+  upsertUserFromCurrentAuth,
+  userIdFromIdentity,
+} from "./access";
 
 const graphValidator = v.any();
 const detailValidator = v.any();
+const invitableCodebaseRoleValidator = v.union(
+  v.literal("maintainer"),
+  v.literal("member"),
+  v.literal("viewer"),
+);
 
 export const getGraph = query({
   args: {
@@ -27,6 +51,8 @@ export const dashboard = query({
   args: {
     codebaseId: v.string(),
     token: v.optional(v.string()),
+    requesterUserId: v.optional(v.string()),
+    requesterSessionId: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     requireAgentToken(args.token);
@@ -43,6 +69,13 @@ export const dashboard = query({
         },
       };
     }
+    const access = await readCodebaseAccessContext(ctx, accessSourceFromGraph(graph), {
+      userId: args.requesterUserId,
+      sessionId: args.requesterSessionId,
+      allowOwnerFallback: true,
+    });
+    const visibleGraph = filterGraphForAccessContext(graph, access);
+    const visibleAccess = visibleGraph.visibilityContext as AccessContext;
 
     const eventEntries = await ctx.db
       .query("agentEvents")
@@ -84,7 +117,7 @@ export const dashboard = query({
     ]);
 
     return {
-      status: buildStatus(graph, {
+      status: buildStatus(visibleGraph, {
         recent,
         lastAcknowledgement,
         lastSync,
@@ -97,7 +130,7 @@ export const dashboard = query({
         lastRefreshComplete,
         latestRefreshEvent,
         lastRemoteUpdate,
-      }),
+      }, visibleAccess),
       events: {
         recent,
         lastAcknowledgement,
@@ -117,8 +150,339 @@ export const dashboard = query({
         path: `convex:${args.codebaseId}`,
         service: "convex-cloud-graph",
         exists: true,
-        graph,
+        graph: visibleGraph,
+        access: summarizeAccessContext(visibleAccess),
       },
+    };
+  },
+});
+
+export const viewer = query({
+  args: {},
+  handler: async (ctx) => {
+    const identity = await ctx.auth.getUserIdentity();
+    if (!identity) return null;
+
+    const userId = userIdFromIdentity(identity as AuthIdentity);
+    const user = await readUserById(ctx, userId);
+
+    return {
+      identity: summarizeAuthIdentity(identity as AuthIdentity),
+      user,
+    };
+  },
+});
+
+export const upsertViewer = mutation({
+  args: {},
+  handler: async (ctx) => {
+    return await upsertUserFromCurrentAuth(ctx);
+  },
+});
+
+export const claimCodebaseOwner = mutation({
+  args: {
+    codebaseId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const actor = await resolveWriteActor(ctx, undefined);
+    requireConfiguredOwnerEmail(actor);
+
+    const codebase = await readCodebaseById(ctx, args.codebaseId);
+    if (!codebase) throw new Error(`Codebase ${args.codebaseId} was not found.`);
+
+    const members = await ctx.db
+      .query("codebaseMembers")
+      .withIndex("by_codebase", (q) => q.eq("codebaseId", args.codebaseId))
+      .collect();
+    const conflictingOwner = members.find(
+      (member) =>
+        member.role === "owner" &&
+        member.status === "active" &&
+        member.userId !== actor.userId &&
+        !isBootstrapOwnerMember(member, codebase),
+    );
+    if (conflictingOwner) {
+      throw new Error(`Codebase ${args.codebaseId} already has an active owner.`);
+    }
+
+    const now = new Date().toISOString();
+    for (const member of members) {
+      if (member.role === "owner" && member.status === "active" && member.userId !== actor.userId) {
+        await ctx.db.patch(member._id, {
+          status: "suspended",
+          suspendedByUserId: actor.userId,
+          suspendedAt: now,
+          updatedAt: now,
+        });
+      }
+    }
+
+    await upsertCodebaseMember(ctx, {
+      codebaseId: args.codebaseId,
+      userId: actor.userId,
+      role: "owner",
+      status: "active",
+      source: "owner-claim",
+      joinedAt: now,
+      now,
+    });
+
+    await ctx.db.patch(codebase._id, {
+      ownerId: actor.userId,
+      owner: claimedOwnerValue(codebase.owner, actor),
+      updatedAt: now,
+    });
+
+    return {
+      ok: true,
+      codebaseId: args.codebaseId,
+      ownerId: actor.userId,
+    };
+  },
+});
+
+export const listCodebaseMembers = query({
+  args: {
+    codebaseId: v.string(),
+    status: v.optional(v.union(v.literal("active"), v.literal("suspended"))),
+    token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await resolveReadActor(ctx, args.token);
+    await requireCodebaseCapabilityForActor(ctx, args.codebaseId, actor, "read");
+
+    const members = await ctx.db
+      .query("codebaseMembers")
+      .withIndex("by_codebase", (q) => q.eq("codebaseId", args.codebaseId))
+      .collect();
+    const visibleMembers = args.status ? members.filter((member) => member.status === args.status) : members;
+
+    return await Promise.all(
+      visibleMembers
+        .sort((a, b) => roleSort(a.role) - roleSort(b.role) || a.userId.localeCompare(b.userId))
+        .map(async (member) => ({
+          ...member,
+          profile: summarizeUser(await readUserById(ctx, member.userId)),
+        })),
+    );
+  },
+});
+
+export const listCodebaseInvitations = query({
+  args: {
+    codebaseId: v.string(),
+    status: v.optional(v.union(
+      v.literal("pending"),
+      v.literal("accepted"),
+      v.literal("revoked"),
+      v.literal("expired"),
+    )),
+    token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await resolveReadActor(ctx, args.token);
+    await requireCodebaseCapabilityForActor(ctx, args.codebaseId, actor, "invite");
+
+    const invitations = await ctx.db
+      .query("codebaseInvitations")
+      .withIndex("by_codebase", (q) => q.eq("codebaseId", args.codebaseId))
+      .collect();
+    const visibleInvitations = args.status
+      ? invitations.filter((invitation) => invitationStatusForRead(invitation) === args.status)
+      : invitations;
+
+    return visibleInvitations
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map(summarizeInvitation);
+  },
+});
+
+export const createCodebaseInvitation = mutation({
+  args: {
+    codebaseId: v.string(),
+    email: v.string(),
+    role: invitableCodebaseRoleValidator,
+    expiresAt: v.optional(v.string()),
+    token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await resolveWriteActor(ctx, args.token);
+    await requireCodebaseCapabilityForActor(ctx, args.codebaseId, actor, "invite");
+
+    const normalizedEmail = normalizeEmail(args.email);
+    if (!normalizedEmail) throw new Error("Invitation email is required.");
+
+    const existingPendingInvite = await ctx.db
+      .query("codebaseInvitations")
+      .withIndex("by_codebase_email", (q) => q.eq("codebaseId", args.codebaseId).eq("normalizedEmail", normalizedEmail))
+      .collect();
+    const now = new Date().toISOString();
+    await expirePendingInvitations(ctx, existingPendingInvite, now);
+    if (existingPendingInvite.some(isInvitationCurrentlyPending)) {
+      throw new Error(`A pending invitation already exists for ${normalizedEmail}.`);
+    }
+
+    const { token, tokenHash } = await createUniqueInvitationToken(ctx);
+
+    const invitation = {
+      codebaseId: args.codebaseId,
+      normalizedEmail,
+      role: args.role,
+      tokenHash,
+      status: "pending" as const,
+      invitedByUserId: actor.userId,
+      createdAt: now,
+      updatedAt: now,
+    } as any;
+    if (args.expiresAt) invitation.expiresAt = args.expiresAt;
+
+    const invitationId = await ctx.db.insert("codebaseInvitations", invitation);
+
+    return {
+      invitationId,
+      codebaseId: args.codebaseId,
+      normalizedEmail,
+      role: args.role,
+      status: "pending",
+      token,
+    };
+  },
+});
+
+export const acceptCodebaseInvitation = mutation({
+  args: {
+    token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const actor = await upsertUserFromCurrentAuth(ctx);
+    if (!actor.primaryEmail) throw new Error("A verified account email is required to accept an invitation.");
+    if (actor.currentAuthEmailVerified !== true) {
+      throw new Error("A verified account email is required to accept an invitation.");
+    }
+
+    const tokenHash = await hashInvitationToken(args.token);
+    const invitation = await ctx.db
+      .query("codebaseInvitations")
+      .withIndex("by_token_hash", (q) => q.eq("tokenHash", tokenHash))
+      .unique();
+    if (!invitation) throw new Error("Invitation not found.");
+    if (invitation.status !== "pending") throw new Error("Invitation is no longer pending.");
+    if (isInvitationExpired(invitation)) {
+      await ctx.db.patch(invitation._id, {
+        status: "expired",
+        updatedAt: new Date().toISOString(),
+      });
+      throw new Error("Invitation has expired.");
+    }
+
+    if (normalizeEmail(actor.primaryEmail) !== invitation.normalizedEmail) {
+      throw new Error("Authenticated account email does not match this invitation.");
+    }
+
+    const now = new Date().toISOString();
+    await upsertCodebaseMember(ctx, {
+      codebaseId: invitation.codebaseId,
+      userId: actor.userId,
+      role: normalizeCodebaseRole(invitation.role, "member"),
+      status: "active",
+      invitedByUserId: invitation.invitedByUserId,
+      source: "invitation",
+      joinedAt: now,
+      now,
+    });
+    await ctx.db.patch(invitation._id, {
+      status: "accepted",
+      acceptedByUserId: actor.userId,
+      acceptedAt: now,
+      updatedAt: now,
+    });
+
+    return {
+      codebaseId: invitation.codebaseId,
+      userId: actor.userId,
+      role: invitation.role,
+      status: "accepted",
+    };
+  },
+});
+
+export const revokeCodebaseInvitation = mutation({
+  args: {
+    invitationId: v.id("codebaseInvitations"),
+    token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await resolveWriteActor(ctx, args.token);
+    const invitation = await requireInvitation(ctx, args.invitationId);
+    await requireCodebaseCapabilityForActor(ctx, invitation.codebaseId, actor, "invite");
+
+    if (invitation.status !== "pending") {
+      throw new Error("Only pending invitations can be revoked.");
+    }
+
+    const now = new Date().toISOString();
+    await ctx.db.patch(args.invitationId, {
+      status: "revoked",
+      revokedByUserId: actor.userId,
+      revokedAt: now,
+      updatedAt: now,
+    });
+
+    return summarizeInvitation(await requireInvitation(ctx, args.invitationId));
+  },
+});
+
+export const suspendCodebaseMember = mutation({
+  args: {
+    codebaseId: v.string(),
+    userId: v.string(),
+    token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await resolveWriteActor(ctx, args.token);
+    const { codebase } = await requireCodebaseCapabilityForActor(ctx, args.codebaseId, actor, "manage_members");
+    const member = await requireCodebaseMember(ctx, args.codebaseId, args.userId);
+    assertMutableMember(codebase, member, "suspend");
+
+    const now = new Date().toISOString();
+    await ctx.db.patch(member._id, {
+      status: "suspended",
+      suspendedByUserId: actor.userId,
+      suspendedAt: now,
+      updatedAt: now,
+    });
+
+    return await ctx.db.get(member._id);
+  },
+});
+
+export const removeCodebaseMember = mutation({
+  args: {
+    codebaseId: v.string(),
+    userId: v.string(),
+    token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await resolveWriteActor(ctx, args.token);
+    const { codebase } = await requireCodebaseCapabilityForActor(ctx, args.codebaseId, actor, "manage_members");
+    const member = await requireCodebaseMember(ctx, args.codebaseId, args.userId);
+    assertMutableMember(codebase, member, "remove");
+
+    const now = new Date().toISOString();
+    await ctx.db.patch(member._id, {
+      status: "suspended",
+      source: "removed",
+      suspendedByUserId: actor.userId,
+      suspendedAt: now,
+      updatedAt: now,
+    });
+
+    return {
+      ok: true,
+      codebaseId: args.codebaseId,
+      userId: args.userId,
+      removedByUserId: actor.userId,
     };
   },
 });
@@ -160,6 +524,7 @@ export const saveGraph = mutation({
     } else {
       await ctx.db.insert("codebases", codebaseValue);
     }
+    await syncGraphAccessRows(ctx, graph, now);
 
     const existingFiles = await ctx.db
       .query("files")
@@ -237,6 +602,111 @@ export const appendEvent = mutation({
   },
 });
 
+async function createUniqueInvitationToken(ctx: any) {
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const token = await createInvitationToken();
+    const existingToken = await ctx.db
+      .query("codebaseInvitations")
+      .withIndex("by_token_hash", (q: any) => q.eq("tokenHash", token.tokenHash))
+      .unique();
+    if (!existingToken) return token;
+  }
+
+  throw new Error("Could not allocate a unique invitation token.");
+}
+
+async function requireInvitation(ctx: any, invitationId: string) {
+  const invitation = await ctx.db.get(invitationId);
+  if (!invitation) throw new Error("Invitation not found.");
+  return invitation;
+}
+
+async function requireCodebaseMember(ctx: any, codebaseId: string, userId: string) {
+  const member = await ctx.db
+    .query("codebaseMembers")
+    .withIndex("by_codebase_user", (q: any) => q.eq("codebaseId", codebaseId).eq("userId", userId))
+    .unique();
+  if (!member) throw new Error(`Member ${userId} was not found for ${codebaseId}.`);
+  return member;
+}
+
+function assertMutableMember(codebase: any, member: any, action: "remove" | "suspend") {
+  if (member.role === "owner" || member.userId === codebase.ownerId) {
+    throw new Error(`Codebase owners cannot be ${action}d through member management.`);
+  }
+}
+
+function summarizeInvitation(invitation: any) {
+  const { tokenHash, ...safeInvitation } = invitation;
+  return {
+    ...safeInvitation,
+    status: invitationStatusForRead(invitation),
+  };
+}
+
+function summarizeUser(user: any) {
+  if (!user) return null;
+  return {
+    userId: user.userId,
+    primaryEmail: user.primaryEmail ?? null,
+    displayName: user.displayName ?? null,
+    avatarUrl: user.avatarUrl ?? null,
+  };
+}
+
+function roleSort(role: string) {
+  if (role === "owner") return 0;
+  if (role === "maintainer") return 1;
+  if (role === "member") return 2;
+  if (role === "viewer") return 3;
+  return 4;
+}
+
+function isBootstrapOwnerMember(member: any, codebase: any) {
+  if (member.userId === "local-owner") return true;
+  return member.source === "graph-owner" && member.userId === codebase.ownerId;
+}
+
+function claimedOwnerValue(existingOwner: any, actor: any) {
+  const owner =
+    existingOwner && typeof existingOwner === "object" && !Array.isArray(existingOwner)
+      ? { ...existingOwner }
+      : {};
+  owner.id = actor.userId;
+  if (stringOrNull(actor.displayName)) owner.name = actor.displayName;
+  if (stringOrNull(actor.primaryEmail)) owner.email = actor.primaryEmail;
+  return owner;
+}
+
+async function expirePendingInvitations(ctx: any, invitations: any[], now: string) {
+  await Promise.all(
+    invitations
+      .filter(isInvitationExpired)
+      .map((invitation) =>
+        ctx.db.patch(invitation._id, {
+          status: "expired",
+          updatedAt: now,
+        }),
+      ),
+  );
+}
+
+function isInvitationCurrentlyPending(invitation: any) {
+  return invitation.status === "pending" && !isInvitationExpired(invitation);
+}
+
+function isInvitationExpired(invitation: any) {
+  if (invitation.status !== "pending") return false;
+  if (!invitation.expiresAt) return false;
+
+  const expiresAt = new Date(invitation.expiresAt).getTime();
+  return Number.isFinite(expiresAt) && expiresAt < Date.now();
+}
+
+function invitationStatusForRead(invitation: any) {
+  return isInvitationExpired(invitation) ? "expired" : invitation.status;
+}
+
 async function readGraph(ctx: { db: DatabaseReader }, codebaseId: string) {
   const codebase = await ctx.db
     .query("codebases")
@@ -281,17 +751,6 @@ async function readGraph(ctx: { db: DatabaseReader }, codebaseId: string) {
   };
   validateGraph(graph);
   return graph;
-}
-
-function requireAgentToken(token: string | undefined) {
-  const expected = process.env.HOPIT_AGENT_TOKEN;
-  if (!expected) {
-    if (process.env.HOPIT_ALLOW_UNAUTHENTICATED_AGENT === "1") return;
-    throw new Error("HOPIT_AGENT_TOKEN must be configured for Convex HopIt access.");
-  }
-  if (token !== expected) {
-    throw new Error("Unauthorized HopIt agent token.");
-  }
 }
 
 function normalizeGraph(graph: unknown) {
@@ -409,15 +868,13 @@ function assertSafeGraphPath(filePath: string) {
   }
 }
 
-function isNonEmptyString(value: unknown) {
-  return typeof value === "string" && value.length > 0;
-}
-
-function buildStatus(graph: any, events: Record<string, any>) {
+function buildStatus(graph: any, events: Record<string, any>, access: AccessContext | null = null) {
   const filePaths = Object.keys(graph.files ?? {});
   const privateCount = filePaths.filter((filePath) => scopeForPath(filePath) === "owner-private").length;
   const syncHealth = buildSyncHealth(events);
   const refreshHealth = buildRefreshHealth(events);
+  const visibilityContext = (graph.visibilityContext ?? access) as AccessContext | null;
+  const accessSummary = summarizeAccessContext(visibilityContext);
 
   return {
     ok: syncHealth.state !== "failed" && refreshHealth.state !== "blocked",
@@ -434,9 +891,13 @@ function buildStatus(graph: any, events: Record<string, any>) {
     mainId: graph.main?.id ?? null,
     ownerId: graph.owner?.id ?? graph.codebase?.ownerId ?? null,
     sessionId: graph.session?.id ?? null,
-    visibleFileCount: filePaths.length,
-    hiddenFileCount: 0,
-    hiddenScopeCounts: { shared: 0, private: 0 },
+    requesterId: accessSummary?.id ?? null,
+    requesterSessionId: accessSummary?.sessionId ?? null,
+    requesterRole: accessSummary?.role ?? null,
+    access: accessSummary,
+    visibleFileCount: accessSummary?.visibleFileCount ?? filePaths.length,
+    hiddenFileCount: accessSummary?.hiddenFileCount ?? 0,
+    hiddenScopeCounts: accessSummary?.hiddenScopeCounts ?? { shared: 0, private: 0 },
     effectiveChangeSetVisibility: graph.selectedState?.effectiveVisibility ?? graph.visibility?.effective ?? null,
     review: {
       state: graph.selectedState?.reviewState ?? "not-open",
@@ -467,6 +928,7 @@ function buildStatus(graph: any, events: Record<string, any>) {
       selectedState: graph.selectedState ?? null,
       owner: graph.owner ?? null,
       session: graph.session ?? null,
+      requester: accessSummary,
       visibility: graph.visibility ?? null,
       revision: graph.revision ?? null,
       fileCount: filePaths.length,
@@ -571,8 +1033,4 @@ function buildRefreshHealth(events: Record<string, any>) {
 function eventTime(event: { at?: string | null }) {
   const time = new Date(event.at ?? "").getTime();
   return Number.isNaN(time) ? 0 : time;
-}
-
-function scopeForPath(filePath: string) {
-  return filePath === ".private" || filePath.startsWith(".private/") ? "owner-private" : "shared";
 }

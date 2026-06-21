@@ -22,6 +22,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useTheme } from 'next-themes'
+import { AuthMenu } from '@/components/hopit/auth-menu'
 
 type HeaderProps = {
   onOpenSidebar: () => void
@@ -137,35 +138,7 @@ export function Header({ onOpenSidebar }: HeaderProps) {
             <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-hop" />
           </button>
 
-          {/* User */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                className="ml-1 flex items-center gap-2 rounded-full p-0.5 ring-1 ring-border hover:ring-hop/40"
-                aria-label="User menu"
-              >
-                <div className="size-8 overflow-hidden rounded-full bg-hop-gradient text-white grid place-items-center text-xs font-semibold">
-                  YO
-                </div>
-              </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-56">
-              <DropdownMenuLabel>
-                <div>
-                  <p className="text-sm font-medium">You</p>
-                  <p className="text-xs font-normal text-muted-foreground">you@hopit.dev</p>
-                </div>
-              </DropdownMenuLabel>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem>Profile</DropdownMenuItem>
-              <DropdownMenuItem>Your files</DropdownMenuItem>
-              <DropdownMenuItem>Settings</DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem className="text-destructive">
-                Sign out
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <AuthMenu />
         </div>
       </div>
     </header>

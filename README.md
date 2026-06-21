@@ -20,6 +20,23 @@ HopIt does not use an ignore-file model for product sharing. Files under `.priva
 - Git compatibility as an import/export and publish layer, not the source of continuity.
 - Explicit `.private/` visibility: synced and versioned, but owner-visible only.
 
+## Current State
+
+HopIt has moved past a local-only spike. The current dogfood baseline is a deployed, production-shaped personal system:
+
+- Vercel production dashboard at `https://hopit-ten.vercel.app`.
+- Convex production graph at `https://sincere-jaguar-17.convex.cloud`.
+- A seeded `hopit` codebase graph with 58 source files.
+- A production-profile managed workspace at `/Users/robert/HopIt Workspaces/hopit`.
+- Hosted dashboard code defaults to Clerk product auth when the Clerk env vars are configured; the current production deployment remains behind Basic Auth until the Clerk/Vercel resource is provisioned.
+- Hosted status reads from Convex; hosted workspace commands are intentionally disabled.
+- Local production-profile `hop` commands can import, hydrate, sync, refresh, recover, review, merge, export, publish, and validate.
+- The dashboard now includes provider sign-in routes, owner claim, member/invite management, a read-only code browser, and first issue/discussion/release workflows backed by Convex.
+
+The system is now usable as a one-person private dogfood environment, but it is not yet a full GitHub or Git replacement. The next major product phase is GitHub-lite collaboration: real accounts, memberships, invitations, web code browsing, diffs, reviews, comments, history, issues, projects, discussions, and releases.
+
+See [docs/github-lite-collaboration-plan.md](docs/github-lite-collaboration-plan.md) for the overall implementation plan, plus [docs/auth-collaboration-plan.md](docs/auth-collaboration-plan.md), [docs/review-code-browser-plan.md](docs/review-code-browser-plan.md), and [docs/work-items-releases-plan.md](docs/work-items-releases-plan.md) for the detailed sub-plans.
+
 ## Product Principles
 
 - Main is the accepted shared source of truth for a codebase.
@@ -80,6 +97,11 @@ HOPIT_CODEBASE_ID=hopit
 HOPIT_AGENT_TOKEN=replace-with-a-long-random-secret
 HOPIT_CONVEX_URL=https://your-convex-deployment.convex.cloud
 NEXT_PUBLIC_CONVEX_URL=https://your-convex-deployment.convex.cloud
+HOPIT_AUTH_PROVIDER=clerk
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_replace-with-your-clerk-publishable-key
+CLERK_SECRET_KEY=sk_test_replace-with-your-clerk-secret-key
+CLERK_JWT_ISSUER_DOMAIN=https://your-clerk-issuer.clerk.accounts.dev
+HOPIT_OWNER_EMAIL=you@example.com
 HOPIT_DASHBOARD_USERNAME=hopit
 HOPIT_DASHBOARD_PASSWORD=replace-with-a-long-random-dashboard-password
 HOPIT_AGENT_STATE_ROOT=/Users/you/Library/Application Support/HopIt/Agent
@@ -104,7 +126,7 @@ Import a real local project into the Convex backend with:
 npm exec -- hop import --source /path/to/project --codebase-id hopit --convex-url "$HOPIT_CONVEX_URL" --agent-token "$HOPIT_AGENT_TOKEN" --force
 ```
 
-For production hosting, deploy the Next.js app to Vercel and set `HOPIT_CODEBASE_ID`, `HOPIT_AGENT_TOKEN`, `HOPIT_CONVEX_URL`, `NEXT_PUBLIC_CONVEX_URL`, `HOPIT_DASHBOARD_USERNAME`, and `HOPIT_DASHBOARD_PASSWORD` as Vercel environment variables. The hosted dashboard reads from Convex through `/api/agent/status`; local workspace commands still run through the local HopIt agent on your machine and are refused on Vercel.
+For production hosting, deploy the Next.js app to Vercel and set `HOPIT_CODEBASE_ID`, `HOPIT_AGENT_TOKEN`, `HOPIT_CONVEX_URL`, `NEXT_PUBLIC_CONVEX_URL`, `HOPIT_AUTH_PROVIDER=clerk`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `CLERK_JWT_ISSUER_DOMAIN`, and `HOPIT_OWNER_EMAIL` as environment variables. `HOPIT_DASHBOARD_USERNAME` and `HOPIT_DASHBOARD_PASSWORD` are only for the explicit Basic Auth fallback. The hosted dashboard reads from Convex through `/api/agent/status`; local workspace commands still run through the local HopIt agent on your machine and are refused on Vercel.
 
 Validate production configuration with:
 
@@ -173,6 +195,10 @@ packages/
   agent/        local agent spike for cloud graph hydration and write journaling
 docs/
   agent-architecture.md  local agent architecture and read/write acknowledgement flow
+  auth-collaboration-plan.md  accounts, memberships, permissions, and invitations plan
+  github-lite-collaboration-plan.md  next major auth, collaboration, review, issue, and release plan
+  review-code-browser-plan.md  code browsing, diffs, reviews, comments, and history plan
+  work-items-releases-plan.md  issues, projects, discussions, and releases plan
   mvp-plan.md  first-version product and architecture plan
   personal-production.md  one-person production setup and dogfood runbook
   progress.md  current milestone progress, evidence, and next work queue
