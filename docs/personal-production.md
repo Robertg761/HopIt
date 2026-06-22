@@ -117,7 +117,7 @@ The packaged artifact contains:
 - `bin/hop`: the HopIt command.
 - `runtime/node`: the embedded Node runtime.
 - `examples/production.env.example`: a local env template for this device.
-- `support/install-macos-launch-agent.sh`: user-level macOS start-on-login setup.
+- `support/install-macos-launch-agent.sh`: user-level macOS start-on-login setup. It copies the package into `~/Library/Application Support/HopIt/Runtime` before writing the LaunchAgent so launchd does not need to execute from a project or downloads folder.
 - `support/install-systemd-user-service.sh`: user-level Linux start-on-login setup.
 
 Create the local env file before installing a login service:
@@ -185,7 +185,8 @@ npm run hop:service:stop -- --codebase-id "$HOPIT_CODEBASE_ID"
 
 For start on login, prefer a user-level supervisor that runs the foreground
 service process (`hop service run`) rather than nesting `service start` inside
-launchd or systemd:
+launchd or systemd. On macOS, the generated installer first installs the runtime
+under HopIt's Application Support folder, then writes and starts the plist:
 
 ```bash
 /tmp/hop-<platform>-<arch>/support/install-macos-launch-agent.sh
@@ -204,11 +205,20 @@ curl http://127.0.0.1:4785/status
 For cross-device handoff today, the safe primitive is still refresh, and
 `--remote-pull` is the personal-dogfood automation around that primitive. The
 service syncs local edits from the device you are using; another device can run
-the remote-pull loop or an explicit safe refresh before you continue there.
+the remote-pull loop, a one-shot remote-pull check, or an explicit safe refresh
+before you continue there.
 Remote-pull only applies when the workspace is fully materialized, the journal is
 clean, and disk content still matches the hash-only materialization manifest; if
 status shows `workspace.localChanges.state` as `dirty`, sync or recover that
 device before trusting handoff:
+
+```bash
+npm run hop -- remote-pull \
+  --profile production \
+  --codebase-id "$HOPIT_CODEBASE_ID" \
+  --convex-url "$HOPIT_CONVEX_URL" \
+  --session-token "$HOPIT_AGENT_SESSION_TOKEN"
+```
 
 ```bash
 npm run hop -- refresh \

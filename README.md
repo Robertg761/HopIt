@@ -35,7 +35,7 @@ HopIt has moved past a local-only spike. The current dogfood baseline is a deplo
 - Hosted dashboard code supports Clerk product auth, but domain-dependent Clerk production rollout is intentionally paused. The current production deployment remains behind Basic Auth while HopIt uses the generated Vercel URL.
 - Hosted status reads from Convex; hosted workspace commands are intentionally disabled.
 - Local production-profile `hop` commands can import, hydrate, sync, refresh, recover, review, merge, export, publish, and validate.
-- `hop workspace` persists a root-level `workspaces.json` index with per-workspace hydration/cursor state, lists visible cloud files, can hydrate one file, and can dehydrate clean workspaces back to metadata-only state.
+- `hop workspace` persists a root-level `workspaces.json` index with per-workspace hydration/cursor state, can discover the configured cloud codebase, attach it into the Workspace Root as metadata-only, list visible cloud files, hydrate one file, and dehydrate clean workspaces back to metadata-only state.
 - `hop device` / `hop session` can report local device identity, and Convex can issue, list, touch, revoke, and authorize scoped agent-session tokens for graph reads, per-file writes, and event sync.
 - The dashboard now includes provider sign-in routes, owner claim, member/invite management, a read-only code browser, and first issue/discussion/release workflows backed by Convex.
 
@@ -55,7 +55,7 @@ The v1 target is not a Git clone manager and not yet a true native filesystem pr
 - Other same-owner devices receive acknowledged changes automatically when the local journal is clean, or get a visible conflict/blocked state when it is not.
 - Web surfaces show code, diffs, review state, history, issues, discussions, projects, releases, members, invitations, and permissions.
 
-Today HopIt has the managed-folder spike, workspace-root command surface with a durable index, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, service wrapper, Convex graph, Basic Auth protected dashboard, first collaboration objects, explicit refresh-based two-session continuity, scoped agent-session token groundwork, and an opt-in safe remote-pull loop for personal dogfooding. Remaining v1 work is account-scoped codebase discovery and attach/setup flow, full lazy materialization policy, production-grade push/subscription remote-update delivery, large-file/object storage, routeable diff/review/history UI, installer/tray setup, and broader cross-device verification.
+Today HopIt has the managed-folder spike, workspace-root command surface with a durable index, configured-codebase discovery, metadata-only attach, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, service wrapper, Convex graph, Basic Auth protected dashboard, first collaboration objects, explicit refresh-based two-session continuity, scoped agent-session token groundwork, and opt-in safe remote-pull polling plus one-shot remote-pull checks for personal dogfooding. Remaining v1 work is account-wide codebase discovery, full lazy materialization policy, production-grade push/subscription remote-update delivery, large-file/object storage, routeable diff/review/history UI, installer/tray setup, and broader cross-device verification.
 
 ## Product Principles
 
@@ -198,16 +198,18 @@ Use the generated standalone package support scripts for user-level login startu
 ./artifacts/hop-<platform>-<arch>/support/install-systemd-user-service.sh
 ```
 
-Keep a restorable agent-state backup, an owner-private Git export, and a
-publishable Git export available:
+Keep a restorable agent-state backup, an owner-private Git export, and a public
+Git export available:
 
 ```bash
 mkdir -p "$HOPIT_BACKUP_ROOT" "$HOPIT_EXPORT_ROOT"
 npm run hop:backup -- --codebase-id "$HOPIT_CODEBASE_ID" --output "$HOPIT_BACKUP_ROOT/hopit-$(date +%Y%m%d-%H%M%S)" --force
 npm run hop:private-export -- --codebase-id "$HOPIT_CODEBASE_ID" --output "$HOPIT_EXPORT_ROOT/hopit-private-export" --force
 npm run hop:export -- --codebase-id "$HOPIT_CODEBASE_ID" --output "$HOPIT_EXPORT_ROOT/hopit-export" --force
-npm run hop:publish -- --codebase-id "$HOPIT_CODEBASE_ID" --output "$HOPIT_EXPORT_ROOT/hopit-publish" --force
 ```
+
+Use `npm run hop:publish` only after the selected active change set has been
+reviewed and merged.
 
 For scoped device-token rotation, register the replacement session, update
 `HOPIT_AGENT_SESSION_TOKEN`, restart the service, then revoke the old session id:

@@ -12,7 +12,7 @@ It is intentionally not a real FUSE, OS filesystem provider, or clone manager. I
 
 The selected cloud state remains the source of truth for the managed folder. In the production model, day-to-day edits should sync into an active change set; Main advances only after review or merge. The local folder is a materialized cache that HopIt manages so OS file pickers, editors, CLIs, and search tools can work without a special mount or a user-managed clone.
 
-The solid v1 target is a HopIt Workspace Root, such as `~/HopIt Workspaces`, where cloud codebases appear as HopIt-managed project folders. This package currently proves selected managed folders, a durable workspace-root index, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, safe remote-pull polling, and scoped Convex agent-session tokens. It does not yet provide account-scoped codebase discovery, a full automatic lazy-materialization policy, or production-grade push/subscription remote-update delivery.
+The solid v1 target is a HopIt Workspace Root, such as `~/HopIt Workspaces`, where cloud codebases appear as HopIt-managed project folders. This package currently proves selected managed folders, a durable workspace-root index, configured-codebase discovery and metadata-only attach, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, safe remote-pull polling plus one-shot remote-pull checks, and scoped Convex agent-session tokens. It does not yet provide account-wide codebase discovery, a full automatic lazy-materialization policy, or production-grade push/subscription remote-update delivery.
 
 HopIt does not use ignore files as product sharing controls. Files under `.private/` are still snapshotted, synced, and versioned, but owner-visible only. Files outside `.private/` are governed by the active change set's effective visibility and the codebase's permissions.
 
@@ -80,10 +80,13 @@ npm run hop -- backup --profile production --codebase-id hopit --output /path/to
 npm run hop -- install --profile production --codebase-id hopit --write-env
 npm run hop -- workspace status
 npm run hop -- workspace list
+npm run hop -- workspace discover
 npm run hop -- workspace ensure
+npm run hop -- workspace attach
 npm run hop -- workspace files
 npm run hop -- workspace hydrate-file --path README.md
 npm run hop -- workspace dehydrate --force
+npm run hop -- remote-pull --profile production --codebase-id hopit
 npm run hop -- device status
 npm run hop -- device register --profile production --codebase-id hopit
 npm run hop -- device list --profile production --codebase-id hopit
@@ -94,12 +97,13 @@ npm run hop -- service run --profile production --codebase-id hopit
 npm run hop -- service status --profile production --codebase-id hopit
 ```
 
-`hop refresh` is the safe cloud-to-workspace command. It refuses to
-touch the managed folder while the local journal has pending or failed entries,
-then mirrors the current selected cloud state into the workspace when the journal is
-clean. `watch` applies the same safety idea at startup by recovering before
-hydrating. Bare `hydrate` is a low-level primitive and should not be treated as
-safe refresh unless the local journal is already clean.
+`hop refresh` is the safe cloud-to-workspace command. It refuses to touch the
+managed folder while the local journal has pending or failed entries or while
+the disk has unjournaled local drift, then mirrors the current selected cloud
+state into the workspace when the journal and manifest are clean. `watch`
+applies the same safety idea at startup by recovering before hydrating. Bare
+`hydrate` is a low-level primitive and should not be treated as safe refresh
+unless the local journal is already clean.
 
 Restart recovery is explicit and dependency-free. `recover` reads the append-only
 journal, the local cloud JSON graph, and the event log, then replays journal
@@ -197,16 +201,21 @@ schema version, codebase/Main/active-change-set identity, visibility enums,
 review/merge/conflict states, file content/revisions, safe relative paths, and
 path-derived `.private/` owner-private scope.
 
-`hop workspace status|list|ensure|files|hydrate-file|dehydrate` is the first
-product-facing workspace-root surface. It reports the configured HopIt root, the
-current codebase folder, whether the codebase has been initialized, hydration
-state, dirty-state, visible cloud files, hydrated path count, and the durable
-root index path. `hydrate-file` materializes one visible cloud path into the
-managed folder. `dehydrate --force` removes clean cached file bodies, writes
-workspace metadata, and marks the workspace metadata-only. `ensure` creates the
-configured root and current managed codebase folder without claiming a true
-virtual filesystem: the adapter remains `managed-folder`, cache mode remains
-`local-cache`, and the status payload explicitly reports `virtualized: false`.
+`hop workspace status|list|discover|ensure|attach|files|hydrate-file|dehydrate`
+is the first product-facing workspace-root surface. It reports the configured
+HopIt root, the current codebase folder, whether the codebase has been attached
+or initialized, hydration state, dirty-state, visible cloud files, hydrated path
+count, and the durable root index path. `discover` lists the configured visible
+cloud codebase plus any indexed local workspaces. `attach` binds the configured
+cloud codebase into the Workspace Root as metadata-only without downloading file
+bodies, writes `.hopit/metadata.json`, and refuses non-empty unmanaged folders
+unless `--force` is explicit. `hydrate-file` materializes one visible cloud path
+into the managed folder. `dehydrate --force` removes clean cached file bodies,
+writes workspace metadata, and marks the workspace metadata-only. `ensure`
+creates the configured root and current managed codebase folder without claiming
+a true virtual filesystem: the adapter remains `managed-folder`, cache mode
+remains `local-cache`, and the status payload explicitly reports
+`virtualized: false`.
 
 Hydrate, refresh, and sync update `workspaces.json` under the agent state root
 unless `HOPIT_WORKSPACE_INDEX` or `--workspace-index` overrides the path. Index
@@ -246,9 +255,10 @@ file instead of leaving stale service state behind.
 
 Service mode syncs local workspace edits from the current device. It does not
 run an automatic remote-pull loop by default, so the conservative cross-device
-handoff remains: let device A sync, then run `hop refresh` on device B before
-continuing there. This avoids pretending concurrent multi-device editing is safe
-before the graph has stronger conflict/concurrency guards.
+handoff remains: let device A sync, then run `hop remote-pull` or `hop refresh`
+on device B before continuing there. This avoids pretending concurrent
+multi-device editing is safe before the graph has stronger conflict/concurrency
+guards.
 
 For personal dogfooding, `watch` and `service start` can opt into a safe
 background cloud refresh loop:
@@ -262,9 +272,11 @@ npm run hop -- service start \
 
 The remote-pull loop checks for a clean local journal, an idle local sync
 scheduler, a fully materialized workspace, a clean hash manifest, and the
-workspace index cursor before calling the same safe `hop refresh` path. If
-pending or failed journal entries exist, the workspace is partial/metadata-only,
-or disk content differs from the last materialized manifest, it emits
+workspace index cursor before calling the same safe `hop refresh` path. `hop
+remote-pull` runs that decision once, which makes same-Mac and cross-device
+handoff verification deterministic without starting a service. If pending or
+failed journal entries exist, the workspace is partial/metadata-only, or disk
+content differs from the last materialized manifest, HopIt emits
 `remote-pull.skipped` and leaves the workspace alone. Tune the polling interval
 with `--remote-refresh-interval-ms <ms>` or
 `HOPIT_REMOTE_REFRESH_INTERVAL_MS`; the default is `5000`.
@@ -315,10 +327,11 @@ Generated local agent state is demo/runtime state, not workspace content:
 Promote this selected managed-folder proof into the full HopIt Workspace Root
 contract. The root-level index, hydration/materialized revision state,
 metadata-only and single-file hydrate primitives, scoped agent-session tokens,
-content-addressed text blobs, per-file agent mutations, and opt-in remote-pull
-cursor are now in place. The next agent work should add account-scoped cloud
-codebase discovery, attach/setup flow, richer per-file cache metadata, automatic
-lazy materialization policy, and production-grade remote-update delivery.
+content-addressed text blobs, per-file agent mutations, configured-codebase
+discover/attach, and opt-in remote-pull cursor are now in place. The next agent
+work should add account-wide cloud codebase discovery, richer per-file cache
+metadata, automatic lazy materialization policy, and production-grade
+remote-update delivery.
 
 In parallel, the cloud graph needs large-file/object-blob handling, durable
 history reconstruction, and full product write-path coverage before concurrent

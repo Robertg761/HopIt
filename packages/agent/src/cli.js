@@ -80,6 +80,11 @@ async function main() {
     return
   }
 
+  if (command === 'remote-pull') {
+    await remotePullOnce(options)
+    return
+  }
+
   if (command === 'sync-once') {
     await syncOnce(options)
     return
@@ -263,6 +268,12 @@ function applyRuntimeDefaults(options, provided) {
   }
   if (!provided.has('workspace-index') && process.env.HOPIT_WORKSPACE_INDEX) {
     options['workspace-index'] = process.env.HOPIT_WORKSPACE_INDEX
+  }
+  if (!provided.has('workspace-root') && process.env.HOPIT_WORKSPACE_ROOT) {
+    options['workspace-root'] = process.env.HOPIT_WORKSPACE_ROOT
+  }
+  if (!provided.has('workspace') && options['workspace-root']) {
+    options.workspace = path.join(options['workspace-root'], codebaseId)
   }
 
   if (productionProfile) {
@@ -554,6 +565,137 @@ async function dehydrateWorkspace(options) {
   }, null, 2))
 }
 
+async function discoverWorkspaces(options, discoverOptions = {}) {
+  const action = discoverOptions.action ?? 'discover'
+  const cloudService = createCloudGraphService(options)
+  const cloud = await cloudService.readOptionalVisibleGraph(visibilityRequestFromOptions(options))
+  const index = await readWorkspaceIndex(options)
+  const rootPath = path.resolve(workspaceRootFromOptions(options))
+  const codebases = []
+
+  if (cloud?.codebase) {
+    codebases.push(discoveredCloudCodebase(options, cloud, index, cloudService))
+  }
+
+  const discoveredKeys = new Set(codebases.map((entry) => workspaceIndexEntryKey(entry)))
+  for (const indexedCodebase of index?.codebases ?? []) {
+    const key = workspaceIndexEntryKey(indexedCodebase)
+    if (discoveredKeys.has(key)) continue
+    codebases.push({
+      ...indexedCodebase,
+      source: 'workspace-index',
+      attached: true,
+      available: false,
+    })
+  }
+
+  console.log(JSON.stringify({
+    ok: true,
+    action,
+    root: {
+      path: rootPath,
+      exists: existsSync(rootPath),
+      adapter: workspaceMode.adapter,
+      cacheMode: workspaceMode.cacheMode,
+      sourceOfTruth: workspaceMode.sourceOfTruth,
+      virtualized: false,
+      index: workspaceIndexSummary(options, index),
+    },
+    cloud: {
+      service: cloudService.type,
+      path: cloudService.location ?? cloudLocationFromOptions(options),
+      exists: Boolean(cloud),
+      discovery: 'configured-codebase',
+    },
+    codebases,
+  }, null, 2))
+}
+
+async function attachWorkspace(options) {
+  const cloudService = createCloudGraphService(options)
+  const cloud = await cloudService.readVisibleGraph(visibilityRequestFromOptions(options))
+  const attachOptions = workspaceOptionsForCloudCodebase(options, cloud)
+  await assertWorkspacePathSafe(attachOptions)
+  const index = await readWorkspaceIndex(attachOptions)
+  const existing = findIndexedCodebase(
+    index,
+    cloud.codebase?.id ?? attachOptions['codebase-id'],
+    attachOptions.workspace,
+  )
+
+  if (existing && existing.hydration?.state !== 'metadata-only' && !options.force) {
+    console.log(JSON.stringify({
+      ok: true,
+      action: 'attach',
+      alreadyAttached: true,
+      root: workspaceIndexRoot(attachOptions),
+      workspace: path.resolve(attachOptions.workspace),
+      codebase: existing,
+      files: {
+        visible: existing.visibleFileCount ?? Object.keys(cloud.files ?? {}).length,
+        hydrated: existing.hydration?.hydratedPathCount ?? null,
+        materialization: existing.materialization ?? null,
+      },
+      index: workspaceIndexSummary(attachOptions, index),
+      note: 'Existing attached workspace was left unchanged. Use hydrate-file, hydrate, or refresh for materialization changes.',
+    }, null, 2))
+    return
+  }
+
+  await assertAttachWorkspaceSafe(attachOptions, cloud, index)
+
+  await fs.mkdir(workspaceRootFromOptions(attachOptions), { recursive: true })
+  await fs.mkdir(attachOptions.workspace, { recursive: true })
+  await writeWorkspaceMetadataManifest(attachOptions, cloud, {
+    materialization: 'metadata-only',
+    attached: true,
+  })
+
+  await emit(attachOptions, 'workspace.attached', {
+    workspace: attachOptions.workspace,
+    codebaseId: cloud.codebase?.id ?? attachOptions['codebase-id'] ?? null,
+    codebaseName: cloud.codebase?.name ?? null,
+    revision: cloud.revision,
+    service: cloudService.type,
+    contract: summarizeGraphContract(cloud),
+    requester: summarizeRequester(cloud.visibilityContext),
+    adapter: workspaceMode.adapter,
+    cacheMode: workspaceMode.cacheMode,
+    materialization: 'metadata-only',
+    visibleFileCount: Object.keys(cloud.files ?? {}).length,
+    scopeCounts: countCloudScopes(cloud),
+    hiddenScopeCounts: cloud.visibilityContext?.hiddenScopeCounts ?? { shared: 0, private: 0 },
+  })
+
+  const attachedIndex = await upsertWorkspaceIndexFromCloud(attachOptions, cloud, {
+    reason: 'attach',
+    lastEvent: 'workspace.attached',
+    hydrationState: 'metadata-only',
+    hydratedPaths: [],
+    materialization: 'metadata-only',
+  })
+  const indexedCodebase = findIndexedCodebase(
+    attachedIndex,
+    cloud.codebase?.id ?? attachOptions['codebase-id'],
+    attachOptions.workspace,
+  )
+
+  console.log(JSON.stringify({
+    ok: true,
+    action: 'attach',
+    alreadyAttached: Boolean(existing),
+    root: workspaceIndexRoot(attachOptions),
+    workspace: path.resolve(attachOptions.workspace),
+    codebase: indexedCodebase,
+    files: {
+      visible: Object.keys(cloud.files ?? {}).length,
+      hydrated: 0,
+      materialization: 'metadata-only',
+    },
+    index: workspaceIndexSummary(attachOptions, attachedIndex),
+  }, null, 2))
+}
+
 async function refreshWorkspace(options) {
   await assertWorkspacePathSafe(options)
   const cloudService = createCloudGraphService(options)
@@ -593,6 +735,22 @@ async function refreshWorkspace(options) {
     }
     await emit(options, 'refresh.blocked', blockedDetail)
     throw new Error('Refresh blocked because the local journal has pending or failed entries.')
+  }
+
+  const workspaceIndex = await readWorkspaceIndex(options)
+  const indexedCodebase = findIndexedCodebase(workspaceIndex, cloud.codebase?.id ?? options['codebase-id'], options.workspace)
+  const localChanges = existsSync(options.workspace)
+    ? await workspaceLocalChanges(options, indexedCodebase)
+    : { safe: true, state: 'missing', reason: null }
+  if (!localChanges.safe) {
+    const blockedDetail = {
+      ...startedDetail,
+      state: 'blocked',
+      reason: localChanges.reason,
+      localChanges,
+    }
+    await emit(options, 'refresh.blocked', blockedDetail)
+    throw new Error('Refresh blocked because the local workspace has unjournaled changes.')
   }
 
   const result = await materializeCloudToWorkspace(options, cloud)
@@ -1251,6 +1409,74 @@ async function createRemoteRefreshScheduler(options, schedulerOptions = {}) {
   }
 }
 
+async function remotePullOnce(options) {
+  const trigger = options.trigger ?? 'manual'
+  const intervalMs = remoteRefreshIntervalMs(options)
+  await emit(options, 'remote-pull.started', {
+    state: 'enabled',
+    trigger,
+    mode: 'once',
+    workspace: options.workspace,
+    intervalMs,
+    adapter: workspaceMode.adapter,
+    cacheMode: workspaceMode.cacheMode,
+    safeRefreshOnly: true,
+  })
+
+  try {
+    const decision = await remoteRefreshDecision(options, {
+      trigger,
+      localSyncIdle: () => true,
+    })
+
+    if (decision.state === 'skip') {
+      if (decision.emit) {
+        await emit(options, 'remote-pull.skipped', decision.detail)
+      }
+
+      const result = {
+        ok: true,
+        action: 'remote-pull',
+        state: decision.emit ? 'skipped' : 'up-to-date',
+        trigger,
+        workspace: options.workspace,
+        reason: decision.detail?.reason ?? null,
+        detail: decision.detail ?? null,
+      }
+      console.log(JSON.stringify(result, null, 2))
+      return result
+    }
+
+    await refreshWorkspace(options)
+    const applied = {
+      state: 'applied',
+      trigger,
+      workspace: options.workspace,
+      fromRevision: decision.fromRevision,
+      toRevision: decision.toRevision,
+      intervalMs,
+      safeRefreshOnly: true,
+    }
+    await emit(options, 'remote-pull.applied', applied)
+
+    const result = {
+      ok: true,
+      action: 'remote-pull',
+      ...applied,
+    }
+    console.log(JSON.stringify(result, null, 2))
+    return result
+  } catch (error) {
+    await emit(options, 'remote-pull.failed', {
+      state: 'failed',
+      trigger,
+      workspace: options.workspace,
+      reason: error.message,
+    })
+    throw error
+  }
+}
+
 async function remoteRefreshDecision(options, context) {
   if (!context.localSyncIdle()) {
     return {
@@ -1568,31 +1794,38 @@ async function serviceStatus(options) {
   const pidPath = path.resolve(options.pid)
   const record = await readServiceRecord(pidPath)
   const pid = record?.pid ?? null
-  const running = typeof pid === 'number' && isProcessRunning(pid)
+  const processRunning = typeof pid === 'number' && isProcessRunning(pid)
   let agent = null
   let error = null
   let fresh = false
+  let endpointReachable = false
 
-  if (running) {
-    let timeout
-    try {
-      const controller = new AbortController()
-      timeout = setTimeout(() => controller.abort(), 1000)
-      const response = await fetch(`http://${options.host}:${options.port}/status`, {
-        cache: 'no-store',
-        signal: controller.signal,
-      })
-      agent = response.ok ? await response.json() : null
-      if (!response.ok) error = `status endpoint returned ${response.status}`
-      fresh = agentWatchStartedAfter(agent, record?.startedAt)
-      if (agent && !fresh) error = 'status endpoint has not observed this service start yet'
-    } catch (statusError) {
-      error = statusError instanceof Error ? statusError.message : 'status endpoint unavailable'
-    } finally {
-      if (timeout) clearTimeout(timeout)
+  let timeout
+  try {
+    const controller = new AbortController()
+    timeout = setTimeout(() => controller.abort(), 1000)
+    const response = await fetch(`http://${options.host}:${options.port}/status`, {
+      cache: 'no-store',
+      signal: controller.signal,
+    })
+    endpointReachable = response.ok
+    agent = response.ok ? await response.json() : null
+    if (!response.ok) error = `status endpoint returned ${response.status}`
+    fresh = record?.startedAt ? agentWatchStartedAfter(agent, record.startedAt) : true
+    if (agent && !fresh) error = 'status endpoint has not observed this service start yet'
+    const expectedCodebaseId = options['codebase-id'] ?? null
+    if (agent && expectedCodebaseId && agent.codebaseId !== expectedCodebaseId) {
+      error = `status endpoint is serving codebase ${agent.codebaseId ?? '(unknown)'}, expected ${expectedCodebaseId}`
     }
+  } catch (statusError) {
+    if (processRunning) {
+      error = statusError instanceof Error ? statusError.message : 'status endpoint unavailable'
+    }
+  } finally {
+    if (timeout) clearTimeout(timeout)
   }
 
+  const running = processRunning || (endpointReachable && agent?.ok !== false)
   return {
     ok: running && !error && fresh && agent?.ok !== false,
     running,
@@ -2020,9 +2253,19 @@ async function installAgent(options) {
 }
 
 async function runWorkspaceCommand(action, options) {
-  const allowedActions = new Set(['status', 'list', 'ensure', 'files', 'hydrate-file', 'dehydrate'])
+  const allowedActions = new Set(['status', 'list', 'discover', 'ensure', 'attach', 'files', 'hydrate-file', 'dehydrate'])
   if (!allowedActions.has(action)) {
     throw new Error(`Unknown workspace action: ${action}`)
+  }
+
+  if (action === 'discover' || action === 'list') {
+    await discoverWorkspaces(options, { action })
+    return
+  }
+
+  if (action === 'attach') {
+    await attachWorkspace(options)
+    return
   }
 
   if (action === 'hydrate-file') {
@@ -2099,11 +2342,18 @@ async function runWorkspaceCommand(action, options) {
 function workspaceCodebaseSummary(options, state) {
   const status = state.status
   const codebaseId = status.codebaseId ?? options['codebase-id'] ?? path.basename(path.resolve(options.workspace))
+  const hydrationState = status.workspace.hydration?.state ?? null
+  const materialization =
+    hydrationState === 'metadata-only'
+      ? 'metadata-only'
+      : hydrationState === 'partial'
+        ? 'partial-managed-folder'
+        : 'managed-folder'
 
   return {
     id: codebaseId,
     name: status.codebaseName ?? codebaseId,
-    initialized: status.readiness === 'ready',
+    initialized: status.readiness !== 'not_initialized',
     workspace: status.workspace,
     cloud: {
       path: status.cloud.path,
@@ -2114,13 +2364,97 @@ function workspaceCodebaseSummary(options, state) {
     mainId: status.mainId,
     visibleFileCount: status.visibleFileCount,
     hiddenFileCount: status.hiddenFileCount,
-    materialization: 'managed-folder',
+    materialization,
     hydration: status.workspace.hydration,
     localChanges: status.workspace.localChanges,
     contentManifest: status.workspace.contentManifest,
     remoteCursor: status.remotePull.cursor,
     virtualized: false,
   }
+}
+
+function discoveredCloudCodebase(options, cloud, index, cloudService) {
+  const codebaseId = cloud.codebase?.id ?? options['codebase-id'] ?? path.basename(path.resolve(options.workspace))
+  const codebaseOptions = workspaceOptionsForCloudCodebase(options, cloud)
+  const indexedCodebase =
+    findIndexedCodebase(index, codebaseId, codebaseOptions.workspace) ??
+    findIndexedCodebase(index, codebaseId)
+  const workspacePath = path.resolve(indexedCodebase?.workspace?.path ?? codebaseOptions.workspace)
+  const workspaceRoot = path.resolve(indexedCodebase?.workspace?.root ?? workspaceRootFromOptions(codebaseOptions))
+
+  return {
+    id: codebaseId,
+    name: cloud.codebase?.name ?? codebaseId,
+    source: 'configured-cloud',
+    attached: Boolean(indexedCodebase),
+    available: true,
+    initialized: true,
+    workspace: {
+      root: workspaceRoot,
+      path: workspacePath,
+      exists: existsSync(workspacePath),
+      adapter: workspaceMode.adapter,
+      cacheMode: workspaceMode.cacheMode,
+      virtualized: false,
+      hydration: indexedCodebase?.hydration ?? { state: 'not_attached' },
+    },
+    cloud: {
+      path: cloudLocationFromOptions(options, codebaseId),
+      service: cloudService.type,
+      exists: true,
+    },
+    ownerId: cloud.codebase?.ownerId ?? cloud.owner?.id ?? null,
+    activeChangeSetId: cloud.selectedState?.type === 'active-change-set' ? cloud.selectedState.id : null,
+    mainId: cloud.main?.id ?? null,
+    selectedState: {
+      type: cloud.selectedState?.type ?? null,
+      id: cloud.selectedState?.id ?? null,
+      revision: cloud.selectedState?.revision ?? null,
+      visibility: cloud.selectedState?.effectiveVisibility ?? cloud.visibility?.effective ?? null,
+    },
+    visibleFileCount: Object.keys(cloud.files ?? {}).length,
+    hiddenFileCount: cloud.visibilityContext?.hiddenFileCount ?? null,
+    scopeCounts: countCloudScopes(cloud),
+    hiddenScopeCounts: cloud.visibilityContext?.hiddenScopeCounts ?? null,
+    materialization: indexedCodebase?.materialization ?? 'not-attached',
+    remoteCursor: indexedCodebase?.remoteCursor ?? null,
+    virtualized: false,
+  }
+}
+
+function workspaceOptionsForCloudCodebase(options, cloud) {
+  const codebaseId = cloud.codebase?.id ?? options['codebase-id'] ?? path.basename(path.resolve(options.workspace))
+  const next = {
+    ...options,
+    'codebase-id': codebaseId,
+  }
+
+  if (!options._provided?.has('workspace')) {
+    next.workspace = path.join(workspaceRootFromOptions(options), workspaceFolderNameForCodebase(codebaseId))
+  }
+
+  return next
+}
+
+function workspaceFolderNameForCodebase(codebaseId) {
+  return String(codebaseId ?? 'codebase')
+    .replace(/[\\/]+/g, '-')
+    .replace(/^\.+$/, 'codebase')
+}
+
+async function assertAttachWorkspaceSafe(options, cloud, index) {
+  if (options.force) return
+  if (!existsSync(options.workspace)) return
+
+  const codebaseId = cloud.codebase?.id ?? options['codebase-id']
+  if (findIndexedCodebase(index, codebaseId, options.workspace)) return
+
+  const unmanagedFiles = await readWorkspaceFiles(options.workspace)
+  if (Object.keys(unmanagedFiles).length === 0) return
+
+  throw new Error(
+    'workspace attach refuses to bind a non-empty unmanaged folder. Choose an empty workspace folder or use the existing indexed workspace.',
+  )
 }
 
 function workspaceFileMetadata(options, relativePath, file, forceExists = false) {
@@ -2548,6 +2882,19 @@ async function workspaceLocalChanges(options, indexedCodebase) {
 
   const baseline = indexedCodebase?.contentManifest
   if (!baseline?.files) {
+    const disk = await contentManifestFromWorkspace(options.workspace)
+    if (Object.keys(disk.files).length === 0) {
+      return {
+        safe: true,
+        state: 'clean',
+        reason: null,
+        addedCount: 0,
+        modifiedCount: 0,
+        deletedCount: 0,
+        samplePaths: [],
+      }
+    }
+
     return {
       safe: false,
       state: 'unknown',
@@ -3033,11 +3380,13 @@ async function readAgentState(options) {
     hydration,
   })
   const initialized = Boolean(cloud) && (hydration.state === 'materialized' || hydration.state === 'partial')
+  const attached = Boolean(cloud) && hydration.state === 'metadata-only'
+  const usable = initialized || attached
 
   return {
     status: {
       ok:
-        initialized &&
+        usable &&
         localChanges.safe &&
         failedJournalEntries.length === 0 &&
         syncHealth.state !== 'failed' &&
@@ -3045,7 +3394,7 @@ async function readAgentState(options) {
         !watchHealth.state.endsWith('degraded') &&
         watchHealth.state !== 'blocked',
       generatedAt: new Date().toISOString(),
-      readiness: initialized ? 'ready' : 'not_initialized',
+      readiness: initialized ? 'ready' : attached ? 'attached' : 'not_initialized',
       mode: workspaceMode,
       codebaseId: cloudSummary.codebase?.id ?? null,
       codebaseName: cloudSummary.codebase?.name ?? null,
@@ -4469,7 +4818,8 @@ Commands:
   init        Seed a local cloud file graph
   import      Import a real local folder into the HopIt graph and hydrate it
   hydrate     Materialize cloud files into the managed workspace
-  refresh     Update the managed workspace from cloud when the journal is safe
+  refresh     Update the managed workspace from cloud when journal and disk are safe
+  remote-pull Run one safe remote refresh decision, matching watch/service polling
   sync        Scan managed-folder writes, journal them, and acknowledge to cloud
   recover     Replay unacknowledged journal entries into the cloud graph
   review      Open the selected active change set for review
@@ -4480,7 +4830,7 @@ Commands:
   doctor      Run a production-oriented local health check
   backup      Write a restorable cloud/status/event backup folder
   install     Prepare production state, workspace, env, and optional launch agent
-  workspace   Manage/list the configured HopIt workspace root and codebase
+  workspace   Manage/list/discover/attach the configured HopIt workspace root and codebase
   session     Manage this device/session registration (alias: device)
   service     Manage the local agent service: start, stop, restart, status, run
   watch       Hydrate and watch the workspace for edits

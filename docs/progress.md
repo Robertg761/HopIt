@@ -48,7 +48,7 @@ npm run package:hop
 
 Current verified result:
 
-- `npm run agent:test`: passes; the current sandbox run reports 43 passing tests plus six sandbox-skipped service/remote-pull tests when loopback listening is unavailable.
+- `npm run agent:test`: passes; the current sandbox run reports 47 passing tests plus six sandbox-skipped service/remote-pull tests when loopback listening is unavailable.
 - `npm run lint`: passes.
 - `npm run check:production-config`: passes when `.env.local` is loaded.
 - `npm run package:hop`: builds the current macOS artifact with env/install support files.
@@ -59,7 +59,7 @@ Current verified result:
 | --- | --- | --- |
 | Product concept | Done | The repo has converged on cloud-native managed workspaces, active change sets, explicit Main, and `.private/` owner-only workspace scope. |
 | Web product shell | Mostly done | The prototype UI polls live local agent state through `/api/agent/status`, maps files/events/revisions/review/merge/conflict state, and can read Convex dashboard state when configured. |
-| HopIt Workspace Root | In progress | Production-profile paths, a root-level workspace index, hydration/materialized revision state, metadata-only/dehydrate, single-file hydrate, and a remote cursor are in place; attach/setup flow, cloud codebase discovery, richer per-file lazy states, and lazy materialization policy remain. |
+| HopIt Workspace Root | In progress | Production-profile paths, a root-level workspace index, configured-codebase discovery, metadata-only attach, hydration/materialized revision state, metadata-only/dehydrate, single-file hydrate, and a remote cursor are in place; account-wide discovery, richer per-file lazy states, and lazy materialization policy remain. |
 | Local managed-folder agent | Done for spike | The agent proves hydration, journaling, sync acknowledgement, recovery, watch startup gating, safe refresh, status, and same-owner continuity. |
 | Lazy materialization | In progress | `workspace files`, `workspace hydrate-file`, and `workspace dehydrate --force` prove metadata listing, single-file hydration, and metadata-only state. V1 still needs automatic policy, editor/tool demand hydration, and broader cache pruning. |
 | Vercel/Convex production baseline | Done for personal dogfood | Vercel hosts the protected dashboard, Convex stores the seeded production graph, and the hosted API reads the graph successfully. |
@@ -70,7 +70,7 @@ Current verified result:
 | Fixture cloud graph service boundary | Done | Commands now use a fixture-backed service boundary instead of direct command-level cloud JSON access. |
 | Main/change-set/owner/session/visibility contract | Done for fixture | The fixture graph and status surface include these identities and visibility fields. |
 | Same-owner two-session continuity | Done for spike | Device/session B can refresh acknowledged shared and `.private/` changes from device/session A. |
-| Automatic remote-update delivery | In progress | Remote-update events, explicit safe refresh, per-workspace materialization cursors, and opt-in `--remote-pull` polling for clean journals exist. Production-grade push/subscription delivery, default policy, and broader verification remain. |
+| Automatic remote-update delivery | In progress | Remote-update events, explicit safe refresh, per-workspace materialization cursors, opt-in `--remote-pull` polling, and one-shot `hop remote-pull` checks for clean materialized workspaces exist. Production-grade push/subscription delivery, default policy, and broader verification remain. |
 | Collaborator visibility simulation | Done for fixture | Tests prove private change sets hide non-owner content, team/review-visible change sets expose non-private paths, and `.private/` remains owner-only. |
 | Remote-update events | Done for spike | Refresh emits first-class `remote-update` events and status exposes the latest update. |
 | Review and merge | Done for fixture | Fixture commands open the selected active change set for review, merge it into Main, emit review/merge events, and expose review/merge state through status. |
@@ -601,6 +601,8 @@ Current foundation:
 
 - Production-profile service paths already separate agent state from the source checkout.
 - The agent can hydrate a selected codebase into `/Users/robert/HopIt Workspaces/hopit`.
+- `hop workspace discover` lists the configured visible cloud codebase plus indexed local workspaces.
+- `hop workspace attach` binds the configured cloud codebase into the Workspace Root as metadata-only without downloading file bodies.
 - `hop workspace files` lists visible cloud file metadata without hydrating bodies.
 - `hop workspace hydrate-file --path <path>` materializes a single visible file and records partial hydration.
 - `hop workspace dehydrate --force` removes clean cached bodies, writes `.hopit/metadata.json`, and records metadata-only hydration state.
@@ -642,10 +644,11 @@ Definition of done:
 
 Current foundation:
 
-- Explicit `hop refresh` is safe and refuses pending or failed journal state.
+- Explicit `hop refresh` is safe and refuses pending or failed journal state and unjournaled local workspace drift.
 - Refresh emits `remote-update` events and status exposes the latest remote update.
 - Same-owner two-service simulation proves sequential handoff: device A syncs through the watcher, device B receives through explicit safe refresh.
-- The current worktree includes opt-in `--remote-pull` support for `watch` and `service start`; sandboxed service-level tests are skipped when loopback listening is unavailable, but the watch-level remote-pull test passes.
+- The current worktree includes opt-in `--remote-pull` support for `watch` and `service start`, plus `hop remote-pull` for a deterministic one-shot safe refresh attempt.
+- The production-profile same-Mac dogfood test uses two isolated state/workspace roots against one fixture graph and covers metadata-only dehydrate, single-file hydrate, refresh fallback, one-shot remote-pull apply, and dirty-state blocking without requiring loopback service access.
 
 ### 0.9. Installer, Daemon, And Production Hygiene
 
@@ -808,7 +811,7 @@ Definition of done:
 
 ## Known Gaps
 
-- No full HopIt Workspace Root contract yet: the root-level codebase/workspace index, hydration cursor, metadata-only state, and single-file hydrate primitive exist, but attach/setup flow, cloud codebase discovery, richer per-file lazy states, and automatic lazy materialization policy remain.
+- No full HopIt Workspace Root contract yet: the root-level codebase/workspace index, configured-codebase discovery, metadata-only attach, hydration cursor, metadata-only state, and single-file hydrate primitive exist, but account-wide discovery, richer per-file lazy states, and automatic lazy materialization policy remain.
 - The current managed folder path still defaults to eager hydrate/refresh for normal operation; metadata-only and single-file hydrate are CLI primitives rather than a complete editor/tool demand-hydration system.
 - Real account provider code exists, but production Clerk DNS/issuer/live-key rollout is pinned until HopIt has an owned domain.
 - Durable membership, role, invitation, hosted member/invite UI, and scoped agent-session token groundwork exist, but complete permission coverage is not done yet.

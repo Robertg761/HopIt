@@ -188,6 +188,7 @@ Install:
 Start on login:
   macOS: ./support/install-macos-launch-agent.sh
   Linux: ./support/install-systemd-user-service.sh
+  macOS installer copies the package to ~/Library/Application Support/HopIt/Runtime before registering launchd.
 
 Run:
   ./bin/hop help
@@ -254,7 +255,12 @@ if [ "$(uname -s)" != "Darwin" ]; then
   exit 1
 fi
 
-PACKAGE_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+SOURCE_PACKAGE_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)"
+INSTALL_ROOT="$HOME/Library/Application Support/HopIt/Runtime"
+if [ -n "\${HOPIT_INSTALL_ROOT-}" ]; then
+  INSTALL_ROOT="$HOPIT_INSTALL_ROOT"
+fi
+PACKAGE_ROOT="$INSTALL_ROOT/$(basename "$SOURCE_PACKAGE_ROOT")"
 ENV_FILE="$HOME/.config/hopit/production.env"
 if [ -n "\${HOPIT_ENV_FILE-}" ]; then
   ENV_FILE="$HOPIT_ENV_FILE"
@@ -266,7 +272,14 @@ fi
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 LOG_DIR="$HOME/Library/Logs/HopIt"
 
-mkdir -p "$(dirname "$ENV_FILE")" "$(dirname "$PLIST")" "$LOG_DIR"
+mkdir -p "$(dirname "$ENV_FILE")" "$(dirname "$PLIST")" "$LOG_DIR" "$INSTALL_ROOT"
+if [ "$SOURCE_PACKAGE_ROOT" != "$PACKAGE_ROOT" ]; then
+  rm -rf "$PACKAGE_ROOT"
+  cp -R "$SOURCE_PACKAGE_ROOT" "$PACKAGE_ROOT"
+fi
+xattr -cr "$PACKAGE_ROOT" >/dev/null 2>&1 || true
+chmod +x "$PACKAGE_ROOT/bin/hop" "$PACKAGE_ROOT/runtime/node" "$PACKAGE_ROOT/support"/*.sh
+
 if [ ! -f "$ENV_FILE" ]; then
   cp "$PACKAGE_ROOT/examples/production.env.example" "$ENV_FILE"
   echo "Created $ENV_FILE. Edit it with real HopIt values, then rerun this installer." >&2

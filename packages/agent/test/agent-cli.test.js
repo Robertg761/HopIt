@@ -49,6 +49,38 @@ async function makeTwoSessionState() {
   }
 }
 
+async function makeProductionTwoDeviceState() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hopit-agent-production-two-device-test-'))
+  const codebaseId = 'hopit-core'
+  const cloud = path.join(root, 'fixture-cloud.json')
+
+  function makeDevice(name, sessionId, deviceName) {
+    const stateRoot = path.join(root, `${name}-state`)
+    const workspaceRoot = path.join(root, `${name}-workspaces`)
+
+    return {
+      root,
+      cloud,
+      codebaseId,
+      stateRoot,
+      workspaceRoot,
+      workspace: path.join(workspaceRoot, codebaseId),
+      journal: path.join(stateRoot, 'journal', `${codebaseId}.ndjson`),
+      events: path.join(stateRoot, 'events', `${codebaseId}.ndjson`),
+      sessionId,
+      deviceName,
+    }
+  }
+
+  return {
+    root,
+    cloud,
+    codebaseId,
+    deviceA: makeDevice('device-a', 'session_prod_device_a', 'Production Device A'),
+    deviceB: makeDevice('device-b', 'session_prod_device_b', 'Production Device B'),
+  }
+}
+
 async function getAvailablePort(t) {
   const reserved = await reserveLoopbackPort(t)
   if (!reserved) return null
@@ -131,6 +163,27 @@ function stateArgs(state) {
     state.journal,
     '--events',
     state.events,
+  ]
+}
+
+function productionProfileArgs(device, extraArgs = []) {
+  return [
+    '--profile',
+    'production',
+    '--codebase-id',
+    device.codebaseId,
+    '--state-root',
+    device.stateRoot,
+    '--workspace-root',
+    device.workspaceRoot,
+    '--cloud',
+    device.cloud,
+    '--allow-local-cloud',
+    '--session-id',
+    device.sessionId,
+    '--device-name',
+    device.deviceName,
+    ...extraArgs,
   ]
 }
 
@@ -707,6 +760,86 @@ test('workspace command reports and prepares the configured workspace root', asy
   assert.equal(listed.codebases[0].id, 'demo-codebase')
 })
 
+test('workspace discover and attach bind a cloud codebase without hydrating file bodies', async () => {
+  const state = await makeState()
+  const workspaceRoot = path.join(state.root, 'HopIt Workspaces')
+  const workspace = path.join(workspaceRoot, 'hopit-core')
+  const args = [
+    '--cloud',
+    state.cloud,
+    '--workspace',
+    workspace,
+    '--journal',
+    state.journal,
+    '--events',
+    state.events,
+    '--workspace-root',
+    workspaceRoot,
+  ]
+
+  await runCli('init', [...args, '--force'])
+
+  const discovered = JSON.parse((await runCli('workspace', ['discover', ...args])).stdout)
+  assert.equal(discovered.ok, true)
+  assert.equal(discovered.action, 'discover')
+  assert.equal(discovered.cloud.exists, true)
+  assert.equal(discovered.cloud.discovery, 'configured-codebase')
+  assert.equal(discovered.root.exists, false)
+  assert.equal(discovered.codebases.length, 1)
+  assert.equal(discovered.codebases[0].id, 'hopit-core')
+  assert.equal(discovered.codebases[0].attached, false)
+  assert.equal(discovered.codebases[0].available, true)
+  assert.equal(discovered.codebases[0].workspace.path, workspace)
+  assert.equal(discovered.codebases[0].workspace.hydration.state, 'not_attached')
+
+  const attached = parseLastJsonObject((await runCli('workspace', ['attach', ...args])).stdout)
+  assert.equal(attached.ok, true)
+  assert.equal(attached.action, 'attach')
+  assert.equal(attached.workspace, workspace)
+  assert.equal(attached.files.visible, 4)
+  assert.equal(attached.files.hydrated, 0)
+  assert.equal(attached.files.materialization, 'metadata-only')
+  assert.equal(attached.codebase.hydration.state, 'metadata-only')
+  assert.equal(attached.codebase.contentManifest.fileCount, 0)
+  assert.equal(await pathExists(path.join(workspace, '.hopit', 'metadata.json')), true)
+  assert.equal(await pathExists(path.join(workspace, 'README.md')), false)
+
+  const status = JSON.parse((await runCli('status', args)).stdout)
+  assert.equal(status.ok, true)
+  assert.equal(status.readiness, 'attached')
+  assert.equal(status.workspace.hydration.state, 'metadata-only')
+  assert.equal(status.workspace.localChanges.state, 'clean')
+
+  const listed = JSON.parse((await runCli('workspace', ['files', ...args])).stdout)
+  assert.equal(listed.summary.visibleFiles, 4)
+  assert.equal(listed.summary.hydratedFiles, 0)
+  assert.equal(listed.summary.materialization, 'metadata-only')
+  assert.equal(listed.current.initialized, true)
+  assert.equal(listed.current.hydration.state, 'metadata-only')
+
+  const hydrated = parseLastJsonObject((await runCli('workspace', [
+    'hydrate-file',
+    ...args,
+    '--path',
+    'README.md',
+  ])).stdout)
+  assert.equal(hydrated.ok, true)
+  assert.equal(hydrated.action, 'hydrate-file')
+  assert.equal(hydrated.hydration.state, 'partial')
+  assert.equal(await pathExists(path.join(workspace, 'README.md')), true)
+  assert.equal(await pathExists(path.join(workspace, 'src/presence.ts')), false)
+})
+
+test('workspace attach refuses non-empty unmanaged folders', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await fs.mkdir(state.workspace, { recursive: true })
+  await fs.writeFile(path.join(state.workspace, 'README.md'), '# unmanaged\n', 'utf8')
+
+  const failure = await runCliFailure('workspace', ['attach', ...stateArgs(state)])
+  assert.match(failure.stderr, /non-empty unmanaged folder/)
+})
+
 test('hydrate records a workspace index cursor for the materialized revision', async () => {
   const state = await makeState()
   await runCli('init', [...stateArgs(state), '--force'])
@@ -769,6 +902,23 @@ test('workspace ensure does not mark a cloud-backed empty folder as materialized
   assert.equal(status.workspace.hydration.state, 'not_materialized')
 })
 
+test('refresh can safely materialize an empty ensured workspace without a manifest', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('workspace', ['ensure', ...stateArgs(state)])
+
+  assert.equal(await pathExists(path.join(state.workspace, 'README.md')), false)
+
+  await runCli('refresh', stateArgs(state))
+
+  const status = JSON.parse((await runCli('status', stateArgs(state))).stdout)
+  assert.equal(status.ok, true)
+  assert.equal(status.readiness, 'ready')
+  assert.equal(status.workspace.hydration.state, 'materialized')
+  assert.equal(status.workspace.localChanges.state, 'clean')
+  assert.equal(await pathExists(path.join(state.workspace, 'README.md')), true)
+})
+
 test('metadata-only workspaces do not treat unhydrated missing files as deletes on sync', async () => {
   const state = await makeState()
   await runCli('init', [...stateArgs(state), '--force'])
@@ -825,6 +975,114 @@ test('workspace files and hydrate-file expose cloud metadata and materialize one
   assert.equal(status.workspace.hydration.state, 'partial')
   assert.equal(status.workspace.hydration.hydratedPathCount, 1)
   assert.equal(status.workspace.contentManifest.fileCount, 1)
+})
+
+test('production-profile same-Mac dogfood simulation covers lazy hydration remote-pull handoff and dirty blocking', async () => {
+  const { deviceA, deviceB } = await makeProductionTwoDeviceState()
+  const deviceAArgs = productionProfileArgs(deviceA)
+  const deviceBArgs = productionProfileArgs(deviceB)
+
+  await runCli('init', [...deviceAArgs, '--force'])
+  await runCli('hydrate', deviceAArgs)
+
+  const listedBefore = JSON.parse((await runCli('workspace', ['files', ...deviceBArgs, '--json'])).stdout)
+  assert.equal(listedBefore.ok, true)
+  assert.equal(listedBefore.action, 'files')
+  assert.equal(listedBefore.summary.visibleFiles, 4)
+  assert.equal(listedBefore.summary.hydratedFiles, 0)
+  assert.equal(listedBefore.files.find((file) => file.path === 'README.md').local.exists, false)
+
+  const hydrated = parseLastJsonObject((await runCli('workspace', [
+    'hydrate-file',
+    ...deviceBArgs,
+    '--path',
+    'README.md',
+  ])).stdout)
+  assert.equal(hydrated.ok, true)
+  assert.equal(hydrated.action, 'hydrate-file')
+  assert.equal(hydrated.index.path, path.join(deviceB.stateRoot, 'workspaces.json'))
+  assert.equal(await pathExists(path.join(deviceB.workspace, 'README.md')), true)
+  assert.equal(await pathExists(path.join(deviceB.workspace, 'src/presence.ts')), false)
+
+  let deviceBStatus = JSON.parse((await runCli('status', deviceBArgs)).stdout)
+  assert.equal(deviceBStatus.workspace.hydration.state, 'partial')
+  assert.equal(deviceBStatus.workspace.localChanges.state, 'clean')
+  assert.equal(deviceBStatus.workspace.contentManifest.fileCount, 1)
+
+  const dehydrated = parseLastJsonObject((await runCli('workspace', [
+    'dehydrate',
+    ...deviceBArgs,
+    '--force',
+  ])).stdout)
+  assert.equal(dehydrated.ok, true)
+  assert.equal(dehydrated.action, 'dehydrate')
+  assert.equal(dehydrated.removed, 1)
+  assert.equal(await pathExists(path.join(deviceB.workspace, 'README.md')), false)
+  assert.equal(await pathExists(path.join(deviceB.workspace, '.hopit', 'metadata.json')), true)
+
+  deviceBStatus = JSON.parse((await runCli('status', deviceBArgs)).stdout)
+  assert.equal(deviceBStatus.workspace.hydration.state, 'metadata-only')
+  assert.equal(deviceBStatus.workspace.localChanges.state, 'clean')
+  assert.equal(deviceBStatus.workspace.contentManifest.fileCount, 0)
+
+  const firstHandoff = '# hopit-core\n\nProduction-profile handoff from device A.\n'
+  await fs.writeFile(path.join(deviceA.workspace, 'README.md'), firstHandoff, 'utf8')
+  await runCli('sync-once', deviceAArgs)
+
+  const metadataOnlyRemotePull = parseLastJsonObject((await runCli('remote-pull', deviceBArgs)).stdout)
+  assert.equal(metadataOnlyRemotePull.ok, true)
+  assert.equal(metadataOnlyRemotePull.state, 'skipped')
+  assert.equal(metadataOnlyRemotePull.reason, 'workspace_not_fully_materialized')
+  assert.equal(await pathExists(path.join(deviceB.workspace, 'README.md')), false)
+
+  await runCli('refresh', deviceBArgs)
+  assert.equal(await fs.readFile(path.join(deviceB.workspace, 'README.md'), 'utf8'), firstHandoff)
+  assert.equal(await pathExists(path.join(deviceB.workspace, 'src/presence.ts')), true)
+
+  const secondHandoff = '# hopit-core\n\nRemote-pull one-shot handoff from device A.\n'
+  await fs.writeFile(path.join(deviceA.workspace, 'README.md'), secondHandoff, 'utf8')
+  await runCli('sync-once', deviceAArgs)
+
+  const appliedRemotePull = parseLastJsonObject((await runCli('remote-pull', deviceBArgs)).stdout)
+  assert.equal(appliedRemotePull.ok, true)
+  assert.equal(appliedRemotePull.state, 'applied')
+  assert.equal(appliedRemotePull.fromRevision, 2)
+  assert.equal(appliedRemotePull.toRevision, 3)
+  assert.equal(await fs.readFile(path.join(deviceB.workspace, 'README.md'), 'utf8'), secondHandoff)
+
+  deviceBStatus = JSON.parse((await runCli('status', [...deviceBArgs, '--remote-pull'])).stdout)
+  assert.equal(deviceBStatus.remotePull.enabled, true)
+  assert.equal(deviceBStatus.remotePull.state, 'enabled')
+  assert.equal(deviceBStatus.remotePull.lastApplied.detail.toRevision, 3)
+  assert.equal(deviceBStatus.remoteUpdate.state, 'updated')
+  assert.deepEqual(deviceBStatus.events.lastRemoteUpdate.detail.changedPaths, ['README.md'])
+
+  const unsafeDeviceBContent = '# hopit-core\n\nUnsynced local draft on device B.\n'
+  await fs.writeFile(path.join(deviceB.workspace, 'README.md'), unsafeDeviceBContent, 'utf8')
+
+  deviceBStatus = JSON.parse((await runCli('status', deviceBArgs)).stdout)
+  assert.equal(deviceBStatus.ok, false)
+  assert.equal(deviceBStatus.workspace.localChanges.state, 'dirty')
+  assert.equal(deviceBStatus.workspace.localChanges.reason, 'workspace_has_unjournaled_changes')
+  assert.equal(deviceBStatus.workspace.localChanges.modifiedCount, 1)
+  assert.deepEqual(deviceBStatus.workspace.localChanges.samplePaths, ['README.md'])
+
+  const thirdHandoff = '# hopit-core\n\nRemote update that must not overwrite dirty device B.\n'
+  await fs.writeFile(path.join(deviceA.workspace, 'README.md'), thirdHandoff, 'utf8')
+  await runCli('sync-once', deviceAArgs)
+
+  const blockedRemotePull = parseLastJsonObject((await runCli('remote-pull', deviceBArgs)).stdout)
+  assert.equal(blockedRemotePull.ok, true)
+  assert.equal(blockedRemotePull.state, 'skipped')
+  assert.equal(blockedRemotePull.reason, 'workspace_has_unjournaled_changes')
+  assert.equal(blockedRemotePull.detail.localChanges.modifiedCount, 1)
+  assert.equal(await fs.readFile(path.join(deviceB.workspace, 'README.md'), 'utf8'), unsafeDeviceBContent)
+
+  deviceBStatus = JSON.parse((await runCli('status', [...deviceBArgs, '--remote-pull'])).stdout)
+  assert.equal(deviceBStatus.remotePull.state, 'skipped')
+  assert.equal(deviceBStatus.remotePull.lastSkipped.detail.reason, 'workspace_has_unjournaled_changes')
+  assert.equal(deviceBStatus.remotePull.lastSkipped.detail.localChanges.modifiedCount, 1)
+  assert.equal(deviceBStatus.remotePull.cursor.behindByRevisions, 1)
 })
 
 test('backup writes restorable cloud status events journal and manifest files', async () => {

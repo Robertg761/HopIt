@@ -164,12 +164,12 @@ Current spike:
 - Fixture conflict handling detects stale selected-state revisions, stale file/base revisions, and stale Main revisions, emits `change_set.conflict_detected`, and surfaces conflict state while preserving local edits for review.
 - The Next.js product shell now polls `/api/agent/status`, maps live local status/events/cloud data into the dashboard, and can read the Convex dashboard query when `HOPIT_CONVEX_URL` or `NEXT_PUBLIC_CONVEX_URL` is configured.
 - `/api/agent/command` exposes whitelisted local actions for sync, refresh, recover, review, and merge. Hosted Convex-backed deployments can read status but still require the local agent for workspace commands.
-- `hop workspace` persists a root-level index keyed by codebase and concrete workspace path; hydrate, refresh, and sync update the materialized revision cursor that status and remote-pull use.
+- `hop workspace` persists a root-level index keyed by codebase and concrete workspace path; configured-codebase discovery and metadata-only attach can bind a cloud codebase into the Workspace Root, and hydrate, refresh, and sync update the materialized revision cursor that status and remote-pull use.
 - `hop device` / `hop session` exposes local session status and Convex-backed scoped session registration, listing, touch, and revocation.
 
 Current next work:
 
-1. Finish the HopIt Workspace Root product contract: cloud codebase discovery, attach/setup flow, richer per-file cache metadata, and automatic lazy materialization policy on top of the current metadata-only and single-file hydrate primitives.
+1. Finish the HopIt Workspace Root product contract: account-wide cloud codebase discovery, richer per-file cache metadata, and automatic lazy materialization policy on top of the current configured-codebase attach, metadata-only, and single-file hydrate primitives.
 2. Broaden content-addressed storage and per-file revision guards beyond the agent text-file path into full history, large files, and product write flows.
 3. Promote the opt-in remote-pull proof into production-grade automatic remote-update delivery so same-owner devices refresh safely without a manual command when the local journal is clean.
 4. Finish scoped device/session auth coverage and continue domain-independent membership, invitation, and permission work behind the Basic Auth production guard.
@@ -238,7 +238,7 @@ The detailed implementation sequence lives in [GitHub-Lite Collaboration Plan](g
 
 ### Milestone 9: Workspace Root And Automatic Device Handoff
 
-- Create a durable workspace-root configuration and setup flow. The root index exists; setup/attach remains.
+- Create a durable workspace-root configuration and setup flow. The root index and configured-codebase metadata-only attach exist; account-wide setup/discovery remains.
 - Represent codebase folders, hydration state, local cache state, and remote event cursors explicitly. Codebase/workspace entries, materialized revision cursors, metadata-only state, and partial single-file hydration exist; richer per-file cache policy remains.
 - Materialize content lazily and safely, with no silent overwrite of pending local edits.
 - Run an automatic remote-update loop that refreshes clean workspaces and blocks/conflicts dirty ones.
