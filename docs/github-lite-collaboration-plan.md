@@ -1,10 +1,10 @@
 # GitHub-Lite Collaboration Plan
 
-Last updated: 2026-06-21
+Last updated: 2026-06-22
 
-HopIt is now ready for its next product phase: turn the deployed personal dogfood system into a private GitHub-lite collaboration surface. The current foundation is a Vercel-hosted dashboard, a Convex production graph, a production-profile local agent, a seeded `hopit` codebase, and a managed workspace hydrated outside the source checkout.
+This is the collaboration sub-plan under the solid v1 dogfood track. HopIt is moving toward a production-shaped Workspace Root first, while also turning the deployed personal dogfood system into a private GitHub-lite collaboration surface. The current foundation is a Vercel-hosted dashboard, a Convex production graph, a production-profile local agent, a seeded `hopit` codebase, and a managed workspace hydrated outside the source checkout.
 
-This plan covers the next major goals before deeper Git-replacement internals resume.
+This plan covers the collaboration goals that sit beside Workspace Root, storage, scoped device auth, and automatic device-handoff work before deeper Git-replacement internals resume.
 
 ## Current Baseline
 

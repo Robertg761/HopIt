@@ -35,7 +35,7 @@ HopIt has moved past a local-only spike. The current dogfood baseline is a deplo
 - Hosted dashboard code supports Clerk product auth, but domain-dependent Clerk production rollout is intentionally paused. The current production deployment remains behind Basic Auth while HopIt uses the generated Vercel URL.
 - Hosted status reads from Convex; hosted workspace commands are intentionally disabled.
 - Local production-profile `hop` commands can import, hydrate, sync, refresh, recover, review, merge, export, publish, and validate.
-- `hop workspace` persists a root-level `workspaces.json` index with per-workspace hydration/cursor state, and status exposes the same materialized revision cursor.
+- `hop workspace` persists a root-level `workspaces.json` index with per-workspace hydration/cursor state, lists visible cloud files, can hydrate one file, and can dehydrate clean workspaces back to metadata-only state.
 - `hop device` / `hop session` can report local device identity, and Convex can issue, list, touch, revoke, and authorize scoped agent-session tokens for graph reads, per-file writes, and event sync.
 - The dashboard now includes provider sign-in routes, owner claim, member/invite management, a read-only code browser, and first issue/discussion/release workflows backed by Convex.
 
@@ -55,7 +55,7 @@ The v1 target is not a Git clone manager and not yet a true native filesystem pr
 - Other same-owner devices receive acknowledged changes automatically when the local journal is clean, or get a visible conflict/blocked state when it is not.
 - Web surfaces show code, diffs, review state, history, issues, discussions, projects, releases, members, invitations, and permissions.
 
-Today HopIt has the managed-folder spike, workspace-root command surface with a durable index, hydration/cursor status, service wrapper, Convex graph, Basic Auth protected dashboard, first collaboration objects, explicit refresh-based two-session continuity, scoped agent-session token groundwork, and an opt-in safe remote-pull loop for personal dogfooding. Remaining v1 work is metadata-only/lazy materialization, production-grade push/subscription remote-update delivery, broader blob-storage rollout and large-file handling, richer web code/review/history UI, installer/tray setup, and broader cross-device verification.
+Today HopIt has the managed-folder spike, workspace-root command surface with a durable index, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, service wrapper, Convex graph, Basic Auth protected dashboard, first collaboration objects, explicit refresh-based two-session continuity, scoped agent-session token groundwork, and an opt-in safe remote-pull loop for personal dogfooding. Remaining v1 work is account-scoped codebase discovery and attach/setup flow, full lazy materialization policy, production-grade push/subscription remote-update delivery, large-file/object storage, routeable diff/review/history UI, installer/tray setup, and broader cross-device verification.
 
 ## Product Principles
 
@@ -143,7 +143,13 @@ Start Convex locally and link the project with:
 npm run convex:dev
 ```
 
-That command prompts for Convex login/project setup, pushes the `convex/` backend functions, and writes the real deployment URL. Set the same `HOPIT_AGENT_TOKEN` in Convex with:
+That command prompts for Convex login/project setup, pushes the `convex/` backend functions, and writes the real development deployment URL. Production updates should use:
+
+```bash
+npm run convex:deploy
+```
+
+Set the same `HOPIT_AGENT_TOKEN` in Convex with:
 
 ```bash
 npx convex env set HOPIT_AGENT_TOKEN replace-with-a-long-random-secret
@@ -169,6 +175,7 @@ For current personal production hosting, deploy the Next.js app to Vercel and se
 Validate production configuration with:
 
 ```bash
+set -a; source .env.local; set +a
 npm run check:production-config
 ```
 
@@ -187,15 +194,17 @@ npm run hop:service:run
 Use the generated standalone package support scripts for user-level login startup:
 
 ```bash
-./artifacts/hop-darwin-arm64/support/install-macos-launch-agent.sh
-./artifacts/hop-linux-x64/support/install-systemd-user-service.sh
+./artifacts/hop-<platform>-<arch>/support/install-macos-launch-agent.sh
+./artifacts/hop-<platform>-<arch>/support/install-systemd-user-service.sh
 ```
 
-Keep both a private backup path and a publishable export path available:
+Keep a restorable agent-state backup, an owner-private Git export, and a
+publishable Git export available:
 
 ```bash
 mkdir -p "$HOPIT_BACKUP_ROOT" "$HOPIT_EXPORT_ROOT"
 npm run hop:backup -- --codebase-id "$HOPIT_CODEBASE_ID" --output "$HOPIT_BACKUP_ROOT/hopit-$(date +%Y%m%d-%H%M%S)" --force
+npm run hop:private-export -- --codebase-id "$HOPIT_CODEBASE_ID" --output "$HOPIT_EXPORT_ROOT/hopit-private-export" --force
 npm run hop:export -- --codebase-id "$HOPIT_CODEBASE_ID" --output "$HOPIT_EXPORT_ROOT/hopit-export" --force
 npm run hop:publish -- --codebase-id "$HOPIT_CODEBASE_ID" --output "$HOPIT_EXPORT_ROOT/hopit-publish" --force
 ```
@@ -263,11 +272,11 @@ src/
   hooks/        shared React hooks
   lib/          shared utilities
 packages/
-  agent/        local agent spike for cloud graph hydration and write journaling
+  agent/        local HopIt agent and CLI for workspace hydration, sync, service, and exports
 docs/
   agent-architecture.md  local agent architecture and read/write acknowledgement flow
   auth-collaboration-plan.md  accounts, memberships, permissions, and invitations plan
-  github-lite-collaboration-plan.md  next major auth, collaboration, review, issue, and release plan
+  github-lite-collaboration-plan.md  collaboration sub-plan for auth, review, issues, and releases
   review-code-browser-plan.md  code browsing, diffs, reviews, comments, and history plan
   work-items-releases-plan.md  issues, projects, discussions, and releases plan
   mvp-plan.md  first-version product and architecture plan

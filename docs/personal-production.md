@@ -1,6 +1,6 @@
 # Personal Production Runbook
 
-This runbook is the first real-use path for one-person HopIt dogfooding. It keeps the local JSON graph as a development fallback, but treats Convex as the canonical cloud graph and Vercel as a protected, read-only dashboard.
+This runbook is the first real-use path for one-person HopIt dogfooding. It keeps the local JSON graph as a development fallback, but treats Convex as the canonical cloud graph and Vercel as the protected hosted dashboard. Hosted workspace commands are disabled; hosted collaboration/member/work-item mutations exist in the codebase but remain behind the current Basic Auth/product-auth boundary.
 
 ## Current Deployment
 
@@ -41,19 +41,23 @@ HOPIT_EXPORT_ROOT="$HOME/HopIt-Exports"
 Validate local configuration without printing secrets:
 
 ```bash
+set -a; source .env.local; set +a
 npm run check:production-config
 ```
 
 ## Convex Backend
 
-Deploy or update the Convex functions, then make the agent token mandatory in Convex:
+Deploy or update the production Convex functions, then make the agent token mandatory in Convex:
 
 ```bash
-npm run convex:dev
+npm run convex:deploy
 npx convex env set HOPIT_AGENT_TOKEN "$HOPIT_AGENT_TOKEN"
 ```
 
 Convex functions now fail closed when `HOPIT_AGENT_TOKEN` is missing. `HOPIT_ALLOW_UNAUTHENTICATED_AGENT=1` exists only as a deliberate local-development escape hatch.
+
+For local development against a dev Convex deployment, use `npm run convex:dev`
+instead.
 
 ## Vercel Dashboard
 
@@ -125,7 +129,12 @@ $EDITOR "$HOME/.config/hopit/production.env"
 ```
 
 Do not put the generated `production.env` file in this repo. It contains the
-bootstrap token or scoped device token for this machine.
+bootstrap token or scoped device token for this machine. When running source
+checkout commands from a shell, export the file first:
+
+```bash
+set -a; source "$HOME/.config/hopit/production.env"; set +a
+```
 
 ## Local Agent Service
 
@@ -179,8 +188,8 @@ service process (`hop service run`) rather than nesting `service start` inside
 launchd or systemd:
 
 ```bash
-/tmp/hop-darwin-arm64/support/install-macos-launch-agent.sh
-/tmp/hop-linux-arm64/support/install-systemd-user-service.sh
+/tmp/hop-<platform>-<arch>/support/install-macos-launch-agent.sh
+/tmp/hop-<platform>-<arch>/support/install-systemd-user-service.sh
 ```
 
 The installer creates the env file from the example and exits if it does not
@@ -251,20 +260,22 @@ agent state root by default.
 
 ## Git Escape Hatch
 
-Before trusting HopIt with valuable work, keep both private backups and
-publishable Git exports available.
+Before trusting HopIt with valuable work, keep a restorable agent-state backup,
+an owner-private Git export, and a publishable Git export available.
 
 ```bash
 npm run hop -- validate --profile production --codebase-id "$HOPIT_CODEBASE_ID"
 mkdir -p "$HOPIT_BACKUP_ROOT" "$HOPIT_EXPORT_ROOT"
 npm run hop:backup -- --codebase-id "$HOPIT_CODEBASE_ID" --output "$HOPIT_BACKUP_ROOT/hopit-$(date +%Y%m%d-%H%M%S)" --force
+npm run hop:private-export -- --codebase-id "$HOPIT_CODEBASE_ID" --output "$HOPIT_EXPORT_ROOT/hopit-private-export" --force
 npm run hop:export -- --codebase-id "$HOPIT_CODEBASE_ID" --output "$HOPIT_EXPORT_ROOT/hopit-export" --force
 ```
 
-`export` omits `.private/` by default. `hop:backup` passes
-`--include-private` and should be treated as owner-private data. `publish` is
-stricter: it requires a reviewed and merged active change set and always omits
-`.private/`.
+`hop:backup` writes a restorable agent-state folder and should be treated as
+owner-private operational data. `hop:private-export` creates a Git export with
+`.private/` included for owner backup. `export` omits `.private/` by default.
+`publish` is stricter: it requires a reviewed and merged active change set and
+always omits `.private/`.
 
 ```bash
 npm run hop -- review --profile production --codebase-id "$HOPIT_CODEBASE_ID"
@@ -308,14 +319,14 @@ npm run hop -- session revoke \
 
 If the bootstrap `HOPIT_AGENT_TOKEN` itself rotates in Convex or Vercel, update
 Convex env, Vercel env, and local bootstrap storage together, then rerun
-`npm run check:production-config`. Installed devices should continue using
+`set -a; source .env.local; set +a; npm run check:production-config`. Installed devices should continue using
 their scoped session token for normal operation.
 
 ## Current Limits
 
-- Hosted dashboard commands are intentionally disabled; local workspace commands run through the local agent.
+- Hosted workspace commands are intentionally disabled; local workspace commands run through the local agent. Hosted collaboration/member/work-item APIs exist, but production is still guarded by the current Basic Auth/product-auth boundary.
 - Basic Auth is the current domain-deferred deployment guard. The repo has Clerk-backed product auth code, durable users, memberships, invitations, and first server-side permission checks, but production Clerk rollout is pinned until HopIt has an owned domain.
-- Convex stores prototype file content and metadata, not a split database/blob-storage production architecture yet.
+- Convex now separates graph/file metadata from content-addressed `fileBlobs` for the agent text-file path and supports per-file revision-guarded mutations. Large-file/object storage, durable history reconstruction, and full product write-path coverage are still incomplete.
 - Git export/publish creates a clean local Git repo; it does not push to a remote.
 - The standalone artifact includes start-on-login support scripts, but it is not signed, notarized, or packaged as a native installer yet.
 - Token rotation is CLI/runbook driven; there is no dashboard UX for device credential recovery yet.

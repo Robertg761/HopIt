@@ -25,10 +25,10 @@ const remoteStateArgs = [
 ]
 
 const commandMap = {
-  sync: { label: 'Sync once', cliCommand: 'sync-once' },
+  sync: { label: 'Sync once', cliCommand: 'sync' },
   refresh: { label: 'Refresh', cliCommand: 'refresh' },
   recover: { label: 'Recover', cliCommand: 'recover' },
-  review: { label: 'Open review', cliCommand: 'review-open' },
+  review: { label: 'Open review', cliCommand: 'review' },
   merge: { label: 'Merge', cliCommand: 'merge' },
 } as const
 

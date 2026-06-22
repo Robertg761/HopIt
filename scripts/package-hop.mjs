@@ -195,6 +195,7 @@ Run:
   ./bin/hop workspace ensure --profile production --codebase-id my-project
   ./bin/hop service start --profile production --codebase-id my-project
   ./bin/hop service status --profile production --codebase-id my-project
+  ./bin/hop backup --profile production --codebase-id my-project --output /path/to/agent-backup
   ./bin/hop export --profile production --output /path/to/export
   ./bin/hop export --profile production --include-private --output /path/to/private-backup
   ./bin/hop publish --profile production --output /path/to/publish
@@ -216,6 +217,8 @@ you create the local env file. It is not signed or notarized yet.
 }
 
 async function writeSupportFiles() {
+  const envDefaults = packageEnvDefaults()
+
   await fs.writeFile(
     path.join(examplesRoot, 'production.env.example'),
     `HOPIT_CODEBASE_ID=hopit
@@ -226,9 +229,9 @@ HOPIT_AUTH_PROVIDER=basic
 HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1
 HOPIT_DASHBOARD_USERNAME=hopit
 HOPIT_DASHBOARD_PASSWORD=replace-with-a-long-random-dashboard-password
-HOPIT_AGENT_STATE_ROOT="$HOME/Library/Application Support/HopIt/Agent"
-HOPIT_WORKSPACE_ROOT="$HOME/HopIt Workspaces"
-HOPIT_WORKSPACE_INDEX="$HOME/Library/Application Support/HopIt/Agent/workspaces.json"
+HOPIT_AGENT_STATE_ROOT="${envDefaults.stateRoot}"
+HOPIT_WORKSPACE_ROOT="${envDefaults.workspaceRoot}"
+HOPIT_WORKSPACE_INDEX="${envDefaults.workspaceIndex}"
 HOPIT_SESSION_ID=replace-with-this-device-session-id
 HOPIT_DEVICE_NAME="Your Mac"
 HOPIT_AGENT_SESSION_TOKEN=replace-after-hop-device-register
@@ -274,7 +277,7 @@ xml_escape() {
   printf '%s' "$1" | sed -e 's/&/\\&amp;/g' -e 's/</\\&lt;/g' -e 's/>/\\&gt;/g'
 }
 
-COMMAND=". \\"$ENV_FILE\\"; exec \\"$PACKAGE_ROOT/bin/hop\\" service run --profile production"
+COMMAND="set -a; . \\"$ENV_FILE\\"; set +a; exec \\"$PACKAGE_ROOT/bin/hop\\" service run --profile production"
 ESCAPED_COMMAND="$(xml_escape "$COMMAND")"
 ESCAPED_HOME="$(xml_escape "$HOME")"
 ESCAPED_STDOUT="$(xml_escape "$LOG_DIR/agent.out.log")"
@@ -354,13 +357,24 @@ if [ -n "\${HOPIT_ENV_FILE-}" ]; then
 fi
 SERVICE_DIR="$HOME/.config/systemd/user"
 SERVICE_FILE="$SERVICE_DIR/hopit-agent.service"
+RUNNER="$HOME/.config/hopit/run-agent.sh"
 
-mkdir -p "$(dirname "$ENV_FILE")" "$SERVICE_DIR"
+mkdir -p "$(dirname "$ENV_FILE")" "$SERVICE_DIR" "$(dirname "$RUNNER")"
 if [ ! -f "$ENV_FILE" ]; then
   cp "$PACKAGE_ROOT/examples/production.env.example" "$ENV_FILE"
   echo "Created $ENV_FILE. Edit it with real HopIt values, then rerun this installer." >&2
   exit 1
 fi
+
+{
+  printf '%s\\n' '#!/bin/sh'
+  printf '%s\\n' 'set -eu'
+  printf '%s\\n' 'set -a'
+  printf '. "%s"\\n' "$ENV_FILE"
+  printf '%s\\n' 'set +a'
+  printf 'exec "%s/bin/hop" service run --profile production\\n' "$PACKAGE_ROOT"
+} > "$RUNNER"
+chmod 700 "$RUNNER"
 
 {
   printf '%s\\n' '[Unit]'
@@ -369,8 +383,7 @@ fi
   printf '%s\\n' ''
   printf '%s\\n' '[Service]'
   printf '%s\\n' 'Type=simple'
-  printf 'EnvironmentFile=%s\\n' "$ENV_FILE"
-  printf 'ExecStart=%s/bin/hop service run --profile production\\n' "$PACKAGE_ROOT"
+  printf 'ExecStart=%s\\n' "$RUNNER"
   printf '%s\\n' 'Restart=on-failure'
   printf '%s\\n' 'RestartSec=5'
   printf 'WorkingDirectory=%s\\n' "$HOME"
@@ -393,12 +406,31 @@ echo "Status: systemctl --user status hopit-agent.service"
 set -eu
 
 SERVICE_FILE="$HOME/.config/systemd/user/hopit-agent.service"
+RUNNER="$HOME/.config/hopit/run-agent.sh"
 systemctl --user disable --now hopit-agent.service >/dev/null 2>&1 || true
 rm -f "$SERVICE_FILE"
+rm -f "$RUNNER"
 systemctl --user daemon-reload >/dev/null 2>&1 || true
 echo "Removed HopIt systemd user service: $SERVICE_FILE"
 `,
   )
+}
+
+function packageEnvDefaults() {
+  if (target.platform === 'linux') {
+    const stateRoot = '${XDG_STATE_HOME:-$HOME/.local/state}/hopit/agent'
+    return {
+      stateRoot,
+      workspaceRoot: '$HOME/HopIt Workspaces',
+      workspaceIndex: `${stateRoot}/workspaces.json`,
+    }
+  }
+
+  return {
+    stateRoot: '$HOME/Library/Application Support/HopIt/Agent',
+    workspaceRoot: '$HOME/HopIt Workspaces',
+    workspaceIndex: '$HOME/Library/Application Support/HopIt/Agent/workspaces.json',
+  }
 }
 
 async function writeExecutableSupportFile(name, content) {

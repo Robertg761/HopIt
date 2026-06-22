@@ -1,10 +1,10 @@
 # HopIt Work Items, Projects, Discussions, And Releases Plan
 
-Last updated: 2026-06-21
+Last updated: 2026-06-22
 
 ## Purpose
 
-This is the implementation plan for HopIt's next major collaboration phase: GitHub-lite work tracking around codebases, active change sets, Main, snapshots, and release history.
+This is the work-tracking and release sub-plan under the solid v1 dogfood track: GitHub-lite issues, projects, discussions, and releases around codebases, active change sets, Main, snapshots, and release history.
 
 The goal is not to turn HopIt into a social Git host. HopIt should keep its current product center:
 
@@ -33,7 +33,7 @@ Every collaboration object should carry:
 - `codebaseId`
 - per-codebase `number`
 - lifecycle `status`
-- creator/updater identity strings until production auth is wired
+- creator/updater identity strings, using durable HopIt user ids when product auth is active and a local/system actor only for personal dogfood fallbacks
 - `createdAt` and `updatedAt`
 - optional links to active change sets, snapshots, release targets, or other collaboration objects
 
@@ -270,31 +270,20 @@ Proof:
 - Permission tests cover owner, collaborator, and guest reads/writes.
 - Notification tests prove no event leaks hidden path names.
 
-## Bounded First Patch
+## Current Boundary
 
-The first patch should be intentionally small:
+The first backend/UI slice has landed. The remaining boundary is deliberately
+smaller than a full GitHub replacement:
 
-- create this plan as the roadmap source
-- add Convex schema tables
-- add basic Convex functions for the four object families
-- avoid UI work
-- avoid auth-specific file changes
-- avoid changing the agent command contract until the collaboration shape is accepted
-
-The first patch is not expected to solve:
-
-- production user authorization
-- notifications
-- reactions
-- markdown rendering
-- issue templates
-- release automation
-- full project drag/reorder semantics
-- GitHub import/export of issues/releases
+- keep this plan as the roadmap source for deeper issue/project/discussion/release work
+- keep the existing Convex schema/functions aligned with codebase permissions
+- expand UI from list/create/update flows into detail/comment/project/release workflows
+- avoid notifications, reactions, templates, markdown automation, and GitHub import/export until the core workflows are stable
+- avoid changing the agent command contract unless an issue/release workflow truly needs agent events or publish artifacts
 
 ## Risks And Open Decisions
 
-- Production auth is still a blocker before these functions can be exposed to hosted users.
+- Production Clerk rollout is still domain-deferred; the current hosted deployment can expose these functions privately behind Basic Auth while permission coverage continues.
 - Per-codebase counters need to remain mutation-owned to avoid duplicate public numbers.
 - Project item ordering needs a real reorder strategy before a UI board depends on it.
 - Release targets need durable snapshot and merge-record ids before releases become authoritative.

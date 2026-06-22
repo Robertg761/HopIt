@@ -1,10 +1,10 @@
 # Code Browsing, Review, Comments, And History Plan
 
-Last updated: 2026-06-21
+Last updated: 2026-06-22
 
 ## Purpose
 
-The next major HopIt phase should make a codebase reviewable in the browser without turning HopIt into a GitHub clone. The target is GitHub-lite collaboration built on HopIt's own model:
+This is the code review and history sub-plan under the solid v1 dogfood track. It makes a codebase reviewable in the browser without turning HopIt into a GitHub clone. The target is GitHub-lite collaboration built on HopIt's own model:
 
 - Main is the accepted state.
 - Active change sets are live cloud-backed work states.
@@ -31,7 +31,7 @@ Already available in this repo:
 - Conflict state is persisted on the selected active change set.
 - `/api/agent/status` can read local agent `status`, `events`, and `cloud` endpoints, or a Convex dashboard query when configured.
 - The web UI maps visible file metadata, capped shared-file content previews, review state, merge state, conflict state, remote-update state, and recent events.
-- The dashboard has a read-only `CodeReviewSection` that lists visible shared files, renders a capped content preview, and groups review readiness/history signals.
+- The dashboard has a read-only `CodeReviewSection` that lists visible files, supports path search and scope/status filters, renders capped content previews with line anchors, and groups review readiness/history signals.
 - Convex can persist the current graph, files, and agent events.
 
 Not yet available:
@@ -43,7 +43,7 @@ Not yet available:
 - Review comment storage.
 - Review decisions or requested-change state.
 - File history import from Git ancestry.
-- Permission-aware browser routes beyond the local prototype status path.
+- Dedicated routeable tree/file/compare APIs beyond the status-backed dashboard slice.
 
 ## Product Principles
 
@@ -558,18 +558,18 @@ npm run lint
 npm run package:hop
 ```
 
-## First Patch Boundary
+## Current Boundary
 
-Safe first patch:
+The first read-only dashboard slice has landed. The remaining boundary is:
 
-- docs only, plus a read-only dashboard section.
-- no auth schema changes.
-- no Convex schema changes.
-- no write endpoints.
-- no comment persistence.
-- no real diff claims unless base/head comparison exists.
+- keep the current dashboard section honest as a status-backed browser, not a routeable code browser
+- add explicit tree/file APIs before claiming routeable hosted code browsing
+- add real base/head compare logic before claiming diffs
+- add durable review/comment storage before claiming inline reviews
+- keep auth and permission checks server-side for every route or mutation
+- keep `.private/` hidden from non-owner review and history surfaces
 
-The first UI should be treated as a planning and orientation surface. It can show visible file metadata, review state, and recent history signals using the current status contract, but true code browsing should graduate to explicit tree/file APIs in Phase 2.
+The current UI should be treated as a planning and orientation surface. It can show visible file metadata, review state, line anchors, and recent history signals using the current status contract, but true code browsing should graduate to explicit tree/file APIs in Phase 2.
 
 ## Open Questions
 

@@ -101,5 +101,3 @@ export const fileTypeColorMap: Record<string, string> = {
   code: '#0ea5e9',
   design: '#a855f7',
 }
-
-// end of mock data

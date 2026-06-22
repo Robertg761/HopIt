@@ -25,7 +25,7 @@ Change-set visibility should be configurable as a global user default, a per-cod
 7. Once the cloud acknowledges the write into the active change set, the local cache can keep or prune clean content according to policy.
 8. Another device owned by the same user opens the same active change set and receives the current cloud state automatically when its local journal is clean, without a manual sync ritual.
 9. Collaborators see in-progress work according to the active change set's effective visibility.
-10. The user can check service health, rotate a scoped device token, create an owner-private backup export, request review, merge the change set into Main, import from Git, export a publishable snapshot, or publish a clean Git commit when ready.
+10. The user can check service health, rotate a scoped device token, create a restorable agent-state backup, create an owner-private Git export, request review, merge the change set into Main, import from Git, export a publishable snapshot, or publish a clean Git commit when ready.
 
 ## Core Concepts
 
@@ -110,7 +110,7 @@ for valuable work. The first production-shaped baseline is intentionally simple:
 - A foreground `hop service run` mode for user-level supervisors.
 - macOS LaunchAgent and Linux systemd user-service templates for start on login.
 - Read-only `/status`, `/events`, `/journal`, and `/cloud` endpoints bound to loopback.
-- A private backup export path that can include `.private/`.
+- A restorable agent-state backup path plus an explicit owner-private Git export path that can include `.private/`.
 - A publishable export/publish path that omits `.private/`.
 - Scoped device-token rotation that does not require deleting the local workspace.
 
@@ -169,11 +169,11 @@ Current spike:
 
 Current next work:
 
-1. Finish the HopIt Workspace Root product contract: cloud codebase discovery, attach/setup flow, per-file cache metadata, and honest metadata-only/partial/lazy materialization states.
+1. Finish the HopIt Workspace Root product contract: cloud codebase discovery, attach/setup flow, richer per-file cache metadata, and automatic lazy materialization policy on top of the current metadata-only and single-file hydrate primitives.
 2. Broaden content-addressed storage and per-file revision guards beyond the agent text-file path into full history, large files, and product write flows.
 3. Promote the opt-in remote-pull proof into production-grade automatic remote-update delivery so same-owner devices refresh safely without a manual command when the local journal is clean.
 4. Finish scoped device/session auth coverage and continue domain-independent membership, invitation, and permission work behind the Basic Auth production guard.
-5. Build the hosted code browser, diff/review/comment/history surface, then issues, projects, discussions, releases, and project boards.
+5. Deepen the hosted code browser, diff/review/comment/history surface, issue/detail and discussion thread flows, releases, and project boards beyond the first dashboard slices.
 
 ### Milestone 3: Recovery And Watch Loop
 
@@ -209,8 +209,8 @@ Current next work:
 - Let a user open an active change set for review.
 - Merge a reviewed change set into Main.
 - Keep Main stable until merge.
-- In the fixture-backed skeleton, `npm run agent:review` opens the selected active change set for review and emits `change_set.review_opened`.
-- In the fixture-backed skeleton, `npm run agent:merge` merges the selected active change set into Main and emits `change_set.merged`.
+- In the current agent graph contract, `npm run agent:review` opens the selected active change set for review and emits `change_set.review_opened`; fixture tests provide deterministic proof coverage.
+- In the current agent graph contract, `npm run agent:merge` merges the selected active change set into Main and emits `change_set.merged`; fixture tests provide deterministic proof coverage.
 - Surface review and merge state through the local agent status contract.
 - Surface conflicts as reviewable change-set states instead of terminal-only chores.
 - Preserve visibility settings in review and merge history.
@@ -218,8 +218,8 @@ Current next work:
 ### Milestone 7: Git Compatibility
 
 - Import an existing Git repository into the cloud file graph.
-- Export a workspace snapshot to a Git commit. The current skeleton can export the selected graph state to a clean Git repo.
-- Publish Main or a selected merged snapshot as Git history when the user chooses to publish. The current skeleton can publish the reviewed and merged selected active change set to a clean Git repo.
+- Export a workspace snapshot to a Git commit. The current agent can export the selected graph state to a clean Git repo.
+- Publish Main or a selected merged snapshot as Git history when the user chooses to publish. The current agent can publish the reviewed and merged selected active change set to a clean Git repo.
 - Preserve commit ancestry where possible.
 - Never leak `.private/` owner-only content during publish.
 - Keep Git out of the everyday continuity model; no user-managed Git-style branch, fork, or worktree product surfaces in v1. Automatic active change sets are a HopIt product concept, not Git branch management.
@@ -239,7 +239,7 @@ The detailed implementation sequence lives in [GitHub-Lite Collaboration Plan](g
 ### Milestone 9: Workspace Root And Automatic Device Handoff
 
 - Create a durable workspace-root configuration and setup flow. The root index exists; setup/attach remains.
-- Represent codebase folders, hydration state, local cache state, and remote event cursors explicitly. Codebase/workspace entries and materialized revision cursors exist; per-file cache states remain.
+- Represent codebase folders, hydration state, local cache state, and remote event cursors explicitly. Codebase/workspace entries, materialized revision cursors, metadata-only state, and partial single-file hydration exist; richer per-file cache policy remains.
 - Materialize content lazily and safely, with no silent overwrite of pending local edits.
 - Run an automatic remote-update loop that refreshes clean workspaces and blocks/conflicts dirty ones.
 - Expose the same state in the dashboard, tray/menu UI, and `hop status`.
@@ -252,7 +252,7 @@ The detailed implementation sequence lives in [GitHub-Lite Collaboration Plan](g
 - Another same-owner device receives acknowledged changes automatically when safe, or gets an explicit blocked/conflict state.
 - Convex/storage writes use file-level revisions and content-addressed blobs instead of replacing the whole graph as the concurrency boundary.
 - Device/session tokens are scoped, revocable, and separate from human dashboard auth.
-- A new device can run HopIt at login, expose loopback-only health endpoints, rotate a scoped token, and produce both owner-private backups and publishable exports without relying on the source checkout.
+- A new device can run HopIt at login, expose loopback-only health endpoints, rotate a scoped token, and produce restorable agent-state backups, owner-private Git exports, and publishable exports without relying on the source checkout.
 - The web app supports routeable code browsing, diffs, review comments, history, issues, discussions, projects, releases, members, invitations, and permission-aware writes.
 - Git import/export/publish remains available as interoperability without becoming the everyday workspace model.
 

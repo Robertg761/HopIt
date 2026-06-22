@@ -1,6 +1,6 @@
 # Auth And Collaboration Plan
 
-This plan scopes the next major HopIt phase around real accounts, authenticated access, durable codebase membership, and invitation flows. It deliberately covers identity and permissions only; code browsing, diffs, comments, issues, projects, discussions, and releases should build on this access layer after it is enforced server-side.
+This plan is the identity and permissions sub-plan under the solid v1 dogfood track. It covers real accounts, authenticated access, durable codebase membership, and invitation flows. Code browsing, diffs, comments, issues, projects, discussions, and releases build on this access layer as it becomes enforced server-side.
 
 ## Goals
 
@@ -10,7 +10,7 @@ This plan scopes the next major HopIt phase around real accounts, authenticated 
 - Invitations are email-bound, expiring, revocable, and accepted by an authenticated account.
 - The server filters codebase state before returning it; the UI is never the permission boundary.
 - `.private/` remains owner-only regardless of codebase membership or active change-set visibility.
-- The current agent token remains a bootstrap/admin bridge only until user-scoped device tokens are introduced.
+- The current agent token remains a bootstrap/admin bridge while scoped device/session tokens cover normal installed-device operation.
 
 ## Data Model
 
@@ -65,7 +65,7 @@ Session tokens are generated once with an `hst_` prefix, stored only as hashes p
 3. Add authenticated account upsert from Convex auth and expose a small `viewer` query.
 4. Add invitation create/accept/revoke mutations and write tests around email match, expiry, revocation, and duplicate acceptance.
 5. Make dashboard and graph reads requester-aware, returning visible file counts plus hidden scope counts without leaking hidden paths.
-6. Move write operations from deployment-wide agent-token authorization to scoped actor authorization: authenticated user for browser commands, scoped agent session token for local agent writes. Agent graph reads, per-file mutations, and event appends now support scoped session tokens; browser command/write coverage remains.
+6. Move write operations from deployment-wide agent-token authorization to scoped actor authorization: authenticated user for browser commands, scoped agent session token for local agent writes. Agent graph reads, per-file mutations, and event appends now support scoped session tokens; complete browser command/write coverage remains.
 7. Add audit events for membership and invitation changes.
 8. Replace the graph-local collaborator list as the source of truth once migration has backfilled memberships.
 

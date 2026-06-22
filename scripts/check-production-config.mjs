@@ -89,7 +89,7 @@ if (env.HOPIT_AGENT_BASE_URL) {
   checks.push(loopbackUrl('HOPIT_AGENT_BASE_URL'))
 }
 if (!env.HOPIT_BACKUP_ROOT) {
-  warnings.push('HOPIT_BACKUP_ROOT is unset; private backup exports should use an explicit output path.')
+  warnings.push('HOPIT_BACKUP_ROOT is unset; restorable agent-state backups should use an explicit output path.')
 } else {
   checks.push(absolutePath('HOPIT_BACKUP_ROOT'))
 }

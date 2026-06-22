@@ -17,7 +17,7 @@ Workspace Root responsibilities:
 - keep local cache metadata separate from user-authored files
 - make same-owner device handoff automatic when the local journal is clean
 
-The current implementation has a production-profile managed workspace path, a root-level `workspaces.json` index, hydration/materialized-revision status, and a remote cursor exposed through `hop status`. Solid v1 still needs account-scoped codebase discovery, metadata-only listings, lazy materialization policy, and production-grade event delivery before claiming the "install and boom" experience.
+The current implementation has a production-profile managed workspace path, a root-level `workspaces.json` index, hydration/materialized-revision status, visible-file metadata listing, single-file hydration, metadata-only dehydrate state, and a remote cursor exposed through `hop status`. Solid v1 still needs account-scoped codebase discovery, attach/setup flow, automatic lazy materialization policy, and production-grade event delivery before claiming the "install and boom" experience.
 
 ### Cloud File Graph
 
@@ -59,12 +59,12 @@ Active change-set visibility is user-configurable:
 
 The effective setting resolves in this order: per-change-set override, codebase override, global user default, product default. The product default should be private until shared or opened for review. `.private/` remains owner-only regardless of the change-set visibility setting.
 
-The fixture-backed agent exposes the minimal review/merge skeleton as explicit
-commands. Opening review updates the selected active change set and emits
-`change_set.review_opened`. Merging applies that selected active change set to
-Main, advances Main only at that point, records merge state, and emits
-`change_set.merged`. Sync acknowledgements before merge continue to advance the
-active change set, not Main.
+The agent graph contract exposes review/merge as explicit commands, with the
+fixture path providing deterministic proof coverage. Opening review updates the
+selected active change set and emits `change_set.review_opened`. Merging applies
+that selected active change set to Main, advances Main only at that point,
+records merge state, and emits `change_set.merged`. Sync acknowledgements before
+merge continue to advance the active change set, not Main.
 
 ### Workspace Adapter
 
@@ -217,7 +217,7 @@ Suggested fields:
 - adapter type: managed folder, with optional research adapters later
 - recent error summary
 
-This can start as a local HTTP endpoint or CLI command. The current spike exposes the HTTP status surface with `npm run agent:status`; a direct CLI status command can use the same agent-state reader. The important part is that status reads from agent state instead of guessing from files on disk.
+This can start as a local HTTP endpoint or CLI command. The current agent exposes the HTTP status surface with `npm run agent:serve` or `npm run agent:status-server`; `npm run agent:status` is the one-shot CLI status command. The important part is that status reads from agent state instead of guessing from files on disk.
 
 ### Event Log
 
@@ -287,7 +287,7 @@ The local-agent contract is good enough for personal dogfooding, but the solid v
 - Persist a user-selected Workspace Root outside the source checkout. Production-profile paths and the root index path are in place.
 - Track codebase folders independently from one selected workspace path. The index now keys entries by codebase and concrete workspace path.
 - Add root-level codebase discovery and attach/hydrate state. Hydration state is in place; account-scoped cloud discovery and attach flows remain.
-- Surface metadata-only, partial, hydrated, dirty, blocked, and conflicted states in `hop status` and the web UI. Hydrated/materialized and cursor state are in place; metadata-only/partial/lazy states remain.
+- Surface metadata-only, partial, hydrated, dirty, blocked, and conflicted states in `hop status` and the web UI. Hydrated/materialized, metadata-only, partial single-file hydration, and cursor state are in place; automatic lazy policy and broader blocked/conflicted UI detail remain.
 - Keep the current managed-folder implementation as the first adapter.
 
 ### 1. Lock The Managed-Folder Contracts
@@ -343,7 +343,7 @@ The local-agent contract is good enough for personal dogfooding, but the solid v
 
 ### 7. Add Review And Merge
 
-Status: done for the fixture-backed skeleton.
+Status: done for the fixture-backed proof.
 
 - Keep Main unchanged while an active change set syncs.
 - Open the selected active change set for review with an explicit agent command.
@@ -354,7 +354,7 @@ Status: done for the fixture-backed skeleton.
 
 ### 8. Tighten Conflict Handling
 
-Status: done for the fixture-backed skeleton.
+Status: done for the fixture-backed proof.
 
 - Detect writes based on stale selected-state or Main revisions.
 - Surface conflicts as reviewable workspace states through status and events.

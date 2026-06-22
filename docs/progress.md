@@ -41,6 +41,7 @@ Current proof commands:
 ```bash
 npm run agent:test
 npm run lint
+set -a; source .env.local; set +a
 npm run check:production-config
 npm run package:hop
 ```
@@ -50,7 +51,7 @@ Current verified result:
 - `npm run agent:test`: passes; the current sandbox run reports 43 passing tests plus six sandbox-skipped service/remote-pull tests when loopback listening is unavailable.
 - `npm run lint`: passes.
 - `npm run check:production-config`: passes when `.env.local` is loaded.
-- `npm run package:hop`: builds the current macOS artifact with env/install support files and verifies `hop help` plus production-profile `hop status`.
+- `npm run package:hop`: builds the current macOS artifact with env/install support files.
 
 ## Executive Progress
 
@@ -58,9 +59,9 @@ Current verified result:
 | --- | --- | --- |
 | Product concept | Done | The repo has converged on cloud-native managed workspaces, active change sets, explicit Main, and `.private/` owner-only workspace scope. |
 | Web product shell | Mostly done | The prototype UI polls live local agent state through `/api/agent/status`, maps files/events/revisions/review/merge/conflict state, and can read Convex dashboard state when configured. |
-| HopIt Workspace Root | In progress | Production-profile paths, a root-level workspace index, hydration/materialized revision state, and a remote cursor are in place; attach/setup flow, cloud codebase discovery, per-file lazy states, and lazy materialization policy remain. |
+| HopIt Workspace Root | In progress | Production-profile paths, a root-level workspace index, hydration/materialized revision state, metadata-only/dehydrate, single-file hydrate, and a remote cursor are in place; attach/setup flow, cloud codebase discovery, richer per-file lazy states, and lazy materialization policy remain. |
 | Local managed-folder agent | Done for spike | The agent proves hydration, journaling, sync acknowledgement, recovery, watch startup gating, safe refresh, status, and same-owner continuity. |
-| Lazy materialization | Not started | The current agent hydrates/refreshes the visible graph eagerly. V1 should expose metadata and materialize file bodies conservatively when the workspace opens, policy prefetches, or local tools need content. |
+| Lazy materialization | In progress | `workspace files`, `workspace hydrate-file`, and `workspace dehydrate --force` prove metadata listing, single-file hydration, and metadata-only state. V1 still needs automatic policy, editor/tool demand hydration, and broader cache pruning. |
 | Vercel/Convex production baseline | Done for personal dogfood | Vercel hosts the protected dashboard, Convex stores the seeded production graph, and the hosted API reads the graph successfully. |
 | Convex cloud graph | Mostly done | Convex functions persist graph metadata, files, content-addressed `fileBlobs`, and agent events; graph reads, per-file mutations, and event appends support service or scoped session tokens. Large-file/object-storage handling and full history reconstruction remain. |
 | `.private/` model | Done for spike | `.private/` files are synced/versioned and classified as owner-private; they are not ignored or skipped. |
@@ -352,12 +353,12 @@ Remaining:
 
 Risks:
 
-- Collaborator filtering is fixture-only and not backed by real authentication or durable permissions.
+- This milestone's collaborator filtering proof is fixture-backed; the hosted Convex path now has requester-aware filtering, but complete authenticated permission enforcement is tracked in the permissions milestones.
 - The fixture graph is still flattened around one selected active change set, so private collaborator reads show an empty file set rather than falling back to a separate Main snapshot.
 
 Next two-session step:
 
-- Use the review/merge skeleton as the boundary for conflict handling while preserving the same remote-update and visibility evidence.
+- Use the review/merge graph contract as the boundary for conflict handling while preserving the same remote-update and visibility evidence.
 
 ### Milestone 6: Review And Merge
 
@@ -414,7 +415,7 @@ Remaining:
 - Preserve commit ancestry where possible.
 - Export a historical selected snapshot as a Git commit once snapshot indexes exist.
 - Push or publish Main/merged snapshots to a remote Git host.
-- Decide the long-term private backup UX for explicit owner-private export.
+- Decide the long-term owner-private Git export UX separately from restorable agent-state backups.
 
 Risks:
 
@@ -600,6 +601,9 @@ Current foundation:
 
 - Production-profile service paths already separate agent state from the source checkout.
 - The agent can hydrate a selected codebase into `/Users/robert/HopIt Workspaces/hopit`.
+- `hop workspace files` lists visible cloud file metadata without hydrating bodies.
+- `hop workspace hydrate-file --path <path>` materializes a single visible file and records partial hydration.
+- `hop workspace dehydrate --force` removes clean cached bodies, writes `.hopit/metadata.json`, and records metadata-only hydration state.
 - Status exposes the managed workspace path, cache mode, visible file count, journal state, remote-update state, and backend.
 - The dashboard labels the current path as a Workspace Root preview rather than a true ghost/native mount.
 
@@ -619,8 +623,9 @@ Definition of done:
 Current foundation:
 
 - Convex stores graph metadata, file rows, hashes, sizes, revisions, and agent events.
+- Convex stores synced text content in content-addressed `fileBlobs` and lets the agent mutate individual files with revision guards.
 - The local fixture validates graph shape and detects stale selected-state/file/Main revisions.
-- Production Convex storage still uses inline content and whole-graph sync boundaries.
+- Bootstrap/import can still replace the graph as an admin operation; large-file/object storage and full history reconstruction remain.
 
 ### 0.75. Automatic Remote-Update Delivery
 
@@ -653,7 +658,7 @@ Definition of done:
 - Keep service credentials in a local env file outside the repo.
 - Preserve manual `service start/status/stop/restart` for debugging.
 - Provide a supervised foreground `service run` mode for launchd/systemd.
-- Document private backup export, publishable export, and scoped token rotation.
+- Document restorable agent-state backup, owner-private Git export, publishable export, and scoped token rotation.
 - Make production config checks fail on unsafe path layouts, bad local-agent URLs, invalid refresh intervals, token reuse, placeholders, and malformed session capabilities.
 - Expose enough status/events/journal evidence to diagnose service health before cross-device handoff.
 
@@ -662,7 +667,7 @@ Current foundation:
 - `scripts/package-hop.mjs` builds a standalone tarball with embedded Node, env example, and launchd/systemd user-service support scripts.
 - `hop service run` is available for supervisors; `service start` still owns pid-file/manual daemon mode.
 - `service start` now carries scoped session-token env into the spawned child when passed through CLI options.
-- `npm run hop:service:*`, `hop:backup`, `hop:export`, and `hop:publish` wrap production-profile operations.
+- `npm run hop:service:*`, `hop:backup`, `hop:private-export`, `hop:export`, and `hop:publish` wrap production-profile operations.
 - `docs/personal-production.md` covers install, login startup, observability, backup/export, and token rotation.
 - `scripts/check-production-config.mjs` performs stricter personal-production hygiene checks without printing secrets.
 
@@ -686,7 +691,7 @@ Current foundation:
 
 ### 1.5. Scoped Device And Session Auth
 
-Status: `Next`
+Status: `In progress`
 
 Definition of done:
 
@@ -737,9 +742,9 @@ Definition of done:
 
 Current foundation:
 
-- The status mapper now carries capped content previews for shared visible files.
-- The dashboard renders a read-only `CodeReviewSection` with file selection, metadata, content preview, review readiness, and history signals.
-- Routeable file browsing, search, syntax highlighting, and dedicated file-read queries are still pending.
+- The status mapper now carries capped content previews for visible files.
+- The dashboard renders a read-only `CodeReviewSection` with file search, scope/status filters, file selection, metadata, content preview, line anchors, review readiness, and history signals.
+- Routeable file browsing, syntax highlighting, large-file fallbacks, and dedicated file-read queries are still pending.
 
 ### 4. Diffs, Reviews, Comments, And History
 
@@ -803,8 +808,8 @@ Definition of done:
 
 ## Known Gaps
 
-- No full HopIt Workspace Root contract yet: the root-level codebase/workspace index and hydration cursor exist, but attach/setup flow, cloud codebase discovery, per-file lazy states, and lazy materialization policy remain.
-- The current managed folder is eagerly materialized; metadata-only and demand-hydrated file states are not implemented yet.
+- No full HopIt Workspace Root contract yet: the root-level codebase/workspace index, hydration cursor, metadata-only state, and single-file hydrate primitive exist, but attach/setup flow, cloud codebase discovery, richer per-file lazy states, and automatic lazy materialization policy remain.
+- The current managed folder path still defaults to eager hydrate/refresh for normal operation; metadata-only and single-file hydrate are CLI primitives rather than a complete editor/tool demand-hydration system.
 - Real account provider code exists, but production Clerk DNS/issuer/live-key rollout is pinned until HopIt has an owned domain.
 - Durable membership, role, invitation, hosted member/invite UI, and scoped agent-session token groundwork exist, but complete permission coverage is not done yet.
 - Convex-backed graph storage and auth-backed user APIs exist for the first collaboration slice, but not every product command has moved to user-scoped auth yet.

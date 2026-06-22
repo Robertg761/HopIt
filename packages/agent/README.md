@@ -1,6 +1,6 @@
-# HopIt Agent Spike
+# HopIt Agent
 
-This package is the first local agent spike for HopIt.
+This package is the local HopIt agent and CLI.
 
 It is intentionally not a real FUSE, OS filesystem provider, or clone manager. Instead, it models the first v1 lifecycle with a normal managed workspace folder backed by a local cache:
 
@@ -12,7 +12,7 @@ It is intentionally not a real FUSE, OS filesystem provider, or clone manager. I
 
 The selected cloud state remains the source of truth for the managed folder. In the production model, day-to-day edits should sync into an active change set; Main advances only after review or merge. The local folder is a materialized cache that HopIt manages so OS file pickers, editors, CLIs, and search tools can work without a special mount or a user-managed clone.
 
-The solid v1 target is a HopIt Workspace Root, such as `~/HopIt Workspaces`, where cloud codebases appear as HopIt-managed project folders. This package currently proves selected managed folders, a durable workspace-root index, hydration/cursor status, safe remote-pull polling, and scoped Convex agent-session token groundwork. It does not yet provide metadata-only file listings, full lazy materialization, or production-grade push/subscription remote-update delivery.
+The solid v1 target is a HopIt Workspace Root, such as `~/HopIt Workspaces`, where cloud codebases appear as HopIt-managed project folders. This package currently proves selected managed folders, a durable workspace-root index, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, safe remote-pull polling, and scoped Convex agent-session tokens. It does not yet provide account-scoped codebase discovery, a full automatic lazy-materialization policy, or production-grade push/subscription remote-update delivery.
 
 HopIt does not use ignore files as product sharing controls. Files under `.private/` are still snapshotted, synced, and versioned, but owner-visible only. Files outside `.private/` are governed by the active change set's effective visibility and the codebase's permissions.
 
@@ -75,15 +75,22 @@ npm run hop -- serve
 npm run hop -- review
 npm run hop -- merge
 npm run hop -- validate
+npm run hop -- doctor --profile production --codebase-id hopit
+npm run hop -- backup --profile production --codebase-id hopit --output /path/to/private-backup
+npm run hop -- install --profile production --codebase-id hopit --write-env
 npm run hop -- workspace status
 npm run hop -- workspace list
 npm run hop -- workspace ensure
+npm run hop -- workspace files
+npm run hop -- workspace hydrate-file --path README.md
+npm run hop -- workspace dehydrate --force
 npm run hop -- device status
 npm run hop -- device register --profile production --codebase-id hopit
 npm run hop -- device list --profile production --codebase-id hopit
 npm run hop -- export --output /path/to/git-export
 npm run hop -- publish --output /path/to/git-publish
 npm run hop -- service start --profile production --codebase-id hopit
+npm run hop -- service run --profile production --codebase-id hopit
 npm run hop -- service status --profile production --codebase-id hopit
 ```
 
@@ -159,28 +166,29 @@ separate local journals/events for each session. The first simulation target is:
    `--requester-id user_demo_collaborator --session-id session_demo_collaborator`
    and sees only the files allowed by the change-set visibility rules.
 
-The current fixture models Main, the selected active change set, owner identity,
-session identity, and effective change-set visibility. The local implementation
-still stores that graph in JSON, but commands now reach it through a
-cloud graph service boundary. That keeps the demos dependency-free while also
-allowing the same command flow to target Convex for the real shared backend.
+The local fixture models Main, the selected active change set, owner identity,
+session identity, and effective change-set visibility. The development fixture
+still stores that graph in JSON, but commands reach it through a cloud graph
+service boundary. That keeps demos dependency-free while allowing the same
+command flow to target Convex for the real shared backend.
 
-Requester-aware reads are fixture-only but explicit. Owner requesters see shared
-and `.private/` files. Collaborator requesters see no active change-set files when
-visibility is `private`, see shared files when visibility is `team-visible` or
-`review-visible`, and never see `.private/` files.
+Requester-aware reads are explicit in both the fixture path and hosted Convex
+dashboard path. Owner requesters see shared and `.private/` files. Collaborator
+requesters see no active change-set files when visibility is `private`, see
+shared files when visibility is `team-visible` or `review-visible`, and never
+see `.private/` files.
 
-Review and merge are also fixture-level commands. `hop review` opens
-the selected active change set for review and emits `change_set.review_opened`.
-`hop merge` merges that selected active change set into Main and emits
-`change_set.merged`. Local sync continues to acknowledge writes into the selected
-active change set; Main should remain stable until the explicit merge command
-advances it. Status should expose the selected change set's review state, merge
-state, and latest review/merge events so the product UI can distinguish synced
-draft work from accepted Main.
+Review and merge are agent-level commands in the current graph contract. `hop
+review` opens the selected active change set for review and emits
+`change_set.review_opened`. `hop merge` merges that selected active change set
+into Main and emits `change_set.merged`. Local sync continues to acknowledge
+writes into the selected active change set; Main should remain stable until the
+explicit merge command advances it. Status exposes the selected change set's
+review state, merge state, and latest review/merge events so the product UI can
+distinguish synced draft work from accepted Main.
 
-Conflict handling is fixture-level as well. Stale selected-state or file/base
-revision recovery and stale Main revision merge attempts emit
+Conflict handling is part of the current graph contract. Stale selected-state or
+file/base revision recovery and stale Main revision merge attempts emit
 `change_set.conflict_detected`, persist conflict state on the selected active
 change set, and leave local unacknowledged edits in place for review.
 
@@ -192,7 +200,10 @@ path-derived `.private/` owner-private scope.
 `hop workspace status|list|ensure|files|hydrate-file|dehydrate` is the first
 product-facing workspace-root surface. It reports the configured HopIt root, the
 current codebase folder, whether the codebase has been initialized, hydration
-state, dirty-state, and the durable root index path. `ensure` creates the
+state, dirty-state, visible cloud files, hydrated path count, and the durable
+root index path. `hydrate-file` materializes one visible cloud path into the
+managed folder. `dehydrate --force` removes clean cached file bodies, writes
+workspace metadata, and marks the workspace metadata-only. `ensure` creates the
 configured root and current managed codebase folder without claiming a true
 virtual filesystem: the adapter remains `managed-folder`, cache mode remains
 `local-cache`, and the status payload explicitly reports `virtualized: false`.
@@ -217,7 +228,8 @@ normal Convex-backed commands prefer the scoped session token. Pass
 `--agent-token` explicitly for bootstrap/admin work such as import, graph
 replacement, or admin session listing.
 
-`hop export` and `hop publish` are the current Git escape hatch. They create a
+`hop backup` writes a restorable diagnostic folder with cloud/status/event
+state. `hop export` and `hop publish` are the current Git escape hatch. They create a
 clean Git repository at `--output`, refuse outputs inside the managed workspace,
 and omit `.private/` owner-only files by default. `hop export --include-private`
 is available for an explicit owner-private backup. `hop publish` is stricter: it
@@ -300,13 +312,13 @@ Generated local agent state is demo/runtime state, not workspace content:
 
 ## Next Step
 
-Promote this selected managed-folder proof into the HopIt Workspace Root
-contract. The root-level index, hydration/materialized revision state, scoped
-agent-session token groundwork, content-addressed text blobs, per-file agent
-mutations, and opt-in remote-pull cursor are now in place. The next agent work
-should add account-scoped cloud codebase discovery, attach/setup flow, per-file
-cache metadata, conservative lazy materialization, and production-grade
-remote-update delivery.
+Promote this selected managed-folder proof into the full HopIt Workspace Root
+contract. The root-level index, hydration/materialized revision state,
+metadata-only and single-file hydrate primitives, scoped agent-session tokens,
+content-addressed text blobs, per-file agent mutations, and opt-in remote-pull
+cursor are now in place. The next agent work should add account-scoped cloud
+codebase discovery, attach/setup flow, richer per-file cache metadata, automatic
+lazy materialization policy, and production-grade remote-update delivery.
 
 In parallel, the cloud graph needs large-file/object-blob handling, durable
 history reconstruction, and full product write-path coverage before concurrent
