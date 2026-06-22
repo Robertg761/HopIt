@@ -370,6 +370,16 @@ export async function readUserById(ctx: any, userId: string) {
     .unique();
 }
 
+export async function readUserByPrimaryEmail(ctx: any, email: string) {
+  const primaryEmail = normalizeEmail(email);
+  if (!primaryEmail) return null;
+
+  return await ctx.db
+    .query("users")
+    .withIndex("by_primary_email", (q: any) => q.eq("primaryEmail", primaryEmail))
+    .unique();
+}
+
 export async function syncGraphAccessRows(ctx: any, graph: any, now: string) {
   const ownerId = stringOrNull(graph.owner?.id) ?? graph.codebase.ownerId;
   await upsertCodebaseMember(ctx, {

@@ -12,6 +12,7 @@ import {
   Plus,
   RefreshCcw,
   Rocket,
+  Search,
   Tag,
 } from 'lucide-react'
 
@@ -33,6 +34,8 @@ type CollaborationSectionProps = {
 }
 
 type CollaborationTab = 'issues' | 'discussions' | 'releases'
+
+type WorkItemFilter = 'active' | 'all' | 'closed'
 
 type FormState = {
   issueTitle: string
@@ -64,6 +67,8 @@ const initialFormState: FormState = {
 
 export function CollaborationSection({ status }: CollaborationSectionProps) {
   const [tab, setTab] = React.useState<CollaborationTab>('issues')
+  const [query, setQuery] = React.useState('')
+  const [itemFilter, setItemFilter] = React.useState<WorkItemFilter>('active')
   const [workItems, setWorkItems] = React.useState<WorkItemsResponse | null>(null)
   const [loading, setLoading] = React.useState(false)
   const [form, setForm] = React.useState<FormState>(initialFormState)
@@ -298,6 +303,31 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
   const openIssues = issues.filter((issue) => issue.status === 'open').length
   const activeDiscussions = discussions.filter((discussion) => discussion.status === 'open').length
   const draftReleases = releases.filter((release) => release.status === 'draft').length
+  const filteredIssues = React.useMemo(
+    () => filterIssues(issues, itemFilter, query),
+    [issues, itemFilter, query],
+  )
+  const filteredDiscussions = React.useMemo(
+    () => filterDiscussions(discussions, itemFilter, query),
+    [discussions, itemFilter, query],
+  )
+  const filteredReleases = React.useMemo(
+    () => filterReleases(releases, itemFilter, query),
+    [releases, itemFilter, query],
+  )
+  const filterCounts = workItemFilterCounts(tab, issues, discussions, releases)
+  const visibleCount =
+    tab === 'issues'
+      ? filteredIssues.length
+      : tab === 'discussions'
+        ? filteredDiscussions.length
+        : filteredReleases.length
+  const totalCount =
+    tab === 'issues'
+      ? issues.length
+      : tab === 'discussions'
+        ? discussions.length
+        : releases.length
 
   return (
     <section className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm">
@@ -351,6 +381,28 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
             </Button>
           </div>
         </div>
+        <div className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-card px-2.5 py-2 lg:max-w-sm lg:flex-1">
+            <Search className="size-3.5 shrink-0 text-muted-foreground" />
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={`Search ${tab}`}
+              className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+            />
+          </div>
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between lg:flex-1">
+            <WorkItemFilterTabs
+              tab={tab}
+              filter={itemFilter}
+              counts={filterCounts}
+              onChange={setItemFilter}
+            />
+            <span className="text-[11px] text-muted-foreground">
+              Showing {visibleCount} of {totalCount}
+            </span>
+          </div>
+        </div>
       </div>
 
       <div className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(300px,0.6fr)]">
@@ -361,21 +413,28 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
             <StateNotice icon={AlertCircle} title="Collaboration unavailable" detail={workItems.error.message} />
           ) : tab === 'issues' ? (
             <IssuesList
-              issues={issues}
+              issues={filteredIssues}
+              emptyDetail={issues.length === 0 ? 'Create the first codebase issue.' : 'No issues match this filter.'}
               disabledReason={issueUpdateReason}
               submitting={submitting}
               onSetStatus={(issue, nextStatus) => void setIssueStatus(issue, nextStatus)}
             />
           ) : tab === 'discussions' ? (
             <DiscussionsList
-              discussions={discussions}
+              discussions={filteredDiscussions}
+              emptyDetail={
+                discussions.length === 0
+                  ? 'Start the first design or coordination thread.'
+                  : 'No discussions match this filter.'
+              }
               disabledReason={discussionUpdateReason}
               submitting={submitting}
               onSetStatus={(discussion, nextStatus) => void setDiscussionStatus(discussion, nextStatus)}
             />
           ) : (
             <ReleasesList
-              releases={releases}
+              releases={filteredReleases}
+              emptyDetail={releases.length === 0 ? 'Draft the first release against Main.' : 'No releases match this filter.'}
               disabledReason={releasePublishReason}
               submitting={submitting}
               onPublish={(release) => void publishRelease(release)}
@@ -383,7 +442,13 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
           )}
         </div>
 
-        <div>
+        <div className="space-y-3">
+          <WorkContextCard
+            status={status}
+            tab={tab}
+            visibleCount={visibleCount}
+            totalCount={totalCount}
+          />
           {tab === 'issues' ? (
             <IssueForm
               form={form}
@@ -456,19 +521,115 @@ function TabList({
   )
 }
 
+function WorkItemFilterTabs({
+  tab,
+  filter,
+  counts,
+  onChange,
+}: {
+  tab: CollaborationTab
+  filter: WorkItemFilter
+  counts: Record<WorkItemFilter, number>
+  onChange: (filter: WorkItemFilter) => void
+}) {
+  const labels = filterLabels(tab)
+
+  return (
+    <div className="flex items-center gap-1 overflow-x-auto rounded-lg border border-border/60 bg-muted/50 p-0.5 scroll-thin">
+      {(['active', 'all', 'closed'] as const).map((item) => (
+        <button
+          key={item}
+          type="button"
+          onClick={() => onChange(item)}
+          className={cn(
+            'flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-medium transition',
+            filter === item
+              ? 'bg-card text-foreground shadow-sm'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          {labels[item]}
+          <span className="rounded bg-muted px-1 text-[10px]">{counts[item]}</span>
+        </button>
+      ))}
+    </div>
+  )
+}
+
+function WorkContextCard({
+  status,
+  tab,
+  visibleCount,
+  totalCount,
+}: {
+  status: AgentStatusSnapshot
+  tab: CollaborationTab
+  visibleCount: number
+  totalCount: number
+}) {
+  const releaseTargetIsAccepted = status.mergeState === 'merged' || status.reviewState !== 'open'
+  const hasHiddenScope = status.hiddenFileCount > 0
+
+  return (
+    <div className="rounded-xl border border-border/60 bg-muted/20 p-3">
+      <p className="flex items-center gap-1.5 text-xs font-semibold">
+        <GitPullRequest className="size-3.5 text-grape" />
+        Work context
+      </p>
+      <dl className="mt-3 space-y-2 text-[11px]">
+        <ContextDatum label="Codebase" value={status.codebaseId ?? 'No codebase'} />
+        <ContextDatum label="Active change set" value={status.activeChangeSetId} />
+        <ContextDatum label="Main" value={status.mainRevision} />
+        <ContextDatum label="Visible in list" value={`${visibleCount} / ${totalCount}`} />
+        {tab === 'releases' ? (
+          <ContextDatum
+            label="Release target"
+            value={releaseTargetIsAccepted ? 'Main accepted state' : 'Review still open'}
+            highlight={!releaseTargetIsAccepted}
+          />
+        ) : null}
+        <ContextDatum
+          label="Private scope"
+          value={`${status.hiddenFileCount} hidden`}
+          highlight={hasHiddenScope}
+        />
+      </dl>
+    </div>
+  )
+}
+
+function ContextDatum({
+  label,
+  value,
+  highlight = false,
+}: {
+  label: string
+  value: string
+  highlight?: boolean
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className={cn('min-w-0 truncate font-medium', highlight && 'text-hop-amber')}>{value}</dd>
+    </div>
+  )
+}
+
 function IssuesList({
   issues,
+  emptyDetail,
   disabledReason,
   submitting,
   onSetStatus,
 }: {
   issues: CollaborationIssue[]
+  emptyDetail: string
   disabledReason: string | null
   submitting: string | null
   onSetStatus: (issue: CollaborationIssue, status: CollaborationIssue['status']) => void
 }) {
   if (issues.length === 0) {
-    return <StateNotice icon={CircleDot} title="No issues" detail="The backend returned no issues for this codebase." />
+    return <StateNotice icon={CircleDot} title="No issues" detail={emptyDetail} />
   }
 
   return (
@@ -516,17 +677,19 @@ function IssuesList({
 
 function DiscussionsList({
   discussions,
+  emptyDetail,
   disabledReason,
   submitting,
   onSetStatus,
 }: {
   discussions: CollaborationDiscussion[]
+  emptyDetail: string
   disabledReason: string | null
   submitting: string | null
   onSetStatus: (discussion: CollaborationDiscussion, status: CollaborationDiscussion['status']) => void
 }) {
   if (discussions.length === 0) {
-    return <StateNotice icon={MessageSquareText} title="No discussions" detail="The backend returned no discussions for this codebase." />
+    return <StateNotice icon={MessageSquareText} title="No discussions" detail={emptyDetail} />
   }
 
   return (
@@ -578,17 +741,19 @@ function DiscussionsList({
 
 function ReleasesList({
   releases,
+  emptyDetail,
   disabledReason,
   submitting,
   onPublish,
 }: {
   releases: CollaborationRelease[]
+  emptyDetail: string
   disabledReason: string | null
   submitting: string | null
   onPublish: (release: CollaborationRelease) => void
 }) {
   if (releases.length === 0) {
-    return <StateNotice icon={PackageCheck} title="No releases" detail="The backend returned no releases for this codebase." />
+    return <StateNotice icon={PackageCheck} title="No releases" detail={emptyDetail} />
   }
 
   return (
@@ -972,6 +1137,125 @@ function MetricChip({ label, value, active }: { label: string; value: string; ac
       <p className="mt-1 truncate text-xs font-semibold text-foreground">{value}</p>
     </div>
   )
+}
+
+function filterIssues(
+  issues: CollaborationIssue[],
+  filter: WorkItemFilter,
+  query: string,
+) {
+  const normalizedQuery = normalizeQuery(query)
+
+  return issues.filter((issue) => {
+    if (filter === 'active' && issue.status !== 'open') return false
+    if (filter === 'closed' && issue.status !== 'closed') return false
+    return queryMatches(
+      normalizedQuery,
+      issue.title,
+      issue.body,
+      issue.priority,
+      issue.status,
+      `#${issue.number}`,
+      issue.linkedChangeSetId,
+      issue.linkedReleaseId,
+      ...issue.labels,
+      ...issue.assigneeIds,
+    )
+  })
+}
+
+function filterDiscussions(
+  discussions: CollaborationDiscussion[],
+  filter: WorkItemFilter,
+  query: string,
+) {
+  const normalizedQuery = normalizeQuery(query)
+
+  return discussions.filter((discussion) => {
+    if (filter === 'active' && discussion.status !== 'open') return false
+    if (filter === 'closed' && discussion.status === 'open') return false
+    return queryMatches(
+      normalizedQuery,
+      discussion.title,
+      discussion.body,
+      discussion.category,
+      discussion.status,
+      `#${discussion.number}`,
+      discussion.linkedChangeSetId,
+      ...discussion.labels,
+      ...discussion.linkedIssueIds,
+    )
+  })
+}
+
+function filterReleases(
+  releases: CollaborationRelease[],
+  filter: WorkItemFilter,
+  query: string,
+) {
+  const normalizedQuery = normalizeQuery(query)
+
+  return releases.filter((release) => {
+    if (filter === 'active' && release.status !== 'draft') return false
+    if (filter === 'closed' && release.status === 'draft') return false
+    return queryMatches(
+      normalizedQuery,
+      release.version,
+      release.title,
+      release.notes,
+      release.status,
+      release.target.type,
+      release.target.id,
+      release.target.revision === null ? null : `rev ${release.target.revision}`,
+      `#${release.number}`,
+    )
+  })
+}
+
+function workItemFilterCounts(
+  tab: CollaborationTab,
+  issues: CollaborationIssue[],
+  discussions: CollaborationDiscussion[],
+  releases: CollaborationRelease[],
+): Record<WorkItemFilter, number> {
+  if (tab === 'issues') {
+    return {
+      active: issues.filter((issue) => issue.status === 'open').length,
+      all: issues.length,
+      closed: issues.filter((issue) => issue.status === 'closed').length,
+    }
+  }
+
+  if (tab === 'discussions') {
+    return {
+      active: discussions.filter((discussion) => discussion.status === 'open').length,
+      all: discussions.length,
+      closed: discussions.filter((discussion) => discussion.status !== 'open').length,
+    }
+  }
+
+  return {
+    active: releases.filter((release) => release.status === 'draft').length,
+    all: releases.length,
+    closed: releases.filter((release) => release.status !== 'draft').length,
+  }
+}
+
+function filterLabels(tab: CollaborationTab): Record<WorkItemFilter, string> {
+  if (tab === 'issues') return { active: 'Open', all: 'All', closed: 'Closed' }
+  if (tab === 'discussions') return { active: 'Open', all: 'All', closed: 'Closed/answered' }
+  return { active: 'Draft', all: 'All', closed: 'Published' }
+}
+
+function normalizeQuery(value: string) {
+  return value.trim().toLowerCase()
+}
+
+function queryMatches(normalizedQuery: string, ...values: Array<string | null | undefined>) {
+  if (!normalizedQuery) return true
+  return values
+    .filter((value): value is string => Boolean(value))
+    .some((value) => value.toLowerCase().includes(normalizedQuery))
 }
 
 function labelsFromInput(value: string) {

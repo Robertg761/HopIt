@@ -1,6 +1,6 @@
 # HopIt
 
-HopIt is an early-stage cloud-native code workspace. The core idea is that a codebase lives in the cloud, while each device gets a managed workspace folder that behaves like a normal local folder and syncs edits back automatically.
+HopIt is an early-stage cloud-native code workspace. The core idea is that a codebase lives in the cloud, while each device gets a HopIt Workspace Root that exposes managed local folders and syncs edits back automatically.
 
 The first product bet is simple: working on code should feel local, but live in the cloud. A developer should be able to open a HopIt codebase on any device, edit it with normal tools, and continue somewhere else without a clone to manage, stale checkout, push, pull, stash, or half-finished recovery flow.
 
@@ -12,11 +12,15 @@ HopIt does not use an ignore-file model for product sharing. Files under `.priva
 
 - Cloud-backed codebase dashboard with live workspace and sync state.
 - Cloud codebase file graph, Main state, active change sets, recent activity, collaborator presence, and connected device visibility.
-- Local HopIt agent that materializes a cloud codebase into a normal managed folder.
-- Agent-owned local cache for hydration, editor compatibility, sync, and recovery.
+- HopIt Workspace Root: a user-chosen local root where cloud codebases appear as agent-owned managed folders.
+- Local HopIt agent that materializes cloud metadata and file content into normal folders when needed.
+- Agent-owned local cache for lazy hydration, editor compatibility, sync, pruning, and recovery.
 - Safe sync journal for writes that have not been acknowledged by the cloud yet.
 - Active change sets that receive live synced edits before review or merge into Main.
 - Change-set visibility controls with global defaults, per-codebase overrides, and per-change-set overrides.
+- Automatic remote-update delivery so same-owner devices can receive current active change-set state without a manual refresh ritual.
+- Production storage based on file metadata, content-addressed blobs, and per-file revision guards rather than whole-graph overwrites.
+- Scoped device/session auth separate from human product auth.
 - Git compatibility as an import/export and publish layer, not the source of continuity.
 - Explicit `.private/` visibility: synced and versioned, but owner-visible only.
 
@@ -28,26 +32,43 @@ HopIt has moved past a local-only spike. The current dogfood baseline is a deplo
 - Convex production graph at `https://sincere-jaguar-17.convex.cloud`.
 - A seeded `hopit` codebase graph with 58 source files.
 - A production-profile managed workspace at `/Users/robert/HopIt Workspaces/hopit`.
-- Hosted dashboard code defaults to Clerk product auth when the Clerk env vars are configured; the current production deployment remains behind Basic Auth until the Clerk/Vercel resource is provisioned.
+- Hosted dashboard code supports Clerk product auth, but domain-dependent Clerk production rollout is intentionally paused. The current production deployment remains behind Basic Auth while HopIt uses the generated Vercel URL.
 - Hosted status reads from Convex; hosted workspace commands are intentionally disabled.
 - Local production-profile `hop` commands can import, hydrate, sync, refresh, recover, review, merge, export, publish, and validate.
+- `hop workspace` persists a root-level `workspaces.json` index with per-workspace hydration/cursor state, and status exposes the same materialized revision cursor.
+- `hop device` / `hop session` can report local device identity, and Convex can issue, list, touch, revoke, and authorize scoped agent-session tokens for graph reads, per-file writes, and event sync.
 - The dashboard now includes provider sign-in routes, owner claim, member/invite management, a read-only code browser, and first issue/discussion/release workflows backed by Convex.
 
-The system is now usable as a one-person private dogfood environment, but it is not yet a full GitHub or Git replacement. The next major product phase is GitHub-lite collaboration: real accounts, memberships, invitations, web code browsing, diffs, reviews, comments, history, issues, projects, discussions, and releases.
+The system is now usable as a one-person private dogfood environment, but it is not yet a full GitHub or Git replacement. The next major product phase is a solid v1 workspace: HopIt Workspace Root, managed-folder/lazy materialization, automatic remote update delivery, content-addressed storage with revision guards, scoped device/session auth, and GitHub-like collaboration surfaces. Work that requires an owned production domain, such as Clerk `pk_live_`/`sk_live_` rollout and retiring Basic Auth, is pinned until a domain is purchased.
 
 See [docs/github-lite-collaboration-plan.md](docs/github-lite-collaboration-plan.md) for the overall implementation plan, plus [docs/auth-collaboration-plan.md](docs/auth-collaboration-plan.md), [docs/review-code-browser-plan.md](docs/review-code-browser-plan.md), and [docs/work-items-releases-plan.md](docs/work-items-releases-plan.md) for the detailed sub-plans.
+
+## Solid V1 Direction
+
+The v1 target is not a Git clone manager and not yet a true native filesystem provider. It is a production-shaped HopIt Workspace Root:
+
+- A user chooses a local root such as `~/HopIt Workspaces`.
+- Cloud codebases appear there as HopIt-managed project folders.
+- Metadata can be visible before every file body is downloaded.
+- Files are materialized safely when the workspace opens, when a tool needs them, or when remote updates arrive.
+- Local edits are journaled before cloud acknowledgement and sync into the user's active change set.
+- Other same-owner devices receive acknowledged changes automatically when the local journal is clean, or get a visible conflict/blocked state when it is not.
+- Web surfaces show code, diffs, review state, history, issues, discussions, projects, releases, members, invitations, and permissions.
+
+Today HopIt has the managed-folder spike, workspace-root command surface with a durable index, hydration/cursor status, service wrapper, Convex graph, Basic Auth protected dashboard, first collaboration objects, explicit refresh-based two-session continuity, scoped agent-session token groundwork, and an opt-in safe remote-pull loop for personal dogfooding. Remaining v1 work is metadata-only/lazy materialization, production-grade push/subscription remote-update delivery, broader blob-storage rollout and large-file handling, richer web code/review/history UI, installer/tray setup, and broader cross-device verification.
 
 ## Product Principles
 
 - Main is the accepted shared source of truth for a codebase.
 - Active change sets are cloud-backed working states that sync live across a user's devices before merge.
 - Local files are a managed cache, not a user-owned checkout.
+- The Workspace Root is the user-facing entry point; managed folders are the first implementation strategy.
 - Git history still matters, but saving work and publishing work are separate actions.
 - Device handoff should be boring: open the project and keep going.
 - Sync is not merge: live edits are acknowledged into an active change set, then reviewed or merged into Main when ready.
 - Change-set visibility is user-configurable, with the effective setting resolved as per-change-set override, then codebase override, then global user default, then product default.
 - Conflicts should be surfaced as reviewable workspace states, not surprise terminal chores.
-- The prototype should prove the managed workspace folder before chasing broad hosting features.
+- The prototype should prove the managed workspace root and lazy materialization path before native filesystem-provider research.
 - The first version should optimize for personal and small-team code sharing before broad open-source network features.
 - V1 should avoid user-managed Git-style branches, forks, worktrees, wiki pages, stars, and social discovery surfaces. Automatic active change sets are part of the core model.
 
@@ -61,7 +82,7 @@ npm run dev
 Run the local workspace agent through the `hop` command:
 
 ```bash
-npm exec -- hop help
+npm run hop -- help
 ```
 
 For local development, `npm link` makes `hop` available globally from this checkout.
@@ -86,7 +107,9 @@ artifact to `artifacts/hop-<platform>-<arch>/`, and creates
 `artifacts/hop-<platform>-<arch>.tar.gz`. The packaged command runs as
 `./bin/hop` and does not require Node or npm on the target machine. Windows
 packaging exits unsupported until the packager handles Node's Windows `.zip`
-runtime archives. These artifacts are unsigned for now.
+runtime archives. The artifact also includes `examples/production.env.example`
+plus macOS LaunchAgent and Linux systemd user-service support scripts under
+`support/`. These artifacts are unsigned for now.
 
 ## Hosted Backend
 
@@ -97,15 +120,21 @@ HOPIT_CODEBASE_ID=hopit
 HOPIT_AGENT_TOKEN=replace-with-a-long-random-secret
 HOPIT_CONVEX_URL=https://your-convex-deployment.convex.cloud
 NEXT_PUBLIC_CONVEX_URL=https://your-convex-deployment.convex.cloud
-HOPIT_AUTH_PROVIDER=clerk
-NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_test_replace-with-your-clerk-publishable-key
-CLERK_SECRET_KEY=sk_test_replace-with-your-clerk-secret-key
-CLERK_JWT_ISSUER_DOMAIN=https://your-clerk-issuer.clerk.accounts.dev
-HOPIT_OWNER_EMAIL=you@example.com
+HOPIT_AUTH_PROVIDER=basic
+HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1
 HOPIT_DASHBOARD_USERNAME=hopit
 HOPIT_DASHBOARD_PASSWORD=replace-with-a-long-random-dashboard-password
-HOPIT_AGENT_STATE_ROOT=/Users/you/Library/Application Support/HopIt/Agent
-HOPIT_WORKSPACE_ROOT=/Users/you/HopIt Workspaces
+HOPIT_AGENT_STATE_ROOT="/Users/you/Library/Application Support/HopIt/Agent"
+HOPIT_WORKSPACE_ROOT="/Users/you/HopIt Workspaces"
+HOPIT_WORKSPACE_INDEX="/Users/you/Library/Application Support/HopIt/Agent/workspaces.json"
+HOPIT_SESSION_ID=replace-with-this-device-session-id
+HOPIT_DEVICE_NAME="Your Mac"
+HOPIT_AGENT_SESSION_TOKEN=replace-after-hop-device-register
+HOPIT_AGENT_SESSION_CAPABILITIES=read,write,sync,watch
+HOPIT_REMOTE_PULL=1
+HOPIT_REMOTE_REFRESH_INTERVAL_MS=5000
+HOPIT_BACKUP_ROOT=/Users/you/HopIt-Backups
+HOPIT_EXPORT_ROOT=/Users/you/HopIt-Exports
 ```
 
 Start Convex locally and link the project with:
@@ -123,10 +152,19 @@ npx convex env set HOPIT_AGENT_TOKEN replace-with-a-long-random-secret
 Import a real local project into the Convex backend with:
 
 ```bash
-npm exec -- hop import --source /path/to/project --codebase-id hopit --convex-url "$HOPIT_CONVEX_URL" --agent-token "$HOPIT_AGENT_TOKEN" --force
+npm run hop -- import --source /path/to/project --codebase-id hopit --convex-url "$HOPIT_CONVEX_URL" --agent-token "$HOPIT_AGENT_TOKEN" --force
 ```
 
-For production hosting, deploy the Next.js app to Vercel and set `HOPIT_CODEBASE_ID`, `HOPIT_AGENT_TOKEN`, `HOPIT_CONVEX_URL`, `NEXT_PUBLIC_CONVEX_URL`, `HOPIT_AUTH_PROVIDER=clerk`, `NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY`, `CLERK_SECRET_KEY`, `CLERK_JWT_ISSUER_DOMAIN`, and `HOPIT_OWNER_EMAIL` as environment variables. `HOPIT_DASHBOARD_USERNAME` and `HOPIT_DASHBOARD_PASSWORD` are only for the explicit Basic Auth fallback. The hosted dashboard reads from Convex through `/api/agent/status`; local workspace commands still run through the local HopIt agent on your machine and are refused on Vercel.
+After the bootstrap token is configured, register this device and store the returned `sessionToken` as `HOPIT_AGENT_SESSION_TOKEN`:
+
+```bash
+npm run hop -- device register --profile production --codebase-id "$HOPIT_CODEBASE_ID"
+```
+
+The deployment-wide `HOPIT_AGENT_TOKEN` remains the bootstrap/admin secret. Installed devices should use scoped session tokens for normal reads, per-file sync, and event writes.
+When both tokens are present, normal commands prefer `HOPIT_AGENT_SESSION_TOKEN`; pass `--agent-token` explicitly for bootstrap/admin operations.
+
+For current personal production hosting, deploy the Next.js app to Vercel and set `HOPIT_CODEBASE_ID`, `HOPIT_AGENT_TOKEN`, `HOPIT_CONVEX_URL`, `NEXT_PUBLIC_CONVEX_URL`, `HOPIT_AUTH_PROVIDER=basic`, `HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1`, `HOPIT_DASHBOARD_USERNAME`, and `HOPIT_DASHBOARD_PASSWORD` as environment variables. Keep Clerk production variables unset until HopIt has an owned production domain. The hosted dashboard reads from Convex through `/api/agent/status`; local workspace commands still run through the local HopIt agent on your machine and are refused on Vercel.
 
 Validate production configuration with:
 
@@ -137,14 +175,47 @@ npm run check:production-config
 Run the local agent with production-profile paths outside the source checkout:
 
 ```bash
-npm exec -- hop service start --profile production --codebase-id "$HOPIT_CODEBASE_ID"
+npm run hop:service:start -- --codebase-id "$HOPIT_CODEBASE_ID"
 ```
 
-Export or publish a clean Git escape hatch with:
+Start-on-login supervisors should run the long-lived foreground service process:
 
 ```bash
-npm exec -- hop export --profile production --codebase-id "$HOPIT_CODEBASE_ID" --output /path/to/export --force
-npm exec -- hop publish --profile production --codebase-id "$HOPIT_CODEBASE_ID" --output /path/to/publish --force
+npm run hop:service:run
+```
+
+Use the generated standalone package support scripts for user-level login startup:
+
+```bash
+./artifacts/hop-darwin-arm64/support/install-macos-launch-agent.sh
+./artifacts/hop-linux-x64/support/install-systemd-user-service.sh
+```
+
+Keep both a private backup path and a publishable export path available:
+
+```bash
+mkdir -p "$HOPIT_BACKUP_ROOT" "$HOPIT_EXPORT_ROOT"
+npm run hop:backup -- --codebase-id "$HOPIT_CODEBASE_ID" --output "$HOPIT_BACKUP_ROOT/hopit-$(date +%Y%m%d-%H%M%S)" --force
+npm run hop:export -- --codebase-id "$HOPIT_CODEBASE_ID" --output "$HOPIT_EXPORT_ROOT/hopit-export" --force
+npm run hop:publish -- --codebase-id "$HOPIT_CODEBASE_ID" --output "$HOPIT_EXPORT_ROOT/hopit-publish" --force
+```
+
+For scoped device-token rotation, register the replacement session, update
+`HOPIT_AGENT_SESSION_TOKEN`, restart the service, then revoke the old session id:
+
+```bash
+npm run hop -- session register --profile production --device-name "$HOPIT_DEVICE_NAME"
+npm run hop:service:restart -- --codebase-id "$HOPIT_CODEBASE_ID"
+npm run hop -- session revoke --profile production --session-id old-session-id
+```
+
+Observe the local agent before trusting a handoff:
+
+```bash
+npm run hop:service:status -- --codebase-id "$HOPIT_CODEBASE_ID"
+npm run hop -- status --profile production --codebase-id "$HOPIT_CODEBASE_ID"
+curl http://127.0.0.1:4785/status
+curl http://127.0.0.1:4785/events
 ```
 
 For the full one-person production setup, see [docs/personal-production.md](docs/personal-production.md).
@@ -152,7 +223,7 @@ For the full one-person production setup, see [docs/personal-production.md](docs
 Import a real local project into HopIt's managed workspace state with:
 
 ```bash
-npm exec -- hop import --source /path/to/project --force
+npm run hop -- import --source /path/to/project --force
 ```
 
 The import command scans text files from the source folder, skips generated folders and sensitive files such as `.git`, `.hopit-agent`, `.next`, `node_modules`, build outputs, and `.env*`, writes `.hopit-agent/cloud.json`, and hydrates `.hopit-agent/workspaces/hopit-core`.

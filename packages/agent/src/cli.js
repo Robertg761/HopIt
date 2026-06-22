@@ -31,6 +31,7 @@ const workspaceMode = {
   sourceOfTruth: 'cloud',
 }
 
+const workspaceIndexVersion = 1
 const cloudServiceType = 'fixture-json-cloud-graph'
 const convexCloudServiceType = 'convex-cloud-graph'
 
@@ -53,6 +54,10 @@ async function main() {
   const args = [...rawArgs]
   const serviceAction =
     command === 'service' && args[0] && !args[0].startsWith('--') ? args.shift() : 'status'
+  const workspaceAction =
+    command === 'workspace' && args[0] && !args[0].startsWith('--') ? args.shift() : 'status'
+  const sessionAction =
+    command === 'session' && args[0] && !args[0].startsWith('--') ? args.shift() : 'status'
   const options = parseOptions(args)
 
   if (command === 'init') {
@@ -111,6 +116,31 @@ async function main() {
     return
   }
 
+  if (command === 'doctor') {
+    await runDoctor(options)
+    return
+  }
+
+  if (command === 'backup') {
+    await backupAgentState(options)
+    return
+  }
+
+  if (command === 'install') {
+    await installAgent(options)
+    return
+  }
+
+  if (command === 'workspace') {
+    await runWorkspaceCommand(workspaceAction, options)
+    return
+  }
+
+  if (command === 'session') {
+    await runSessionCommand(sessionAction, options)
+    return
+  }
+
   if (command === 'service') {
     await runServiceCommand(serviceAction, options)
     return
@@ -155,6 +185,10 @@ function normalizeCommand(command) {
     export: 'export-git',
     serve: 'status-server',
     server: 'status-server',
+    workspaces: 'workspace',
+    device: 'session',
+    devices: 'session',
+    sessions: 'session',
   }
 
   return aliases[command] ?? command
@@ -163,7 +197,18 @@ function normalizeCommand(command) {
 function parseOptions(args) {
   const options = { ...defaultOptions }
   const provided = new Set()
-  const booleanOptions = new Set(['force', 'allow-unsafe-workspace', 'allow-local-cloud', 'include-private'])
+  const booleanOptions = new Set([
+    'force',
+    'allow-unsafe-workspace',
+    'allow-local-cloud',
+    'include-private',
+    'remote-pull',
+    'auto-refresh',
+    'json',
+    'start-service',
+    'write-env',
+    'launch-agent',
+  ])
 
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i]
@@ -185,6 +230,7 @@ function parseOptions(args) {
     i += 1
   }
 
+  options._provided = provided
   return applyRuntimeDefaults(options, provided)
 }
 
@@ -196,6 +242,27 @@ function applyRuntimeDefaults(options, provided) {
   options.profile = profile
   if (!provided.has('codebase-id') && process.env.HOPIT_CODEBASE_ID) {
     options['codebase-id'] = process.env.HOPIT_CODEBASE_ID
+  }
+  if (!provided.has('remote-pull') && isTruthyEnv(process.env.HOPIT_REMOTE_PULL)) {
+    options['remote-pull'] = true
+  }
+  if (!provided.has('auto-refresh') && isTruthyEnv(process.env.HOPIT_AUTO_REFRESH)) {
+    options['auto-refresh'] = true
+  }
+  if (!provided.has('remote-refresh-interval-ms') && process.env.HOPIT_REMOTE_REFRESH_INTERVAL_MS) {
+    options['remote-refresh-interval-ms'] = process.env.HOPIT_REMOTE_REFRESH_INTERVAL_MS
+  }
+  if (!provided.has('session-id') && process.env.HOPIT_SESSION_ID) {
+    options['session-id'] = process.env.HOPIT_SESSION_ID
+  }
+  if (!provided.has('device-name') && process.env.HOPIT_DEVICE_NAME) {
+    options['device-name'] = process.env.HOPIT_DEVICE_NAME
+  }
+  if (!provided.has('session-token') && process.env.HOPIT_AGENT_SESSION_TOKEN) {
+    options['session-token'] = process.env.HOPIT_AGENT_SESSION_TOKEN
+  }
+  if (!provided.has('workspace-index') && process.env.HOPIT_WORKSPACE_INDEX) {
+    options['workspace-index'] = process.env.HOPIT_WORKSPACE_INDEX
   }
 
   if (productionProfile) {
@@ -381,6 +448,110 @@ async function hydrateWorkspace(options) {
     scopeCounts: countCloudScopes(cloud),
     hiddenScopeCounts: cloud.visibilityContext?.hiddenScopeCounts ?? { shared: 0, private: 0 },
   })
+  await upsertWorkspaceIndexFromCloud(options, cloud, {
+    reason: 'hydrate',
+    lastEvent: 'workspace.ready',
+    hydrationState: 'materialized',
+    hydratedPaths: Object.keys(cloud.files ?? {}),
+  })
+}
+
+async function hydrateWorkspaceFile(options) {
+  const relativePath = assertSafeCloudPath(options.path ?? options.file)
+  await assertWorkspacePathSafe(options)
+  const cloudService = createCloudGraphService(options)
+  const cloud = await cloudService.readVisibleGraph(visibilityRequestFromOptions(options))
+  const file = cloud.files?.[relativePath]
+  if (!file) {
+    throw new Error(`File is not visible in the configured cloud graph: ${relativePath}`)
+  }
+  if (typeof file.content !== 'string') {
+    throw new Error(`Cloud file is missing string content: ${relativePath}`)
+  }
+
+  const absolutePath = workspaceFilePath(options.workspace, relativePath)
+  await fs.mkdir(path.dirname(absolutePath), { recursive: true })
+  await fs.writeFile(absolutePath, file.content, 'utf8')
+  const hydratedPaths = await hydratedPathUnion(options, cloud.codebase?.id, [relativePath])
+
+  await emit(options, 'file.lazy_hydrated', {
+    path: relativePath,
+    scope: scopeForPath(relativePath),
+    bytes: Buffer.byteLength(file.content),
+    revision: file.revision,
+    workspace: options.workspace,
+    service: cloudService.type,
+    contract: summarizeGraphContract(cloud),
+    hydratedPathCount: hydratedPaths.length,
+  })
+  const index = await upsertWorkspaceIndexFromCloud(options, cloud, {
+    reason: 'lazy-hydrate',
+    lastEvent: 'file.lazy_hydrated',
+    hydrationState: 'partial',
+    hydratedPaths,
+    materialization: 'partial-managed-folder',
+  })
+
+  console.log(JSON.stringify({
+    ok: true,
+    action: 'hydrate-file',
+    path: relativePath,
+    workspace: path.resolve(options.workspace),
+    file: workspaceFileMetadata(options, relativePath, file, true),
+    index: workspaceIndexSummary(options, index),
+    hydration: findIndexedCodebase(index, cloud.codebase?.id ?? options['codebase-id'], options.workspace)?.hydration ?? null,
+  }, null, 2))
+}
+
+async function dehydrateWorkspace(options) {
+  if (!options.force) {
+    throw new Error('workspace dehydrate requires --force because it removes local cached file contents.')
+  }
+  await assertWorkspacePathSafe(options)
+  const journalSafety = await readJournalSafety(options)
+  if (!journalSafety.safe) {
+    throw new Error('Cannot dehydrate while the local journal has pending or failed entries.')
+  }
+
+  const cloudService = createCloudGraphService(options)
+  const cloud = await cloudService.readVisibleGraph(visibilityRequestFromOptions(options))
+  const removedPaths = []
+  for (const relativePath of Object.keys(cloud.files ?? {})) {
+    const absolutePath = workspaceFilePath(options.workspace, relativePath)
+    if (!existsSync(absolutePath)) continue
+    await fs.rm(absolutePath, { force: true })
+    await removeEmptyAncestorDirectories(options.workspace, path.dirname(relativePath))
+    removedPaths.push(relativePath)
+  }
+
+  await writeWorkspaceMetadataManifest(options, cloud, {
+    materialization: 'metadata-only',
+    removedPaths,
+  })
+  await emit(options, 'workspace.dehydrated', {
+    workspace: options.workspace,
+    removed: removedPaths.length,
+    removedScopeCounts: countPathScopes(removedPaths),
+    revision: cloud.revision,
+    service: cloudService.type,
+    contract: summarizeGraphContract(cloud),
+  })
+  const index = await upsertWorkspaceIndexFromCloud(options, cloud, {
+    reason: 'dehydrate',
+    lastEvent: 'workspace.dehydrated',
+    hydrationState: 'metadata-only',
+    hydratedPaths: [],
+    materialization: 'metadata-only',
+  })
+
+  console.log(JSON.stringify({
+    ok: true,
+    action: 'dehydrate',
+    removed: removedPaths.length,
+    removedScopeCounts: countPathScopes(removedPaths),
+    workspace: path.resolve(options.workspace),
+    index: workspaceIndexSummary(options, index),
+  }, null, 2))
 }
 
 async function refreshWorkspace(options) {
@@ -446,6 +617,12 @@ async function refreshWorkspace(options) {
   await emit(options, 'refresh.complete', {
     ...startedDetail,
     ...result,
+  })
+  await upsertWorkspaceIndexFromCloud(options, cloud, {
+    reason: 'refresh',
+    lastEvent: 'refresh.complete',
+    hydrationState: 'materialized',
+    hydratedPaths: Object.keys(cloud.files ?? {}),
   })
 }
 
@@ -532,6 +709,16 @@ async function performSyncOnce(options, contextDetail = {}) {
   const cloud = await cloudService.readGraph()
   const diskFiles = await readWorkspaceFiles(options.workspace)
   const visibilityContext = visibilityContextForGraph(cloud, visibilityRequestFromOptions(options))
+  const visibleCloudPaths = Object.keys(cloud.files).filter((relativePath) =>
+    canRequesterSeePath(visibilityContext, relativePath),
+  )
+  const workspaceIndex = await readWorkspaceIndex(options)
+  const indexedCodebase = findIndexedCodebase(
+    workspaceIndex,
+    cloud.codebase?.id ?? options['codebase-id'],
+    options.workspace,
+  )
+  const deleteCandidatePaths = deletableCloudPathsForWorkspace(indexedCodebase, visibleCloudPaths)
   const cloudPaths = new Set(
     Object.keys(cloud.files).filter((relativePath) => canRequesterSeePath(visibilityContext, relativePath)),
   )
@@ -564,17 +751,18 @@ async function performSyncOnce(options, contextDetail = {}) {
     await appendNdjson(options.journal, entry)
     await emit(options, 'write.journaled', entry)
 
-    const acknowledgement = cloudService.applyJournalEntry(cloud, entry, {
+    const acknowledgement = await cloudService.commitJournalEntry(cloud, entry, {
       content,
       now,
     })
-    await cloudService.writeGraph(cloud)
     await emit(options, 'cloud.acknowledged', acknowledgement)
 
     writeEvents.push(entry)
   }
 
   for (const relativePath of cloudPaths) {
+    if (!deleteCandidatePaths.has(relativePath)) continue
+
     const scope = scopeForPath(relativePath)
     const entry = {
       id: randomUUID(),
@@ -590,14 +778,15 @@ async function performSyncOnce(options, contextDetail = {}) {
     await appendNdjson(options.journal, entry)
     await emit(options, 'write.journaled', entry)
 
-    const acknowledgement = cloudService.applyJournalEntry(cloud, entry, { now })
-    await cloudService.writeGraph(cloud)
+    const acknowledgement = await cloudService.commitJournalEntry(cloud, entry, { now })
     await emit(options, 'cloud.acknowledged', acknowledgement)
 
     writeEvents.push(entry)
   }
 
-  await cloudService.writeGraph(cloud)
+  if (!cloudService.usesAtomicFileMutations) {
+    await cloudService.writeGraph(cloud)
+  }
   const result = {
     ...contextDetail,
     writes: writeEvents.length,
@@ -608,6 +797,13 @@ async function performSyncOnce(options, contextDetail = {}) {
     journaledScopeCounts: countEntryScopes(writeEvents),
   }
   await emit(options, 'sync.complete', result)
+  const visibleCloud = filterVisibleGraphForRequester(cloud, visibilityRequestFromOptions(options))
+  await upsertWorkspaceIndexFromCloud(options, visibleCloud, {
+    reason: 'sync',
+    lastEvent: 'sync.complete',
+    hydrationState: workspaceIndexHydrationStateForSync(indexedCodebase),
+    hydratedPaths: hydratedPathsAfterSync(indexedCodebase, Object.keys(diskFiles), Object.keys(visibleCloud.files ?? {})),
+  })
   return result
 }
 
@@ -633,11 +829,10 @@ async function recoverJournal(options) {
 
     try {
       const recovery = await prepareRecovery(cloud, entry, options.workspace)
-      const acknowledgement = cloudService.applyJournalEntry(cloud, entry, {
+      const acknowledgement = await cloudService.commitJournalEntry(cloud, entry, {
         content: recovery.content,
         now,
       })
-      await cloudService.writeGraph(cloud)
       await emit(options, 'cloud.acknowledged', {
         ...acknowledgement,
         recovered: true,
@@ -671,6 +866,25 @@ async function recoverJournal(options) {
     contract: summarizeGraphContract(cloud),
     scopeCounts: countCloudScopes(cloud),
   })
+
+  if (result.acknowledged > 0 && result.failed === 0) {
+    const workspaceIndex = await readWorkspaceIndex(options)
+    const indexedCodebase = findIndexedCodebase(
+      workspaceIndex,
+      cloud.codebase?.id ?? options['codebase-id'],
+      options.workspace,
+    )
+    const diskFiles = await readWorkspaceFiles(options.workspace)
+    const hydrationState = workspaceIndexHydrationStateForSync(indexedCodebase)
+    const visibleCloud = filterVisibleGraphForRequester(cloud, visibilityRequestFromOptions(options))
+    await upsertWorkspaceIndexFromCloud(options, visibleCloud, {
+      reason: 'recover',
+      lastEvent: 'journal.recovery_complete',
+      hydrationState,
+      hydratedPaths: hydratedPathsAfterSync(indexedCodebase, Object.keys(diskFiles), Object.keys(visibleCloud.files ?? {})),
+      materialization: hydrationState === 'materialized' ? 'managed-folder' : 'partial-managed-folder',
+    })
+  }
 
   return result
 }
@@ -790,6 +1004,7 @@ async function watchWorkspace(options) {
   const scheduleSync = createWatchSyncScheduler(options)
   let watcher
   let poller = null
+  let remotePuller = null
   const degradeToPolling = async (error) => {
     if (!poller) {
       poller = await createWorkspacePoller(options.workspace, scheduleSync)
@@ -830,8 +1045,24 @@ async function watchWorkspace(options) {
     })
   })
 
+  remotePuller = await createRemoteRefreshScheduler(options, {
+    localSyncIdle: () => scheduleSync.isIdle?.() ?? true,
+  })
+
   console.log(`HopIt agent watching ${options.workspace}`)
   console.log('Press Ctrl+C to stop.')
+
+  return {
+    close() {
+      try {
+        watcher?.close()
+      } catch {
+        // Watchers may already be closed by an error handler.
+      }
+      poller?.close()
+      remotePuller?.close()
+    },
+  }
 }
 
 function createWatchSyncScheduler(options, schedulerOptions = {}) {
@@ -870,7 +1101,7 @@ function createWatchSyncScheduler(options, schedulerOptions = {}) {
     }
   }
 
-  return (eventType, filename) => {
+  const schedule = (eventType, filename) => {
     queued = true
     queuedEvents += 1
     lastEvent = {
@@ -886,6 +1117,9 @@ function createWatchSyncScheduler(options, schedulerOptions = {}) {
       })
     }, debounceMs)
   }
+
+  schedule.isIdle = () => !running && !queued && timer === null
+  return schedule
 }
 
 async function createWorkspacePoller(workspace, onChange, pollerOptions = {}) {
@@ -943,6 +1177,180 @@ async function snapshotWorkspace(root) {
   return files.join('\n')
 }
 
+async function createRemoteRefreshScheduler(options, schedulerOptions = {}) {
+  if (!remotePullEnabled(options)) return null
+
+  const intervalMs = remoteRefreshIntervalMs(options)
+  const localSyncIdle = schedulerOptions.localSyncIdle ?? (() => true)
+  let closed = false
+  let running = false
+
+  await emit(options, 'remote-pull.started', {
+    state: 'enabled',
+    workspace: options.workspace,
+    intervalMs,
+    adapter: workspaceMode.adapter,
+    cacheMode: workspaceMode.cacheMode,
+    safeRefreshOnly: true,
+  })
+
+  const run = async (trigger) => {
+    if (closed || running) return
+    running = true
+
+    try {
+      const decision = await remoteRefreshDecision(options, {
+        trigger,
+        localSyncIdle,
+      })
+
+      if (decision.state === 'skip') {
+        if (decision.emit) {
+          await emit(options, 'remote-pull.skipped', decision.detail)
+        }
+        return
+      }
+
+      await refreshWorkspace(options)
+      await emit(options, 'remote-pull.applied', {
+        state: 'applied',
+        trigger,
+        workspace: options.workspace,
+        fromRevision: decision.fromRevision,
+        toRevision: decision.toRevision,
+        intervalMs,
+        safeRefreshOnly: true,
+      })
+    } catch (error) {
+      await emit(options, 'remote-pull.failed', {
+        state: 'failed',
+        trigger,
+        workspace: options.workspace,
+        reason: error.message,
+      })
+    } finally {
+      running = false
+    }
+  }
+
+  const interval = setInterval(() => {
+    run('interval').catch((error) => {
+      console.error(error)
+    })
+  }, intervalMs)
+
+  run('startup').catch((error) => {
+    console.error(error)
+  })
+
+  return {
+    close() {
+      closed = true
+      clearInterval(interval)
+    },
+  }
+}
+
+async function remoteRefreshDecision(options, context) {
+  if (!context.localSyncIdle()) {
+    return {
+      state: 'skip',
+      emit: true,
+      detail: {
+        state: 'skipped',
+        trigger: context.trigger,
+        workspace: options.workspace,
+        reason: 'local_sync_pending',
+      },
+    }
+  }
+
+  const journalSafety = await readJournalSafety(options)
+  if (!journalSafety.safe) {
+    return {
+      state: 'skip',
+      emit: true,
+      detail: {
+        state: 'skipped',
+        trigger: context.trigger,
+        workspace: options.workspace,
+        reason: 'journal_has_unresolved_entries',
+        journal: journalSafety.summary,
+      },
+    }
+  }
+
+  const cloudService = createCloudGraphService(options)
+  if (!(await cloudService.exists())) {
+    return {
+      state: 'skip',
+      emit: true,
+      detail: {
+        state: 'skipped',
+        trigger: context.trigger,
+        workspace: options.workspace,
+        reason: 'cloud_missing',
+        service: cloudService.type,
+      },
+    }
+  }
+
+  const cloud = await cloudService.readVisibleGraph(visibilityRequestFromOptions(options))
+  const eventEntries = await readNdjson(options.events)
+  const lastVisibleWorkspaceEvent = findLastEventOf(eventEntries, [
+    'workspace.ready',
+    'refresh.complete',
+    'remote-update',
+  ])
+  const workspaceIndex = await readWorkspaceIndex(options)
+  const indexedCodebase = findIndexedCodebase(workspaceIndex, cloud.codebase?.id ?? options['codebase-id'], options.workspace)
+  if (indexedCodebase?.hydration?.state && indexedCodebase.hydration.state !== 'materialized') {
+    return {
+      state: 'skip',
+      emit: true,
+      detail: {
+        state: 'skipped',
+        trigger: context.trigger,
+        workspace: options.workspace,
+        reason: 'workspace_not_fully_materialized',
+        hydration: indexedCodebase.hydration,
+      },
+    }
+  }
+
+  const localChanges = await workspaceLocalChanges(options, indexedCodebase)
+  if (!localChanges.safe) {
+    return {
+      state: 'skip',
+      emit: true,
+      detail: {
+        state: 'skipped',
+        trigger: context.trigger,
+        workspace: options.workspace,
+        reason: localChanges.reason,
+        localChanges,
+      },
+    }
+  }
+
+  const indexedRevision = indexedCodebase?.hydration?.lastMaterializedRevision
+  const visibleRevision = Number.isInteger(indexedRevision)
+    ? indexedRevision
+    : visibleRevisionFromEvent(lastVisibleWorkspaceEvent)
+  if (visibleRevision === cloud.revision) {
+    return {
+      state: 'skip',
+      emit: false,
+    }
+  }
+
+  return {
+    state: 'refresh',
+    fromRevision: visibleRevision,
+    toRevision: cloud.revision,
+  }
+}
+
 async function serveStatus(options) {
   const host = options.host
   const port = Number(options.port)
@@ -998,6 +1406,8 @@ async function serveStatus(options) {
 
   console.log(`HopIt agent status server listening on http://${host}:${port}`)
   console.log('Endpoints: /status, /events, /journal, /cloud')
+
+  return server
 }
 
 async function runServiceCommand(action, options) {
@@ -1014,6 +1424,10 @@ async function runServiceCommand(action, options) {
     await startService(options)
     return
   }
+  if (action === 'run') {
+    await runServiceProcess(options)
+    return
+  }
   if (action === 'status') {
     console.log(JSON.stringify(await serviceStatus(options), null, 2))
     return
@@ -1023,8 +1437,17 @@ async function runServiceCommand(action, options) {
 }
 
 async function runServiceProcess(options) {
-  await watchWorkspace(options)
-  await serveStatus(options)
+  let statusServer = null
+  let watchHandle = null
+
+  try {
+    statusServer = await serveStatus(options)
+    watchHandle = await watchWorkspace(options)
+  } catch (error) {
+    watchHandle?.close()
+    statusServer?.close()
+    throw error
+  }
 }
 
 async function startService(options) {
@@ -1043,6 +1466,11 @@ async function startService(options) {
   }
   const token = agentTokenFromOptions(options)
   if (token) childEnv.HOPIT_AGENT_TOKEN = token
+  const sessionToken = agentSessionTokenFromOptions(options)
+  if (sessionToken) childEnv.HOPIT_AGENT_SESSION_TOKEN = sessionToken
+  if (options['session-id']) childEnv.HOPIT_SESSION_ID = options['session-id']
+  if (options['device-name']) childEnv.HOPIT_DEVICE_NAME = options['device-name']
+  if (options.capabilities) childEnv.HOPIT_AGENT_SESSION_CAPABILITIES = options.capabilities
 
   const child = spawn(process.execPath, [__filename, 'service-run', ...runtimeArgsFromOptions(options)], {
     cwd: process.cwd(),
@@ -1062,7 +1490,62 @@ async function startService(options) {
     logPath,
   }
   await writeJson(pidPath, record)
-  console.log(JSON.stringify({ ok: true, ...record, pidPath }, null, 2))
+  try {
+    const status = await waitForServiceReady(options, {
+      child,
+      logPath,
+      pidPath,
+      startedAt: record.startedAt,
+    })
+    console.log(JSON.stringify({ ok: true, ...record, pidPath, service: status }, null, 2))
+  } catch (error) {
+    if (typeof child.pid === 'number' && isProcessRunning(child.pid)) {
+      process.kill(child.pid, 'SIGTERM')
+      await waitForProcessExit(child.pid, 2500)
+    }
+    await fs.rm(pidPath, { force: true })
+    throw error
+  }
+}
+
+async function waitForServiceReady(options, waitOptions) {
+  const timeoutMs = waitOptions.timeoutMs ?? 15000
+  const startedAt = Date.now()
+  let lastStatus = null
+
+  while (Date.now() - startedAt < timeoutMs) {
+    if (waitOptions.child.exitCode !== null || waitOptions.child.signalCode !== null) {
+      throw new Error(
+        `HopIt service exited before it became ready. Check the service log at ${waitOptions.logPath}.`,
+      )
+    }
+
+    lastStatus = await serviceStatus(options)
+    if (
+      lastStatus.ok &&
+      lastStatus.running &&
+      lastStatus.agent?.ok === true &&
+      lastStatus.agent?.readiness === 'ready' &&
+      lastStatus.agent?.watch?.state === 'watching' &&
+      agentWatchStartedAfter(lastStatus.agent, waitOptions.startedAt)
+    ) {
+      return lastStatus
+    }
+
+    if (lastStatus.pid && !lastStatus.running) {
+      throw new Error(
+        `HopIt service stopped before it became ready. Check the service log at ${waitOptions.logPath}.`,
+      )
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 100))
+  }
+
+  throw new Error(
+    `HopIt service did not become ready within ${timeoutMs}ms. Check the service log at ${
+      waitOptions.logPath
+    }. Last status: ${JSON.stringify(lastStatus)}`,
+  )
 }
 
 async function stopService(options, stopOptions = {}) {
@@ -1088,6 +1571,7 @@ async function serviceStatus(options) {
   const running = typeof pid === 'number' && isProcessRunning(pid)
   let agent = null
   let error = null
+  let fresh = false
 
   if (running) {
     let timeout
@@ -1100,6 +1584,8 @@ async function serviceStatus(options) {
       })
       agent = response.ok ? await response.json() : null
       if (!response.ok) error = `status endpoint returned ${response.status}`
+      fresh = agentWatchStartedAfter(agent, record?.startedAt)
+      if (agent && !fresh) error = 'status endpoint has not observed this service start yet'
     } catch (statusError) {
       error = statusError instanceof Error ? statusError.message : 'status endpoint unavailable'
     } finally {
@@ -1108,7 +1594,7 @@ async function serviceStatus(options) {
   }
 
   return {
-    ok: running && !error,
+    ok: running && !error && fresh && agent?.ok !== false,
     running,
     pid,
     pidPath,
@@ -1117,6 +1603,20 @@ async function serviceStatus(options) {
     agent,
     error,
   }
+}
+
+function agentWatchStartedAfter(agent, startedAt) {
+  if (!startedAt) return true
+  const watchStartedAt = agent?.events?.lastWatchStarted?.at ?? agent?.watch?.lastStarted?.at
+  if (!watchStartedAt) return false
+  return isTimestampAtOrAfter(watchStartedAt, startedAt)
+}
+
+function isTimestampAtOrAfter(value, reference) {
+  const time = Date.parse(value)
+  const referenceTime = Date.parse(reference)
+  if (Number.isNaN(time) || Number.isNaN(referenceTime)) return false
+  return time >= referenceTime
 }
 
 async function readServiceRecord(pidPath) {
@@ -1155,11 +1655,27 @@ function runtimeArgsFromOptions(options) {
     ['--convex-url', convexUrlFromOptions(options)],
     ['--state-root', options['state-root']],
     ['--workspace-root', options['workspace-root']],
+    ['--workspace-index', options['workspace-index']],
+    ['--requester-id', options['requester-id']],
+    ['--session-id', options['session-id']],
+    ['--device-name', options['device-name']],
   ]
   const args = []
   for (const [name, value] of entries) {
     if (!value) continue
     args.push(name, value)
+  }
+  if (remotePullEnabled(options)) {
+    args.push('--remote-pull')
+  }
+  if (options['remote-refresh-interval-ms']) {
+    args.push('--remote-refresh-interval-ms', options['remote-refresh-interval-ms'])
+  }
+  if (options['allow-local-cloud']) {
+    args.push('--allow-local-cloud')
+  }
+  if (options['allow-unsafe-workspace']) {
+    args.push('--allow-unsafe-workspace')
   }
   return args
 }
@@ -1296,6 +1812,858 @@ async function validateCloud(options) {
   console.log(JSON.stringify(result, null, 2))
 }
 
+async function runDoctor(options) {
+  let state = null
+  let service = null
+  const checks = []
+
+  try {
+    state = await readAgentState(options)
+    checks.push(checkResult('cloud', state.status.cloud.exists, state.status.cloud.exists ? 'Cloud graph is reachable.' : 'Cloud graph is missing.'))
+    checks.push(checkResult('workspace', state.status.workspace.exists, state.status.workspace.exists ? 'Workspace path exists.' : 'Workspace path is not created.'))
+    checks.push(checkResult(
+      'hydration',
+      ['materialized', 'partial'].includes(state.status.workspace.hydration.state),
+      `Workspace hydration is ${state.status.workspace.hydration.state}.`,
+    ))
+    checks.push(checkResult(
+      'journal',
+      state.status.journal.pendingCount === 0 && state.status.journal.failedCount === 0,
+      `Journal pending=${state.status.journal.pendingCount}, failed=${state.status.journal.failedCount}.`,
+    ))
+    checks.push(checkResult(
+      'remote-cursor',
+      (state.status.remotePull.cursor.behindByRevisions ?? 0) === 0,
+      `Workspace is ${state.status.remotePull.cursor.behindByRevisions ?? 'unknown'} revisions behind cloud.`,
+    ))
+  } catch (error) {
+    checks.push(checkResult('agent-state', false, error.message))
+  }
+
+  try {
+    service = await serviceStatus(options)
+    checks.push(checkResult(
+      'service',
+      service.running && service.ok,
+      service.running ? (service.ok ? 'Service is running and reachable.' : `Service is running but unhealthy: ${service.error}`) : 'Service is not running.',
+    ))
+  } catch (error) {
+    checks.push(checkResult('service', false, error.message))
+  }
+
+  const failed = checks.filter((check) => !check.ok)
+  const result = {
+    ok: failed.length === 0,
+    checkedAt: new Date().toISOString(),
+    profile: options.profile,
+    codebaseId: options['codebase-id'] ?? state?.status.codebaseId ?? null,
+    checks,
+    service: service
+      ? {
+          running: service.running,
+          pid: service.pid,
+          statusUrl: service.statusUrl,
+          error: service.error,
+        }
+      : null,
+    status: state?.status
+      ? {
+          readiness: state.status.readiness,
+          hydration: state.status.workspace.hydration,
+          pendingWrites: state.status.journal.pendingCount,
+          failedWrites: state.status.journal.failedCount,
+          remoteBehindByRevisions: state.status.remotePull.cursor.behindByRevisions,
+          remotePull: state.status.remotePull.state,
+          watch: state.status.watch.state,
+        }
+      : null,
+  }
+
+  console.log(JSON.stringify(result, null, 2))
+  if (!result.ok) process.exitCode = 1
+}
+
+function checkResult(name, ok, detail) {
+  return {
+    name,
+    ok: Boolean(ok),
+    detail,
+  }
+}
+
+async function backupAgentState(options) {
+  const output = path.resolve(options.output ?? path.join(agentStateRootFromOptions(options), 'backups', backupDirectoryName(options)))
+  await assertBackupOutputSafe(output, options)
+  await prepareCleanOutputDirectory(output, options)
+
+  const cloudService = createCloudGraphService(options)
+  const cloud = await cloudService.readGraph()
+  const state = await readAgentState(options)
+  const files = []
+
+  await writeBackupFile(output, files, 'cloud.json', cloud)
+  await writeBackupFile(output, files, 'status.json', state.status)
+  await copyBackupFileIfExists(output, files, 'events.ndjson', options.events)
+  await copyBackupFileIfExists(output, files, 'journal.ndjson', options.journal)
+  await copyBackupFileIfExists(output, files, 'workspaces.json', workspaceIndexPath(options))
+
+  const manifest = {
+    schemaVersion: 1,
+    createdAt: new Date().toISOString(),
+    codebaseId: cloud.codebase?.id ?? options['codebase-id'] ?? null,
+    cloud: {
+      service: cloudService.type,
+      location: cloudService.location,
+      revision: cloud.revision,
+      fileCount: Object.keys(cloud.files ?? {}).length,
+      scopeCounts: countCloudScopes(cloud),
+    },
+    workspace: {
+      path: path.resolve(options.workspace),
+      hydration: state.status.workspace.hydration,
+    },
+    files,
+  }
+  await writeBackupFile(output, files, 'manifest.json', manifest)
+
+  console.log(JSON.stringify({
+    ok: true,
+    output,
+    codebaseId: manifest.codebaseId,
+    revision: manifest.cloud.revision,
+    files: files.length,
+    manifest: path.join(output, 'manifest.json'),
+  }, null, 2))
+}
+
+async function installAgent(options) {
+  await assertWorkspacePathSafe(options)
+  const stateRoot = path.resolve(agentStateRootFromOptions(options))
+  const workspaceRoot = path.resolve(workspaceRootFromOptions(options))
+  const codebaseId = options['codebase-id'] ?? path.basename(path.resolve(options.workspace))
+
+  await fs.mkdir(path.join(stateRoot, 'cloud'), { recursive: true })
+  await fs.mkdir(path.join(stateRoot, 'journal'), { recursive: true })
+  await fs.mkdir(path.join(stateRoot, 'events'), { recursive: true })
+  await fs.mkdir(path.join(stateRoot, 'run'), { recursive: true })
+  await fs.mkdir(path.join(stateRoot, 'backups'), { recursive: true })
+  await fs.mkdir(workspaceRoot, { recursive: true })
+  await fs.mkdir(options.workspace, { recursive: true })
+
+  let index = await readWorkspaceIndex(options)
+  if (!index) {
+    index = await upsertWorkspaceIndex(options, {
+      id: codebaseId,
+      name: codebaseId,
+      initialized: false,
+      workspace: {
+        root: workspaceRoot,
+        path: path.resolve(options.workspace),
+        exists: true,
+        adapter: workspaceMode.adapter,
+        cacheMode: workspaceMode.cacheMode,
+        virtualized: false,
+      },
+      cloud: {
+        path: cloudLocationFromOptions(options, codebaseId),
+        service: convexUrlFromOptions(options) ? convexCloudServiceType : cloudServiceType,
+        exists: false,
+      },
+      materialization: 'metadata-only',
+      hydration: {
+        state: 'metadata-only',
+        lastMaterializedAt: null,
+        lastMaterializedRevision: null,
+        selectedStateRevision: null,
+        source: 'install',
+        lastEvent: null,
+        hydratedPathCount: 0,
+      },
+      hydratedPaths: [],
+      remoteCursor: {
+        graphRevision: null,
+        selectedStateRevision: null,
+        materializedRevision: null,
+        lastMaterializedAt: null,
+      },
+      virtualized: false,
+      updatedAt: new Date().toISOString(),
+    })
+  }
+
+  const envExamplePath = path.join(stateRoot, 'hopit.env.example')
+  if (options['write-env']) {
+    await fs.writeFile(envExamplePath, productionEnvTemplate(options), 'utf8')
+  }
+
+  let launchAgent = null
+  if (options['launch-agent']) {
+    launchAgent = await writeLaunchAgent(options)
+  }
+
+  if (options['start-service']) {
+    await startService(options)
+  }
+
+  console.log(JSON.stringify({
+    ok: true,
+    action: 'install',
+    codebaseId,
+    stateRoot,
+    workspaceRoot,
+    workspace: path.resolve(options.workspace),
+    workspaceIndex: workspaceIndexSummary(options, index),
+    envExample: options['write-env'] ? envExamplePath : null,
+    launchAgent,
+    serviceStarted: Boolean(options['start-service']),
+  }, null, 2))
+}
+
+async function runWorkspaceCommand(action, options) {
+  const allowedActions = new Set(['status', 'list', 'ensure', 'files', 'hydrate-file', 'dehydrate'])
+  if (!allowedActions.has(action)) {
+    throw new Error(`Unknown workspace action: ${action}`)
+  }
+
+  if (action === 'hydrate-file') {
+    if (!options.path && !options.file) {
+      throw new Error('workspace hydrate-file requires --path <cloud-path>.')
+    }
+    await hydrateWorkspaceFile(options)
+    return
+  }
+
+  if (action === 'dehydrate') {
+    await dehydrateWorkspace(options)
+    return
+  }
+
+  if (action === 'ensure') {
+    await assertWorkspacePathSafe(options)
+    createCloudGraphService(options)
+    await fs.mkdir(workspaceRootFromOptions(options), { recursive: true })
+    await fs.mkdir(options.workspace, { recursive: true })
+  }
+
+  const state = await readAgentState(options)
+  const rootPath = path.resolve(workspaceRootFromOptions(options))
+  let current = workspaceCodebaseSummary(options, state)
+  const index = action === 'ensure'
+    ? await upsertWorkspaceIndex(options, current)
+    : await readWorkspaceIndex(options)
+  const cloud = state.cloud.graph
+  if (current) {
+    current = {
+      ...current,
+      workspace: {
+        ...current.workspace,
+        index: workspaceIndexSummary(options, index),
+      },
+    }
+  }
+  const indexedCodebases = mergeIndexedCodebases(index?.codebases ?? [], current)
+  const result = {
+    ok: true,
+    action,
+    root: {
+      path: rootPath,
+      exists: existsSync(rootPath),
+      adapter: workspaceMode.adapter,
+      cacheMode: workspaceMode.cacheMode,
+      sourceOfTruth: workspaceMode.sourceOfTruth,
+      virtualized: false,
+      index: workspaceIndexSummary(options, index),
+      note: 'HopIt currently uses managed folders under this root, not a FUSE or OS filesystem provider.',
+    },
+    current,
+    codebases: indexedCodebases,
+  }
+
+  if (action === 'files') {
+    result.files = cloud
+      ? Object.entries(cloud.files ?? {}).map(([relativePath, file]) =>
+          workspaceFileMetadata(options, relativePath, file),
+        )
+      : []
+    result.summary = {
+      visibleFiles: result.files.length,
+      hydratedFiles: result.files.filter((file) => file.local.exists).length,
+      materialization: current?.materialization ?? 'unknown',
+      hydration: current?.hydration ?? null,
+    }
+  }
+
+  console.log(JSON.stringify(result, null, 2))
+}
+
+function workspaceCodebaseSummary(options, state) {
+  const status = state.status
+  const codebaseId = status.codebaseId ?? options['codebase-id'] ?? path.basename(path.resolve(options.workspace))
+
+  return {
+    id: codebaseId,
+    name: status.codebaseName ?? codebaseId,
+    initialized: status.readiness === 'ready',
+    workspace: status.workspace,
+    cloud: {
+      path: status.cloud.path,
+      service: status.cloud.service,
+      exists: status.cloud.exists,
+    },
+    activeChangeSetId: status.activeChangeSetId,
+    mainId: status.mainId,
+    visibleFileCount: status.visibleFileCount,
+    hiddenFileCount: status.hiddenFileCount,
+    materialization: 'managed-folder',
+    hydration: status.workspace.hydration,
+    localChanges: status.workspace.localChanges,
+    contentManifest: status.workspace.contentManifest,
+    remoteCursor: status.remotePull.cursor,
+    virtualized: false,
+  }
+}
+
+function workspaceFileMetadata(options, relativePath, file, forceExists = false) {
+  const absolutePath = workspaceFilePath(options.workspace, relativePath)
+  const exists = forceExists || existsSync(absolutePath)
+  return {
+    path: relativePath,
+    scope: file.scope ?? scopeForPath(relativePath),
+    revision: file.revision ?? null,
+    size: file.size ?? (typeof file.content === 'string' ? Buffer.byteLength(file.content) : null),
+    hash: file.hash ?? (typeof file.content === 'string' ? hashContent(file.content) : null),
+    local: {
+      path: absolutePath,
+      exists,
+      hydrated: exists,
+    },
+  }
+}
+
+async function writeWorkspaceMetadataManifest(options, cloud, detail = {}) {
+  await fs.mkdir(path.join(options.workspace, '.hopit'), { recursive: true })
+  const files = Object.entries(cloud.files ?? {}).map(([relativePath, file]) => ({
+    path: relativePath,
+    scope: file.scope ?? scopeForPath(relativePath),
+    revision: file.revision ?? null,
+    size: file.size ?? null,
+    hash: file.hash ?? null,
+  }))
+  await writeJson(path.join(options.workspace, '.hopit', 'metadata.json'), {
+    schemaVersion: 1,
+    generatedAt: new Date().toISOString(),
+    codebase: cloud.codebase,
+    main: cloud.main,
+    selectedState: {
+      type: cloud.selectedState?.type ?? null,
+      id: cloud.selectedState?.id ?? null,
+      revision: cloud.selectedState?.revision ?? null,
+      visibility: cloud.selectedState?.effectiveVisibility ?? cloud.visibility?.effective ?? null,
+    },
+    materialization: detail.materialization ?? 'metadata-only',
+    fileCount: files.length,
+    files,
+  })
+}
+
+async function runSessionCommand(action, options) {
+  const allowedActions = new Set(['status', 'register', 'list', 'touch', 'revoke'])
+  if (!allowedActions.has(action)) {
+    throw new Error(`Unknown session action: ${action}`)
+  }
+
+  if (action === 'status') {
+    const state = await readAgentState(options)
+    const sessionId = options['session-id'] ?? state.status.sessionId ?? null
+    const deviceName = options['device-name'] ?? state.cloud.graph?.session?.deviceName ?? os.hostname() ?? null
+    console.log(JSON.stringify({
+      ok: true,
+      action,
+      codebaseId: state.status.codebaseId ?? options['codebase-id'] ?? null,
+      session: {
+        id: sessionId,
+        deviceName,
+        cloudSessionId: state.status.sessionId,
+      },
+      credentials: {
+        serviceTokenConfigured: Boolean(agentTokenFromOptions(options)),
+        sessionTokenConfigured: Boolean(agentSessionTokenFromOptions(options)),
+      },
+      cloud: {
+        service: state.status.cloud.service,
+        path: state.status.cloud.path,
+        exists: state.status.cloud.exists,
+      },
+    }, null, 2))
+    return
+  }
+
+  const cloudService = createCloudGraphService(options)
+  if (!(cloudService instanceof ConvexCloudGraphService)) {
+    throw new Error(`Session ${action} requires Convex. Configure --convex-url or HOPIT_CONVEX_URL.`)
+  }
+
+  if (action === 'register') {
+    const result = await cloudService.registerAgentSession({
+      sessionId: options['session-id'],
+      deviceName: options['device-name'] ?? os.hostname() ?? 'local-device',
+      capabilities: sessionCapabilitiesFromOptions(options),
+      expiresAt: options['expires-at'],
+    })
+    console.log(JSON.stringify({
+      ok: true,
+      action,
+      ...result,
+      note: 'Store sessionToken as HOPIT_AGENT_SESSION_TOKEN on this device. It is only returned once.',
+    }, null, 2))
+    return
+  }
+
+  if (action === 'list') {
+    const result = await cloudService.listAgentSessions({ status: options.status })
+    console.log(JSON.stringify({
+      ok: true,
+      action,
+      codebaseId: cloudService.codebaseId,
+      sessions: result,
+    }, null, 2))
+    return
+  }
+
+  const sessionId = options['session-id']
+  if (!sessionId) {
+    throw new Error(`Session ${action} requires --session-id.`)
+  }
+
+  if (action === 'touch') {
+    const result = await cloudService.touchAgentSession({ sessionId })
+    console.log(JSON.stringify({
+      ok: true,
+      action,
+      session: result,
+    }, null, 2))
+    return
+  }
+
+  if (action === 'revoke') {
+    const result = await cloudService.revokeAgentSession({ sessionId })
+    console.log(JSON.stringify({
+      ok: true,
+      action,
+      session: result,
+    }, null, 2))
+  }
+}
+
+async function readWorkspaceIndex(options) {
+  const indexPath = workspaceIndexPath(options)
+  try {
+    return normalizeWorkspaceIndex(await readJson(indexPath), options)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null
+    throw error
+  }
+}
+
+async function writeWorkspaceIndex(options, index) {
+  const indexPath = workspaceIndexPath(options)
+  await fs.mkdir(path.dirname(indexPath), { recursive: true })
+  await writeJson(indexPath, normalizeWorkspaceIndex(index, options))
+}
+
+async function upsertWorkspaceIndex(options, current) {
+  const now = new Date().toISOString()
+  const existing = (await readWorkspaceIndex(options)) ?? emptyWorkspaceIndex(options)
+  const next = {
+    ...existing,
+    schemaVersion: workspaceIndexVersion,
+    updatedAt: now,
+    root: workspaceIndexRoot(options),
+    codebases: mergeIndexedCodebases(existing.codebases, current ? storableWorkspaceIndexEntry({
+      ...current,
+      updatedAt: now,
+    }) : null),
+  }
+  await writeWorkspaceIndex(options, next)
+  return next
+}
+
+async function upsertWorkspaceIndexFromCloud(options, cloud, metadata = {}) {
+  return upsertWorkspaceIndex(options, workspaceIndexEntryFromCloud(options, cloud, metadata))
+}
+
+async function hydratedPathUnion(options, codebaseId, nextPaths) {
+  const index = await readWorkspaceIndex(options)
+  const indexedCodebase = findIndexedCodebase(index, codebaseId, options.workspace)
+  return uniqueCloudPaths([...(indexedCodebase?.hydratedPaths ?? []), ...nextPaths])
+}
+
+function uniqueCloudPaths(paths) {
+  return Array.from(new Set(paths.map((value) => assertSafeCloudPath(value)))).sort()
+}
+
+function deletableCloudPathsForWorkspace(indexedCodebase, visibleCloudPaths) {
+  const visible = uniqueCloudPaths(visibleCloudPaths)
+  if (!indexedCodebase || indexedCodebase.hydration?.state === 'materialized') {
+    return new Set(visible)
+  }
+
+  return new Set(uniqueCloudPaths(indexedCodebase.hydratedPaths ?? []).filter((relativePath) =>
+    visible.includes(relativePath),
+  ))
+}
+
+function workspaceIndexHydrationStateForSync(indexedCodebase) {
+  if (!indexedCodebase) return 'materialized'
+  if (indexedCodebase.hydration?.state === 'metadata-only') return 'partial'
+  if (indexedCodebase.hydration?.state === 'partial') return 'partial'
+  return 'materialized'
+}
+
+function hydratedPathsAfterSync(indexedCodebase, diskPaths, cloudPaths) {
+  const existing =
+    indexedCodebase?.hydration?.state === 'partial' || indexedCodebase?.hydration?.state === 'metadata-only'
+      ? indexedCodebase.hydratedPaths ?? []
+      : cloudPaths
+  return uniqueCloudPaths([...existing, ...diskPaths])
+}
+
+function emptyWorkspaceIndex(options) {
+  return {
+    schemaVersion: workspaceIndexVersion,
+    updatedAt: null,
+    root: workspaceIndexRoot(options),
+    codebases: [],
+  }
+}
+
+function normalizeWorkspaceIndex(value, options) {
+  if (!value || typeof value !== 'object') return emptyWorkspaceIndex(options)
+  const codebases = Array.isArray(value.codebases)
+    ? value.codebases.filter((entry) => entry && typeof entry.id === 'string' && entry.id.length > 0)
+    : []
+
+  return {
+    ...value,
+    schemaVersion: workspaceIndexVersion,
+    root: value.root && typeof value.root === 'object' ? value.root : workspaceIndexRoot(options),
+    codebases,
+  }
+}
+
+function mergeIndexedCodebases(indexedCodebases, current) {
+  const byId = new Map()
+  for (const codebase of indexedCodebases ?? []) {
+    if (codebase?.id) byId.set(workspaceIndexEntryKey(codebase), codebase)
+  }
+  if (current?.id) {
+    const key = workspaceIndexEntryKey(current)
+    byId.set(key, {
+      ...(byId.get(key) ?? {}),
+      ...current,
+    })
+  }
+
+  return [...byId.values()].sort((a, b) => {
+    const nameCompare = String(a.name ?? a.id).localeCompare(String(b.name ?? b.id))
+    return nameCompare || String(a.id).localeCompare(String(b.id))
+  })
+}
+
+function workspaceIndexEntryKey(entry) {
+  const workspacePath = entry.workspace?.path ? path.resolve(entry.workspace.path) : '(unbound)'
+  return `${entry.id}:${workspacePath}`
+}
+
+function findIndexedCodebase(index, codebaseId, workspacePath = null) {
+  if (!index || !codebaseId) return null
+  const resolvedWorkspace = workspacePath ? path.resolve(workspacePath) : null
+  return (
+    (index.codebases ?? []).find((codebase) => {
+      if (codebase.id !== codebaseId) return false
+      if (!resolvedWorkspace) return true
+      return path.resolve(codebase.workspace?.path ?? '') === resolvedWorkspace
+    }) ?? null
+  )
+}
+
+function storableWorkspaceIndexEntry(entry) {
+  if (!entry?.workspace?.index) return entry
+  const { index: _index, ...workspace } = entry.workspace
+  return {
+    ...entry,
+    workspace,
+  }
+}
+
+function workspaceIndexEntryFromCloud(options, cloud, metadata = {}) {
+  const now = metadata.now ?? new Date().toISOString()
+  const codebaseId = cloud.codebase?.id ?? options['codebase-id'] ?? path.basename(path.resolve(options.workspace))
+  const hydrationState = metadata.hydrationState ?? 'materialized'
+  const hydratedPaths = Array.isArray(metadata.hydratedPaths)
+    ? uniqueCloudPaths(metadata.hydratedPaths)
+    : hydrationState === 'materialized'
+      ? Object.keys(cloud.files ?? {}).sort()
+      : []
+  const materializedRevision = hydrationState === 'materialized' ? (cloud.revision ?? null) : null
+  const contentManifest = contentManifestFromCloud(cloud, hydratedPaths)
+  const hydration = {
+    state: hydrationState,
+    lastMaterializedAt: now,
+    lastMaterializedRevision: materializedRevision,
+    selectedStateRevision: cloud.selectedState?.revision ?? null,
+    source: metadata.reason ?? 'unknown',
+    lastEvent: metadata.lastEvent ?? null,
+    hydratedPathCount: hydratedPaths.length,
+  }
+
+  return {
+    id: codebaseId,
+    name: cloud.codebase?.name ?? codebaseId,
+    initialized: true,
+    workspace: {
+      root: path.resolve(workspaceRootFromOptions(options)),
+      path: path.resolve(options.workspace),
+      exists: existsSync(options.workspace),
+      adapter: workspaceMode.adapter,
+      cacheMode: workspaceMode.cacheMode,
+      virtualized: false,
+    },
+    cloud: {
+      path: cloudLocationFromOptions(options, codebaseId),
+      service: convexUrlFromOptions(options) ? convexCloudServiceType : cloudServiceType,
+      exists: true,
+    },
+    activeChangeSetId: cloud.selectedState?.type === 'active-change-set' ? cloud.selectedState.id : null,
+    mainId: cloud.main?.id ?? null,
+    visibleFileCount: Object.keys(cloud.files ?? {}).length,
+    hiddenFileCount: cloud.visibilityContext?.hiddenFileCount ?? null,
+    materialization: metadata.materialization ?? (hydrationState === 'materialized' ? 'managed-folder' : 'metadata-only'),
+    hydration,
+    hydratedPaths,
+    contentManifest,
+    remoteCursor: {
+      graphRevision: cloud.revision ?? null,
+      selectedStateRevision: cloud.selectedState?.revision ?? null,
+      materializedRevision: hydration.lastMaterializedRevision,
+      lastMaterializedAt: hydration.lastMaterializedAt,
+    },
+    virtualized: false,
+    updatedAt: now,
+  }
+}
+
+function workspaceIndexRoot(options) {
+  return {
+    path: path.resolve(workspaceRootFromOptions(options)),
+    adapter: workspaceMode.adapter,
+    cacheMode: workspaceMode.cacheMode,
+    sourceOfTruth: workspaceMode.sourceOfTruth,
+    virtualized: false,
+  }
+}
+
+function workspaceIndexPath(options) {
+  return options['workspace-index'] ?? path.join(agentStateRootFromOptions(options), 'workspaces.json')
+}
+
+function agentStateRootFromOptions(options) {
+  return options['state-root'] ?? path.dirname(path.resolve(options.journal))
+}
+
+function workspaceIndexSummary(options, index) {
+  return {
+    path: path.resolve(workspaceIndexPath(options)),
+    exists: Boolean(index),
+    schemaVersion: index?.schemaVersion ?? null,
+    updatedAt: index?.updatedAt ?? null,
+    codebaseCount: index?.codebases?.length ?? 0,
+  }
+}
+
+function contentManifestFromCloud(cloud, hydratedPaths = Object.keys(cloud.files ?? {})) {
+  const files = {}
+  for (const relativePath of uniqueCloudPaths(hydratedPaths)) {
+    const file = cloud.files?.[relativePath]
+    if (!file) continue
+    const content = typeof file.content === 'string' ? file.content : ''
+    files[relativePath] = {
+      hash: typeof file.hash === 'string' ? file.hash : hashContent(content),
+      size: Number.isInteger(file.size) ? file.size : Buffer.byteLength(content),
+      scope: file.scope ?? scopeForPath(relativePath),
+      revision: Number.isInteger(file.revision) ? file.revision : null,
+    }
+  }
+
+  return {
+    schemaVersion: 1,
+    source: 'cloud-visible-graph',
+    fileCount: Object.keys(files).length,
+    files,
+  }
+}
+
+async function contentManifestFromWorkspace(root) {
+  const diskFiles = await readWorkspaceFiles(root)
+  const files = {}
+  for (const relativePath of Object.keys(diskFiles).sort()) {
+    const content = diskFiles[relativePath]
+    files[relativePath] = {
+      hash: hashContent(content),
+      size: Buffer.byteLength(content),
+      scope: scopeForPath(relativePath),
+      revision: null,
+    }
+  }
+
+  return {
+    schemaVersion: 1,
+    source: 'workspace-disk',
+    fileCount: Object.keys(files).length,
+    files,
+  }
+}
+
+function contentManifestSummary(manifest) {
+  return {
+    exists: Boolean(manifest?.files),
+    schemaVersion: manifest?.schemaVersion ?? null,
+    fileCount: manifest?.fileCount ?? (manifest?.files ? Object.keys(manifest.files).length : 0),
+    source: manifest?.source ?? null,
+  }
+}
+
+async function workspaceLocalChanges(options, indexedCodebase) {
+  if (!existsSync(options.workspace)) {
+    return {
+      safe: false,
+      state: 'missing',
+      reason: 'workspace_missing',
+      addedCount: 0,
+      modifiedCount: 0,
+      deletedCount: 0,
+      samplePaths: [],
+    }
+  }
+
+  const baseline = indexedCodebase?.contentManifest
+  if (!baseline?.files) {
+    return {
+      safe: false,
+      state: 'unknown',
+      reason: 'workspace_manifest_missing',
+      addedCount: 0,
+      modifiedCount: 0,
+      deletedCount: 0,
+      samplePaths: [],
+    }
+  }
+
+  const disk = await contentManifestFromWorkspace(options.workspace)
+  const diff = diffContentManifests(baseline, disk)
+  const dirty = diff.addedPaths.length > 0 || diff.modifiedPaths.length > 0 || diff.deletedPaths.length > 0
+
+  return {
+    safe: !dirty,
+    state: dirty ? 'dirty' : 'clean',
+    reason: dirty ? 'workspace_has_unjournaled_changes' : null,
+    addedCount: diff.addedPaths.length,
+    modifiedCount: diff.modifiedPaths.length,
+    deletedCount: diff.deletedPaths.length,
+    samplePaths: [...diff.addedPaths, ...diff.modifiedPaths, ...diff.deletedPaths].slice(0, 10),
+  }
+}
+
+function diffContentManifests(baseline, disk) {
+  const baselineFiles = baseline?.files ?? {}
+  const diskFiles = disk?.files ?? {}
+  const addedPaths = []
+  const modifiedPaths = []
+  const deletedPaths = []
+
+  for (const relativePath of Object.keys(diskFiles).sort()) {
+    const expected = baselineFiles[relativePath]
+    const actual = diskFiles[relativePath]
+    if (!expected) {
+      addedPaths.push(relativePath)
+      continue
+    }
+    if (expected.hash !== actual.hash || expected.size !== actual.size || expected.scope !== actual.scope) {
+      modifiedPaths.push(relativePath)
+    }
+  }
+
+  for (const relativePath of Object.keys(baselineFiles).sort()) {
+    if (!diskFiles[relativePath]) deletedPaths.push(relativePath)
+  }
+
+  return { addedPaths, modifiedPaths, deletedPaths }
+}
+
+function buildWorkspaceHydration({
+  cloudSummary,
+  workspaceExists,
+  lastWorkspaceReady,
+  lastRefreshComplete,
+  indexedCodebase,
+}) {
+  const indexedHydration = indexedCodebase?.hydration ?? null
+  const latestMaterializedEvent = latestEvent([lastWorkspaceReady, lastRefreshComplete])
+  const lastMaterializedRevision = visibleRevisionFromEvent(latestMaterializedEvent)
+
+  let state = 'not_initialized'
+  if (cloudSummary.exists && workspaceExists && indexedHydration?.state === 'metadata-only') {
+    state = 'metadata-only'
+  } else if (cloudSummary.exists && workspaceExists && indexedHydration?.state === 'partial') {
+    state = 'partial'
+  } else if (cloudSummary.exists && workspaceExists && latestMaterializedEvent) {
+    state = 'materialized'
+  } else if (cloudSummary.exists && workspaceExists) {
+    state = 'not_materialized'
+  } else if (cloudSummary.exists) {
+    state = 'not_materialized'
+  }
+
+  return {
+    state,
+    lastMaterializedAt: indexedHydration?.lastMaterializedAt ?? latestMaterializedEvent?.at ?? null,
+    lastMaterializedRevision: indexedHydration?.lastMaterializedRevision ?? lastMaterializedRevision,
+    selectedStateRevision: cloudSummary.selectedState?.revision ?? null,
+    graphRevision: cloudSummary.revision,
+    sourceEvent: indexedHydration?.lastEvent ?? latestMaterializedEvent?.event ?? null,
+    hydratedPathCount: indexedHydration?.hydratedPathCount ?? indexedHydration?.hydratedPaths?.length ?? null,
+  }
+}
+
+function buildRemoteCursor({ cloudSummary, eventsSummary, hydration }) {
+  const latestCursorEvent = latestEvent([
+    eventsSummary.lastWorkspaceReady,
+    eventsSummary.lastRefreshComplete,
+    eventsSummary.lastRemoteUpdate,
+    eventsSummary.lastAcknowledgement,
+  ])
+  const graphRevision = cloudSummary.revision
+  const materializedRevision = hydration.lastMaterializedRevision
+  const behindByRevisions =
+    Number.isInteger(graphRevision) && Number.isInteger(materializedRevision)
+      ? Math.max(0, graphRevision - materializedRevision)
+      : null
+
+  return {
+    graphRevision,
+    selectedStateId: cloudSummary.selectedState?.id ?? null,
+    selectedStateType: cloudSummary.selectedState?.type ?? null,
+    selectedStateRevision: cloudSummary.selectedState?.revision ?? null,
+    materializedRevision,
+    lastMaterializedAt: hydration.lastMaterializedAt,
+    lastRemoteUpdateRevision: visibleRevisionFromEvent(eventsSummary.lastRemoteUpdate),
+    latestEventRevision: visibleRevisionFromEvent(latestCursorEvent),
+    latestEvent: latestCursorEvent?.event ?? null,
+    eventCount: eventsSummary.totalEntries,
+    behindByRevisions,
+  }
+}
+
 async function assertExportOutputSafe(output, options) {
   const workspace = path.resolve(options.workspace)
   const unsafeRoots = new Set([path.parse(output).root, os.homedir(), process.cwd()])
@@ -1304,6 +2672,13 @@ async function assertExportOutputSafe(output, options) {
   }
   if (pathsOverlap(output, workspace)) {
     throw new Error(`Refusing to export into or around the managed workspace: ${output}`)
+  }
+}
+
+async function assertBackupOutputSafe(output, options) {
+  const unsafeRoots = new Set([path.parse(output).root, os.homedir(), process.cwd(), path.resolve(options.workspace)])
+  if (unsafeRoots.has(output)) {
+    throw new Error(`Refusing to write backup into unsafe output path: ${output}`)
   }
 }
 
@@ -1320,6 +2695,115 @@ async function prepareCleanOutputDirectory(output, options) {
 
   await fs.rm(output, { recursive: true, force: true })
   await fs.mkdir(output, { recursive: true })
+}
+
+function backupDirectoryName(options) {
+  const codebaseId = options['codebase-id'] ?? 'hopit'
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  return `${codebaseId}-${stamp}`
+}
+
+async function writeBackupFile(output, files, relativePath, value) {
+  const destination = path.join(output, relativePath)
+  await fs.mkdir(path.dirname(destination), { recursive: true })
+  const content = `${JSON.stringify(value, null, 2)}\n`
+  await fs.writeFile(destination, content, 'utf8')
+  files.push({
+    path: relativePath,
+    bytes: Buffer.byteLength(content),
+    sha256: hashContent(content),
+  })
+}
+
+async function copyBackupFileIfExists(output, files, relativePath, sourcePath) {
+  if (!existsSync(sourcePath)) return
+  const destination = path.join(output, relativePath)
+  await fs.mkdir(path.dirname(destination), { recursive: true })
+  const content = await fs.readFile(sourcePath)
+  await fs.writeFile(destination, content)
+  files.push({
+    path: relativePath,
+    bytes: content.length,
+    sha256: createHash('sha256').update(content).digest('hex'),
+  })
+}
+
+function productionEnvTemplate(options) {
+  const codebaseId = options['codebase-id'] ?? 'hopit'
+  return `# HopIt production agent environment
+HOPIT_PROFILE=production
+HOPIT_CODEBASE_ID=${codebaseId}
+HOPIT_CONVEX_URL=${convexUrlFromOptions(options) ?? 'https://your-convex-deployment.convex.cloud'}
+HOPIT_AGENT_STATE_ROOT=${JSON.stringify(path.resolve(agentStateRootFromOptions(options)))}
+HOPIT_WORKSPACE_ROOT=${JSON.stringify(path.resolve(workspaceRootFromOptions(options)))}
+HOPIT_WORKSPACE_INDEX=${JSON.stringify(path.resolve(workspaceIndexPath(options)))}
+HOPIT_SESSION_ID=${options['session-id'] ?? `session_${codebaseId}_${os.hostname().replace(/[^a-zA-Z0-9]+/g, '_')}`}
+HOPIT_DEVICE_NAME=${JSON.stringify(options['device-name'] ?? os.hostname() ?? 'local-device')}
+HOPIT_AGENT_SESSION_TOKEN=replace-with-hop-device-register-token
+HOPIT_REMOTE_PULL=1
+HOPIT_REMOTE_REFRESH_INTERVAL_MS=${options['remote-refresh-interval-ms'] ?? '5000'}
+`
+}
+
+async function writeLaunchAgent(options) {
+  if (process.platform !== 'darwin') {
+    throw new Error('--launch-agent currently supports macOS launchd only.')
+  }
+  const codebaseId = options['codebase-id'] ?? 'hopit'
+  const label = `com.hopit.agent.${codebaseId}`
+  const launchAgentsRoot = path.join(os.homedir(), 'Library', 'LaunchAgents')
+  const plistPath = path.join(launchAgentsRoot, `${label}.plist`)
+  const hopBin = options['hop-bin'] ?? process.argv[1] ?? __filename
+  const programArguments = [
+    process.execPath,
+    hopBin,
+    'service',
+    'start',
+    '--profile',
+    'production',
+    '--codebase-id',
+    codebaseId,
+    '--remote-pull',
+  ]
+
+  const plist = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${escapePlist(label)}</string>
+  <key>ProgramArguments</key>
+  <array>
+${programArguments.map((argument) => `    <string>${escapePlist(argument)}</string>`).join('\n')}
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>${escapePlist(path.join(agentStateRootFromOptions(options), 'run', `${codebaseId}.launchd.out.log`))}</string>
+  <key>StandardErrorPath</key>
+  <string>${escapePlist(path.join(agentStateRootFromOptions(options), 'run', `${codebaseId}.launchd.err.log`))}</string>
+</dict>
+</plist>
+`
+
+  await fs.mkdir(launchAgentsRoot, { recursive: true })
+  await fs.writeFile(plistPath, plist, 'utf8')
+  return {
+    label,
+    plistPath,
+    loadCommand: `launchctl bootstrap gui/$(id -u) ${plistPath}`,
+  }
+}
+
+function escapePlist(value) {
+  return String(value)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;')
 }
 
 function runGit(args, cwd) {
@@ -1363,7 +2847,25 @@ async function readAgentState(options) {
   const lastRefreshStarted = findLastEvent(eventEntries, 'refresh.started')
   const lastRefreshBlocked = findLastEvent(eventEntries, 'refresh.blocked')
   const lastRefreshComplete = findLastEvent(eventEntries, 'refresh.complete')
+  const lastWorkspaceReady = findLastEvent(eventEntries, 'workspace.ready')
   const lastRemoteUpdate = findLastEvent(eventEntries, 'remote-update')
+  const lastRemotePullStarted = findLastEvent(eventEntries, 'remote-pull.started')
+  const lastRemotePullSkipped = findLastEvent(eventEntries, 'remote-pull.skipped')
+  const lastRemotePullFailed = findLastEvent(eventEntries, 'remote-pull.failed')
+  const latestRemotePullEvent = findLastEventOf(eventEntries, [
+    'remote-pull.started',
+    'remote-pull.applied',
+    'remote-pull.skipped',
+    'remote-pull.failed',
+  ])
+  const lastRemotePullApplied = findLastEvent(eventEntries, 'remote-pull.applied')
+  const remotePullHealth = buildRemotePullHealth(options, {
+    lastRemotePullStarted,
+    lastRemotePullApplied,
+    lastRemotePullSkipped,
+    lastRemotePullFailed,
+    latestRemotePullEvent,
+  })
   const latestRefreshEvent = findLastEventOf(eventEntries, [
     'refresh.started',
     'refresh.blocked',
@@ -1398,7 +2900,12 @@ async function readAgentState(options) {
     (entry) => entry.recoveryStatus === 'acknowledged',
   )
   const workspaceExists = existsSync(options.workspace)
-  const initialized = Boolean(cloud) && workspaceExists
+  const workspaceIndex = await readWorkspaceIndex(options)
+  const indexedCodebase = findIndexedCodebase(
+    workspaceIndex,
+    cloud?.codebase?.id ?? options['codebase-id'],
+    options.workspace,
+  )
 
   const cloudSummary = {
     path: cloudService.location ?? path.resolve(options.cloud),
@@ -1445,7 +2952,7 @@ async function readAgentState(options) {
       ? {
           id: cloud.session.id ?? null,
           deviceName: cloud.session.deviceName ?? null,
-    }
+        }
       : null,
     requester: cloud?.visibilityContext ? summarizeRequester(cloud.visibilityContext) : null,
     hiddenFileCount: cloud?.visibilityContext?.hiddenFileCount ?? null,
@@ -1492,10 +2999,16 @@ async function readAgentState(options) {
     lastFailedSync,
     lastRecoveredSync,
     latestSyncEvent,
+    lastWorkspaceReady,
     lastRefreshStarted,
     lastRefreshBlocked,
     lastRefreshComplete,
     lastRemoteUpdate,
+    lastRemotePullStarted,
+    lastRemotePullApplied,
+    lastRemotePullSkipped,
+    lastRemotePullFailed,
+    latestRemotePullEvent,
     lastReviewOpened: findLastEvent(eventEntries, 'change_set.review_opened'),
     lastChangeSetMerged: findLastEvent(eventEntries, 'change_set.merged'),
     lastConflictDetected: findLastEvent(eventEntries, 'change_set.conflict_detected'),
@@ -1506,11 +3019,26 @@ async function readAgentState(options) {
     lastWatchRecoveryBlocked,
     latestWatchEvent,
   }
+  const hydration = buildWorkspaceHydration({
+    cloudSummary,
+    workspaceExists,
+    lastWorkspaceReady,
+    lastRefreshComplete,
+    indexedCodebase,
+  })
+  const localChanges = await workspaceLocalChanges(options, indexedCodebase)
+  remotePullHealth.cursor = buildRemoteCursor({
+    cloudSummary,
+    eventsSummary,
+    hydration,
+  })
+  const initialized = Boolean(cloud) && (hydration.state === 'materialized' || hydration.state === 'partial')
 
   return {
     status: {
       ok:
         initialized &&
+        localChanges.safe &&
         failedJournalEntries.length === 0 &&
         syncHealth.state !== 'failed' &&
         refreshHealth.state !== 'blocked' &&
@@ -1548,11 +3076,17 @@ async function readAgentState(options) {
         state: cloudSummary.selectedState?.conflictState ?? 'none',
         detail: cloudSummary.selectedState?.conflict ?? null,
       },
-	      workspace: {
-	        path: path.resolve(options.workspace),
-	        exists: workspaceExists,
+      workspace: {
+        root: path.resolve(workspaceRootFromOptions(options)),
+        path: path.resolve(options.workspace),
+        exists: workspaceExists,
         adapter: workspaceMode.adapter,
         cacheMode: workspaceMode.cacheMode,
+        hydration,
+        localChanges,
+        contentManifest: contentManifestSummary(indexedCodebase?.contentManifest),
+        index: workspaceIndexSummary(options, workspaceIndex),
+        virtualized: false,
       },
       cloud: cloudSummary,
       journal: {
@@ -1573,6 +3107,7 @@ async function readAgentState(options) {
         state: lastRemoteUpdate ? 'updated' : 'idle',
         lastUpdate: lastRemoteUpdate,
       },
+      remotePull: remotePullHealth,
       watch: watchHealth,
       events: {
         path: eventsSummary.path,
@@ -1585,10 +3120,16 @@ async function readAgentState(options) {
         lastFailedSync,
         lastRecoveredSync,
         latestSyncEvent,
+        lastWorkspaceReady,
         lastRefreshStarted,
         lastRefreshBlocked,
         lastRefreshComplete,
         lastRemoteUpdate,
+        lastRemotePullStarted,
+        lastRemotePullApplied,
+        lastRemotePullSkipped,
+        lastRemotePullFailed,
+        latestRemotePullEvent,
         lastReviewOpened: eventsSummary.lastReviewOpened,
         lastChangeSetMerged: eventsSummary.lastChangeSetMerged,
         lastConflictDetected: eventsSummary.lastConflictDetected,
@@ -1920,6 +3461,34 @@ function buildWatchHealth(watchEvents) {
   }
 }
 
+function buildRemotePullHealth(options, remotePullEvents) {
+  const enabled = remotePullEnabled(options)
+  const latestProblem = latestEvent([
+    remotePullEvents.lastRemotePullSkipped,
+    remotePullEvents.lastRemotePullFailed,
+  ])
+  let state = enabled ? 'enabled' : 'disabled'
+
+  if (enabled && remotePullEvents.latestRemotePullEvent?.event === 'remote-pull.failed') {
+    state = 'failed'
+  } else if (enabled && remotePullEvents.latestRemotePullEvent?.event === 'remote-pull.skipped') {
+    state = 'skipped'
+  }
+
+  return {
+    enabled,
+    state,
+    intervalMs: enabled ? remoteRefreshIntervalMs(options) : null,
+    safeRefreshOnly: enabled,
+    lastStarted: remotePullEvents.lastRemotePullStarted,
+    lastApplied: remotePullEvents.lastRemotePullApplied,
+    lastSkipped: remotePullEvents.lastRemotePullSkipped,
+    lastFailed: remotePullEvents.lastRemotePullFailed,
+    latestEvent: remotePullEvents.latestRemotePullEvent,
+    lastError: latestProblem?.detail?.reason ?? null,
+  }
+}
+
 function latestEvent(events) {
   return events.filter(Boolean).reduce((latest, event) => {
     if (!latest || isEventAfter(event, latest)) return event
@@ -1943,6 +3512,34 @@ function visibleRevisionFromEvent(event) {
   if (Number.isInteger(event.detail?.toRevision)) return event.detail.toRevision
   if (Number.isInteger(event.detail?.revision)) return event.detail.revision
   return null
+}
+
+function workspaceRootFromOptions(options) {
+  return options['workspace-root'] ?? path.dirname(path.resolve(options.workspace))
+}
+
+function cloudLocationFromOptions(options, codebaseId = options['codebase-id'] ?? null) {
+  if (convexUrlFromOptions(options)) {
+    return codebaseId ? `convex:${codebaseId}` : `convex:${convexUrlFromOptions(options)}`
+  }
+  return path.resolve(options.cloud)
+}
+
+function remotePullEnabled(options) {
+  return Boolean(options['remote-pull'] || options['auto-refresh'])
+}
+
+function remoteRefreshIntervalMs(options) {
+  const rawValue = options['remote-refresh-interval-ms'] ?? '5000'
+  const value = Number(rawValue)
+  if (!Number.isInteger(value) || value < 100) {
+    throw new Error(`Invalid --remote-refresh-interval-ms value: ${rawValue}`)
+  }
+  return value
+}
+
+function isTruthyEnv(value) {
+  return /^(1|true|yes|on)$/i.test(value ?? '')
 }
 
 async function assertWorkspacePathSafe(options, context = {}) {
@@ -2010,24 +3607,34 @@ function isPathInside(candidate, root) {
 
 async function readWorkspaceFiles(root) {
   const result = {}
+  if (!existsSync(root)) return result
 
   async function walk(dir) {
     const entries = await fs.readdir(dir, { withFileTypes: true })
     for (const entry of entries) {
       const absolutePath = path.join(dir, entry.name)
+      const relativePath = toCloudPath(path.relative(root, absolutePath))
+      if (shouldSkipWorkspacePath(relativePath, entry)) continue
+
       if (entry.isDirectory()) {
         await walk(absolutePath)
         continue
       }
       if (!entry.isFile()) continue
 
-      const relativePath = toCloudPath(path.relative(root, absolutePath))
       result[relativePath] = await fs.readFile(absolutePath, 'utf8')
     }
   }
 
   await walk(root)
   return result
+}
+
+function shouldSkipWorkspacePath(relativePath, entry) {
+  const parts = relativePath.split('/')
+  if (parts.includes('.hopit')) return true
+  if (entry.isDirectory() && entry.name === '.git') return true
+  return false
 }
 
 async function readImportableProjectFiles(root) {
@@ -2136,6 +3743,7 @@ class FixtureJsonCloudGraphService {
     this.path = cloudPath
     this.type = cloudServiceType
     this.location = path.resolve(cloudPath)
+    this.usesAtomicFileMutations = false
   }
 
   async exists() {
@@ -2173,16 +3781,25 @@ class FixtureJsonCloudGraphService {
   applyJournalEntry(cloud, entry, options = {}) {
     return applyJournalEntryToCloud(cloud, entry, options)
   }
+
+  async commitJournalEntry(cloud, entry, options = {}) {
+    const acknowledgement = this.applyJournalEntry(cloud, entry, options)
+    await this.writeGraph(cloud)
+    return acknowledgement
+  }
 }
 
 class ConvexCloudGraphService {
   constructor(options) {
     this.url = convexUrlFromOptions(options)
     this.token = agentTokenFromOptions(options)
+    this.sessionToken = agentSessionTokenFromOptions(options)
+    this.preferSessionToken = preferSessionTokenFromOptions(options)
     this.codebaseId = options['codebase-id'] || process.env.HOPIT_CODEBASE_ID || null
     this.type = convexCloudServiceType
     this.location = this.codebaseId ? `convex:${this.codebaseId}` : `convex:${this.url}`
     this.client = new ConvexHttpClient(this.url, { logger: false })
+    this.usesAtomicFileMutations = true
   }
 
   async exists() {
@@ -2213,7 +3830,7 @@ class ConvexCloudGraphService {
     if (!this.codebaseId) return null
 
     const args = { codebaseId: this.codebaseId }
-    if (this.token) args.token = this.token
+    Object.assign(args, this.credentialArgs())
 
     const graph = await this.client.query(anyApi.agent.getGraph, args)
     return graph ? normalizeValidatedCloudGraph(graph) : null
@@ -2230,13 +3847,95 @@ class ConvexCloudGraphService {
     this.codebaseId = normalized.codebase.id
     this.location = `convex:${this.codebaseId}`
     const args = { graph: normalized }
-    if (this.token) args.token = this.token
+    Object.assign(args, this.credentialArgs())
 
     await this.client.mutation(anyApi.agent.saveGraph, args)
   }
 
   applyJournalEntry(cloud, entry, options = {}) {
     return applyJournalEntryToCloud(cloud, entry, options)
+  }
+
+  async commitJournalEntry(cloud, entry, options = {}) {
+    const args = {
+      codebaseId: cloud.codebase.id,
+      type: entry.type,
+      path: entry.path,
+      baseRevision: Object.hasOwn(entry, 'baseRevision') ? entry.baseRevision : undefined,
+      targetStateRevision: Object.hasOwn(entry, 'targetStateRevision') ? entry.targetStateRevision : undefined,
+    }
+    if (entry.hash) args.hash = entry.hash
+    if (Number.isInteger(entry.bytes)) args.size = entry.bytes
+    if (typeof options.content === 'string') args.content = options.content
+    Object.assign(args, this.credentialArgs())
+
+    let remoteAcknowledgement
+    try {
+      remoteAcknowledgement = await this.client.mutation(anyApi.agent.applyFileMutation, args)
+    } catch (error) {
+      if (!isMissingConvexFunctionError(error)) throw error
+
+      const legacyAcknowledgement = this.applyJournalEntry(cloud, entry, options)
+      await this.writeGraph(cloud)
+      return {
+        ...legacyAcknowledgement,
+        storageMode: 'legacy-save-graph-fallback',
+      }
+    }
+
+    const localAcknowledgement = this.applyJournalEntry(cloud, entry, options)
+    return {
+      ...localAcknowledgement,
+      ...remoteAcknowledgement,
+      storageMode: 'per-file-mutation',
+    }
+  }
+
+  async registerAgentSession(options = {}) {
+    const args = {
+      codebaseId: requireConvexCodebaseId(this.codebaseId),
+      deviceName: options.deviceName,
+      capabilities: options.capabilities,
+    }
+    if (options.sessionId) args.sessionId = options.sessionId
+    if (options.expiresAt) args.expiresAt = options.expiresAt
+    Object.assign(args, this.credentialArgs())
+
+    return await this.client.mutation(anyApi.agent.registerAgentSession, args)
+  }
+
+  async listAgentSessions(options = {}) {
+    const args = { codebaseId: requireConvexCodebaseId(this.codebaseId) }
+    if (options.status) args.status = options.status
+    Object.assign(args, this.credentialArgs())
+
+    return await this.client.query(anyApi.agent.listAgentSessions, args)
+  }
+
+  async touchAgentSession(options = {}) {
+    const args = {
+      sessionId: options.sessionId,
+    }
+    Object.assign(args, this.credentialArgs())
+
+    return await this.client.mutation(anyApi.agent.touchAgentSession, args)
+  }
+
+  async revokeAgentSession(options = {}) {
+    const args = {
+      sessionId: options.sessionId,
+    }
+    Object.assign(args, this.credentialArgs())
+
+    return await this.client.mutation(anyApi.agent.revokeAgentSession, args)
+  }
+
+  credentialArgs() {
+    return convexCredentialArgs({
+      token: this.token,
+      sessionToken: this.sessionToken,
+      preferSessionToken: this.preferSessionToken,
+    })
   }
 }
 
@@ -2433,6 +4132,10 @@ function filterVisibleGraphForRequester(cloud, request = {}) {
 }
 
 function visibilityContextForGraph(cloud, request = {}) {
+  if (!request.requesterId && !request.sessionId && cloud.visibilityContext) {
+    return cloud.visibilityContext
+  }
+
   const ownerId = cloud.owner?.id ?? cloud.codebase?.ownerId ?? null
   const requesterId = request.requesterId ?? ownerId
   const collaborator = (cloud.collaborators ?? []).find((entry) => entry.id === requesterId) ?? null
@@ -2635,7 +4338,9 @@ async function readNdjson(filePath) {
 
 async function writeJson(filePath, value) {
   await fs.mkdir(path.dirname(filePath), { recursive: true })
-  await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+  const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`)
+  await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
+  await fs.rename(tempPath, filePath)
 }
 
 async function appendNdjson(filePath, value) {
@@ -2670,8 +4375,7 @@ async function appendConvexEvent(options, payload) {
       at: payload.at,
       source: 'local-agent',
     }
-    const token = agentTokenFromOptions(options)
-    if (token) args.token = token
+    Object.assign(args, convexCredentialArgsFromOptions(options))
 
     await client.mutation(anyApi.agent.appendEvent, args)
   } catch (error) {
@@ -2696,6 +4400,50 @@ function convexUrlFromOptions(options) {
 
 function agentTokenFromOptions(options) {
   return options['agent-token'] ?? process.env.HOPIT_AGENT_TOKEN ?? null
+}
+
+function agentSessionTokenFromOptions(options) {
+  return options['session-token'] ?? process.env.HOPIT_AGENT_SESSION_TOKEN ?? null
+}
+
+function preferSessionTokenFromOptions(options) {
+  return Boolean(agentSessionTokenFromOptions(options) && !options._provided?.has('agent-token'))
+}
+
+function convexCredentialArgsFromOptions(options) {
+  return convexCredentialArgs({
+    token: agentTokenFromOptions(options),
+    sessionToken: agentSessionTokenFromOptions(options),
+    preferSessionToken: preferSessionTokenFromOptions(options),
+  })
+}
+
+function convexCredentialArgs({ token, sessionToken, preferSessionToken }) {
+  if (preferSessionToken && sessionToken) return { sessionToken }
+  if (token) return { token }
+  if (sessionToken) return { sessionToken }
+  return {}
+}
+
+function sessionCapabilitiesFromOptions(options) {
+  const raw = options.capabilities ?? process.env.HOPIT_AGENT_SESSION_CAPABILITIES
+  if (!raw) return ['read', 'write', 'sync', 'watch']
+  return String(raw)
+    .split(',')
+    .map((capability) => capability.trim())
+    .filter(Boolean)
+}
+
+function requireConvexCodebaseId(codebaseId) {
+  if (!codebaseId) {
+    throw new Error('Convex session commands require --codebase-id or HOPIT_CODEBASE_ID.')
+  }
+  return codebaseId
+}
+
+function isMissingConvexFunctionError(error) {
+  const message = error instanceof Error ? error.message : String(error)
+  return /applyFileMutation|not found|Could not find public function|No function/i.test(message)
 }
 
 function findLastEvent(events, eventName) {
@@ -2729,34 +4477,50 @@ Commands:
   export      Export the selected graph state to a clean Git repo
   publish     Export a reviewed and merged change set to a clean Git repo
   validate    Validate the configured cloud graph contract
-  service     Manage the local agent service: start, stop, restart, status
+  doctor      Run a production-oriented local health check
+  backup      Write a restorable cloud/status/event backup folder
+  install     Prepare production state, workspace, env, and optional launch agent
+  workspace   Manage/list the configured HopIt workspace root and codebase
+  session     Manage this device/session registration (alias: device)
+  service     Manage the local agent service: start, stop, restart, status, run
   watch       Hydrate and watch the workspace for edits
   status      Print read-only local agent status JSON
   serve       Serve read-only local agent status JSON over HTTP
   demo        Run init, hydrate, edit, sync, and verify
 
 Compatibility aliases:
-  import-local, sync-once, review-open, status-server
+  import-local, sync-once, review-open, status-server, workspaces, device, devices, sessions
 
 Options:
   --source <path>     Source folder for import
   --output <path>     Output folder for Git export/publish
+  --path <cloud-path> Cloud file path for workspace hydrate-file
   --codebase-id <id>  Codebase id for import
   --codebase-name <name> Codebase display name for import
   --profile <name>    development or production path profile
   --state-root <path> Agent state root for production profile
-  --workspace-root <path> Managed workspace root for production profile
+  --workspace-root <path> Root that contains managed HopIt codebase folders
+  --workspace-index <path> Optional workspace root index path
   --cloud <path>      Cloud graph JSON path
   --convex-url <url>  Convex deployment URL for the real cloud graph
   --agent-token <token> Agent token for Convex mutations/queries
+  --session-token <token> Per-device Convex session token
   --workspace <path>  Managed workspace folder path
   --journal <path>    Pending write journal path
   --events <path>     Event log path
   --pid <path>        Service pid file path
   --requester-id <id> Requester identity for visibility-filtered reads
   --session-id <id>   Requester session id for visibility-filtered reads
+  --device-name <name> Device name for session registration
+  --capabilities <csv> Session capabilities, default read,write,sync,watch
   --host <host>        Status server host, defaults to 127.0.0.1
   --port <port>        Status server port, defaults to 4785
+  --remote-pull        Opt into safe background cloud refresh in watch/service mode
+  --remote-refresh-interval-ms <ms> Background refresh interval, default 5000
+  --start-service      install: start the production service after preparing paths
+  --write-env          install: write hopit.env.example under the agent state root
+  --launch-agent       install: write a macOS LaunchAgent for start-on-login
+  --json              Accepted for scripting; commands already emit JSON where applicable
   --message <text>    Git commit message for export/publish
   --include-private   Include .private files in export only; publish always omits them
   --allow-unsafe-workspace Override workspace path safety checks

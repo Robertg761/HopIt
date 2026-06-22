@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 import { execFile, spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import fs from 'node:fs/promises'
+import { createServer as createHttpServer } from 'node:http'
+import { createServer as createNetServer } from 'node:net'
 import os from 'node:os'
 import path from 'node:path'
 import { test } from 'node:test'
@@ -43,6 +45,78 @@ async function makeTwoSessionState() {
       workspace: path.join(root, 'device-b-workspace'),
       journal: path.join(root, 'device-b-journal.ndjson'),
       events: path.join(root, 'device-b-events.ndjson'),
+    },
+  }
+}
+
+async function getAvailablePort(t) {
+  const reserved = await reserveLoopbackPort(t)
+  if (!reserved) return null
+  await reserved.close()
+  return reserved.port
+}
+
+async function reserveLoopbackPort(t) {
+  const server = createNetServer()
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+  } catch (error) {
+    if (error?.code === 'EPERM' || error?.code === 'EACCES') {
+      t.skip(`local loopback listen is unavailable in this environment: ${error.message}`)
+      return null
+    }
+    throw error
+  }
+  const address = server.address()
+  const port = typeof address === 'object' && address ? address.port : null
+  if (!port) throw new Error('Unable to reserve an available port.')
+  return {
+    port,
+    server,
+    close() {
+      return new Promise((resolve, reject) => {
+        server.close((error) => {
+          if (error) reject(error)
+          else resolve()
+        })
+      })
+    },
+  }
+}
+
+async function reserveLoopbackHttpPort(t) {
+  const server = createHttpServer((_request, response) => {
+    response.writeHead(409, { 'content-type': 'application/json' })
+    response.end('{"error":"occupied"}')
+  })
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+  } catch (error) {
+    if (error?.code === 'EPERM' || error?.code === 'EACCES') {
+      t.skip(`local loopback listen is unavailable in this environment: ${error.message}`)
+      return null
+    }
+    throw error
+  }
+  const address = server.address()
+  const port = typeof address === 'object' && address ? address.port : null
+  if (!port) throw new Error('Unable to reserve an available HTTP port.')
+  return {
+    port,
+    server,
+    close() {
+      return new Promise((resolve, reject) => {
+        server.close((error) => {
+          if (error) reject(error)
+          else resolve()
+        })
+      })
     },
   }
 }
@@ -138,7 +212,13 @@ async function startWatch(state, t, options = {}) {
     nodeArgs.push('--import', pathToFileURL(preloadPath).href)
   }
 
-  const child = spawn(process.execPath, [...nodeArgs, cliPath, 'watch', ...stateArgs(state)], {
+  const child = spawn(process.execPath, [
+    ...nodeArgs,
+    cliPath,
+    'watch',
+    ...stateArgs(state),
+    ...(options.extraArgs ?? []),
+  ], {
     cwd: repoRoot,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -324,6 +404,12 @@ async function readNdjson(filePath) {
     .split('\n')
     .filter(Boolean)
     .map((line) => JSON.parse(line))
+}
+
+function parseLastJsonObject(stdout) {
+  const trimmed = stdout.trim()
+  const start = trimmed.lastIndexOf('\n{')
+  return JSON.parse(start === -1 ? trimmed : trimmed.slice(start + 1))
 }
 
 function hashContent(content) {
@@ -569,6 +655,293 @@ test('production profile derives agent state and workspace paths outside the che
   assert.equal(status.events.path, path.join(stateRoot, 'events', 'prod-demo.ndjson'))
 })
 
+test('workspace command reports and prepares the configured workspace root', async () => {
+  const state = await makeState()
+  const workspaceRoot = path.join(state.root, 'HopIt Workspaces')
+  const workspace = path.join(workspaceRoot, 'demo-codebase')
+  const args = [
+    '--cloud',
+    state.cloud,
+    '--workspace',
+    workspace,
+    '--journal',
+    state.journal,
+    '--events',
+    state.events,
+    '--workspace-root',
+    workspaceRoot,
+    '--codebase-id',
+    'demo-codebase',
+  ]
+
+  const before = JSON.parse((await runCli('workspace', ['status', ...args])).stdout)
+  assert.equal(before.ok, true)
+  assert.equal(before.action, 'status')
+  assert.equal(before.root.path, workspaceRoot)
+  assert.equal(before.root.exists, false)
+  assert.equal(before.root.adapter, 'managed-folder')
+  assert.equal(before.root.virtualized, false)
+  assert.equal(before.root.index.exists, false)
+  assert.equal(before.current.id, 'demo-codebase')
+  assert.equal(before.current.initialized, false)
+  assert.equal(before.current.materialization, 'managed-folder')
+  assert.equal(before.current.hydration.state, 'not_initialized')
+  assert.equal(before.current.virtualized, false)
+
+  const ensured = JSON.parse((await runCli('workspace', ['ensure', ...args])).stdout)
+  assert.equal(ensured.action, 'ensure')
+  assert.equal(ensured.root.exists, true)
+  assert.equal(ensured.root.index.exists, true)
+  assert.equal(ensured.root.index.codebaseCount, 1)
+  assert.equal(ensured.current.workspace.path, workspace)
+  assert.equal(await pathExists(workspaceRoot), true)
+  assert.equal(await pathExists(workspace), true)
+  const index = await readJson(path.join(state.root, 'workspaces.json'))
+  assert.equal(index.schemaVersion, 1)
+  assert.equal(index.codebases[0].id, 'demo-codebase')
+  assert.equal(index.codebases[0].workspace.path, workspace)
+
+  const listed = JSON.parse((await runCli('workspaces', ['list', ...args])).stdout)
+  assert.equal(listed.action, 'list')
+  assert.equal(listed.codebases.length, 1)
+  assert.equal(listed.codebases[0].id, 'demo-codebase')
+})
+
+test('hydrate records a workspace index cursor for the materialized revision', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+
+  const index = await readJson(path.join(state.root, 'workspaces.json'))
+  assert.equal(index.root.path, state.root)
+  assert.equal(index.codebases.length, 1)
+  assert.equal(index.codebases[0].id, 'hopit-core')
+  assert.equal(index.codebases[0].hydration.state, 'materialized')
+  assert.equal(index.codebases[0].hydration.lastMaterializedRevision, 1)
+  assert.equal(index.codebases[0].contentManifest.fileCount, 4)
+  assert.equal(index.codebases[0].contentManifest.files['README.md'].scope, 'shared')
+  assert.equal(index.codebases[0].remoteCursor.materializedRevision, 1)
+
+  const status = JSON.parse((await runCli('status', stateArgs(state))).stdout)
+  assert.equal(status.workspace.hydration.state, 'materialized')
+  assert.equal(status.workspace.hydration.lastMaterializedRevision, 1)
+  assert.equal(status.workspace.localChanges.state, 'clean')
+  assert.equal(status.workspace.contentManifest.fileCount, 4)
+  assert.equal(status.remotePull.cursor.materializedRevision, 1)
+  assert.equal(status.remotePull.cursor.graphRevision, 1)
+  assert.equal(status.workspace.index.exists, true)
+})
+
+test('status reports unjournaled local workspace drift from the materialized manifest', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+
+  await fs.writeFile(path.join(state.workspace, 'README.md'), '# hopit-core\n\nUnsynced local draft.\n', 'utf8')
+
+  const status = JSON.parse((await runCli('status', stateArgs(state))).stdout)
+  assert.equal(status.ok, false)
+  assert.equal(status.workspace.localChanges.state, 'dirty')
+  assert.equal(status.workspace.localChanges.reason, 'workspace_has_unjournaled_changes')
+  assert.equal(status.workspace.localChanges.modifiedCount, 1)
+  assert.deepEqual(status.workspace.localChanges.samplePaths, ['README.md'])
+})
+
+test('workspace ensure does not mark a cloud-backed empty folder as materialized', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+
+  const ensured = JSON.parse((await runCli('workspace', ['ensure', ...stateArgs(state)])).stdout)
+  assert.equal(ensured.ok, true)
+  assert.equal(ensured.current.initialized, false)
+  assert.equal(ensured.current.hydration.state, 'not_materialized')
+  assert.equal(ensured.current.hydration.lastMaterializedRevision, null)
+  assert.equal(ensured.current.remoteCursor.materializedRevision, null)
+
+  const index = await readJson(path.join(state.root, 'workspaces.json'))
+  assert.equal(index.codebases[0].hydration.state, 'not_materialized')
+  assert.equal(index.codebases[0].hydration.lastMaterializedRevision, null)
+  assert.equal(index.codebases[0].remoteCursor.materializedRevision, null)
+
+  const status = JSON.parse((await runCli('status', stateArgs(state))).stdout)
+  assert.equal(status.ok, false)
+  assert.equal(status.readiness, 'not_initialized')
+  assert.equal(status.workspace.hydration.state, 'not_materialized')
+})
+
+test('metadata-only workspaces do not treat unhydrated missing files as deletes on sync', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+  await runCli('workspace', ['dehydrate', ...stateArgs(state), '--force'])
+
+  assert.equal(await pathExists(path.join(state.workspace, 'README.md')), false)
+  await fs.writeFile(path.join(state.workspace, 'scratch.md'), 'new partial workspace file\n', 'utf8')
+
+  await runCli('sync-once', stateArgs(state))
+
+  const cloud = await readJson(state.cloud)
+  assert.ok(cloud.files['README.md'])
+  assert.ok(cloud.files['src/presence.ts'])
+  assert.equal(cloud.files['scratch.md'].content, 'new partial workspace file\n')
+
+  const status = JSON.parse((await runCli('status', stateArgs(state))).stdout)
+  assert.equal(status.workspace.hydration.state, 'partial')
+  assert.equal(status.workspace.hydration.hydratedPathCount, 1)
+  assert.equal(status.workspace.localChanges.state, 'clean')
+  assert.equal(status.workspace.contentManifest.fileCount, 1)
+})
+
+test('workspace files and hydrate-file expose cloud metadata and materialize one path', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+
+  const listedBefore = JSON.parse((await runCli('workspace', ['files', ...stateArgs(state), '--json'])).stdout)
+  assert.equal(listedBefore.ok, true)
+  assert.equal(listedBefore.action, 'files')
+  assert.equal(listedBefore.summary.visibleFiles, 4)
+  assert.equal(listedBefore.summary.hydratedFiles, 0)
+  assert.equal(listedBefore.files.find((file) => file.path === 'README.md').local.exists, false)
+
+  const hydrated = parseLastJsonObject((await runCli('workspace', [
+    'hydrate-file',
+    ...stateArgs(state),
+    '--path',
+    'README.md',
+  ])).stdout)
+  assert.equal(hydrated.ok, true)
+  assert.equal(hydrated.action, 'hydrate-file')
+  assert.equal(hydrated.path, 'README.md')
+  assert.equal(await pathExists(path.join(state.workspace, 'README.md')), true)
+  assert.equal(await pathExists(path.join(state.workspace, 'src/presence.ts')), false)
+
+  const listedAfter = JSON.parse((await runCli('workspace', ['files', ...stateArgs(state)])).stdout)
+  assert.equal(listedAfter.summary.hydratedFiles, 1)
+  assert.equal(listedAfter.files.find((file) => file.path === 'README.md').local.hydrated, true)
+
+  const status = JSON.parse((await runCli('status', stateArgs(state))).stdout)
+  assert.equal(status.ok, true)
+  assert.equal(status.readiness, 'ready')
+  assert.equal(status.workspace.hydration.state, 'partial')
+  assert.equal(status.workspace.hydration.hydratedPathCount, 1)
+  assert.equal(status.workspace.contentManifest.fileCount, 1)
+})
+
+test('backup writes restorable cloud status events journal and manifest files', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+  const output = path.join(state.root, 'backup')
+
+  const backup = JSON.parse((await runCli('backup', [
+    ...stateArgs(state),
+    '--output',
+    output,
+    '--force',
+  ])).stdout)
+  assert.equal(backup.ok, true)
+  assert.equal(backup.output, output)
+  assert.equal(await pathExists(path.join(output, 'cloud.json')), true)
+  assert.equal(await pathExists(path.join(output, 'status.json')), true)
+  assert.equal(await pathExists(path.join(output, 'events.ndjson')), true)
+  assert.equal(await pathExists(path.join(output, 'workspaces.json')), true)
+
+  const manifest = await readJson(path.join(output, 'manifest.json'))
+  assert.equal(manifest.schemaVersion, 1)
+  assert.equal(manifest.codebaseId, 'hopit-core')
+  assert.equal(manifest.cloud.fileCount, 4)
+  assert.ok(manifest.files.find((file) => file.path === 'cloud.json')?.sha256)
+})
+
+test('install prepares production-style state, workspace, index, and env template', async () => {
+  const state = await makeState()
+  const stateRoot = path.join(state.root, 'agent-state')
+  const workspaceRoot = path.join(state.root, 'HopIt Workspaces')
+  const workspace = path.join(workspaceRoot, 'prod-demo')
+
+  const installed = JSON.parse((await runCli('install', [
+    '--profile',
+    'production',
+    '--codebase-id',
+    'prod-demo',
+    '--state-root',
+    stateRoot,
+    '--workspace-root',
+    workspaceRoot,
+    '--workspace',
+    workspace,
+    '--allow-local-cloud',
+    '--write-env',
+  ])).stdout)
+
+  assert.equal(installed.ok, true)
+  assert.equal(installed.codebaseId, 'prod-demo')
+  assert.equal(await pathExists(path.join(stateRoot, 'run')), true)
+  assert.equal(await pathExists(workspace), true)
+  assert.equal(await pathExists(path.join(stateRoot, 'hopit.env.example')), true)
+  const index = await readJson(path.join(stateRoot, 'workspaces.json'))
+  assert.equal(index.codebases[0].id, 'prod-demo')
+  assert.equal(index.codebases[0].hydration.state, 'metadata-only')
+})
+
+test('doctor reports failed checks without hiding the JSON status payload', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+
+  const failure = await runCliFailure('doctor', stateArgs(state))
+  assert.equal(failure.code, 1)
+  const doctor = JSON.parse(failure.stdout)
+  assert.equal(doctor.ok, false)
+  assert.equal(doctor.status.readiness, 'ready')
+  assert.equal(doctor.checks.find((check) => check.name === 'cloud').ok, true)
+  assert.equal(doctor.checks.find((check) => check.name === 'service').ok, false)
+})
+
+test('device status reports configured session identity and token source', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+
+  const status = JSON.parse((await runCli('device', [
+    'status',
+    ...stateArgs(state),
+    '--session-id',
+    'session_test_device',
+    '--device-name',
+    'Test Device',
+    '--session-token',
+    'hst_test_token',
+  ])).stdout)
+
+  assert.equal(status.ok, true)
+  assert.equal(status.action, 'status')
+  assert.equal(status.session.id, 'session_test_device')
+  assert.equal(status.session.deviceName, 'Test Device')
+  assert.equal(status.credentials.sessionTokenConfigured, true)
+})
+
+test('remote-pull applied event clears a previous skipped health state', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+
+  await appendEvent(state, 'remote-pull.skipped', {
+    state: 'skipped',
+    reason: 'journal_has_unresolved_entries',
+  })
+  let status = JSON.parse((await runCli('status', [...stateArgs(state), '--remote-pull'])).stdout)
+  assert.equal(status.remotePull.state, 'skipped')
+
+  await appendEvent(state, 'remote-pull.applied', {
+    state: 'applied',
+    fromRevision: 1,
+    toRevision: 2,
+  })
+  status = JSON.parse((await runCli('status', [...stateArgs(state), '--remote-pull'])).stdout)
+  assert.equal(status.remotePull.state, 'enabled')
+  assert.equal(status.remotePull.lastApplied.detail.toRevision, 2)
+})
+
 test('production profile refuses local JSON cloud unless explicitly allowed', async () => {
   const state = await makeState()
   const failure = await runCliFailure('status', [
@@ -583,6 +956,362 @@ test('production profile refuses local JSON cloud unless explicitly allowed', as
   ])
 
   assert.match(failure.stderr, /Production profile requires --convex-url/)
+})
+
+test('service start exposes status and service stop cleans up the pid file', async (t) => {
+  const state = await makeState()
+  const pid = path.join(state.root, 'run', 'hopit.pid')
+  const port = await getAvailablePort(t)
+  if (!port) return
+  const serviceArgs = [
+    ...stateArgs(state),
+    '--pid',
+    pid,
+    '--host',
+    '127.0.0.1',
+    '--port',
+    String(port),
+  ]
+
+  const started = await runCli('service', ['start', ...serviceArgs])
+  const startRecord = JSON.parse(started.stdout)
+  assert.equal(startRecord.ok, true)
+  assert.equal(startRecord.pidPath, pid)
+  assert.equal(startRecord.statusUrl, `http://127.0.0.1:${port}/status`)
+  assert.equal(typeof startRecord.pid, 'number')
+  assert.equal(startRecord.service.ok, true)
+  assert.equal(startRecord.service.running, true)
+  assert.equal(startRecord.service.agent.readiness, 'ready')
+  assert.equal(startRecord.service.agent.watch.state, 'watching')
+
+  t.after(async () => {
+    try {
+      await runCli('service', ['stop', ...serviceArgs])
+    } catch {
+      // The test may already have stopped the service.
+    }
+  })
+
+  const statusResult = await runCli('service', ['status', ...serviceArgs])
+  const running = JSON.parse(statusResult.stdout)
+
+  assert.equal(running.pid, startRecord.pid)
+  assert.equal(running.ok, true)
+  assert.equal(running.agent.readiness, 'ready')
+  assert.equal(running.agent.watch.state, 'watching')
+  assert.equal(running.agent.cloud.service, 'fixture-json-cloud-graph')
+
+  const stopped = await runCli('service', ['stop', ...serviceArgs])
+  const stopRecord = JSON.parse(stopped.stdout)
+  assert.equal(stopRecord.ok, true)
+  assert.equal(stopRecord.stoppedPid, startRecord.pid)
+  assert.equal(await pathExists(pid), false)
+
+  const afterStop = await runCli('service', ['status', ...serviceArgs])
+  const stoppedStatus = JSON.parse(afterStop.stdout)
+  assert.equal(stoppedStatus.running, false)
+  assert.equal(stoppedStatus.ok, false)
+})
+
+test('service start fails cleanly when the status port is already occupied', async (t) => {
+  const state = await makeState()
+  const pid = path.join(state.root, 'run', 'hopit.pid')
+  const reserved = await reserveLoopbackHttpPort(t)
+  if (!reserved) return
+  t.after(async () => {
+    await reserved.close()
+  })
+
+  const failure = await runCliFailure('service', [
+    'start',
+    ...stateArgs(state),
+    '--pid',
+    pid,
+    '--host',
+    '127.0.0.1',
+    '--port',
+    String(reserved.port),
+  ])
+
+  assert.equal(failure.code, 1)
+  assert.match(failure.stderr, /service (exited|stopped|did not become ready)|service log/i)
+  assert.equal(await pathExists(pid), false)
+})
+
+test('production service start fails cleanly when Convex is not configured', async (t) => {
+  const state = await makeState()
+  const stateRoot = path.join(state.root, 'agent-state')
+  const workspaceRoot = path.join(state.root, 'managed-workspaces')
+  const pid = path.join(stateRoot, 'run', 'prod-demo.pid')
+  const port = await getAvailablePort(t)
+  if (!port) return
+
+  const failure = await runCliFailure('service', [
+    'start',
+    '--profile',
+    'production',
+    '--codebase-id',
+    'prod-demo',
+    '--state-root',
+    stateRoot,
+    '--workspace-root',
+    workspaceRoot,
+    '--pid',
+    pid,
+    '--host',
+    '127.0.0.1',
+    '--port',
+    String(port),
+  ])
+
+  assert.equal(failure.code, 1)
+  assert.match(failure.stderr, /service (exited|stopped|did not become ready)|service log/i)
+  assert.equal(await pathExists(pid), false)
+})
+
+test('two services sync local edits and hand off through explicit refresh', async (t) => {
+  const { deviceA, deviceB } = await makeTwoSessionState()
+  const portA = await getAvailablePort(t)
+  if (!portA) return
+  const portB = await getAvailablePort(t)
+  if (!portB) return
+
+  const serviceAArgs = [
+    ...stateArgs(deviceA),
+    '--pid',
+    path.join(deviceA.root, 'device-a.pid'),
+    '--host',
+    '127.0.0.1',
+    '--port',
+    String(portA),
+  ]
+  const serviceBArgs = [
+    ...stateArgs(deviceB),
+    '--pid',
+    path.join(deviceB.root, 'device-b.pid'),
+    '--host',
+    '127.0.0.1',
+    '--port',
+    String(portB),
+  ]
+
+  await runCli('init', [...stateArgs(deviceA), '--force'])
+  await runCli('service', ['start', ...serviceAArgs])
+  await runCli('service', ['start', ...serviceBArgs])
+
+  t.after(async () => {
+    for (const args of [serviceAArgs, serviceBArgs]) {
+      try {
+        await runCli('service', ['stop', ...args])
+      } catch {
+        // The test may already have stopped the service.
+      }
+    }
+  })
+
+  await waitFor(async () => {
+    const result = await runCli('service', ['status', ...serviceAArgs])
+    const status = JSON.parse(result.stdout)
+    return status.ok && status.agent?.readiness === 'ready'
+  })
+  await waitFor(async () => {
+    const result = await runCli('service', ['status', ...serviceBArgs])
+    const status = JSON.parse(result.stdout)
+    return status.ok && status.agent?.readiness === 'ready'
+  })
+
+  const initialDeviceBReadme = await fs.readFile(path.join(deviceB.workspace, 'README.md'), 'utf8')
+  const deviceAContent = '# hopit-core\n\nLive service handoff edit from device A.\n'
+  await fs.writeFile(path.join(deviceA.workspace, 'README.md'), deviceAContent, 'utf8')
+
+  await waitFor(
+    async () => {
+      const cloud = await readJson(deviceA.cloud)
+      return cloud.files['README.md']?.content === deviceAContent
+    },
+    {
+      timeout: 5000,
+      message: 'Timed out waiting for device A service watcher to sync.',
+    },
+  )
+
+  assert.equal(await fs.readFile(path.join(deviceB.workspace, 'README.md'), 'utf8'), initialDeviceBReadme)
+
+  await runCli('refresh', stateArgs(deviceB))
+  assert.equal(await fs.readFile(path.join(deviceB.workspace, 'README.md'), 'utf8'), deviceAContent)
+
+  const deviceBStatus = JSON.parse((await runCli('service', ['status', ...serviceBArgs])).stdout)
+  assert.equal(deviceBStatus.agent.remoteUpdate.state, 'updated')
+  assert.deepEqual(deviceBStatus.agent.events.lastRemoteUpdate.detail.changedPaths, ['README.md'])
+})
+
+test('remote-pull service option refreshes a clean second device automatically', async (t) => {
+  const { deviceA, deviceB } = await makeTwoSessionState()
+  const portA = await getAvailablePort(t)
+  if (!portA) return
+  const portB = await getAvailablePort(t)
+  if (!portB) return
+
+  const serviceAArgs = [
+    ...stateArgs(deviceA),
+    '--pid',
+    path.join(deviceA.root, 'device-a-auto.pid'),
+    '--host',
+    '127.0.0.1',
+    '--port',
+    String(portA),
+  ]
+  const serviceBArgs = [
+    ...stateArgs(deviceB),
+    '--pid',
+    path.join(deviceB.root, 'device-b-auto.pid'),
+    '--host',
+    '127.0.0.1',
+    '--port',
+    String(portB),
+    '--remote-pull',
+    '--remote-refresh-interval-ms',
+    '100',
+  ]
+
+  await runCli('init', [...stateArgs(deviceA), '--force'])
+  await runCli('service', ['start', ...serviceAArgs])
+  await runCli('service', ['start', ...serviceBArgs])
+
+  t.after(async () => {
+    for (const args of [serviceAArgs, serviceBArgs]) {
+      try {
+        await runCli('service', ['stop', ...args])
+      } catch {
+        // The test may already have stopped the service.
+      }
+    }
+  })
+
+  await waitFor(async () => {
+    const status = JSON.parse((await runCli('service', ['status', ...serviceBArgs])).stdout)
+    return status.ok && status.agent?.remotePull?.enabled === true
+  })
+
+  const deviceAContent = '# hopit-core\n\nAutomatic remote pull edit from device A.\n'
+  await fs.writeFile(path.join(deviceA.workspace, 'README.md'), deviceAContent, 'utf8')
+
+  await waitFor(
+    async () => {
+      const cloud = await readJson(deviceA.cloud)
+      return cloud.files['README.md']?.content === deviceAContent
+    },
+    {
+      timeout: 5000,
+      message: 'Timed out waiting for device A service watcher to sync.',
+    },
+  )
+
+  await waitFor(
+    async () => {
+      const content = await fs.readFile(path.join(deviceB.workspace, 'README.md'), 'utf8')
+      return content === deviceAContent
+    },
+    {
+      timeout: 5000,
+      message: 'Timed out waiting for device B remote-pull refresh.',
+    },
+  )
+
+  const deviceBStatus = JSON.parse((await runCli('service', ['status', ...serviceBArgs])).stdout)
+  assert.equal(deviceBStatus.agent.remotePull.enabled, true)
+  assert.equal(deviceBStatus.agent.remotePull.intervalMs, 100)
+  assert.equal(deviceBStatus.agent.remoteUpdate.state, 'updated')
+  assert.deepEqual(deviceBStatus.agent.events.lastRemoteUpdate.detail.changedPaths, ['README.md'])
+  assert.equal(deviceBStatus.agent.journal.pendingCount, 0)
+  assert.equal(deviceBStatus.agent.journal.failedCount, 0)
+})
+
+test('remote-pull service option skips refresh while the local journal is unresolved', async (t) => {
+  const { deviceA, deviceB } = await makeTwoSessionState()
+  const portA = await getAvailablePort(t)
+  if (!portA) return
+  const portB = await getAvailablePort(t)
+  if (!portB) return
+
+  const serviceAArgs = [
+    ...stateArgs(deviceA),
+    '--pid',
+    path.join(deviceA.root, 'device-a-skip.pid'),
+    '--host',
+    '127.0.0.1',
+    '--port',
+    String(portA),
+  ]
+  const serviceBArgs = [
+    ...stateArgs(deviceB),
+    '--pid',
+    path.join(deviceB.root, 'device-b-skip.pid'),
+    '--host',
+    '127.0.0.1',
+    '--port',
+    String(portB),
+    '--remote-pull',
+    '--remote-refresh-interval-ms',
+    '100',
+  ]
+
+  await runCli('init', [...stateArgs(deviceA), '--force'])
+  await runCli('service', ['start', ...serviceAArgs])
+  await runCli('service', ['start', ...serviceBArgs])
+
+  t.after(async () => {
+    for (const args of [serviceAArgs, serviceBArgs]) {
+      try {
+        await runCli('service', ['stop', ...args])
+      } catch {
+        // The test may already have stopped the service.
+      }
+    }
+  })
+
+  const initialDeviceBReadme = await fs.readFile(path.join(deviceB.workspace, 'README.md'), 'utf8')
+  await appendJournalEntry(deviceB, {
+    id: randomUUID(),
+    type: 'write',
+    path: 'README.md',
+    scope: 'shared',
+    hash: hashContent('unresolved local edit\n'),
+    bytes: Buffer.byteLength('unresolved local edit\n'),
+    createdAt: new Date().toISOString(),
+    status: 'pending',
+  })
+
+  const deviceAContent = '# hopit-core\n\nRemote pull should skip this while B is unsafe.\n'
+  await fs.writeFile(path.join(deviceA.workspace, 'README.md'), deviceAContent, 'utf8')
+
+  await waitFor(
+    async () => {
+      const cloud = await readJson(deviceA.cloud)
+      return cloud.files['README.md']?.content === deviceAContent
+    },
+    {
+      timeout: 5000,
+      message: 'Timed out waiting for device A service watcher to sync.',
+    },
+  )
+
+  const skippedStatus = await waitFor(
+    async () => {
+      const status = JSON.parse((await runCli('service', ['status', ...serviceBArgs])).stdout)
+      return status.agent?.remotePull?.lastSkipped?.detail?.reason === 'journal_has_unresolved_entries'
+        ? status
+        : false
+    },
+    {
+      timeout: 5000,
+      message: 'Timed out waiting for device B remote-pull safety skip.',
+    },
+  )
+
+  assert.equal(skippedStatus.agent.remotePull.state, 'skipped')
+  assert.equal(skippedStatus.agent.journal.pendingCount, 1)
+  assert.equal(await fs.readFile(path.join(deviceB.workspace, 'README.md'), 'utf8'), initialDeviceBReadme)
 })
 
 test('CLI exposes product-facing command aliases', async () => {
@@ -877,6 +1606,42 @@ test('refresh brings device A shared-file sync into device B managed workspace',
 
   const status = JSON.parse((await runCli('status', stateArgs(deviceB))).stdout)
   assert.equal(status.remoteUpdate.state, 'updated')
+  assert.deepEqual(status.events.lastRemoteUpdate.detail.changedPaths, ['README.md'])
+})
+
+test('watch remote-pull refreshes device B when device A syncs acknowledged changes', async (t) => {
+  if (await skipUnlessRefreshAvailable(t)) return
+
+  const { deviceA, deviceB } = await makeTwoSessionState()
+  await runCli('init', [...stateArgs(deviceA), '--force'])
+  await runCli('hydrate', stateArgs(deviceA))
+
+  const watchProcess = await startWatch(deviceB, t, {
+    pollingWatch: true,
+    extraArgs: ['--remote-pull', '--remote-refresh-interval-ms', '150'],
+  })
+  await waitForOutput(watchProcess, /remote-pull\.started/)
+  await waitForOutput(watchProcess, /watch\.started/)
+
+  const deviceBReadme = path.join(deviceB.workspace, 'README.md')
+  const remoteContent = '# hopit-core\n\nRemote-pull edit from device A.\n'
+  await fs.writeFile(path.join(deviceA.workspace, 'README.md'), remoteContent, 'utf8')
+  await runCli('sync-once', stateArgs(deviceA))
+
+  await waitFor(
+    async () => {
+      const content = await fs.readFile(deviceBReadme, 'utf8')
+      return content === remoteContent
+    },
+    {
+      timeout: 7000,
+      message: 'Timed out waiting for device B remote-pull refresh.',
+    },
+  )
+
+  const status = JSON.parse((await runCli('status', stateArgs(deviceB))).stdout)
+  assert.equal(status.remoteUpdate.state, 'updated')
+  assert.equal(status.refresh.state, 'healthy')
   assert.deepEqual(status.events.lastRemoteUpdate.detail.changedPaths, ['README.md'])
 })
 

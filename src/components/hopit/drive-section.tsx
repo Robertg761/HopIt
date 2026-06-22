@@ -7,7 +7,9 @@ import {
   CloudUpload,
   Grid3x3,
   List,
+  Lock,
   MoreHorizontal,
+  Search,
   Share2,
   Users,
 } from 'lucide-react'
@@ -31,11 +33,33 @@ type DriveSectionProps = {
   status: AgentStatusSnapshot
 }
 
+type DriveScopeFilter = 'all' | 'shared' | 'private'
+
+type DriveBrowserFile = DriveFile & {
+  path: string
+  directory: string
+  scope: AgentFile['scope']
+  revision: number | null
+}
+
+type DriveFolder = DriveFile & {
+  directory: string
+}
+
 export function DriveSection({ status }: DriveSectionProps) {
   const [view, setView] = React.useState<'grid' | 'list'>('grid')
-  const liveFiles = status.files.map(agentFileToDriveFile)
+  const [activeFolder, setActiveFolder] = React.useState('all')
+  const [scopeFilter, setScopeFilter] = React.useState<DriveScopeFilter>('all')
+  const [fileQuery, setFileQuery] = React.useState('')
+  const filteredAgentFiles = React.useMemo(
+    () => filterAgentFiles(status.files, activeFolder, scopeFilter, fileQuery),
+    [activeFolder, fileQuery, scopeFilter, status.files],
+  )
+  const liveFiles = filteredAgentFiles.map(agentFileToDriveFile)
   const liveFolders = status.files.length > 0 ? agentFoldersFromFiles(status.files) : []
   const fileCountLabel = `${status.files.length} files`
+  const privateFileCount = status.files.filter((file) => file.scope === 'owner-private').length
+  const sharedFileCount = status.files.length - privateFileCount
 
   return (
     <section className="flex flex-col rounded-2xl border border-border/60 bg-card shadow-sm">
@@ -51,7 +75,7 @@ export function DriveSection({ status }: DriveSectionProps) {
             aria-label="Files path"
             className="mt-1 flex items-center gap-1 text-xs text-muted-foreground"
           >
-            <span>Workspace</span>
+            <span>Workspace Root</span>
             <ChevronRight className="size-3" />
             <span className="font-medium text-foreground">{status.codebaseName}</span>
           </nav>
@@ -91,20 +115,73 @@ export function DriveSection({ status }: DriveSectionProps) {
         </div>
       </div>
 
+      <div className="border-b border-border/60 px-4 py-3">
+        <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+          <div className="flex min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-2.5 py-2 lg:max-w-sm lg:flex-1">
+            <Search className="size-3.5 shrink-0 text-muted-foreground" />
+            <input
+              value={fileQuery}
+              onChange={(event) => setFileQuery(event.target.value)}
+              placeholder="Search files"
+              className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <ScopeFilterButton
+              active={scopeFilter === 'all'}
+              label="All"
+              count={status.files.length}
+              onClick={() => setScopeFilter('all')}
+            />
+            <ScopeFilterButton
+              active={scopeFilter === 'shared'}
+              label="Shared"
+              count={sharedFileCount}
+              onClick={() => setScopeFilter('shared')}
+            />
+            <ScopeFilterButton
+              active={scopeFilter === 'private'}
+              label="Private"
+              count={privateFileCount}
+              onClick={() => setScopeFilter('private')}
+            />
+          </div>
+        </div>
+      </div>
+
       {/* Folders */}
       {liveFolders.length > 0 ? (
         <div className="px-4 pt-4">
-          <p className="mb-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-            Folders
-          </p>
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+              Folders
+            </p>
+            <button
+              type="button"
+              onClick={() => setActiveFolder('all')}
+              className={cn(
+                'rounded-md px-2 py-1 text-[11px] transition',
+                activeFolder === 'all'
+                  ? 'bg-hop/10 text-hop ring-1 ring-hop/20'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+              )}
+            >
+              All files
+            </button>
+          </div>
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
             {liveFolders.map((f, i) => (
               <motion.button
                 key={f.id}
+                type="button"
+                onClick={() => setActiveFolder(f.directory)}
                 initial={{ opacity: 0, y: 6 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.04, duration: 0.3 }}
-                className="group flex items-center gap-2.5 rounded-xl border border-border/60 bg-background/40 p-3 text-left transition hover:border-grape/40 hover:bg-grape/5"
+                className={cn(
+                  'group flex items-center gap-2.5 rounded-xl border border-border/60 bg-background/40 p-3 text-left transition hover:border-grape/40 hover:bg-grape/5',
+                  activeFolder === f.directory && 'border-hop/40 bg-hop/5 ring-1 ring-hop/20',
+                )}
               >
                 <div
                   className={cn(
@@ -133,12 +210,10 @@ export function DriveSection({ status }: DriveSectionProps) {
           <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
             Files
           </p>
-          <button className="text-[11px] text-muted-foreground hover:text-foreground">
-            Sort: Modified ↓
-          </button>
+          <span className="text-[11px] text-muted-foreground">{liveFiles.length} visible</span>
         </div>
         {liveFiles.length === 0 ? (
-          <EmptyFiles />
+          <EmptyFiles activeFolder={activeFolder} />
         ) : view === 'grid' ? (
           <FileGrid files={liveFiles} />
         ) : (
@@ -149,21 +224,55 @@ export function DriveSection({ status }: DriveSectionProps) {
   )
 }
 
-function EmptyFiles() {
+function ScopeFilterButton({
+  active,
+  label,
+  count,
+  onClick,
+}: {
+  active: boolean
+  label: string
+  count: number
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cn(
+        'rounded-lg px-2.5 py-1.5 text-xs font-medium transition',
+        active
+          ? 'bg-grape/10 text-grape ring-1 ring-grape/20'
+          : 'bg-muted/40 text-muted-foreground hover:text-foreground',
+      )}
+    >
+      {label}
+      <span className="ml-1 text-[10px] opacity-70">{count}</span>
+    </button>
+  )
+}
+
+function EmptyFiles({ activeFolder }: { activeFolder: string }) {
   return (
     <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 p-6 text-center">
-      <p className="text-sm font-medium">No files loaded</p>
+      <p className="text-sm font-medium">No files match this view</p>
       <p className="mt-1 text-xs text-muted-foreground">
-        Import a real local project, then this panel will show the files in the managed workspace.
+        {activeFolder === 'all'
+          ? 'Import a real local project, or clear the search and scope filters.'
+          : 'Clear the folder selection or choose another folder.'}
       </p>
     </div>
   )
 }
 
-function agentFileToDriveFile(file: AgentFile): DriveFile {
+function agentFileToDriveFile(file: AgentFile): DriveBrowserFile {
   return {
     id: file.path,
-    name: file.path,
+    name: file.name,
+    path: file.path,
+    directory: file.directory,
+    scope: file.scope,
+    revision: file.revision,
     kind: 'file',
     type: fileTypeForPath(file.path),
     size: formatBytes(file.size),
@@ -173,14 +282,15 @@ function agentFileToDriveFile(file: AgentFile): DriveFile {
   }
 }
 
-function agentFoldersFromFiles(files: AgentFile[]): DriveFile[] {
+function agentFoldersFromFiles(files: AgentFile[]): DriveFolder[] {
   const folders = Array.from(new Set(files.map((file) => file.directory)))
     .filter((directory) => directory !== '/')
     .sort()
 
-  const rootFolder: DriveFile = {
+  const rootFolder: DriveFolder = {
     id: 'workspace-root',
     name: 'Workspace root',
+    directory: '/',
     kind: 'folder',
     modified: 'live',
     modifiedBy: 'HopIt agent',
@@ -193,6 +303,7 @@ function agentFoldersFromFiles(files: AgentFile[]): DriveFile[] {
     ...folders.map((directory) => ({
       id: directory,
       name: directory,
+      directory,
       kind: 'folder' as const,
       modified: 'live',
       modifiedBy: 'HopIt agent',
@@ -200,6 +311,23 @@ function agentFoldersFromFiles(files: AgentFile[]): DriveFile[] {
       color: directory.startsWith('.private') ? 'amber' : 'grape',
     })),
   ]
+}
+
+function filterAgentFiles(
+  files: AgentFile[],
+  activeFolder: string,
+  scopeFilter: DriveScopeFilter,
+  query: string,
+) {
+  const normalizedQuery = query.trim().toLowerCase()
+
+  return files.filter((file) => {
+    if (activeFolder !== 'all' && file.directory !== activeFolder) return false
+    if (scopeFilter === 'shared' && file.scope !== 'shared') return false
+    if (scopeFilter === 'private' && file.scope !== 'owner-private') return false
+    if (!normalizedQuery) return true
+    return `${file.path} ${file.name} ${file.directory}`.toLowerCase().includes(normalizedQuery)
+  })
 }
 
 function fileTypeForPath(filePath: string): DriveFile['type'] {
@@ -215,7 +343,7 @@ function formatBytes(bytes: number | null) {
   return `${(bytes / 1024).toFixed(1)} KB`
 }
 
-function FileGrid({ files }: { files: DriveFile[] }) {
+function FileGrid({ files }: { files: DriveBrowserFile[] }) {
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
       {files.map((f, i) => {
@@ -238,16 +366,19 @@ function FileGrid({ files }: { files: DriveFile[] }) {
               </div>
             </div>
             <div className="min-w-0">
-              <p className="truncate text-xs font-medium" title={f.name}>
+              <p className="truncate text-xs font-medium" title={f.path}>
                 {f.name}
               </p>
               <p className="mt-0.5 text-[10.5px] text-muted-foreground">
                 {f.size} · {f.modified}
               </p>
+              <p className="mt-0.5 truncate text-[10px] text-muted-foreground/80">
+                {f.directory}
+              </p>
             </div>
             <div className="mt-auto flex items-center justify-between pt-1">
               <div className="flex items-center gap-1">
-                <ShareStack count={f.sharedWith} />
+                <ScopePill scope={f.scope} />
               </div>
               <button
                 className="rounded-md p-1 text-muted-foreground/60 opacity-0 transition hover:bg-muted group-hover:opacity-100"
@@ -263,14 +394,14 @@ function FileGrid({ files }: { files: DriveFile[] }) {
   )
 }
 
-function FileList({ files }: { files: DriveFile[] }) {
+function FileList({ files }: { files: DriveBrowserFile[] }) {
   return (
     <ul className="divide-y divide-border/50 overflow-hidden rounded-lg border border-border/60">
       <li className="grid grid-cols-12 gap-2 bg-muted/40 px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
-        <span className="col-span-6">Name</span>
+        <span className="col-span-5">Name</span>
+        <span className="col-span-3 hidden md:block">Directory</span>
         <span className="col-span-2 hidden sm:block">Size</span>
-        <span className="col-span-2 hidden md:block">Modified</span>
-        <span className="col-span-2 text-right sm:col-span-2">Shared</span>
+        <span className="col-span-7 text-right sm:col-span-5 md:col-span-2">Scope</span>
       </li>
       {files.map((f) => {
         const Icon = f.type ? fileTypeIconMap[f.type] : fileTypeIconMap.doc
@@ -280,14 +411,14 @@ function FileList({ files }: { files: DriveFile[] }) {
             key={f.id}
             className="group grid cursor-pointer grid-cols-12 items-center gap-2 px-3 py-2 text-xs transition hover:bg-muted/40"
           >
-            <span className="col-span-6 flex items-center gap-2 min-w-0">
+            <span className="col-span-5 flex min-w-0 items-center gap-2">
               <Icon className="size-3.5 shrink-0" style={{ color }} />
-              <span className="truncate">{f.name}</span>
+              <span className="truncate" title={f.path}>{f.name}</span>
             </span>
+            <span className="col-span-3 hidden truncate text-muted-foreground md:block">{f.directory}</span>
             <span className="col-span-2 hidden text-muted-foreground sm:block">{f.size}</span>
-            <span className="col-span-2 hidden text-muted-foreground md:block">{f.modified}</span>
-            <span className="col-span-6 flex justify-end sm:col-span-2">
-              <ShareStack count={f.sharedWith} />
+            <span className="col-span-7 flex justify-end sm:col-span-5 md:col-span-2">
+              <ScopePill scope={f.scope} />
             </span>
           </li>
         )
@@ -296,24 +427,20 @@ function FileList({ files }: { files: DriveFile[] }) {
   )
 }
 
-function ShareStack({ count }: { count: number }) {
+function ScopePill({ scope }: { scope: AgentFile['scope'] }) {
+  const privateScope = scope === 'owner-private'
+
   return (
-    <span className="flex items-center gap-1">
-      <div className="flex -space-x-1.5">
-        {[0, 1, 2].slice(0, Math.min(count, 3)).map((i) => (
-          <span
-            key={i}
-            className="size-4 rounded-full ring-1 ring-card"
-            style={{
-              background: ['#10b981', '#8b5cf6', '#f59e0b'][i],
-            }}
-          />
-        ))}
-      </div>
-      <span className="flex items-center gap-0.5 text-[10px] text-muted-foreground">
-        <Share2 className="size-2.5" />
-        {count}
-      </span>
+    <span
+      className={cn(
+        'inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] font-medium ring-1 ring-inset',
+        privateScope
+          ? 'bg-hop-amber/10 text-hop-amber ring-hop-amber/20'
+          : 'bg-hop/10 text-hop ring-hop/20',
+      )}
+    >
+      {privateScope ? <Lock className="size-2.5" /> : <Share2 className="size-2.5" />}
+      {privateScope ? 'private' : 'shared'}
     </span>
   )
 }

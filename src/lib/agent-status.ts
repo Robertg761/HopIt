@@ -62,6 +62,12 @@ export type AgentStatusSnapshot = {
   mergeState: string
   conflictState: string
   remoteUpdateState: string
+  remotePullState: string
+  remotePullEnabled: boolean
+  workspaceHydrationState: string
+  workspaceMaterializedRevision: number | null
+  workspaceIndexPath: string | null
+  remoteBehindByRevisions: number | null
   commandsAvailable: boolean
   backend: 'local-agent' | 'convex' | 'unknown'
   requester: AgentRequester
@@ -167,6 +173,7 @@ type RawEventsResponse = {
 type RawAgentStatus = {
   ok?: boolean
   generatedAt?: string
+  readiness?: string
   codebaseId?: string | null
   codebaseName?: string | null
   activeChangeSetId?: string | null
@@ -182,6 +189,15 @@ type RawAgentStatus = {
   workspace?: {
     path?: string | null
     cacheMode?: string | null
+    hydration?: {
+      state?: string
+      lastMaterializedRevision?: number | null
+      graphRevision?: number | null
+    } | null
+    index?: {
+      path?: string | null
+      exists?: boolean
+    } | null
   }
   cloud?: {
     revision?: number | null
@@ -207,6 +223,16 @@ type RawAgentStatus = {
   }
   remoteUpdate?: {
     state?: string
+  }
+  remotePull?: {
+    enabled?: boolean
+    state?: string
+    intervalMs?: number | null
+    cursor?: {
+      materializedRevision?: number | null
+      graphRevision?: number | null
+      behindByRevisions?: number | null
+    } | null
   }
   review?: {
     state?: string
@@ -257,6 +283,12 @@ export function offlineAgentStatus(reason = 'Start the local HopIt agent status 
     mergeState: 'Unavailable',
     conflictState: 'Unavailable',
     remoteUpdateState: 'Unavailable',
+    remotePullState: 'Unavailable',
+    remotePullEnabled: false,
+    workspaceHydrationState: 'Unavailable',
+    workspaceMaterializedRevision: null,
+    workspaceIndexPath: null,
+    remoteBehindByRevisions: null,
     commandsAvailable: false,
     backend: 'unknown',
     requester: offlineRequester(),
@@ -301,6 +333,10 @@ export function mapAgentStatusResponse(response: unknown): AgentStatusSnapshot {
   const events = wrappedResponse?.events ?? status.events
   const recentEvents = events?.recent ?? []
   const remoteUpdateState = status.remoteUpdate?.state ?? (events?.lastRemoteUpdate ? 'updated' : 'idle')
+  const remotePullState = status.remotePull?.state ?? 'disabled'
+  const remotePullEnabled = Boolean(status.remotePull?.enabled)
+  const workspaceHydration = status.workspace?.hydration
+  const remoteCursor = status.remotePull?.cursor
   const backend = backendName(wrappedResponse?.capabilities?.backend)
   const access = status.access ?? wrappedResponse?.cloud?.access ?? wrappedResponse?.cloud?.graph?.visibilityContext ?? null
   const codebaseId = stringOrNull(status.codebaseId) ?? stringOrNull(wrappedResponse?.cloud?.graph?.codebase?.id)
@@ -335,6 +371,14 @@ export function mapAgentStatusResponse(response: unknown): AgentStatusSnapshot {
     mergeState: status.merge?.state ?? 'unmerged',
     conflictState,
     remoteUpdateState,
+    remotePullState,
+    remotePullEnabled,
+    workspaceHydrationState: workspaceHydration?.state ?? status.readiness ?? 'unknown',
+    workspaceMaterializedRevision:
+      numberOrNull(workspaceHydration?.lastMaterializedRevision) ??
+      numberOrNull(remoteCursor?.materializedRevision),
+    workspaceIndexPath: stringOrNull(status.workspace?.index?.path),
+    remoteBehindByRevisions: numberOrNull(remoteCursor?.behindByRevisions),
     commandsAvailable: Boolean(wrappedResponse?.capabilities?.commands),
     backend,
     requester: mapRequester(status, access),
@@ -596,14 +640,36 @@ function mapRecentEvents(events: RawAgentEvent[]): AgentEvent[] {
 
 function describeEvent(event: RawAgentEvent) {
   const payload = event.detail ?? event.payload ?? {}
+  const label = event.event ?? event.type ?? ''
   const path = typeof payload.path === 'string' ? payload.path : null
   const trigger = typeof payload.trigger === 'string' ? payload.trigger : null
   const revision = typeof payload.revision === 'number' ? payload.revision : null
+  const baseRevision = typeof payload.baseRevision === 'number' ? payload.baseRevision : null
+  const headRevision = typeof payload.headRevision === 'number' ? payload.headRevision : null
+  const mainRevision = typeof payload.mainRevision === 'number' ? payload.mainRevision : null
+  const changeSetId = typeof payload.changeSetId === 'string' ? payload.changeSetId : null
+  const hiddenCount = typeof payload.hiddenFileCount === 'number' ? payload.hiddenFileCount : null
+  const changedPaths = Array.isArray(payload.changedPaths)
+    ? payload.changedPaths.filter((value): value is string => typeof value === 'string')
+    : []
   const writes = typeof payload.writes === 'number' ? payload.writes : null
 
+  if (label.includes('review') && changeSetId) {
+    return `Review opened for ${changeSetId}${headRevision === null ? '' : ` at revision ${headRevision}`}`
+  }
+  if (label.includes('merge') && changeSetId) {
+    return `Merged ${changeSetId}${mainRevision === null ? '' : ` into Main revision ${mainRevision}`}`
+  }
+  if (label.includes('conflict') && changeSetId) {
+    return `Conflict recorded on ${changeSetId}${baseRevision === null ? '' : ` from base revision ${baseRevision}`}`
+  }
+  if (label.includes('remote') && changedPaths.length > 0) {
+    return `${changedPaths.length} remote path${changedPaths.length === 1 ? '' : 's'} updated`
+  }
   if (path && revision !== null) return `${path} acknowledged at revision ${revision}`
   if (path) return path
   if (writes !== null) return `${writes} write${writes === 1 ? '' : 's'} processed`
+  if (hiddenCount !== null) return `${hiddenCount} private path${hiddenCount === 1 ? '' : 's'} hidden`
   if (trigger) return `Triggered by ${trigger}`
 
   return 'Local agent state changed'

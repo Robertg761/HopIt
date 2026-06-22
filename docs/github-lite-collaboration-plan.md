@@ -13,7 +13,7 @@ This plan covers the next major goals before deeper Git-replacement internals re
 - Current codebase id: `hopit`
 - Current production graph contents: 58 source files
 - Current workspace: `/Users/robert/HopIt Workspaces/hopit`
-- Hosted dashboard: code-ready for Clerk product auth, currently still protected by Basic Auth in production until the Clerk/Vercel resource is provisioned; read-only for workspace commands
+- Hosted dashboard: code-ready for Clerk product auth, currently still protected by Basic Auth in production while owned-domain-dependent Clerk rollout is pinned; read-only for workspace commands
 - Local agent: can import, hydrate, sync, refresh, recover, open review, merge, export, publish, validate, and report status
 - Git compatibility: export/publish exists as a local escape hatch; history import, ancestry preservation, and remote publish are still future work
 
@@ -28,12 +28,15 @@ The first collaboration slice is now started in the repo:
 - The dashboard includes a read-only code-review browser section.
 - The dashboard includes member/invite management plus first issue, discussion, and release workflows.
 - Convex has initial permission-gated tables/functions for issues, projects, discussions, releases, release assets, and per-codebase counters.
+- Convex has scoped agent-session token registration/list/touch/revoke plus token authorization for graph reads, per-file agent writes, and event sync.
 
-This is still a foundation layer, but it is no longer only backend scaffolding. The repo has Clerk-backed sign-in routes, auth middleware, Convex auth config, member/invite UI, and work-item UI. The production deployment still needs the real Clerk environment variables and Convex auth issuer before Basic Auth can be retired. Real diffs, inline review comments, routeable history, project-board UI, immutable release publishing, and scoped agent-session tokens remain pending.
+This is still a foundation layer, but it is no longer only backend scaffolding. The repo has Clerk-backed sign-in routes, auth middleware, Convex auth config, member/invite UI, work-item UI, owner email config, scoped agent-session token groundwork, and a Convex JWT template. Clerk production rollout and retiring Basic Auth are intentionally deferred until HopIt has an owned domain. Real diffs, inline review comments, routeable history, project-board UI, immutable release publishing, and complete permission coverage remain pending.
 
 ## Phase Principle
 
 Build identity and collaboration as first-class product contracts, not as dashboard-only decoration. Every object below must eventually be permission checked server-side and tied to durable codebase, change-set, Main, and user identities.
+
+While domain-dependent work is pinned, keep the hosted deployment private behind Basic Auth and continue with domain-independent product work: permissions, role checks, code browsing, reviews, issues, discussions, releases, and local-agent/service-token hardening.
 
 ## Goal 1: Real Accounts And Auth
 

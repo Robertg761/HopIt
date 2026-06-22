@@ -20,6 +20,8 @@ This plan scopes the next major HopIt phase around real accounts, authenticated 
 
 `authIdentities` links provider identities to HopIt users. The first implementation can map a Convex auth `tokenIdentifier` to a single user, while leaving room for later account linking.
 
+`/api/me` is the hosted account bridge. When Clerk auth and Convex are configured, it derives the Convex JWT from the server-side Clerk session, upserts the HopIt user through `agent.upsertViewer`, and returns a sanitized account summary. It does not accept caller-supplied bearer tokens for product account sync.
+
 ### Codebase Access
 
 `codebaseMembers` is the durable access source for a codebase. Roles should start small:
@@ -37,9 +39,13 @@ The legacy graph `ownerId` and `collaborators[]` fields are still useful during 
 
 `codebaseInvitations` stores pending, accepted, revoked, and expired invitations. Invitations should be keyed by an opaque token hash, not a raw token. Acceptance requires an authenticated user whose normalized primary email matches the invitation email.
 
+Invitation creation is also server-guarded against duplicate active membership by normalized email. Expiry values must parse as future timestamps; invalid or past expiry values are rejected at creation, and legacy invalid pending expiries are treated as expired on read.
+
 ### Agent Sessions
 
-`agentSessions` tracks user-owned devices or local agents. A later patch should replace the single deployment-wide `HOPIT_AGENT_TOKEN` with user/device-scoped tokens bound to an agent session and codebase membership.
+`agentSessions` tracks user-owned devices or local agents. The table stores hashed session tokens, token prefixes, capabilities, expiry, status, revocation metadata, user id, and optional codebase scope. `HOPIT_AGENT_TOKEN` remains the bootstrap/admin credential, while normal installed devices can use `HOPIT_AGENT_SESSION_TOKEN` for graph reads, per-file mutations, and agent event appends.
+
+Session tokens are generated once with an `hst_` prefix, stored only as hashes plus a display prefix, and scoped to a single user/codebase pair. Re-registering an existing session id is only allowed for that same user and codebase; cross-user or cross-codebase reuse is rejected. Session expiry values must be valid future timestamps.
 
 ## Permission Rules
 
@@ -59,7 +65,7 @@ The legacy graph `ownerId` and `collaborators[]` fields are still useful during 
 3. Add authenticated account upsert from Convex auth and expose a small `viewer` query.
 4. Add invitation create/accept/revoke mutations and write tests around email match, expiry, revocation, and duplicate acceptance.
 5. Make dashboard and graph reads requester-aware, returning visible file counts plus hidden scope counts without leaking hidden paths.
-6. Move write operations from deployment-wide agent-token authorization to scoped actor authorization: authenticated user for browser commands, scoped agent session token for local agent writes.
+6. Move write operations from deployment-wide agent-token authorization to scoped actor authorization: authenticated user for browser commands, scoped agent session token for local agent writes. Agent graph reads, per-file mutations, and event appends now support scoped session tokens; browser command/write coverage remains.
 7. Add audit events for membership and invitation changes.
 8. Replace the graph-local collaborator list as the source of truth once migration has backfilled memberships.
 
@@ -68,14 +74,36 @@ The legacy graph `ownerId` and `collaborators[]` fields are still useful during 
 Status: backend plus first hosted UI/API slice landed.
 
 - Added Convex tables for users, auth identities, codebase members, invitations, and agent sessions.
+- Added scoped agent-session registration, listing, touch, revocation, token hashing, capability checks, and CLI `hop device` commands.
 - Added Convex helpers for authenticated viewer upsert, owner claim, member list/manage, invitation create/accept/revoke, and requester-aware dashboard filtering.
 - Added pending-invite duplicate checks, server-generated invite tokens, token hashing, verified-email invite acceptance, and revocation audit fields.
 - Added Clerk provider wiring, sign-in/sign-up pages, auth middleware, `/api/me`, and Clerk-to-Convex token forwarding through the hosted API routes.
 - Added hosted member/invite UI for owner claim, member list, invite creation, invite acceptance, revocation, suspension, and removal.
-- Preserved existing `getGraph`, `saveGraph`, and `appendEvent` token behavior for the local agent.
+- Preserved service-token bootstrap/admin behavior while adding session-token authorization for `getGraph`, per-file mutation sync, and event append paths.
+- Hardened hosted API token handling so collaboration routes derive Convex auth from the active Clerk server session instead of trusting arbitrary request bearer tokens.
+- Added `/api/me` Convex account sync, active-member invite rejection, future-only invite/session expiries, session id reuse checks, and `hst_` session-token format validation.
+
+## Domain-Deferred Rollout
+
+The provider-auth code remains valuable, but production Clerk rollout is pinned until HopIt has an owned domain. Current personal production should keep `HOPIT_AUTH_PROVIDER=basic`, `HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1`, and the Vercel-generated deployment URL.
+
+Continue building domain-independent pieces:
+
+- Permission helpers and server-side role checks.
+- Membership and invitation lifecycle behavior.
+- Requester-aware dashboard filtering.
+- Complete permission coverage for every browser and agent write path.
+
+Do not treat these as current blockers:
+
+- Clerk production instance completion.
+- `pk_live_`/`sk_live_` Vercel environment rollout.
+- Production OAuth callback verification on an owned domain.
+- Retiring Basic Auth from the live deployment.
 
 ## Risks And Blockers
 
-- The production deployment still needs real Clerk environment variables and the Convex auth issuer before Basic Auth can be retired.
-- The current agent reads full graphs through `getGraph`; scoped agent sessions are required before the shared token can be retired.
+- The production deployment has Clerk/Convex wiring in code, but production Clerk rollout is intentionally deferred until an owned HopIt domain exists. Basic Auth remains the current personal production guard.
+- The current agent can read graphs through scoped session tokens, but bootstrap/admin graph replacement still uses the shared service token. Retiring the shared token requires installer/setup flow, rotation UX, and complete write-path coverage.
 - Existing fixture identities such as `user_demo_owner` are not real auth subjects. Migration must map or claim those owners before production use.
+- Invitation emails are matched against HopIt `users.primaryEmail`, so duplicate-member rejection only works for accounts that have already signed in or otherwise been upserted.

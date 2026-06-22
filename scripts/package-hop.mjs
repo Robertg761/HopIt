@@ -21,6 +21,8 @@ const runtimeRoot = path.join(releaseRoot, 'runtime')
 const appRoot = path.join(releaseRoot, 'app')
 const fixtureRoot = path.join(appRoot, 'fixtures')
 const binRoot = path.join(releaseRoot, 'bin')
+const examplesRoot = path.join(releaseRoot, 'examples')
+const supportRoot = path.join(releaseRoot, 'support')
 const archivePath = path.join(artifactsRoot, `${packageName}.tar.gz`)
 const bundledCliPath = path.join(appRoot, 'hop.mjs')
 const runtimeNodePath = path.join(runtimeRoot, target.exeName)
@@ -30,6 +32,8 @@ await fs.mkdir(cacheRoot, { recursive: true })
 await fs.mkdir(runtimeRoot, { recursive: true })
 await fs.mkdir(fixtureRoot, { recursive: true })
 await fs.mkdir(binRoot, { recursive: true })
+await fs.mkdir(examplesRoot, { recursive: true })
+await fs.mkdir(supportRoot, { recursive: true })
 
 const officialNodePath = await ensureOfficialNodeRuntime()
 await copyExecutable(officialNodePath, runtimeNodePath)
@@ -50,6 +54,7 @@ await fs.copyFile(
   path.join(fixtureRoot, 'demo-cloud.json'),
 )
 await writeLauncher()
+await writeSupportFiles()
 await writeReadme()
 await writeManifest()
 await verifyRelease()
@@ -175,19 +180,231 @@ async function writeReadme() {
     path.join(releaseRoot, 'README.txt'),
     `HopIt standalone command
 
+Install:
+  cp examples/production.env.example ~/.config/hopit/production.env
+  edit ~/.config/hopit/production.env
+  ./bin/hop service start --profile production
+
+Start on login:
+  macOS: ./support/install-macos-launch-agent.sh
+  Linux: ./support/install-systemd-user-service.sh
+
 Run:
   ./bin/hop help
   ./bin/hop import --profile production --source /path/to/project --codebase-id my-project --force
+  ./bin/hop workspace ensure --profile production --codebase-id my-project
   ./bin/hop service start --profile production --codebase-id my-project
   ./bin/hop service status --profile production --codebase-id my-project
-  ./bin/hop export --output /path/to/export
-  ./bin/hop publish --output /path/to/publish
+  ./bin/hop export --profile production --output /path/to/export
+  ./bin/hop export --profile production --include-private --output /path/to/private-backup
+  ./bin/hop publish --profile production --output /path/to/publish
+  ./bin/hop session revoke --profile production --session-id old-session-id
+  ./bin/hop session register --profile production --device-name "$(hostname)"
+
+Observe:
+  ./bin/hop status --profile production
+  ./bin/hop service status --profile production
+  curl http://127.0.0.1:4785/status
+  curl http://127.0.0.1:4785/events
 
 This package includes its own Node runtime, so Node and npm are not required on
-the target machine. It is not signed or notarized yet.
+the target machine. The support scripts install a user-level service only after
+you create the local env file. It is not signed or notarized yet.
 `,
     'utf8',
   )
+}
+
+async function writeSupportFiles() {
+  await fs.writeFile(
+    path.join(examplesRoot, 'production.env.example'),
+    `HOPIT_CODEBASE_ID=hopit
+HOPIT_AGENT_TOKEN=replace-with-a-long-random-bootstrap-token
+HOPIT_CONVEX_URL=https://your-convex-deployment.convex.cloud
+NEXT_PUBLIC_CONVEX_URL=https://your-convex-deployment.convex.cloud
+HOPIT_AUTH_PROVIDER=basic
+HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1
+HOPIT_DASHBOARD_USERNAME=hopit
+HOPIT_DASHBOARD_PASSWORD=replace-with-a-long-random-dashboard-password
+HOPIT_AGENT_STATE_ROOT="$HOME/Library/Application Support/HopIt/Agent"
+HOPIT_WORKSPACE_ROOT="$HOME/HopIt Workspaces"
+HOPIT_WORKSPACE_INDEX="$HOME/Library/Application Support/HopIt/Agent/workspaces.json"
+HOPIT_SESSION_ID=replace-with-this-device-session-id
+HOPIT_DEVICE_NAME="Your Mac"
+HOPIT_AGENT_SESSION_TOKEN=replace-after-hop-device-register
+HOPIT_AGENT_SESSION_CAPABILITIES=read,write,sync,watch
+HOPIT_REMOTE_PULL=1
+HOPIT_REMOTE_REFRESH_INTERVAL_MS=5000
+HOPIT_BACKUP_ROOT=$HOME/HopIt-Backups
+HOPIT_EXPORT_ROOT=$HOME/HopIt-Exports
+`,
+    'utf8',
+  )
+
+  await writeExecutableSupportFile(
+    'install-macos-launch-agent.sh',
+    `#!/bin/sh
+set -eu
+
+if [ "$(uname -s)" != "Darwin" ]; then
+  echo "This installer is for macOS launchd." >&2
+  exit 1
+fi
+
+PACKAGE_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+ENV_FILE="$HOME/.config/hopit/production.env"
+if [ -n "\${HOPIT_ENV_FILE-}" ]; then
+  ENV_FILE="$HOPIT_ENV_FILE"
+fi
+LABEL="com.hopit.agent"
+if [ -n "\${HOPIT_LAUNCHD_LABEL-}" ]; then
+  LABEL="$HOPIT_LAUNCHD_LABEL"
+fi
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+LOG_DIR="$HOME/Library/Logs/HopIt"
+
+mkdir -p "$(dirname "$ENV_FILE")" "$(dirname "$PLIST")" "$LOG_DIR"
+if [ ! -f "$ENV_FILE" ]; then
+  cp "$PACKAGE_ROOT/examples/production.env.example" "$ENV_FILE"
+  echo "Created $ENV_FILE. Edit it with real HopIt values, then rerun this installer." >&2
+  exit 1
+fi
+
+xml_escape() {
+  printf '%s' "$1" | sed -e 's/&/\\&amp;/g' -e 's/</\\&lt;/g' -e 's/>/\\&gt;/g'
+}
+
+COMMAND=". \\"$ENV_FILE\\"; exec \\"$PACKAGE_ROOT/bin/hop\\" service run --profile production"
+ESCAPED_COMMAND="$(xml_escape "$COMMAND")"
+ESCAPED_HOME="$(xml_escape "$HOME")"
+ESCAPED_STDOUT="$(xml_escape "$LOG_DIR/agent.out.log")"
+ESCAPED_STDERR="$(xml_escape "$LOG_DIR/agent.err.log")"
+
+{
+  printf '%s\\n' '<?xml version="1.0" encoding="UTF-8"?>'
+  printf '%s\\n' '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'
+  printf '%s\\n' '<plist version="1.0">'
+  printf '%s\\n' '<dict>'
+  printf '%s\\n' '  <key>Label</key>'
+  printf '  <string>%s</string>\\n' "$LABEL"
+  printf '%s\\n' '  <key>ProgramArguments</key>'
+  printf '%s\\n' '  <array>'
+  printf '%s\\n' '    <string>/bin/sh</string>'
+  printf '%s\\n' '    <string>-lc</string>'
+  printf '    <string>%s</string>\\n' "$ESCAPED_COMMAND"
+  printf '%s\\n' '  </array>'
+  printf '%s\\n' '  <key>RunAtLoad</key>'
+  printf '%s\\n' '  <true/>'
+  printf '%s\\n' '  <key>KeepAlive</key>'
+  printf '%s\\n' '  <true/>'
+  printf '%s\\n' '  <key>WorkingDirectory</key>'
+  printf '  <string>%s</string>\\n' "$ESCAPED_HOME"
+  printf '%s\\n' '  <key>StandardOutPath</key>'
+  printf '  <string>%s</string>\\n' "$ESCAPED_STDOUT"
+  printf '%s\\n' '  <key>StandardErrorPath</key>'
+  printf '  <string>%s</string>\\n' "$ESCAPED_STDERR"
+  printf '%s\\n' '</dict>'
+  printf '%s\\n' '</plist>'
+} > "$PLIST"
+
+launchctl unload "$PLIST" >/dev/null 2>&1 || true
+launchctl load "$PLIST"
+launchctl start "$LABEL" >/dev/null 2>&1 || true
+
+echo "Installed HopIt launch agent: $PLIST"
+echo "Logs: $LOG_DIR/agent.out.log and $LOG_DIR/agent.err.log"
+`,
+  )
+
+  await writeExecutableSupportFile(
+    'uninstall-macos-launch-agent.sh',
+    `#!/bin/sh
+set -eu
+
+LABEL="com.hopit.agent"
+if [ -n "\${HOPIT_LAUNCHD_LABEL-}" ]; then
+  LABEL="$HOPIT_LAUNCHD_LABEL"
+fi
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+
+launchctl unload "$PLIST" >/dev/null 2>&1 || true
+rm -f "$PLIST"
+echo "Removed HopIt launch agent: $PLIST"
+`,
+  )
+
+  await writeExecutableSupportFile(
+    'install-systemd-user-service.sh',
+    `#!/bin/sh
+set -eu
+
+if [ "$(uname -s)" != "Linux" ]; then
+  echo "This installer is for Linux systemd user services." >&2
+  exit 1
+fi
+if ! command -v systemctl >/dev/null 2>&1; then
+  echo "systemctl is required for this installer." >&2
+  exit 1
+fi
+
+PACKAGE_ROOT="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+ENV_FILE="$HOME/.config/hopit/production.env"
+if [ -n "\${HOPIT_ENV_FILE-}" ]; then
+  ENV_FILE="$HOPIT_ENV_FILE"
+fi
+SERVICE_DIR="$HOME/.config/systemd/user"
+SERVICE_FILE="$SERVICE_DIR/hopit-agent.service"
+
+mkdir -p "$(dirname "$ENV_FILE")" "$SERVICE_DIR"
+if [ ! -f "$ENV_FILE" ]; then
+  cp "$PACKAGE_ROOT/examples/production.env.example" "$ENV_FILE"
+  echo "Created $ENV_FILE. Edit it with real HopIt values, then rerun this installer." >&2
+  exit 1
+fi
+
+{
+  printf '%s\\n' '[Unit]'
+  printf '%s\\n' 'Description=HopIt local workspace agent'
+  printf '%s\\n' 'After=network-online.target'
+  printf '%s\\n' ''
+  printf '%s\\n' '[Service]'
+  printf '%s\\n' 'Type=simple'
+  printf 'EnvironmentFile=%s\\n' "$ENV_FILE"
+  printf 'ExecStart=%s/bin/hop service run --profile production\\n' "$PACKAGE_ROOT"
+  printf '%s\\n' 'Restart=on-failure'
+  printf '%s\\n' 'RestartSec=5'
+  printf 'WorkingDirectory=%s\\n' "$HOME"
+  printf '%s\\n' ''
+  printf '%s\\n' '[Install]'
+  printf '%s\\n' 'WantedBy=default.target'
+} > "$SERVICE_FILE"
+
+systemctl --user daemon-reload
+systemctl --user enable --now hopit-agent.service
+
+echo "Installed HopIt systemd user service: $SERVICE_FILE"
+echo "Status: systemctl --user status hopit-agent.service"
+`,
+  )
+
+  await writeExecutableSupportFile(
+    'uninstall-systemd-user-service.sh',
+    `#!/bin/sh
+set -eu
+
+SERVICE_FILE="$HOME/.config/systemd/user/hopit-agent.service"
+systemctl --user disable --now hopit-agent.service >/dev/null 2>&1 || true
+rm -f "$SERVICE_FILE"
+systemctl --user daemon-reload >/dev/null 2>&1 || true
+echo "Removed HopIt systemd user service: $SERVICE_FILE"
+`,
+  )
+}
+
+async function writeExecutableSupportFile(name, content) {
+  const filePath = path.join(supportRoot, name)
+  await fs.writeFile(filePath, content, 'utf8')
+  await fs.chmod(filePath, 0o755)
 }
 
 async function writeManifest() {
@@ -202,6 +419,11 @@ async function writeManifest() {
       runtime: `runtime/${target.exeName}`,
       app: 'app/hop.mjs',
       fixture: 'app/fixtures/demo-cloud.json',
+      productionEnvExample: 'examples/production.env.example',
+      macosLaunchAgentInstaller: 'support/install-macos-launch-agent.sh',
+      macosLaunchAgentUninstaller: 'support/uninstall-macos-launch-agent.sh',
+      systemdUserServiceInstaller: 'support/install-systemd-user-service.sh',
+      systemdUserServiceUninstaller: 'support/uninstall-systemd-user-service.sh',
     },
     checksums: {
       app: await sha256File(bundledCliPath),

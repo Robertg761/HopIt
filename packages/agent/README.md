@@ -2,7 +2,7 @@
 
 This package is the first local agent spike for HopIt.
 
-It is intentionally not a real FUSE, OS filesystem provider, or clone manager. Instead, it models the v1 lifecycle with a normal managed workspace folder backed by a local cache:
+It is intentionally not a real FUSE, OS filesystem provider, or clone manager. Instead, it models the first v1 lifecycle with a normal managed workspace folder backed by a local cache:
 
 1. Seed a local cloud file graph that stands in for one selected active change set.
 2. Hydrate files into a managed workspace folder.
@@ -12,6 +12,8 @@ It is intentionally not a real FUSE, OS filesystem provider, or clone manager. I
 
 The selected cloud state remains the source of truth for the managed folder. In the production model, day-to-day edits should sync into an active change set; Main advances only after review or merge. The local folder is a materialized cache that HopIt manages so OS file pickers, editors, CLIs, and search tools can work without a special mount or a user-managed clone.
 
+The solid v1 target is a HopIt Workspace Root, such as `~/HopIt Workspaces`, where cloud codebases appear as HopIt-managed project folders. This package currently proves selected managed folders, a durable workspace-root index, hydration/cursor status, safe remote-pull polling, and scoped Convex agent-session token groundwork. It does not yet provide metadata-only file listings, full lazy materialization, or production-grade push/subscription remote-update delivery.
+
 HopIt does not use ignore files as product sharing controls. Files under `.private/` are still snapshotted, synced, and versioned, but owner-visible only. Files outside `.private/` are governed by the active change set's effective visibility and the codebase's permissions.
 
 ## Commands
@@ -19,13 +21,13 @@ HopIt does not use ignore files as product sharing controls. Files under `.priva
 Run the full deterministic demo:
 
 ```bash
-npm exec -- hop demo
+npm run hop -- demo
 ```
 
 Import a real local folder into the managed HopIt graph:
 
 ```bash
-npm exec -- hop import --source /path/to/project --force
+npm run hop -- import --source /path/to/project --force
 ```
 
 The import path skips `.git`, `.hopit-agent`, `node_modules`, build outputs,
@@ -35,7 +37,7 @@ managed workspace from the imported cloud graph.
 Point the same import at the real Convex backend with:
 
 ```bash
-npm exec -- hop import \
+npm run hop -- import \
   --source /path/to/project \
   --codebase-id hopit \
   --convex-url "$HOPIT_CONVEX_URL" \
@@ -62,21 +64,27 @@ runtime this packager handles.
 Run the pieces manually:
 
 ```bash
-npm exec -- hop init
-npm exec -- hop hydrate
-npm exec -- hop refresh
-npm exec -- hop sync
-npm exec -- hop recover
-npm exec -- hop watch
-npm exec -- hop status
-npm exec -- hop serve
-npm exec -- hop review
-npm exec -- hop merge
-npm exec -- hop validate
-npm exec -- hop export --output /path/to/git-export
-npm exec -- hop publish --output /path/to/git-publish
-npm exec -- hop service start --profile production --codebase-id hopit
-npm exec -- hop service status --profile production --codebase-id hopit
+npm run hop -- init
+npm run hop -- hydrate
+npm run hop -- refresh
+npm run hop -- sync
+npm run hop -- recover
+npm run hop -- watch
+npm run hop -- status
+npm run hop -- serve
+npm run hop -- review
+npm run hop -- merge
+npm run hop -- validate
+npm run hop -- workspace status
+npm run hop -- workspace list
+npm run hop -- workspace ensure
+npm run hop -- device status
+npm run hop -- device register --profile production --codebase-id hopit
+npm run hop -- device list --profile production --codebase-id hopit
+npm run hop -- export --output /path/to/git-export
+npm run hop -- publish --output /path/to/git-publish
+npm run hop -- service start --profile production --codebase-id hopit
+npm run hop -- service status --profile production --codebase-id hopit
 ```
 
 `hop refresh` is the safe cloud-to-workspace command. It refuses to
@@ -119,13 +127,13 @@ journal safely is required before the workspace can be refreshed from cloud stat
 Safe refresh refuses pending or failed local journal state:
 
 ```bash
-npm exec -- hop status \
+npm run hop -- status \
   --cloud .hopit-agent/demo/cloud.json \
   --workspace .hopit-agent/demo/workspaces/hopit-core \
   --journal .hopit-agent/demo/journal.ndjson \
   --events .hopit-agent/demo/events.ndjson
 
-npm exec -- hop refresh \
+npm run hop -- refresh \
   --cloud .hopit-agent/demo/cloud.json \
   --workspace .hopit-agent/demo/workspaces/hopit-core \
   --journal .hopit-agent/demo/journal.ndjson \
@@ -181,6 +189,34 @@ schema version, codebase/Main/active-change-set identity, visibility enums,
 review/merge/conflict states, file content/revisions, safe relative paths, and
 path-derived `.private/` owner-private scope.
 
+`hop workspace status|list|ensure|files|hydrate-file|dehydrate` is the first
+product-facing workspace-root surface. It reports the configured HopIt root, the
+current codebase folder, whether the codebase has been initialized, hydration
+state, dirty-state, and the durable root index path. `ensure` creates the
+configured root and current managed codebase folder without claiming a true
+virtual filesystem: the adapter remains `managed-folder`, cache mode remains
+`local-cache`, and the status payload explicitly reports `virtualized: false`.
+
+Hydrate, refresh, and sync update `workspaces.json` under the agent state root
+unless `HOPIT_WORKSPACE_INDEX` or `--workspace-index` overrides the path. Index
+entries are scoped to the codebase and the concrete workspace path, so same
+codebase materializations on different devices keep independent hydration
+cursors. The index stores a hash-only content manifest for hydrated paths, not
+file bodies, so status and remote-pull can detect unjournaled local drift without
+duplicating workspace content.
+
+`hop device` is an alias for `hop session`. `device status` reports the local
+session id, device name, and whether the command is using the bootstrap service
+token or a scoped per-device session token. `device register` calls Convex to
+issue a token for this codebase; store the returned `sessionToken` as
+`HOPIT_AGENT_SESSION_TOKEN`. `device list`, `device touch`, and `device revoke`
+are the management surface for active/revoked sessions.
+
+When both `HOPIT_AGENT_TOKEN` and `HOPIT_AGENT_SESSION_TOKEN` are present,
+normal Convex-backed commands prefer the scoped session token. Pass
+`--agent-token` explicitly for bootstrap/admin work such as import, graph
+replacement, or admin session listing.
+
 `hop export` and `hop publish` are the current Git escape hatch. They create a
 clean Git repository at `--output`, refuse outputs inside the managed workspace,
 and omit `.private/` owner-only files by default. `hop export --include-private`
@@ -192,7 +228,34 @@ omits `.private/`.
 as one background process. Use `--profile production` to keep agent state under
 the platform app-state directory and managed workspaces under `~/HopIt
 Workspaces` unless `HOPIT_AGENT_STATE_ROOT` or `HOPIT_WORKSPACE_ROOT` overrides
-those defaults.
+those defaults. `service start` waits for the local status endpoint and watcher
+to become ready before it reports success, and failed startup removes the pid
+file instead of leaving stale service state behind.
+
+Service mode syncs local workspace edits from the current device. It does not
+run an automatic remote-pull loop by default, so the conservative cross-device
+handoff remains: let device A sync, then run `hop refresh` on device B before
+continuing there. This avoids pretending concurrent multi-device editing is safe
+before the graph has stronger conflict/concurrency guards.
+
+For personal dogfooding, `watch` and `service start` can opt into a safe
+background cloud refresh loop:
+
+```bash
+npm run hop -- service start \
+  --profile production \
+  --codebase-id hopit \
+  --remote-pull
+```
+
+The remote-pull loop checks for a clean local journal, an idle local sync
+scheduler, a fully materialized workspace, a clean hash manifest, and the
+workspace index cursor before calling the same safe `hop refresh` path. If
+pending or failed journal entries exist, the workspace is partial/metadata-only,
+or disk content differs from the last materialized manifest, it emits
+`remote-pull.skipped` and leaves the workspace alone. Tune the polling interval
+with `--remote-refresh-interval-ms <ms>` or
+`HOPIT_REMOTE_REFRESH_INTERVAL_MS`; the default is `5000`.
 
 Serve local agent status JSON:
 
@@ -200,7 +263,7 @@ Serve local agent status JSON:
 npm run agent:serve
 ```
 
-The status server is dependency-free and listens on `127.0.0.1:4785` by default. It is read-only and reports `adapter: managed-folder`, `cacheMode: local-cache`, the workspace folder, local cloud graph summary, requester identity and visibility-filtered file counts, pending/failed/acknowledged journal counts, recent events, and the latest acknowledgement, sync, recovery, remote-update, review, merge, and conflict state.
+The status server is dependency-free and listens on `127.0.0.1:4785` by default. It is read-only and reports `adapter: managed-folder`, `cacheMode: local-cache`, the workspace root and current codebase folder, workspace index summary, hydration/materialized revision, hash-manifest summary, local clean/dirty state, remote cursor state, local cloud graph summary, requester identity and visibility-filtered file counts, pending/failed/acknowledged journal counts, recent events, and the latest acknowledgement, sync, recovery, remote-update, remote-pull, review, merge, and conflict state.
 
 For a one-shot status JSON printout without starting the server, run:
 
@@ -220,7 +283,7 @@ curl http://127.0.0.1:4785/cloud
 Use the same local-state options as the other commands when you want to inspect the demo state:
 
 ```bash
-npm exec -- hop status \
+npm run hop -- status \
   --cloud .hopit-agent/demo/cloud.json \
   --workspace .hopit-agent/demo/workspaces/hopit-core \
   --journal .hopit-agent/demo/journal.ndjson \
@@ -237,12 +300,18 @@ Generated local agent state is demo/runtime state, not workspace content:
 
 ## Next Step
 
-Extend Git compatibility on top of the safe export/publish skeleton. The
-same-owner, collaborator visibility, remote-update, review, merge, conflict, and
-Git escape-hatch simulations now define how active change-set state becomes
-visible locally, how it becomes accepted Main, how stale revisions become
-reviewable state, and how accepted work can leave HopIt without leaking
-`.private/` owner-only content. The next proof should add Git history import,
-ancestry preservation, historical snapshot export, and remote publish. Offline
-behavior can build on that boundary. A true virtual filesystem or RAM-only mount
-remains future optional research, not the current product path.
+Promote this selected managed-folder proof into the HopIt Workspace Root
+contract. The root-level index, hydration/materialized revision state, scoped
+agent-session token groundwork, content-addressed text blobs, per-file agent
+mutations, and opt-in remote-pull cursor are now in place. The next agent work
+should add account-scoped cloud codebase discovery, attach/setup flow, per-file
+cache metadata, conservative lazy materialization, and production-grade
+remote-update delivery.
+
+In parallel, the cloud graph needs large-file/object-blob handling, durable
+history reconstruction, and full product write-path coverage before concurrent
+multi-device editing is treated as production safe. Git compatibility can
+continue as an escape hatch on top of
+snapshots, but it should not displace Workspace Root, automatic device handoff,
+or active change sets as the primary v1 product path. A true virtual filesystem
+or RAM-only mount remains future optional research.

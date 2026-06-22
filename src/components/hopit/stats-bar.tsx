@@ -4,8 +4,8 @@ import { motion } from 'framer-motion'
 import {
   Code2,
   Folder,
+  GitPullRequest,
   History,
-  Users,
 } from 'lucide-react'
 import type { AgentStatusSnapshot } from '@/lib/agent-status'
 
@@ -46,11 +46,11 @@ export function StatsBar({ status, loading }: StatsBarProps) {
       bg: status.pendingWrites > 0 ? 'bg-hop-amber/10' : 'bg-hop/10',
     },
     {
-      label: 'Agent state',
-      value: loading ? '...' : status.healthLabel,
-      icon: Users,
-      accent: status.state === 'blocked' ? 'text-destructive' : 'text-sky-500',
-      bg: status.state === 'blocked' ? 'bg-destructive/10' : 'bg-sky-500/10',
+      label: 'Review state',
+      value: loading ? '...' : status.reviewState,
+      icon: GitPullRequest,
+      accent: status.conflictState === 'conflicted' ? 'text-destructive' : 'text-sky-500',
+      bg: status.conflictState === 'conflicted' ? 'bg-destructive/10' : 'bg-sky-500/10',
     },
   ]
 

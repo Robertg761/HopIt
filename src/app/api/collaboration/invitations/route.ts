@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server'
-import { auth } from '@clerk/nextjs/server'
-import { ConvexHttpClient } from 'convex/browser'
 import { anyApi } from 'convex/server'
 
-import { shouldUseClerkAuth } from '@/lib/auth-config'
+import { convexAuthToken, convexClient, convexUrl } from '@/lib/convex-auth'
 import type { InvitationsResponse, PendingInvitation } from '@/lib/collaboration'
 
 export const dynamic = 'force-dynamic'
@@ -11,7 +9,7 @@ export const runtime = 'nodejs'
 
 export async function GET(request: Request) {
   const codebaseId = codebaseIdFromRequest(request)
-  const authToken = await convexAuthToken(request)
+  const authToken = await convexAuthToken()
 
   if (!convexUrl()) {
     return invitationError(codebaseId, 'convex_unavailable', 'Convex is not configured for invitations.', 503)
@@ -43,7 +41,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const body = await readBody(request)
   const codebaseId = stringValue(body.codebaseId) ?? defaultCodebaseId()
-  const authToken = await convexAuthToken(request)
+  const authToken = await convexAuthToken()
 
   if (!authToken) {
     return invitationError(
@@ -93,17 +91,17 @@ export async function PATCH(request: Request) {
   const codebaseId = stringValue(body.codebaseId) ?? defaultCodebaseId()
 
   if (body.action === 'accept') {
-    return acceptInvitation(request, body, codebaseId)
+    return acceptInvitation(body, codebaseId)
   }
   if (body.action === 'revoke') {
-    return revokeInvitation(request, body, codebaseId)
+    return revokeInvitation(body, codebaseId)
   }
 
   return invitationError(codebaseId, 'unsupported_invitation_action', 'Expected invitation action to be accept or revoke.', 400)
 }
 
-async function acceptInvitation(request: Request, body: Record<string, unknown>, codebaseId: string) {
-  const authToken = await convexAuthToken(request)
+async function acceptInvitation(body: Record<string, unknown>, codebaseId: string) {
+  const authToken = await convexAuthToken()
 
   if (!authToken) {
     return invitationError(
@@ -130,8 +128,8 @@ async function acceptInvitation(request: Request, body: Record<string, unknown>,
   }
 }
 
-async function revokeInvitation(request: Request, body: Record<string, unknown>, codebaseId: string) {
-  const authToken = await convexAuthToken(request)
+async function revokeInvitation(body: Record<string, unknown>, codebaseId: string) {
+  const authToken = await convexAuthToken()
 
   if (!authToken) {
     return invitationError(
@@ -221,25 +219,6 @@ async function readBody(request: Request): Promise<Record<string, unknown>> {
   return recordValue(body) ?? {}
 }
 
-async function convexAuthToken(request: Request) {
-  const bearer = bearerToken(request.headers.get('authorization'))
-  if (bearer) return bearer
-  if (!shouldUseClerkAuth()) return null
-
-  const authState = await auth()
-  if (!authState.userId) return null
-  return await authState.getToken({ template: process.env.HOPIT_CLERK_CONVEX_JWT_TEMPLATE ?? 'convex' })
-}
-
-function convexClient(authToken: string) {
-  const url = convexUrl()
-  if (!url) throw new Error('Convex is not configured. Set HOPIT_CONVEX_URL or CONVEX_URL.')
-
-  const client = new ConvexHttpClient(url, { logger: false })
-  client.setAuth(authToken)
-  return client
-}
-
 function codebaseIdFromRequest(request: Request) {
   const url = new URL(request.url)
   return url.searchParams.get('codebaseId') || defaultCodebaseId()
@@ -249,22 +228,12 @@ function defaultCodebaseId() {
   return process.env.HOPIT_CODEBASE_ID ?? 'hopit'
 }
 
-function convexUrl() {
-  return process.env.HOPIT_CONVEX_URL ?? process.env.CONVEX_URL ?? process.env.NEXT_PUBLIC_CONVEX_URL
-}
-
 function responseInit() {
   return {
     headers: {
       'Cache-Control': 'no-store',
     },
   }
-}
-
-function bearerToken(value: string | null) {
-  if (!value) return null
-  const match = value.match(/^Bearer\s+(.+)$/i)
-  return match?.[1] ?? null
 }
 
 function requireText(value: unknown, label: string) {

@@ -106,12 +106,19 @@ export default defineSchema({
     sessionId: v.string(),
     codebaseId: v.optional(v.string()),
     deviceName: v.optional(v.string()),
+    tokenHash: v.optional(v.string()),
+    tokenPrefix: v.optional(v.string()),
+    capabilities: v.optional(v.array(v.string())),
+    expiresAt: v.optional(v.string()),
     status: v.union(v.literal("active"), v.literal("revoked")),
     createdAt: v.string(),
     lastSeenAt: v.string(),
+    updatedAt: v.optional(v.string()),
+    revokedByUserId: v.optional(v.string()),
     revokedAt: v.optional(v.string()),
   })
     .index("by_session_id", ["sessionId"])
+    .index("by_token_hash", ["tokenHash"])
     .index("by_user", ["userId"])
     .index("by_codebase", ["codebaseId"]),
 
@@ -119,6 +126,8 @@ export default defineSchema({
     codebaseId: v.string(),
     path: v.string(),
     content: v.string(),
+    blobHash: v.optional(v.string()),
+    contentStorage: v.optional(v.string()),
     hash: v.optional(v.string()),
     size: v.optional(v.number()),
     scope: v.union(v.literal("shared"), v.literal("owner-private")),
@@ -127,6 +136,16 @@ export default defineSchema({
   })
     .index("by_codebase", ["codebaseId"])
     .index("by_codebase_path", ["codebaseId", "path"]),
+
+  fileBlobs: defineTable({
+    codebaseId: v.string(),
+    hash: v.string(),
+    content: v.string(),
+    size: v.number(),
+    createdAt: v.string(),
+  })
+    .index("by_codebase", ["codebaseId"])
+    .index("by_codebase_hash", ["codebaseId", "hash"]),
 
   agentEvents: defineTable({
     codebaseId: v.string(),

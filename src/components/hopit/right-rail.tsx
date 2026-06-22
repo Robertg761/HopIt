@@ -106,7 +106,7 @@ function AgentStatusPanel({
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <h2 className="text-sm font-semibold">Local agent</h2>
+              <h2 className="text-sm font-semibold">Workspace agent</h2>
               <span
                 className={cn(
                   'flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px] font-medium capitalize',
@@ -149,7 +149,7 @@ function AgentStatusPanel({
         <div className="rounded-xl border border-border/60 bg-muted/25 p-3">
           <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
             <FolderOpen className="size-3.5" />
-            Managed workspace
+            Workspace root preview
           </p>
           <p className="mt-2 truncate font-mono text-sm font-semibold">
             {status.managedWorkspacePath}
@@ -164,9 +164,25 @@ function AgentStatusPanel({
               value={status.cloudRevision}
             />
             <StatusMetric
+              icon={HardDrive}
+              label="Hydration"
+              value={status.workspaceHydrationState}
+              highlight={status.workspaceHydrationState !== 'materialized'}
+            />
+            <StatusMetric
               icon={FileStack}
               label="Visible files"
               value={status.fileCount.toLocaleString()}
+            />
+            <StatusMetric
+              icon={RotateCcw}
+              label="Behind"
+              value={
+                status.remoteBehindByRevisions === null
+                  ? 'unknown'
+                  : status.remoteBehindByRevisions.toString()
+              }
+              highlight={(status.remoteBehindByRevisions ?? 0) > 0}
             />
             <StatusMetric
               icon={UploadCloud}
@@ -187,6 +203,12 @@ function AgentStatusPanel({
                 status.remoteUpdateState !== 'idle' &&
                 status.remoteUpdateState !== 'Unavailable'
               }
+            />
+            <StatusMetric
+              icon={RotateCcw}
+              label="Remote pull"
+              value={status.remotePullEnabled ? status.remotePullState : 'disabled'}
+              highlight={status.remotePullEnabled && status.remotePullState !== 'enabled'}
             />
             <StatusMetric
               icon={ShieldCheck}
@@ -239,13 +261,15 @@ function AgentStatusPanel({
               {prototypeActions.map((action) => {
                 const Icon = action.icon
                 const isRunning = runningCommand === action.command
+                const disabledReason = commandDisabledReason(action.command, status, runningCommand)
                 return (
                   <Button
                     key={action.command}
                     type="button"
                     size="sm"
                     variant="outline"
-                    disabled={Boolean(runningCommand)}
+                    disabled={Boolean(disabledReason)}
+                    title={disabledReason ?? action.label}
                     className="h-8 justify-start gap-1.5 rounded-lg px-2 text-xs"
                     onClick={() => void runCommand(action.command)}
                   >
@@ -366,4 +390,21 @@ function SyncStamp({ icon: Icon, label, value }: SyncStampProps) {
       <p className="mt-1 text-xs font-semibold">{value}</p>
     </div>
   )
+}
+
+function commandDisabledReason(
+  command: AgentCommand,
+  status: AgentStatusSnapshot,
+  runningCommand: AgentCommand | null,
+) {
+  if (runningCommand) return `Running ${runningCommand}`
+  if (command === 'review' && status.reviewState === 'open') return 'Review is already open.'
+  if (command === 'merge' && status.reviewState !== 'open') return 'Open review before merge.'
+  if (command === 'merge' && status.conflictState !== 'none' && status.conflictState !== 'Unavailable') {
+    return 'Resolve conflicts before merge.'
+  }
+  if (command === 'merge' && (status.pendingWrites > 0 || status.failedWrites > 0)) {
+    return 'Clear pending or failed writes before merge.'
+  }
+  return null
 }

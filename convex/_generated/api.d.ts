@@ -8,6 +8,7 @@
  * @module
  */
 
+import type * as access from "../access.js";
 import type * as agent from "../agent.js";
 import type * as collaboration from "../collaboration.js";
 
@@ -18,6 +19,7 @@ import type {
 } from "convex/server";
 
 declare const fullApi: ApiFromModules<{
+  access: typeof access;
   agent: typeof agent;
   collaboration: typeof collaboration;
 }>;

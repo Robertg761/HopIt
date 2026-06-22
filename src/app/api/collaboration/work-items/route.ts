@@ -1,9 +1,7 @@
 import { NextResponse } from 'next/server'
-import { auth } from '@clerk/nextjs/server'
-import { ConvexHttpClient } from 'convex/browser'
 import { anyApi } from 'convex/server'
 
-import { shouldUseClerkAuth } from '@/lib/auth-config'
+import { convexAuthToken, convexClient, convexUrl } from '@/lib/convex-auth'
 import type {
   CollaborationCapabilities,
   CollaborationDiscussion,
@@ -17,12 +15,12 @@ export const runtime = 'nodejs'
 
 export async function GET(request: Request) {
   const codebaseId = codebaseIdFromRequest(request)
-  const authToken = await convexAuthToken(request)
+  const authToken = await convexAuthToken()
   const unavailable = unavailableReason('read', Boolean(authToken))
   if (unavailable) return workItemsUnavailable(codebaseId, unavailable)
 
   try {
-    return NextResponse.json(await readWorkItems(codebaseId, request, authToken), responseInit())
+    return NextResponse.json(await readWorkItems(codebaseId, authToken), responseInit())
   } catch (error) {
     return workItemsError(codebaseId, 'collaboration_read_failed', errorMessage(error), 502)
   }
@@ -36,7 +34,7 @@ export async function POST(request: Request) {
   if (unavailable) return workItemsUnavailable(codebaseId, unavailable)
 
   try {
-    const authToken = await convexAuthToken(request)
+    const authToken = await convexAuthToken()
     if (!authToken) {
       return workItemsError(codebaseId, 'browser_auth_required', 'Creating collaboration items requires product auth.', 401)
     }
@@ -87,7 +85,7 @@ export async function POST(request: Request) {
       return workItemsError(codebaseId, 'invalid_type', 'Expected type to be issue, discussion, or release.', 400)
     }
 
-    return NextResponse.json(await readWorkItems(codebaseId, request, authToken), responseInit())
+    return NextResponse.json(await readWorkItems(codebaseId, authToken), responseInit())
   } catch (error) {
     return workItemsError(codebaseId, 'collaboration_create_failed', errorMessage(error), 400)
   }
@@ -101,7 +99,7 @@ export async function PATCH(request: Request) {
   if (unavailable) return workItemsUnavailable(codebaseId, unavailable)
 
   try {
-    const authToken = await convexAuthToken(request)
+    const authToken = await convexAuthToken()
     if (!authToken) {
       return workItemsError(codebaseId, 'browser_auth_required', 'Updating collaboration items requires product auth.', 401)
     }
@@ -138,7 +136,7 @@ export async function PATCH(request: Request) {
       return workItemsError(codebaseId, 'invalid_action', 'Unknown collaboration update action.', 400)
     }
 
-    return NextResponse.json(await readWorkItems(codebaseId, request, authToken), responseInit())
+    return NextResponse.json(await readWorkItems(codebaseId, authToken), responseInit())
   } catch (error) {
     return workItemsError(codebaseId, 'collaboration_update_failed', errorMessage(error), 400)
   }
@@ -146,10 +144,9 @@ export async function PATCH(request: Request) {
 
 async function readWorkItems(
   codebaseId: string,
-  request: Request,
   providedAuthToken?: string | null,
 ): Promise<WorkItemsResponse> {
-  const authToken = providedAuthToken ?? await convexAuthToken(request)
+  const authToken = providedAuthToken ?? await convexAuthToken()
   const client = convexClient(authToken)
   const args = readArgs({ codebaseId }, authToken)
   const [issues, discussions, releases] = await Promise.all([
@@ -235,15 +232,6 @@ async function readBody(request: Request): Promise<Record<string, unknown>> {
   return recordValue(body) ?? {}
 }
 
-function convexClient(authToken?: string | null) {
-  const url = convexUrl()
-  if (!url) throw new Error('Convex is not configured. Set HOPIT_CONVEX_URL or CONVEX_URL.')
-
-  const client = new ConvexHttpClient(url, { logger: false })
-  if (authToken) client.setAuth(authToken)
-  return client
-}
-
 function codebaseIdFromRequest(request: Request) {
   const url = new URL(request.url)
   return url.searchParams.get('codebaseId') || defaultCodebaseId()
@@ -251,10 +239,6 @@ function codebaseIdFromRequest(request: Request) {
 
 function defaultCodebaseId() {
   return process.env.HOPIT_CODEBASE_ID ?? 'hopit'
-}
-
-function convexUrl() {
-  return process.env.HOPIT_CONVEX_URL ?? process.env.CONVEX_URL ?? process.env.NEXT_PUBLIC_CONVEX_URL
 }
 
 function unavailableReason(mode: 'read' | 'write', hasAuth = false) {
@@ -316,26 +300,10 @@ function responseInit() {
   }
 }
 
-async function convexAuthToken(request: Request) {
-  const bearer = bearerToken(request.headers.get('authorization'))
-  if (bearer) return bearer
-  if (!shouldUseClerkAuth()) return null
-
-  const authState = await auth()
-  if (!authState.userId) return null
-  return await authState.getToken({ template: process.env.HOPIT_CLERK_CONVEX_JWT_TEMPLATE ?? 'convex' })
-}
-
 function readArgs<T extends Record<string, unknown>>(value: T, authToken: string | null) {
   if (authToken) return value
   const token = process.env.HOPIT_AGENT_TOKEN
   return token ? { ...value, token } : value
-}
-
-function bearerToken(value: string | null) {
-  if (!value) return null
-  const match = value.match(/^Bearer\s+(.+)$/i)
-  return match?.[1] ?? null
 }
 
 function documentId(row: Record<string, unknown>) {

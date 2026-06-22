@@ -1,6 +1,6 @@
 # HopIt Progress Tracker
 
-Last updated: 2026-06-21
+Last updated: 2026-06-22
 
 This tracker is the working view of what is done, what is in progress, what is next, and what is still deliberately out of scope. The roadmap source remains [MVP Plan](mvp-plan.md), and the agent contract source remains [Local Agent Architecture](agent-architecture.md). This file turns those plans into a practical implementation ledger.
 
@@ -18,6 +18,8 @@ This tracker is the working view of what is done, what is in progress, what is n
 
 HopIt has a working local managed-folder agent spike plus a deployed personal production baseline. The agent can seed a cloud graph, hydrate a normal folder, capture local writes, journal them durably, acknowledge them into the selected active change set, recover unacknowledged writes after restart, safely refresh a second same-owner workspace, export/publish a clean Git escape hatch, and expose local status/event/journal/cloud state.
 
+The solid v1 target is now broader than the current spike: a HopIt Workspace Root, managed-folder/lazy materialization first, production-grade automatic remote-update delivery, content-addressed storage with per-file revision guards, scoped device/session auth, and GitHub-like code/review/work-item/release surfaces. True native filesystem-provider work remains future research; v1 should prove the managed-folder Workspace Root before going there.
+
 The web app polls `/api/agent/status`. In local mode that route reads the local agent status server's status/events/cloud endpoints; in production it reads the Convex `agent.dashboard` query. The local command route can run whitelisted sync, refresh, recover, review, and merge actions against the local agent, while hosted Convex-backed deployments remain read-only for workspace commands and require dashboard authentication.
 
 Fixture-backed conflict handling is in place for stale selected-state revisions, stale file/base revisions, and stale Main revisions. Conflicts are persisted on the selected active change set, emitted as `change_set.conflict_detected`, and surfaced through status while preserving local edits for review.
@@ -32,6 +34,8 @@ Current live deployment:
 - Seeded graph size: 58 source files
 - Production workspace: `/Users/robert/HopIt Workspaces/hopit`
 
+Domain-dependent production auth work is pinned for now. The current personal production path stays on the generated Vercel URL behind Basic Auth while domain-independent collaboration work continues.
+
 Current proof commands:
 
 ```bash
@@ -43,10 +47,10 @@ npm run package:hop
 
 Current verified result:
 
-- `npm run agent:test`: 31 passing tests.
+- `npm run agent:test`: passes; the current sandbox run reports 43 passing tests plus six sandbox-skipped service/remote-pull tests when loopback listening is unavailable.
 - `npm run lint`: passes.
 - `npm run check:production-config`: passes when `.env.local` is loaded.
-- `npm run package:hop`: builds the current macOS artifact and verifies `hop help` plus production-profile `hop status`.
+- `npm run package:hop`: builds the current macOS artifact with env/install support files and verifies `hop help` plus production-profile `hop status`.
 
 ## Executive Progress
 
@@ -54,25 +58,29 @@ Current verified result:
 | --- | --- | --- |
 | Product concept | Done | The repo has converged on cloud-native managed workspaces, active change sets, explicit Main, and `.private/` owner-only workspace scope. |
 | Web product shell | Mostly done | The prototype UI polls live local agent state through `/api/agent/status`, maps files/events/revisions/review/merge/conflict state, and can read Convex dashboard state when configured. |
+| HopIt Workspace Root | In progress | Production-profile paths, a root-level workspace index, hydration/materialized revision state, and a remote cursor are in place; attach/setup flow, cloud codebase discovery, per-file lazy states, and lazy materialization policy remain. |
 | Local managed-folder agent | Done for spike | The agent proves hydration, journaling, sync acknowledgement, recovery, watch startup gating, safe refresh, status, and same-owner continuity. |
+| Lazy materialization | Not started | The current agent hydrates/refreshes the visible graph eagerly. V1 should expose metadata and materialize file bodies conservatively when the workspace opens, policy prefetches, or local tools need content. |
 | Vercel/Convex production baseline | Done for personal dogfood | Vercel hosts the protected dashboard, Convex stores the seeded production graph, and the hosted API reads the graph successfully. |
-| Convex cloud graph | Mostly done | Convex functions persist graph, files, and agent events, require an agent token by default, validate graph contracts, and expose a dashboard query, but blob storage and durable user permissions are still thin. |
+| Convex cloud graph | Mostly done | Convex functions persist graph metadata, files, content-addressed `fileBlobs`, and agent events; graph reads, per-file mutations, and event appends support service or scoped session tokens. Large-file/object-storage handling and full history reconstruction remain. |
 | `.private/` model | Done for spike | `.private/` files are synced/versioned and classified as owner-private; they are not ignored or skipped. |
 | Safety journal | Done for spike | Pending, acknowledged, and failed entries are derived from journal/events and exposed through status. |
-| Watch loop | Done for spike | Watch startup runs recovery before hydration, blocks unsafe recovery, and syncs later editor writes. |
+| Watch loop | Done for spike | Watch startup runs recovery before hydration, blocks unsafe recovery, and syncs later editor writes. Service start waits for the watcher and status server to be ready before reporting success. |
 | Fixture cloud graph service boundary | Done | Commands now use a fixture-backed service boundary instead of direct command-level cloud JSON access. |
 | Main/change-set/owner/session/visibility contract | Done for fixture | The fixture graph and status surface include these identities and visibility fields. |
 | Same-owner two-session continuity | Done for spike | Device/session B can refresh acknowledged shared and `.private/` changes from device/session A. |
+| Automatic remote-update delivery | In progress | Remote-update events, explicit safe refresh, per-workspace materialization cursors, and opt-in `--remote-pull` polling for clean journals exist. Production-grade push/subscription delivery, default policy, and broader verification remain. |
 | Collaborator visibility simulation | Done for fixture | Tests prove private change sets hide non-owner content, team/review-visible change sets expose non-private paths, and `.private/` remains owner-only. |
 | Remote-update events | Done for spike | Refresh emits first-class `remote-update` events and status exposes the latest update. |
 | Review and merge | Done for fixture | Fixture commands open the selected active change set for review, merge it into Main, emit review/merge events, and expose review/merge state through status. |
 | Conflict handling | Done for fixture | Stale selected-state, file/base, and Main revisions become reviewable conflict state. |
-| Packaging | Mostly done | The current packager builds macOS/Linux `x64`/`arm64` tarballs with an embedded Node runtime, verifies help plus production-profile status, and now fails explicitly on unsupported Windows hosts. |
+| Packaging | Mostly done | The current packager builds macOS/Linux `x64`/`arm64` tarballs with an embedded Node runtime, verifies help plus production-profile status, ships a production env example, and includes user-level launchd/systemd support scripts. |
+| Installer/daemon hygiene | In progress | Manual service start, supervised `service run`, env-file install templates, production config checks, scoped-token rotation runbook, backup/export roots, and read-only observability endpoints are documented. Native signed installers and tray UX remain. |
 | Git compatibility | In progress | Safe export/publish now creates clean Git repos while omitting `.private/` from publish, but ancestry preservation and remote publishing are still not started. |
-| Real accounts/auth | In progress | The repo now has Clerk sign-in routes, middleware, Convex auth config, `/api/me`, and provider-token forwarding; production still needs real Clerk env vars before Basic Auth can be retired. |
-| Permissions and invitations | In progress | Durable memberships, invitation tables, requester-aware dashboard filtering, owner claim, member management, and invite create/accept/revoke UI are in place; scoped agent-session tokens and complete permission coverage remain. |
+| Real accounts/auth | In progress | The repo now has Clerk sign-in routes, middleware, Convex auth config, `/api/me`, provider-token forwarding, owner email config, and a Convex JWT template; production Clerk rollout is pinned until HopIt has an owned domain, so Basic Auth remains the personal production guard. |
+| Permissions and invitations | In progress | Durable memberships, invitation tables, requester-aware dashboard filtering, owner claim, member management, invite create/accept/revoke UI, and scoped agent-session token groundwork are in place; complete permission coverage remains. |
 | Code browsing/reviews/issues/releases | In progress | The dashboard now has a read-only code-review browser slice plus issue/discussion/release UI backed by Convex; real diffs, review comments, routeable history, project-board UI, and immutable release publishing remain. |
-| Native mount/FUSE/RAM-only cache | Later | Explicitly not part of the current MVP path. |
+| Native mount/FUSE/RAM-only cache | Later | Explicitly not the first v1 implementation path. Revisit only after the managed-folder Workspace Root proves core value. |
 
 ## Milestone Tracker
 
@@ -113,7 +121,7 @@ Risks:
 
 Next product-shell step:
 
-- Harden the live UI/Convex status contract and use it to drive the Git compatibility import/export/publish flow.
+- Harden the live UI/Convex status contract around Workspace Root, hydration state, automatic remote-update state, storage mode, scoped device auth, and GitHub-like review/history surfaces.
 
 ### Milestone 2: Agent Managed-Folder Spike
 
@@ -571,7 +579,92 @@ Risks:
 
 ## Immediate Next Queue
 
-The next major phase is tracked in [GitHub-Lite Collaboration Plan](github-lite-collaboration-plan.md). The detailed sub-plans are [Auth And Collaboration Plan](auth-collaboration-plan.md), [Code Browsing, Review, Comments, And History Plan](review-code-browser-plan.md), and [HopIt Work Items, Projects, Discussions, And Releases Plan](work-items-releases-plan.md). Git compatibility remains important, but the immediate product gap is now collaboration: accounts, permissions, code browsing, reviews, issues, projects, discussions, and releases.
+The next major phase is a solid v1 workspace, not collaboration alone. The v1 sequence is: HopIt Workspace Root and hydration-state contract, content-addressed storage with per-file revision guards, production-grade automatic remote-update delivery, scoped device/session auth, and GitHub-like web surfaces. The collaboration track is still documented in [GitHub-Lite Collaboration Plan](github-lite-collaboration-plan.md), with sub-plans in [Auth And Collaboration Plan](auth-collaboration-plan.md), [Code Browsing, Review, Comments, And History Plan](review-code-browser-plan.md), and [HopIt Work Items, Projects, Discussions, And Releases Plan](work-items-releases-plan.md).
+
+Domain-dependent items are pinned until a HopIt domain is purchased: completing Clerk production DNS/issuer setup, rolling out `pk_live_`/`sk_live_`, retiring Basic Auth, and production OAuth/invite smoke tests on an owned domain. Continue building Workspace Root, storage, remote-update, permission checks, collaboration data, code browsing, review/history, issues, projects, discussions, releases, and scoped agent-session tokens behind the current Basic Auth guard.
+
+### 0. HopIt Workspace Root And Lazy Materialization
+
+Status: `In progress`
+
+Definition of done:
+
+- Persist a user-selected Workspace Root outside the source checkout.
+- List cloud codebases under that root without requiring manual clone/import per device.
+- Track per-codebase hydration state: metadata-only, partial, hydrated, dirty, blocked, conflicted, and clean.
+- Materialize file bodies safely on workspace open, policy prefetch, remote update, or supported demand-hydration path.
+- Keep pending local writes protected by the safety journal before any cache pruning or remote refresh.
+- Surface Workspace Root, codebase folder state, hydration state, and cache state through `hop status`, the service API, and the web dashboard.
+
+Current foundation:
+
+- Production-profile service paths already separate agent state from the source checkout.
+- The agent can hydrate a selected codebase into `/Users/robert/HopIt Workspaces/hopit`.
+- Status exposes the managed workspace path, cache mode, visible file count, journal state, remote-update state, and backend.
+- The dashboard labels the current path as a Workspace Root preview rather than a true ghost/native mount.
+
+### 0.5. Content-Addressed Storage And Revision Guards
+
+Status: `In progress`
+
+Definition of done:
+
+- Store file metadata separately from content.
+- Store file content by hash/blob id instead of inline-only file rows.
+- Replace whole-graph save semantics with file-level mutations.
+- Require base revision or known cloud revision for each write.
+- Return explicit conflict state on stale revisions.
+- Keep snapshot reconstruction possible for Main, active change sets, review, merge, export, and publish.
+
+Current foundation:
+
+- Convex stores graph metadata, file rows, hashes, sizes, revisions, and agent events.
+- The local fixture validates graph shape and detects stale selected-state/file/Main revisions.
+- Production Convex storage still uses inline content and whole-graph sync boundaries.
+
+### 0.75. Automatic Remote-Update Delivery
+
+Status: `Next`
+
+Definition of done:
+
+- Store a remote event cursor per device, codebase, and selected state.
+- Receive cloud updates through Convex subscriptions or a bounded polling loop.
+- Apply safe refresh automatically when the local journal is clean.
+- Block and expose conflict/dirty state when local pending, failed, or uncertain writes exist.
+- Preserve `.private/` visibility and requester filtering during remote updates.
+- Show applied, unchanged, blocked, and failed remote-update states in the dashboard.
+
+Current foundation:
+
+- Explicit `hop refresh` is safe and refuses pending or failed journal state.
+- Refresh emits `remote-update` events and status exposes the latest remote update.
+- Same-owner two-service simulation proves sequential handoff: device A syncs through the watcher, device B receives through explicit safe refresh.
+- The current worktree includes opt-in `--remote-pull` support for `watch` and `service start`; sandboxed service-level tests are skipped when loopback listening is unavailable, but the watch-level remote-pull test passes.
+
+### 0.9. Installer, Daemon, And Production Hygiene
+
+Status: `In progress`
+
+Definition of done:
+
+- Ship a standalone command that does not require Node or npm on the target machine.
+- Provide a user-level start-on-login path for macOS and Linux.
+- Keep service credentials in a local env file outside the repo.
+- Preserve manual `service start/status/stop/restart` for debugging.
+- Provide a supervised foreground `service run` mode for launchd/systemd.
+- Document private backup export, publishable export, and scoped token rotation.
+- Make production config checks fail on unsafe path layouts, bad local-agent URLs, invalid refresh intervals, token reuse, placeholders, and malformed session capabilities.
+- Expose enough status/events/journal evidence to diagnose service health before cross-device handoff.
+
+Current foundation:
+
+- `scripts/package-hop.mjs` builds a standalone tarball with embedded Node, env example, and launchd/systemd user-service support scripts.
+- `hop service run` is available for supervisors; `service start` still owns pid-file/manual daemon mode.
+- `service start` now carries scoped session-token env into the spawned child when passed through CLI options.
+- `npm run hop:service:*`, `hop:backup`, `hop:export`, and `hop:publish` wrap production-profile operations.
+- `docs/personal-production.md` covers install, login startup, observability, backup/export, and token rotation.
+- `scripts/check-production-config.mjs` performs stricter personal-production hygiene checks without printing secrets.
 
 ### 1. Real Accounts And Auth
 
@@ -589,7 +682,28 @@ Current foundation:
 - Convex schema now includes `users` and `authIdentities`.
 - Convex exposes `viewer` and `upsertViewer`.
 - The Next app includes Clerk provider wrapping, sign-in/sign-up pages, protected middleware, `/api/me`, and server-side Clerk-to-Convex token forwarding.
-- The hosted dashboard still needs the real Clerk environment variables before the production deployment can move off Basic Auth.
+- The hosted dashboard has provider-auth code, but production Clerk rollout is pinned until HopIt has an owned domain; Basic Auth stays in place for personal production.
+
+### 1.5. Scoped Device And Session Auth
+
+Status: `Next`
+
+Definition of done:
+
+- Issue revocable device/session credentials scoped to one user and allowed codebases.
+- Keep local service credentials separate from human dashboard identity.
+- Enforce scoped actor permissions on every agent read/write path.
+- Support token rotation, revocation, and recovery without deleting the local workspace.
+
+Current foundation:
+
+- Convex schema includes `agentSessions` with token hashes, token prefixes, capabilities, expiry, revocation metadata, and codebase scope.
+- Convex can register, list, touch, and revoke agent sessions.
+- Convex graph reads, per-file mutations, and agent event appends accept scoped `sessionToken` credentials.
+- The CLI exposes `hop device` / `hop session` for status, registration, listing, touch, and revocation.
+- Bootstrap/admin still uses `HOPIT_AGENT_TOKEN`; normal installed-device operation can use `HOPIT_AGENT_SESSION_TOKEN`.
+- Access helpers distinguish service-token actors from user actors.
+- The current broad agent token remains a personal-production bridge and should not be treated as final v1 security.
 
 ### 2. Multi-User Permissions And Invitations
 
@@ -689,21 +803,26 @@ Definition of done:
 
 ## Known Gaps
 
-- Real account provider code exists, but production Clerk keys/issuer/owner email are not configured yet.
-- Durable membership, role, invitation, and hosted member/invite UI exist, but scoped agent-session tokens and complete permission coverage are not done yet.
+- No full HopIt Workspace Root contract yet: the root-level codebase/workspace index and hydration cursor exist, but attach/setup flow, cloud codebase discovery, per-file lazy states, and lazy materialization policy remain.
+- The current managed folder is eagerly materialized; metadata-only and demand-hydrated file states are not implemented yet.
+- Real account provider code exists, but production Clerk DNS/issuer/live-key rollout is pinned until HopIt has an owned domain.
+- Durable membership, role, invitation, hosted member/invite UI, and scoped agent-session token groundwork exist, but complete permission coverage is not done yet.
 - Convex-backed graph storage and auth-backed user APIs exist for the first collaboration slice, but not every product command has moved to user-scoped auth yet.
-- No production database/object-blob split yet; Convex stores prototype graph metadata, file content, and events.
-- No content-addressed blob backend yet.
-- No schema validator yet.
+- Convex now separates file metadata from content-addressed `fileBlobs` for synced text files, but large-file/object-blob storage and durable history reconstruction are not complete yet.
+- Per-file revision-guarded mutation exists for the agent path, but the full product write surface has not moved to the same model yet.
+- Graph contract validators exist for the agent/Convex graph path, but product-level validation is not yet comprehensive across every future object type.
 - Requester-aware dashboard filtering exists, but the auth-backed collaborator permission model is not enforced across every user-facing write yet.
 - A first read-only code-review browser slice exists, but dedicated routeable code browsing, diff view, inline review comments, durable review records, and history UI are still pending.
 - Issue, discussion, and release product UI exists for the first slice; project-board UI, comment/detail pages, and richer filters are still pending.
-- No push-style live remote-update delivery yet; remote-update is currently emitted by explicit refresh.
+- No production-grade push/subscription remote-update delivery yet; explicit refresh, per-workspace cursor state, and opt-in polling remote-pull are personal-dogfood proof rather than the final v1 delivery model.
+- Service mode syncs local edits and serves status. Local two-service simulation proves device A edits sync through the watcher, while device B pulls them through explicit safe refresh before switching devices.
 - No conflict resolution UI yet; fixture conflict detection/status exists.
 - No Git history import, ancestry preservation, or remote publish yet.
 - No local cache pruning yet.
 - No offline mode yet.
-- No signed production installer or tray/menu agent wrapper yet.
+- No signed production installer, notarization, native package manager integration, or tray/menu agent wrapper yet.
+- Start-on-login setup is script/template based and expects the operator to create a correct local env file.
+- Scoped token rotation is documented and CLI-backed, but not yet a dashboard-guided recovery flow.
 - No cross-platform watch behavior matrix yet.
 
 ## Verification Checklist
@@ -713,6 +832,8 @@ Run this before marking agent progress as done:
 ```bash
 npm run agent:test
 npm run lint
+npm run check:production-config
+npm run package:hop
 ```
 
 For manual smoke testing:

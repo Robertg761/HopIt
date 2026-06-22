@@ -2,13 +2,13 @@
 
 ## Goal
 
-Build the smallest useful version of a cloud-native managed workspace for codebases. The MVP should prove that a developer can open a HopIt codebase on a device, see it as a normal local folder, edit it with normal tools, and have those changes become cloud-backed active change-set state automatically.
+Build the smallest useful version of a cloud-native managed workspace for codebases. The MVP should prove that a developer can choose a HopIt Workspace Root on a device, see cloud codebases as normal local project folders, edit with normal tools, and have those changes become cloud-backed active change-set state automatically.
 
 The product promise is:
 
 > It feels local. It lives in the cloud.
 
-HopIt should start as a managed workspace folder for codebases, not as social Git hosting or a true OS filesystem mount.
+HopIt should start as a managed-folder Workspace Root for codebases, not as social Git hosting or a true OS filesystem mount. A normal folder cannot fully behave like a native ghost filesystem without an OS filesystem provider, so v1 should use the practical path first: cloud metadata, conservative lazy materialization, safe local cache, automatic remote update delivery, and visible blocked/conflict states.
 
 The v1 sharing model has two layers. Path visibility is controlled by `.private/`: files under `.private/` are snapshotted, synced, and versioned like any other workspace file, but they are visible only to the owner. Change-set visibility controls whether in-progress work outside `.private/` is private, visible to the team, or opened for review.
 
@@ -17,21 +17,25 @@ Change-set visibility should be configurable as a global user default, a per-cod
 ## First-Version Experience
 
 1. A user creates or imports a codebase into HopIt.
-2. HopIt stores Main, active change sets, file content, metadata, collaborators, visibility settings, and snapshots in the cloud.
+2. HopIt stores Main, active change sets, file metadata, content-addressed blobs, collaborators, visibility settings, and snapshots in the cloud.
 3. The user installs or runs the HopIt agent on a device.
-4. The agent creates a managed local folder for the cloud codebase.
-5. Files are materialized into the folder when the workspace opens or when local tools need them.
+4. The user chooses a HopIt Workspace Root, and the agent shows cloud codebases there as managed local project folders.
+5. Directory and file metadata are visible before every file body is downloaded; file content is materialized when the workspace opens, when policy prefetches it, or when local tools need it.
 6. Edits are captured by the agent, written into a small safety journal, and streamed to the user's active change set in the cloud.
 7. Once the cloud acknowledges the write into the active change set, the local cache can keep or prune clean content according to policy.
-8. Another device owned by the same user opens the same active change set and receives the current cloud state without a manual sync ritual.
+8. Another device owned by the same user opens the same active change set and receives the current cloud state automatically when its local journal is clean, without a manual sync ritual.
 9. Collaborators see in-progress work according to the active change set's effective visibility.
-10. The user can request review, merge the change set into Main, import from Git, export a snapshot, or publish a clean Git commit when ready.
+10. The user can check service health, rotate a scoped device token, create an owner-private backup export, request review, merge the change set into Main, import from Git, export a publishable snapshot, or publish a clean Git commit when ready.
 
 ## Core Concepts
 
 ### Codebase
 
 The main object users interact with. A codebase contains Main state, active change sets, content-addressed blobs, workspace snapshots, collaborators, permissions, connected devices, visibility preferences, and sync state.
+
+### HopIt Workspace Root
+
+The local root chosen by the user, such as `~/HopIt Workspaces`. V1 should make cloud codebases appear under this root without asking the user to clone each project manually. The first implementation should use managed folders and agent-owned cache metadata. Native filesystem providers, macFUSE, or RAM-only mounts can be researched later if managed folders cannot meet the product experience.
 
 ### Main
 
@@ -43,7 +47,7 @@ A cloud-backed working state created automatically when a user starts editing. I
 
 ### Managed Workspace Folder
 
-A normal local folder materialized and watched by the HopIt agent. Editors, terminals, language servers, and test runners should treat it like any other folder, while HopIt treats it as an agent-owned view of cloud state with no clone to manage.
+A normal local folder under the HopIt Workspace Root, materialized and watched by the HopIt agent. Editors, terminals, language servers, and test runners should treat it like any other folder, while HopIt treats it as an agent-owned view of cloud state with no clone to manage.
 
 ### HopIt Agent
 
@@ -71,17 +75,21 @@ The visibility state for in-progress work outside `.private/`. V1 should support
 
 ### Cloud File Graph
 
-The durable representation of directories, files, blobs, revisions, visibility metadata, Main state, active change sets, and snapshot metadata. Git can be imported from and exported to this graph, and a snapshot or merged state can be published as a Git commit, but the graph is optimized for live sync, device handoff, review, merge, and on-demand hydration.
+The durable representation of directories, files, blobs, revisions, visibility metadata, Main state, active change sets, and snapshot metadata. Git can be imported from and exported to this graph, and a snapshot or merged state can be published as a Git commit, but the graph is optimized for live sync, device handoff, review, merge, and on-demand hydration. V1 needs content-addressed blob storage and per-file revision guards so concurrent devices do not rely on whole-graph overwrites.
 
 ## Workspace Modes
 
 ### Managed Folder Mode
 
-The v1 default. The agent materializes a normal local folder, watches it for changes, journals writes before cloud acknowledgement, and keeps the currently selected cloud state as the source of truth. For day-to-day editing, that state is usually the user's active change set; for browsing accepted project state, it can be Main.
+The v1 default. The agent creates managed project folders under the HopIt Workspace Root, materializes metadata and content according to policy, watches local edits, journals writes before cloud acknowledgement, and keeps the currently selected cloud state as the source of truth. For day-to-day editing, that state is usually the user's active change set; for browsing accepted project state, it can be Main.
 
 ### Safe Cache Mode
 
 The same managed folder model with explicit pruning and recovery rules. HopIt owns the cache and can prune clean content, while unsynced writes stay protected by the safety journal.
+
+### Lazy Materialization Mode
+
+The first production-grade refinement of managed folder mode. HopIt may list project structure and metadata before every file body is present locally, then hydrate content on workspace open, explicit prefetch, remote update, or local tool demand. Until a native filesystem provider exists, demand hydration must be conservative: do not present a file as safely editable unless the agent can protect writes with the journal and cache metadata.
 
 ### Offline Mode
 
@@ -91,14 +99,34 @@ Optional later mode for travel or unreliable networks. The agent keeps enough lo
 
 Optional future research. A true OS filesystem mount, macFUSE backend, or RAM-only working set may become useful later for large repos or specialized workflows, but it is not the v1 default or next main milestone.
 
+## Installer And Operations Baseline
+
+The v1 agent should be installable and observable before HopIt depends on it
+for valuable work. The first production-shaped baseline is intentionally simple:
+
+- A standalone `hop` tarball with an embedded Node runtime.
+- A local env file outside the repo for Convex URLs, bootstrap token, scoped device token, workspace root, backup root, export root, and remote-pull settings.
+- Manual `hop service start/status/stop/restart` commands for debugging.
+- A foreground `hop service run` mode for user-level supervisors.
+- macOS LaunchAgent and Linux systemd user-service templates for start on login.
+- Read-only `/status`, `/events`, `/journal`, and `/cloud` endpoints bound to loopback.
+- A private backup export path that can include `.private/`.
+- A publishable export/publish path that omits `.private/`.
+- Scoped device-token rotation that does not require deleting the local workspace.
+
+Native signed installers, notarization, package-manager distribution, tray/menu
+UI, and dashboard-guided credential recovery are later production polish, not
+the current v1 proof gate.
+
 ## Current Architecture
 
 - Web app: Next.js product shell on Vercel for codebases, files, live sync state, active change sets, connected devices, recent activity, collaborators, review/merge state, and snapshots.
 - API: Next.js routes for hosted/local status and whitelisted local commands. Hosted deployments read Convex status and refuse local workspace commands.
-- Convex backend: production graph service for codebase metadata, files, agent events, graph validation, and dashboard reads.
-- Local agent: managed-folder process with auth token storage, local cache, safety journal, retry queue, service wrapper, and `.private/` visibility handling.
-- Storage today: Convex stores prototype graph metadata, file content, and events. A later production architecture may split file blobs into object storage or content-addressed blob storage when scale requires it.
-- Realtime today: polling through `/api/agent/status`. Push-style realtime remains future work for file changes, collaborator presence, sync status, visibility changes, review events, merge events, and device handoff.
+- Convex backend: production graph service for codebase metadata, file metadata, content-addressed `fileBlobs`, per-file agent mutations, agent events, graph validation, scoped session-token authorization, and dashboard reads.
+- Local agent: managed-folder process with service/session token support, workspace-root index, hydration cursor, local cache, safety journal, retry queue, service wrapper, and `.private/` visibility handling.
+- Installer/daemon: standalone package with embedded runtime, production env example, user-level launchd/systemd support scripts, manual service controls, supervised `service run`, backup/export runbook, token-rotation runbook, and stricter production config checks.
+- Storage today: Convex separates file metadata from content-addressed text blobs and protects agent writes with per-file/base revision guards. Solid v1 still needs large-file/object-blob handling, durable history reconstruction, and all product write paths on the same model.
+- Realtime today: polling through `/api/agent/status`, `remote-update` events emitted by explicit safe refresh, a per-workspace materialization cursor, and an opt-in `--remote-pull` polling loop for personal dogfooding. Solid v1 still needs production-grade automatic remote-update delivery for file changes, collaborator presence, sync status, visibility changes, review events, merge events, and device handoff.
 - Git interoperability: import/export/publish stays as snapshot interoperability, not the everyday sync model.
 
 The local agent contract is detailed in [Local Agent Architecture](agent-architecture.md). That document is the implementation guide for the cloud file graph, managed-folder adapter, local cache, safety journal, status API, event log, two-device simulation, and editor read/write acknowledgement flow.
@@ -136,13 +164,16 @@ Current spike:
 - Fixture conflict handling detects stale selected-state revisions, stale file/base revisions, and stale Main revisions, emits `change_set.conflict_detected`, and surfaces conflict state while preserving local edits for review.
 - The Next.js product shell now polls `/api/agent/status`, maps live local status/events/cloud data into the dashboard, and can read the Convex dashboard query when `HOPIT_CONVEX_URL` or `NEXT_PUBLIC_CONVEX_URL` is configured.
 - `/api/agent/command` exposes whitelisted local actions for sync, refresh, recover, review, and merge. Hosted Convex-backed deployments can read status but still require the local agent for workspace commands.
+- `hop workspace` persists a root-level index keyed by codebase and concrete workspace path; hydrate, refresh, and sync update the materialized revision cursor that status and remote-pull use.
+- `hop device` / `hop session` exposes local session status and Convex-backed scoped session registration, listing, touch, and revocation.
 
 Current next work:
 
-1. Replace product-level Basic Auth with real accounts and authenticated user identity.
-2. Add durable codebase memberships, roles, invitations, and server-side permission checks.
-3. Build the hosted code browser, diff/review/comment/history surface, then issues, projects, discussions, and releases.
-4. Keep the live UI status adapter aligned with the local status server and Convex dashboard shapes while these collaboration objects are added.
+1. Finish the HopIt Workspace Root product contract: cloud codebase discovery, attach/setup flow, per-file cache metadata, and honest metadata-only/partial/lazy materialization states.
+2. Broaden content-addressed storage and per-file revision guards beyond the agent text-file path into full history, large files, and product write flows.
+3. Promote the opt-in remote-pull proof into production-grade automatic remote-update delivery so same-owner devices refresh safely without a manual command when the local journal is clean.
+4. Finish scoped device/session auth coverage and continue domain-independent membership, invitation, and permission work behind the Basic Auth production guard.
+5. Build the hosted code browser, diff/review/comment/history surface, then issues, projects, discussions, releases, and project boards.
 
 ### Milestone 3: Recovery And Watch Loop
 
@@ -160,6 +191,7 @@ Current next work:
 - Model Main, active change sets, owner identity, change-set visibility, and merge targets.
 - Store blobs content-addressably.
 - Store file graph metadata and revisions.
+- Add per-file mutation APIs with base revision checks and conflict responses.
 - Reconstruct a Main or active change-set snapshot from metadata and blobs.
 
 ### Milestone 5: Two-Session Continuity
@@ -170,6 +202,7 @@ Current next work:
 - Keep collaborator simulations passing: private change sets remain hidden, team-visible and review-visible change sets expose non-private paths, and `.private/` stays owner-only in every mode.
 - Preserve pending local edits until acknowledgement or conflict review.
 - Keep status and event-log evidence for remote updates.
+- Move from explicit refresh-only continuity to automatic remote-update delivery when the receiving device has a clean local journal.
 
 ### Milestone 6: Review And Merge
 
@@ -203,6 +236,26 @@ Current next work:
 
 The detailed implementation sequence lives in [GitHub-Lite Collaboration Plan](github-lite-collaboration-plan.md).
 
+### Milestone 9: Workspace Root And Automatic Device Handoff
+
+- Create a durable workspace-root configuration and setup flow. The root index exists; setup/attach remains.
+- Represent codebase folders, hydration state, local cache state, and remote event cursors explicitly. Codebase/workspace entries and materialized revision cursors exist; per-file cache states remain.
+- Materialize content lazily and safely, with no silent overwrite of pending local edits.
+- Run an automatic remote-update loop that refreshes clean workspaces and blocks/conflicts dirty ones.
+- Expose the same state in the dashboard, tray/menu UI, and `hop status`.
+
+## Solid V1 Exit Criteria
+
+- A new device can install HopIt, point at the same account/service, choose a Workspace Root, and see the user's cloud codebases.
+- Opening a codebase materializes enough content for normal editor, terminal, language-server, and test-runner workflows.
+- Local writes are journaled, acknowledged into an active change set, and visible on the web dashboard.
+- Another same-owner device receives acknowledged changes automatically when safe, or gets an explicit blocked/conflict state.
+- Convex/storage writes use file-level revisions and content-addressed blobs instead of replacing the whole graph as the concurrency boundary.
+- Device/session tokens are scoped, revocable, and separate from human dashboard auth.
+- A new device can run HopIt at login, expose loopback-only health endpoints, rotate a scoped token, and produce both owner-private backups and publishable exports without relying on the source checkout.
+- The web app supports routeable code browsing, diffs, review comments, history, issues, discussions, projects, releases, members, invitations, and permission-aware writes.
+- Git import/export/publish remains available as interoperability without becoming the everyday workspace model.
+
 ## Deliberate Non-Goals For V1
 
 - Replacing every Git workflow on day one.
@@ -210,4 +263,4 @@ The detailed implementation sequence lives in [GitHub-Lite Collaboration Plan](g
 - Full browser IDE implementation.
 - Enterprise admin, compliance, or audit-log features.
 - Perfect merge conflict automation.
-- True OS filesystem mount, macFUSE, RAM-only workspace mode, or large-repo virtual filesystem optimization.
+- True OS filesystem mount, macFUSE, RAM-only workspace mode, or large-repo virtual filesystem optimization as the first implementation. These remain valid future research after the managed-folder Workspace Root is proven.

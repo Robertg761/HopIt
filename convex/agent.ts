@@ -1,18 +1,21 @@
 import { v } from "convex/values";
 import { mutation, query } from "./_generated/server";
 import type { DatabaseReader } from "./_generated/server";
-import type { AccessContext, AuthIdentity } from "./access";
+import type { AccessContext, AuthIdentity, Capability } from "./access";
 import {
   accessSourceFromGraph,
+  accessSourceFromCodebase,
   createInvitationToken,
   filterGraphForAccessContext,
   hashInvitationToken,
   isNonEmptyString,
   normalizeCodebaseRole,
   normalizeEmail,
+  optionalText,
   readCodebaseAccessContext,
   readCodebaseById,
   readUserById,
+  readUserByPrimaryEmail,
   requireAgentToken,
   requireCodebaseCapabilityForActor,
   requireConfiguredOwnerEmail,
@@ -35,15 +38,38 @@ const invitableCodebaseRoleValidator = v.union(
   v.literal("member"),
   v.literal("viewer"),
 );
+const fileMutationTypeValidator = v.union(
+  v.literal("create"),
+  v.literal("write"),
+  v.literal("delete"),
+);
+const agentSessionCapabilityValidator = v.union(
+  v.literal("read"),
+  v.literal("write"),
+  v.literal("sync"),
+  v.literal("watch"),
+  v.literal("invite"),
+  v.literal("admin"),
+);
+const agentSessionStatusValidator = v.union(
+  v.literal("active"),
+  v.literal("revoked"),
+);
 
 export const getGraph = query({
   args: {
     codebaseId: v.string(),
     token: v.optional(v.string()),
+    sessionToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    requireAgentToken(args.token);
-    return await readGraph(ctx, args.codebaseId);
+    const access = await requireAgentAccess(ctx, args.codebaseId, {
+      token: args.token,
+      sessionToken: args.sessionToken,
+    }, "read");
+    const graph = await readGraph(ctx, args.codebaseId);
+    if (!graph || access.kind === "service") return graph;
+    return filterGraphForAccessContext(graph, access.access);
   },
 });
 
@@ -312,6 +338,10 @@ export const createCodebaseInvitation = mutation({
 
     const normalizedEmail = normalizeEmail(args.email);
     if (!normalizedEmail) throw new Error("Invitation email is required.");
+    const existingMember = await readActiveMemberByEmail(ctx, args.codebaseId, normalizedEmail);
+    if (existingMember) {
+      throw new Error(`${normalizedEmail} already has active access to ${args.codebaseId}.`);
+    }
 
     const existingPendingInvite = await ctx.db
       .query("codebaseInvitations")
@@ -323,6 +353,7 @@ export const createCodebaseInvitation = mutation({
       throw new Error(`A pending invitation already exists for ${normalizedEmail}.`);
     }
 
+    const expiresAt = normalizeFutureTimestamp(args.expiresAt, "Invitation expiry");
     const { token, tokenHash } = await createUniqueInvitationToken(ctx);
 
     const invitation = {
@@ -335,7 +366,7 @@ export const createCodebaseInvitation = mutation({
       createdAt: now,
       updatedAt: now,
     } as any;
-    if (args.expiresAt) invitation.expiresAt = args.expiresAt;
+    if (expiresAt) invitation.expiresAt = expiresAt;
 
     const invitationId = await ctx.db.insert("codebaseInvitations", invitation);
 
@@ -491,14 +522,17 @@ export const saveGraph = mutation({
   args: {
     graph: graphValidator,
     token: v.optional(v.string()),
+    sessionToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    requireAgentToken(args.token);
-
     validateRawGraph(args.graph);
     const graph = normalizeGraph(args.graph);
     validateGraph(graph);
     const codebaseId = graph.codebase.id;
+    await requireAgentAccess(ctx, codebaseId, {
+      token: args.token,
+      sessionToken: args.sessionToken,
+    }, "admin", { touch: true });
     const now = new Date().toISOString();
     const existing = await ctx.db
       .query("codebases")
@@ -534,10 +568,17 @@ export const saveGraph = mutation({
     const incomingPaths = new Set(Object.keys(graph.files));
 
     for (const [filePath, file] of Object.entries(graph.files)) {
+      const content = String((file as { content?: string }).content ?? "");
+      const hash = typeof (file as { hash?: unknown }).hash === "string"
+        ? (file as { hash: string }).hash
+        : null;
+      if (hash) {
+        await upsertFileBlob(ctx, codebaseId, hash, content, now);
+      }
       const fileValue: any = {
         codebaseId,
         path: filePath,
-        content: String((file as { content?: string }).content ?? ""),
+        content,
         scope: scopeForPath(filePath),
         revision:
           typeof (file as { revision?: unknown }).revision === "number"
@@ -548,8 +589,10 @@ export const saveGraph = mutation({
             ? (file as { updatedAt: string }).updatedAt
             : now,
       };
-      if (typeof (file as { hash?: unknown }).hash === "string") {
-        fileValue.hash = (file as { hash: string }).hash;
+      if (hash) {
+        fileValue.hash = hash;
+        fileValue.blobHash = hash;
+        fileValue.contentStorage = "convex-file-blob";
       }
       if (typeof (file as { size?: unknown }).size === "number") {
         fileValue.size = (file as { size: number }).size;
@@ -578,6 +621,256 @@ export const saveGraph = mutation({
   },
 });
 
+export const applyFileMutation = mutation({
+  args: {
+    codebaseId: v.string(),
+    type: fileMutationTypeValidator,
+    path: v.string(),
+    content: v.optional(v.string()),
+    hash: v.optional(v.string()),
+    size: v.optional(v.number()),
+    baseRevision: v.optional(v.union(v.number(), v.null())),
+    targetStateRevision: v.optional(v.number()),
+    token: v.optional(v.string()),
+    sessionToken: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAgentAccess(ctx, args.codebaseId, {
+      token: args.token,
+      sessionToken: args.sessionToken,
+    }, "write", { touch: true });
+    assertSafeGraphPath(args.path);
+
+    const codebase = await ctx.db
+      .query("codebases")
+      .withIndex("by_codebase_id", (q) => q.eq("codebaseId", args.codebaseId))
+      .unique();
+    if (!codebase) throw new Error(`Codebase ${args.codebaseId} was not found.`);
+
+    const selectedState = codebase.selectedState as any;
+    if (
+      args.targetStateRevision !== undefined &&
+      selectedState?.revision !== args.targetStateRevision
+    ) {
+      throw new Error(
+        `selected_state_revision_mismatch: expected ${args.targetStateRevision}, got ${selectedState?.revision ?? null}`,
+      );
+    }
+
+    const existingFile = await readFileByPath(ctx, args.codebaseId, args.path);
+    if (args.baseRevision !== undefined) {
+      const actualRevision = existingFile?.revision ?? null;
+      if (args.baseRevision !== actualRevision) {
+        throw new Error(`base_revision_mismatch: expected ${args.baseRevision}, got ${actualRevision}`);
+      }
+    }
+
+    const now = new Date().toISOString();
+    const previousRevision = codebase.revision;
+    let nextRevision = previousRevision;
+
+    if (args.type === "delete") {
+      if (existingFile) {
+        nextRevision += 1;
+        await ctx.db.delete(existingFile._id);
+      }
+    } else {
+      if (typeof args.content !== "string") {
+        throw new Error(`File ${args.type} requires content.`);
+      }
+      if (!args.hash) {
+        throw new Error(`File ${args.type} requires a content hash.`);
+      }
+
+      const size = args.size ?? byteLength(args.content);
+      const scope = scopeForPath(args.path) as "shared" | "owner-private";
+      const changed =
+        !existingFile ||
+        existingFile.hash !== args.hash ||
+        existingFile.scope !== scope ||
+        existingFile.content !== args.content;
+
+      if (changed) {
+        nextRevision += 1;
+        await upsertFileBlob(ctx, args.codebaseId, args.hash, args.content, now);
+        const fileValue = {
+          codebaseId: args.codebaseId,
+          path: args.path,
+          content: args.content,
+          blobHash: args.hash,
+          contentStorage: "convex-file-blob",
+          hash: args.hash,
+          size,
+          scope,
+          revision: nextRevision,
+          updatedAt: now,
+        };
+
+        if (existingFile) {
+          await ctx.db.patch(existingFile._id, fileValue);
+        } else {
+          await ctx.db.insert("files", fileValue);
+        }
+      }
+    }
+
+    if (nextRevision !== previousRevision) {
+      const nextSelectedState = selectedState && typeof selectedState === "object"
+        ? {
+            ...selectedState,
+            revision: nextRevision,
+          }
+        : selectedState;
+      await ctx.db.patch(codebase._id, {
+        revision: nextRevision,
+        selectedState: nextSelectedState,
+        updatedAt: now,
+      });
+    }
+
+    return {
+      ok: true,
+      id: `${args.codebaseId}:${args.path}:${nextRevision}`,
+      codebaseId: args.codebaseId,
+      type: args.type,
+      path: args.path,
+      scope: scopeForPath(args.path),
+      revision: nextRevision,
+      selectedStateType: selectedState?.type ?? null,
+      selectedStateId: selectedState?.id ?? null,
+      selectedStateRevision: nextRevision !== previousRevision ? nextRevision : (selectedState?.revision ?? null),
+    };
+  },
+});
+
+export const registerAgentSession = mutation({
+  args: {
+    codebaseId: v.string(),
+    sessionId: v.optional(v.string()),
+    deviceName: v.optional(v.string()),
+    capabilities: v.optional(v.array(agentSessionCapabilityValidator)),
+    expiresAt: v.optional(v.string()),
+    token: v.optional(v.string()),
+    sessionToken: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const registration = await resolveAgentSessionRegistrationActor(ctx, args);
+    const now = new Date().toISOString();
+    const sessionId = normalizeAgentSessionId(args.sessionId ?? createAgentSessionId());
+    const deviceName = optionalText(args.deviceName);
+    const expiresAt = normalizeFutureTimestamp(args.expiresAt, "Agent session expiry");
+    const existing = await ctx.db
+      .query("agentSessions")
+      .withIndex("by_session_id", (q: any) => q.eq("sessionId", sessionId))
+      .unique();
+
+    if (existing?.status === "revoked") {
+      throw new Error(`Agent session ${sessionId} is revoked and cannot be reused.`);
+    }
+    if (existing) {
+      assertReusableAgentSession(existing, {
+        codebaseId: args.codebaseId,
+        userId: registration.userId,
+      });
+    }
+
+    const sessionToken = await createAgentSessionToken();
+    const sessionValue: any = {
+      userId: registration.userId,
+      sessionId,
+      codebaseId: args.codebaseId,
+      tokenHash: sessionToken.tokenHash,
+      tokenPrefix: sessionToken.tokenPrefix,
+      capabilities: normalizeAgentSessionCapabilities(args.capabilities),
+      status: "active",
+      lastSeenAt: now,
+      updatedAt: now,
+    };
+    if (deviceName) sessionValue.deviceName = deviceName;
+    if (expiresAt) sessionValue.expiresAt = expiresAt;
+
+    let agentSessionId;
+    if (existing) {
+      await ctx.db.patch(existing._id, sessionValue);
+      agentSessionId = existing._id;
+    } else {
+      agentSessionId = await ctx.db.insert("agentSessions", {
+        ...sessionValue,
+        createdAt: now,
+      });
+    }
+
+    return {
+      session: summarizeAgentSession(await requireAgentSessionById(ctx, agentSessionId)),
+      sessionToken: sessionToken.token,
+    };
+  },
+});
+
+export const listAgentSessions = query({
+  args: {
+    codebaseId: v.string(),
+    status: v.optional(agentSessionStatusValidator),
+    token: v.optional(v.string()),
+    sessionToken: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    await requireAgentAccess(ctx, args.codebaseId, {
+      token: args.token,
+      sessionToken: args.sessionToken,
+    }, "admin");
+
+    const sessions = await ctx.db
+      .query("agentSessions")
+      .withIndex("by_codebase", (q: any) => q.eq("codebaseId", args.codebaseId))
+      .collect();
+
+    return sessions
+      .filter((session) => !args.status || session.status === args.status)
+      .sort((a, b) => String(b.lastSeenAt).localeCompare(String(a.lastSeenAt)))
+      .map(summarizeAgentSession);
+  },
+});
+
+export const touchAgentSession = mutation({
+  args: {
+    sessionId: v.string(),
+    token: v.optional(v.string()),
+    sessionToken: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const session = await requireMutableAgentSession(ctx, args);
+    if (session.status !== "active") throw new Error("Only active agent sessions can be touched.");
+    const now = new Date().toISOString();
+    await ctx.db.patch(session._id, {
+      lastSeenAt: now,
+      updatedAt: now,
+    });
+
+    return summarizeAgentSession(await requireAgentSessionById(ctx, session._id));
+  },
+});
+
+export const revokeAgentSession = mutation({
+  args: {
+    sessionId: v.string(),
+    token: v.optional(v.string()),
+    sessionToken: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const session = await requireMutableAgentSession(ctx, args);
+    const now = new Date().toISOString();
+    await ctx.db.patch(session._id, {
+      status: "revoked",
+      revokedByUserId: await revokedByUserId(ctx, args, session),
+      revokedAt: now,
+      updatedAt: now,
+    });
+
+    return summarizeAgentSession(await requireAgentSessionById(ctx, session._id));
+  },
+});
+
 export const appendEvent = mutation({
   args: {
     codebaseId: v.string(),
@@ -586,9 +879,13 @@ export const appendEvent = mutation({
     at: v.optional(v.string()),
     source: v.optional(v.string()),
     token: v.optional(v.string()),
+    sessionToken: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
-    requireAgentToken(args.token);
+    await requireAgentAccess(ctx, args.codebaseId, {
+      token: args.token,
+      sessionToken: args.sessionToken,
+    }, "sync", { touch: true });
 
     const eventValue: any = {
       codebaseId: args.codebaseId,
@@ -601,6 +898,216 @@ export const appendEvent = mutation({
     return await ctx.db.insert("agentEvents", eventValue);
   },
 });
+
+async function requireAgentAccess(
+  ctx: any,
+  codebaseId: string,
+  credentials: { token?: string; sessionToken?: string },
+  capability: string,
+  options: { touch?: boolean } = {},
+) {
+  if (credentials.token !== undefined || !credentials.sessionToken) {
+    requireAgentToken(credentials.token);
+    return { kind: "service" as const, userId: "service:hopit-agent" };
+  }
+
+  const session = await requireActiveAgentSessionByToken(ctx, credentials.sessionToken, codebaseId, capability);
+  const codebase = await readCodebaseById(ctx, codebaseId);
+  if (!codebase) throw new Error(`Codebase ${codebaseId} was not found.`);
+  const access = await readCodebaseAccessContext(ctx, accessSourceFromCodebase(codebase), {
+    userId: session.userId,
+    sessionId: session.sessionId,
+  });
+  const requiredCapability = codebaseCapabilityForAgentCapability(capability);
+  if (requiredCapability && !access.permissions.includes(requiredCapability)) {
+    throw new Error(`Agent session user ${session.userId} does not have ${requiredCapability} access to ${codebaseId}.`);
+  }
+
+  if (options.touch) {
+    const now = new Date().toISOString();
+    await ctx.db.patch(session._id, {
+      lastSeenAt: now,
+      updatedAt: now,
+    });
+  }
+
+  return { kind: "agent-session" as const, userId: session.userId, session, access };
+}
+
+function codebaseCapabilityForAgentCapability(capability: string): Capability | null {
+  if (capability === "sync" || capability === "watch") return "read";
+  if (capability === "admin") return "manage_members";
+  if (
+    capability === "read" ||
+    capability === "write" ||
+    capability === "invite" ||
+    capability === "review" ||
+    capability === "merge" ||
+    capability === "release"
+  ) {
+    return capability;
+  }
+  return null;
+}
+
+async function resolveAgentSessionRegistrationActor(ctx: any, args: any) {
+  if (args.sessionToken && args.token === undefined) {
+    const access = await requireAgentAccess(ctx, args.codebaseId, {
+      sessionToken: args.sessionToken,
+    }, "admin", { touch: true });
+    return {
+      userId: access.userId,
+    };
+  }
+
+  const actor = await resolveWriteActor(ctx, args.token);
+  const { codebase } = await requireCodebaseCapabilityForActor(ctx, args.codebaseId, actor, "manage_members");
+  return {
+    userId: actor.kind === "service" ? codebase.ownerId : actor.userId,
+  };
+}
+
+async function requireActiveAgentSessionByToken(
+  ctx: any,
+  token: string,
+  codebaseId: string | null,
+  capability: string,
+) {
+  const tokenHash = await hashAgentSessionToken(token);
+  const session = await ctx.db
+    .query("agentSessions")
+    .withIndex("by_token_hash", (q: any) => q.eq("tokenHash", tokenHash))
+    .unique();
+
+  if (!session) throw new Error("Agent session token was not found.");
+  if (session.status !== "active") throw new Error("Agent session is not active.");
+  if (session.expiresAt && isExpiredTimestamp(session.expiresAt)) {
+    throw new Error("Agent session token has expired.");
+  }
+  if (codebaseId && session.codebaseId !== codebaseId) {
+    throw new Error(`Agent session is not scoped to codebase ${codebaseId}.`);
+  }
+  if (!agentSessionHasCapability(session, capability)) {
+    throw new Error(`Agent session does not have ${capability} capability.`);
+  }
+
+  return session;
+}
+
+async function requireMutableAgentSession(ctx: any, args: any) {
+  const session = await ctx.db
+    .query("agentSessions")
+    .withIndex("by_session_id", (q: any) => q.eq("sessionId", args.sessionId))
+    .unique();
+  if (!session) throw new Error(`Agent session ${args.sessionId} was not found.`);
+
+  if (args.sessionToken && args.token === undefined) {
+    const tokenSession = await requireActiveAgentSessionByToken(
+      ctx,
+      args.sessionToken,
+      session.codebaseId ?? null,
+      "read",
+    );
+    if (tokenSession.sessionId === session.sessionId) return session;
+    if (!agentSessionHasCapability(tokenSession, "admin")) {
+      throw new Error("Agent session token can only modify itself unless it has admin capability.");
+    }
+    if (!session.codebaseId) {
+      throw new Error("Agent session token cannot manage unscoped sessions.");
+    }
+    await requireAgentAccess(ctx, session.codebaseId, { sessionToken: args.sessionToken }, "admin");
+    return session;
+  }
+
+  const actor = await resolveWriteActor(ctx, args.token);
+  if (actor.kind === "service") return session;
+  if (actor.userId === session.userId) return session;
+  if (session.codebaseId) {
+    await requireCodebaseCapabilityForActor(ctx, session.codebaseId, actor, "manage_members");
+    return session;
+  }
+
+  throw new Error(`User ${actor.userId} cannot modify agent session ${session.sessionId}.`);
+}
+
+async function revokedByUserId(ctx: any, args: any, session: any) {
+  if (args.sessionToken && args.token === undefined) {
+    const tokenSession = await requireActiveAgentSessionByToken(
+      ctx,
+      args.sessionToken,
+      session.codebaseId ?? null,
+      "read",
+    );
+    return tokenSession.userId;
+  }
+
+  const actor = await resolveWriteActor(ctx, args.token);
+  return actor.userId;
+}
+
+async function requireAgentSessionById(ctx: any, id: string) {
+  const session = await ctx.db.get(id);
+  if (!session) throw new Error("Agent session was not found.");
+  return session;
+}
+
+function summarizeAgentSession(session: any) {
+  const { tokenHash, ...safeSession } = session;
+  return safeSession;
+}
+
+function normalizeAgentSessionCapabilities(capabilities: string[] | undefined) {
+  const values = capabilities && capabilities.length > 0
+    ? capabilities
+    : ["read", "write", "sync", "watch"];
+  return Array.from(new Set(values)).sort();
+}
+
+function agentSessionHasCapability(session: any, capability: string) {
+  const capabilities = Array.isArray(session.capabilities) ? session.capabilities : [];
+  return capabilities.includes("admin") || capabilities.includes(capability);
+}
+
+async function createAgentSessionToken() {
+  const token = `hst_${randomBase64Url(32)}`;
+  return {
+    token,
+    tokenHash: await hashAgentSessionToken(token),
+    tokenPrefix: token.slice(0, 12),
+  };
+}
+
+function createAgentSessionId() {
+  return `as_${randomBase64Url(12)}`;
+}
+
+async function hashAgentSessionToken(token: string) {
+  const normalized = token.trim();
+  if (!normalized) throw new Error("Agent session token is required.");
+  if (!normalized.startsWith("hst_")) throw new Error("Agent session token has an invalid format.");
+
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(`hopit.agent-session.v1:${normalized}`),
+  );
+  return `sha256:${hex(new Uint8Array(digest))}`;
+}
+
+function randomBase64Url(byteCount: number) {
+  const bytes = new Uint8Array(byteCount);
+  crypto.getRandomValues(bytes);
+  return base64Url(bytes);
+}
+
+function base64Url(bytes: Uint8Array) {
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function hex(bytes: Uint8Array) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
 
 async function createUniqueInvitationToken(ctx: any) {
   for (let attempt = 0; attempt < 4; attempt += 1) {
@@ -633,6 +1140,29 @@ async function requireCodebaseMember(ctx: any, codebaseId: string, userId: strin
 function assertMutableMember(codebase: any, member: any, action: "remove" | "suspend") {
   if (member.role === "owner" || member.userId === codebase.ownerId) {
     throw new Error(`Codebase owners cannot be ${action}d through member management.`);
+  }
+}
+
+async function readActiveMemberByEmail(ctx: any, codebaseId: string, normalizedEmail: string) {
+  const user = await readUserByPrimaryEmail(ctx, normalizedEmail);
+  if (!user) return null;
+
+  const member = await ctx.db
+    .query("codebaseMembers")
+    .withIndex("by_codebase_user", (q: any) => q.eq("codebaseId", codebaseId).eq("userId", user.userId))
+    .unique();
+  return member?.status === "active" ? member : null;
+}
+
+function assertReusableAgentSession(
+  existing: any,
+  registration: { codebaseId: string; userId: string },
+) {
+  if (existing.userId !== registration.userId) {
+    throw new Error(`Agent session ${existing.sessionId} belongs to a different user.`);
+  }
+  if (existing.codebaseId !== registration.codebaseId) {
+    throw new Error(`Agent session ${existing.sessionId} is scoped to a different codebase.`);
   }
 }
 
@@ -699,12 +1229,35 @@ function isInvitationExpired(invitation: any) {
   if (invitation.status !== "pending") return false;
   if (!invitation.expiresAt) return false;
 
-  const expiresAt = new Date(invitation.expiresAt).getTime();
-  return Number.isFinite(expiresAt) && expiresAt < Date.now();
+  return isExpiredTimestamp(invitation.expiresAt);
 }
 
 function invitationStatusForRead(invitation: any) {
   return isInvitationExpired(invitation) ? "expired" : invitation.status;
+}
+
+function normalizeFutureTimestamp(value: string | undefined, label: string) {
+  const text = optionalText(value);
+  if (!text) return undefined;
+
+  const time = Date.parse(text);
+  if (!Number.isFinite(time)) throw new Error(`${label} must be a valid timestamp.`);
+  if (time <= Date.now()) throw new Error(`${label} must be in the future.`);
+  return new Date(time).toISOString();
+}
+
+function isExpiredTimestamp(value: string) {
+  const time = Date.parse(value);
+  return !Number.isFinite(time) || time <= Date.now();
+}
+
+function normalizeAgentSessionId(value: string) {
+  const sessionId = optionalText(value);
+  if (!sessionId) throw new Error("Agent session id is required.");
+  if (!/^[A-Za-z0-9_.:-]{3,160}$/.test(sessionId)) {
+    throw new Error("Agent session id may only contain letters, numbers, dots, underscores, colons, and dashes.");
+  }
+  return sessionId;
 }
 
 async function readGraph(ctx: { db: DatabaseReader }, codebaseId: string) {
@@ -724,6 +1277,8 @@ async function readGraph(ctx: { db: DatabaseReader }, codebaseId: string) {
       file.path,
       {
         content: file.content,
+        blobHash: file.blobHash ?? file.hash ?? null,
+        contentStorage: file.contentStorage ?? "inline",
         hash: file.hash ?? null,
         size: file.size ?? file.content.length,
         scope: file.scope,
@@ -751,6 +1306,40 @@ async function readGraph(ctx: { db: DatabaseReader }, codebaseId: string) {
   };
   validateGraph(graph);
   return graph;
+}
+
+async function readFileByPath(ctx: any, codebaseId: string, filePath: string) {
+  return await ctx.db
+    .query("files")
+    .withIndex("by_codebase_path", (q: any) => q.eq("codebaseId", codebaseId).eq("path", filePath))
+    .unique();
+}
+
+async function upsertFileBlob(ctx: any, codebaseId: string, hash: string, content: string, now: string) {
+  const size = byteLength(content);
+  const existingBlob = await ctx.db
+    .query("fileBlobs")
+    .withIndex("by_codebase_hash", (q: any) => q.eq("codebaseId", codebaseId).eq("hash", hash))
+    .unique();
+
+  if (existingBlob) {
+    if (existingBlob.content !== content || existingBlob.size !== size) {
+      throw new Error(`content_hash_collision: existing blob content differs for ${hash}.`);
+    }
+    return existingBlob._id;
+  }
+
+  return await ctx.db.insert("fileBlobs", {
+    codebaseId,
+    hash,
+    content,
+    size,
+    createdAt: now,
+  });
+}
+
+function byteLength(value: string) {
+  return new TextEncoder().encode(value).length;
 }
 
 function normalizeGraph(graph: unknown) {

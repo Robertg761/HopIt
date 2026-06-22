@@ -1,8 +1,23 @@
 # Local Agent Architecture
 
-HopIt's local agent materializes a selected cloud codebase state into a managed workspace folder. For accepted project state that selected state can be Main; for day-to-day editing it is usually the user's active change set. The v1 architecture should optimize for OS and editor compatibility: a normal local folder, an agent-owned local cache, a safety journal, a status API, and an event log. A true OS filesystem mount is future optional research, not the default product path.
+HopIt's local agent materializes selected cloud codebase state under a HopIt Workspace Root. For accepted project state that selected state can be Main; for day-to-day editing it is usually the user's active change set. The v1 architecture should optimize for OS and editor compatibility: a normal local folder, agent-owned cache metadata, lazy materialization where safe, a safety journal, automatic remote-update delivery, a status API, and an event log. A true OS filesystem mount is future optional research, not the default product path.
 
 ## Core Pieces
+
+### HopIt Workspace Root
+
+The Workspace Root is the local directory a user chooses for HopIt-managed codebases, such as `~/HopIt Workspaces`. It is not a Git checkout root and not a native filesystem mount in the first v1 path. It is the product-level entry point where cloud codebases appear as agent-owned managed project folders.
+
+Workspace Root responsibilities:
+
+- persist the selected root path and per-device identity
+- list cloud codebases that belong to the signed-in user
+- create or attach managed project folders for those codebases
+- track whether a codebase is metadata-only, partially materialized, fully materialized, dirty, blocked, conflicted, or clean
+- keep local cache metadata separate from user-authored files
+- make same-owner device handoff automatic when the local journal is clean
+
+The current implementation has a production-profile managed workspace path, a root-level `workspaces.json` index, hydration/materialized-revision status, and a remote cursor exposed through `hop status`. Solid v1 still needs account-scoped codebase discovery, metadata-only listings, lazy materialization policy, and production-grade event delivery before claiming the "install and boom" experience.
 
 ### Cloud File Graph
 
@@ -17,7 +32,16 @@ The cloud file graph is the durable model for a codebase:
 - workspace revision number
 - device/session sync state
 
-The spike stores a simplified single selected state in `.hopit-agent/cloud.json`. A production service should split metadata into a database and content into blob storage, but expose the same graph-shaped API to the agent with explicit Main, active change-set, owner, and visibility fields.
+The spike stores a simplified single selected state in `.hopit-agent/cloud.json`. A production service should split metadata into a database and content into content-addressed blob storage, but expose the same graph-shaped API to the agent with explicit Main, active change-set, owner, and visibility fields.
+
+Solid v1 storage requirements:
+
+- file metadata and file content are separate records
+- file content is addressed by hash/blob id and deduplicated where practical
+- writes are per-file mutations, not whole-graph replacement as the concurrency boundary
+- every write carries a base revision or known cloud revision
+- stale base revisions return explicit conflict state instead of silently winning
+- snapshots can be reconstructed from file metadata and blob references
 
 HopIt v1 does not have an ignore-file model. The graph should store visibility metadata for `.private/` paths: those files are snapshotted, synced, and versioned, but visible only to the owner. Files outside `.private/` are governed by the active change set's effective visibility and the codebase's permissions.
 
@@ -48,7 +72,9 @@ The workspace adapter is the boundary between normal local tools and HopIt state
 
 V1 managed-folder adapter:
 
-- materializes files from Main or an active change set into a managed workspace folder, such as `.hopit-agent/workspaces/<codebase>`
+- creates managed folders under the HopIt Workspace Root, such as `~/HopIt Workspaces/<codebase>`
+- can expose codebase structure and hydration status before every file body is present locally
+- materializes files from Main or an active change set into the managed workspace folder when policy says the content should be local
 - lets editors, terminals, language servers, and test runners use normal OS file APIs
 - scans the folder for edits
 - translates file creates, writes, and deletes into journal entries
@@ -70,10 +96,11 @@ The cache is an agent-owned working set, not a durable local source of truth. In
 
 Responsibilities:
 
-- materialize file content when the workspace opens, when files change remotely, or when policy requests hydration
+- materialize file content when the workspace opens, when files change remotely, when policy requests hydration, or when a supported demand-hydration path needs content
 - keep files available for editors, language servers, and test runners through normal disk paths
 - prune clean cached content when policy allows
 - never evict writes that are still awaiting cloud acknowledgement
+- record which local paths are metadata-only, partially hydrated, clean, dirty, blocked, or conflicted
 
 RAM-only caching can be revisited later for specialized workflows, but it is not the v1 default.
 
@@ -140,6 +167,22 @@ Refresh expectations:
 - pending, failed, or uncertain journal entries block refresh until recovered, acknowledged, or explicitly resolved
 - failed entries stay visible through status and events; refresh must not hide them by hydrating over the workspace
 - `.private/` paths refresh like normal graph paths for the same owner, while retaining owner-private visibility metadata
+- hash-only materialization manifests let the agent detect unjournaled local drift before automatic refresh paths overwrite disk content
+
+### Automatic Remote-Update Delivery
+
+Explicit `hop refresh` is the current safe primitive. The current worktree also has an opt-in `--remote-pull` polling loop for `watch` and `service start`; it calls the same safe refresh path only when local state is fully materialized, clean against the hash-only materialization manifest, and the per-workspace index cursor is behind the cloud revision. Solid v1 should keep that safety contract but make remote-update delivery production-grade, observable, and suitable for normal same-owner device handoff.
+
+Remote-update delivery expectations:
+
+- the agent stores a remote event cursor per codebase, selected state, and concrete workspace path
+- the cloud emits or exposes file, review, visibility, conflict, and membership events in cursor order
+- the local service receives those events through a subscription or bounded polling loop
+- if the local journal is clean, the agent safely materializes the new selected cloud state
+- if the local journal has pending, failed, or uncertain entries, or if disk content differs from the last materialized manifest, the agent does not overwrite the workspace and instead reports a blocked/conflict state
+- metadata-only or partially materialized workspaces stay lazy until an explicit hydrate or refresh operation changes that state
+- remote updates preserve `.private/` visibility and requester filtering
+- status exposes whether the last update was applied, skipped as unchanged, blocked by local work, or failed
 
 ### Status API
 
@@ -147,6 +190,9 @@ The agent should expose a small local status API for the product UI, tray/menu U
 
 Suggested fields:
 
+- workspace root path
+- codebase folder hydration state
+- local workspace clean/dirty state compared with the hash-only materialization manifest
 - codebase id and display name
 - selected state type: Main, active change set, or review change set
 - active change-set id when applicable
@@ -160,11 +206,14 @@ Suggested fields:
 - pending journal entry count
 - last cloud acknowledgement time
 - latest remote-update event and state
+- remote event cursor and last applied event id when available
 - review state for the selected active change set
 - merge state and latest merge event for Main
 - conflict state and latest conflict event for stale file/base or Main revision mismatches
 - connectivity state
 - cache mode and approximate memory/disk use
+- storage mode, such as inline prototype content or content-addressed blobs
+- device/session token scope and expiry summary
 - adapter type: managed folder, with optional research adapters later
 - recent error summary
 
@@ -231,7 +280,15 @@ If the cloud cannot acknowledge immediately, the journal entry remains pending a
 
 ## Next Milestones
 
-The local-agent contract is now good enough to support personal dogfooding. The next product phase should build GitHub-lite collaboration on top of the cloud graph instead of expanding the local agent first: real accounts, memberships, invitations, code browsing, diffs, reviews, comments, history, issues, projects, discussions, and releases. The detailed plan lives in [GitHub-Lite Collaboration Plan](github-lite-collaboration-plan.md).
+The local-agent contract is good enough for personal dogfooding, but the solid v1 target now requires finishing the Workspace Root and cross-device handoff contract before HopIt can claim the "install and keep going anywhere" experience. GitHub-lite collaboration still matters, but it should advance alongside the storage, auth, and automatic remote-update foundations it depends on. The detailed collaboration plan lives in [GitHub-Lite Collaboration Plan](github-lite-collaboration-plan.md).
+
+### 0. Promote The Workspace Root To A Product Contract
+
+- Persist a user-selected Workspace Root outside the source checkout. Production-profile paths and the root index path are in place.
+- Track codebase folders independently from one selected workspace path. The index now keys entries by codebase and concrete workspace path.
+- Add root-level codebase discovery and attach/hydrate state. Hydration state is in place; account-scoped cloud discovery and attach flows remain.
+- Surface metadata-only, partial, hydrated, dirty, blocked, and conflicted states in `hop status` and the web UI. Hydrated/materialized and cursor state are in place; metadata-only/partial/lazy states remain.
+- Keep the current managed-folder implementation as the first adapter.
 
 ### 1. Lock The Managed-Folder Contracts
 
@@ -264,12 +321,15 @@ The local-agent contract is now good enough to support personal dogfooding. The 
 - Keep the local fixture implementation behind the service-shaped cloud graph interface for tests and demos.
 - Preserve explicit contract names for Main, the selected active change set, owner/session identity, effective visibility, acknowledgements, and status summaries.
 - Extend the service boundary with validation failures, connectivity loss, review, merge, and retry timing.
+- Add file-level mutation methods with base revision checks.
+- Add content-addressed blob references and snapshot reconstruction.
 - Preserve the same editor read/write flow from the managed-folder spike.
 
 ### 5. Prove Two-Device Continuity
 
 - Run two agent sessions against the same active change set.
 - Show that writes acknowledged from device/session A become visible to same-owner device/session B after B performs the safe refresh flow.
+- Then promote the opt-in remote-pull proof to production-grade automatic remote-update delivery when B's local journal is clean.
 - Simulate A syncing both non-private content and `.private/` owner-private content, then B refreshing as the same owner and seeing both sets of files with their visibility metadata preserved.
 - Keep collaborator visibility simulations passing: private change sets stay hidden, team-visible and review-visible change sets expose non-private paths to permitted collaborators, and `.private/` remains owner-only in every mode.
 - Emit event-log entries for remote updates and cache invalidation.
@@ -299,6 +359,13 @@ Status: done for the fixture-backed skeleton.
 - Detect writes based on stale selected-state or Main revisions.
 - Surface conflicts as reviewable workspace states through status and events.
 - Keep clean acknowledged content evictable while preserving unacknowledged local edits.
+
+### 9. Scope Device And Session Auth
+
+- Issue device/session credentials that are scoped to one user, device, and allowed codebases. Convex can now register, list, touch, revoke, and authorize scoped agent-session tokens.
+- Keep service credentials separate from dashboard user auth.
+- Support revocation and rotation without deleting the local workspace.
+- Make every cloud write path enforce the scoped actor and codebase permissions. Graph reads, per-file mutations, and event appends accept scoped session tokens; bootstrap/admin paths still use the deployment service token.
 
 ## Future Optional Research
 
