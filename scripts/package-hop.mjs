@@ -241,6 +241,22 @@ HOPIT_REMOTE_PULL=1
 HOPIT_REMOTE_REFRESH_INTERVAL_MS=5000
 HOPIT_BACKUP_ROOT=$HOME/HopIt-Backups
 HOPIT_EXPORT_ROOT=$HOME/HopIt-Exports
+HOPIT_BLOB_PROVIDER=r2
+HOPIT_BLOB_PREFIX=production
+HOPIT_BLOB_FREE_ONLY=1
+HOPIT_BLOB_STORAGE_BUDGET_BYTES=8000000000
+HOPIT_R2_ACCOUNT_ID=replace-with-cloudflare-account-id
+HOPIT_R2_BUCKET=hopit-blobs
+HOPIT_R2_ACCESS_KEY_ID=replace-with-r2-access-key-id
+HOPIT_R2_SECRET_ACCESS_KEY=replace-with-r2-secret-access-key
+
+# Backblaze B2 migration path:
+# HOPIT_BLOB_PROVIDER=b2
+# HOPIT_B2_BUCKET=hopit-blobs
+# HOPIT_B2_ENDPOINT=https://s3.us-west-004.backblazeb2.com
+# HOPIT_B2_REGION=us-west-004
+# HOPIT_B2_KEY_ID=replace-with-b2-key-id
+# HOPIT_B2_APPLICATION_KEY=replace-with-b2-application-key
 `,
     'utf8',
   )

@@ -88,6 +88,40 @@ if (env.HOPIT_AGENT_SESSION_CAPABILITIES) {
 if (env.HOPIT_AGENT_BASE_URL) {
   checks.push(loopbackUrl('HOPIT_AGENT_BASE_URL'))
 }
+if (!env.HOPIT_BLOB_PROVIDER) {
+  warnings.push('HOPIT_BLOB_PROVIDER is unset; this avoids R2 object-storage charges, but synced file bodies will stay in Convex-backed storage if the agent is started. Keep large repo sync paused or configure R2 free-only first.')
+} else {
+  const blobProvider = normalizeBlobProvider(env.HOPIT_BLOB_PROVIDER)
+  checks.push(nonPlaceholder('HOPIT_BLOB_PROVIDER'))
+  if (blobProvider === 'r2') {
+    checks.push(required('HOPIT_R2_ACCOUNT_ID'))
+    checks.push(required('HOPIT_R2_BUCKET'))
+    checks.push(secret('HOPIT_R2_ACCESS_KEY_ID', { minLength: 16 }))
+    checks.push(secret('HOPIT_R2_SECRET_ACCESS_KEY', { minLength: 32 }))
+    checks.push(truthyDefault('HOPIT_BLOB_FREE_ONLY', '1'))
+    checks.push(integerRangeDefault('HOPIT_BLOB_STORAGE_BUDGET_BYTES', { defaultValue: 8000000000, min: 1, max: 8000000000 }))
+    if (env.HOPIT_R2_ENDPOINT) checks.push(urlCheck('HOPIT_R2_ENDPOINT'))
+  } else if (blobProvider === 'b2') {
+    checks.push(required('HOPIT_B2_BUCKET'))
+    checks.push(required('HOPIT_B2_ENDPOINT'))
+    checks.push(secret('HOPIT_B2_KEY_ID', { minLength: 16 }))
+    checks.push(secret('HOPIT_B2_APPLICATION_KEY', { minLength: 32 }))
+  } else if (blobProvider === 's3') {
+    checks.push(required('HOPIT_S3_ENDPOINT'))
+    checks.push(required('HOPIT_S3_BUCKET'))
+    checks.push(secret('HOPIT_S3_ACCESS_KEY_ID', { minLength: 16 }))
+    checks.push(secret('HOPIT_S3_SECRET_ACCESS_KEY', { minLength: 32 }))
+  } else if (blobProvider === 'filesystem') {
+    checks.push(required('HOPIT_BLOB_ROOT'))
+    checks.push(absolutePath('HOPIT_BLOB_ROOT'))
+    warnings.push('HOPIT_BLOB_PROVIDER=filesystem is for local tests only; use r2, b2, or s3 for real production.')
+  } else {
+    checks.push({
+      name: 'HOPIT_BLOB_PROVIDER',
+      failures: [`HOPIT_BLOB_PROVIDER must be r2, b2, s3, filesystem, or unset; got "${env.HOPIT_BLOB_PROVIDER}".`],
+    })
+  }
+}
 if (!env.HOPIT_BACKUP_ROOT) {
   warnings.push('HOPIT_BACKUP_ROOT is unset; restorable agent-state backups should use an explicit output path.')
 } else {
@@ -199,6 +233,19 @@ function integerRange(name, options) {
   return { name, failures }
 }
 
+function integerRangeDefault(name, options) {
+  const rawValue = env[name] ?? String(options.defaultValue)
+  const value = Number(rawValue)
+  const failures = []
+  if (!Number.isInteger(value)) {
+    failures.push(`${name} must be an integer.`)
+  } else {
+    if (options.min && value < options.min) failures.push(`${name} must be at least ${options.min}.`)
+    if (options.max && value > options.max) failures.push(`${name} must be at most ${options.max}.`)
+  }
+  return { name, failures }
+}
+
 function csvSubset(name, allowedValues) {
   const allowed = new Set(allowedValues)
   const values = String(env[name] ?? '')
@@ -228,6 +275,34 @@ function loopbackUrl(name) {
     failures.push(`${name} must be a valid URL.`)
   }
   return { name, failures }
+}
+
+function truthyDefault(name, defaultValue) {
+  const value = env[name] ?? defaultValue
+  const failures = []
+  if (!/^(1|true|yes|on)$/i.test(value ?? '')) {
+    failures.push(`${name} must stay enabled for the current free-only R2 setup.`)
+  }
+  return { name, failures }
+}
+
+function urlCheck(name) {
+  const failures = []
+  try {
+    const url = new URL(env[name])
+    if (!['http:', 'https:'].includes(url.protocol)) {
+      failures.push(`${name} must use http or https.`)
+    }
+  } catch {
+    failures.push(`${name} must be a valid URL.`)
+  }
+  return { name, failures }
+}
+
+function normalizeBlobProvider(value) {
+  if (value === 'local' || value === 'fs') return 'filesystem'
+  if (value === 'backblaze') return 'b2'
+  return value
 }
 
 function bothAbsolute(name, otherName) {

@@ -15,6 +15,10 @@ This runbook is the first real-use path for one-person HopIt dogfooding. It keep
 ## Required Configuration
 
 Use long random secrets. Do not commit `.env.local`.
+Routed env files under `.private/env/` are intentionally local-only for now.
+They are not uploaded by the agent until HopIt has client-side encrypted secret
+sync, where secret values are encrypted on-device for the intended user/device
+set and remain unreadable to Convex, R2/B2/S3, and HopIt cloud operators.
 
 ```bash
 HOPIT_CODEBASE_ID=hopit
@@ -36,6 +40,14 @@ HOPIT_REMOTE_PULL=1
 HOPIT_REMOTE_REFRESH_INTERVAL_MS=5000
 HOPIT_BACKUP_ROOT="$HOME/HopIt-Backups"
 HOPIT_EXPORT_ROOT="$HOME/HopIt-Exports"
+HOPIT_BLOB_PROVIDER=r2
+HOPIT_BLOB_PREFIX=production
+HOPIT_BLOB_FREE_ONLY=1
+HOPIT_BLOB_STORAGE_BUDGET_BYTES=8000000000
+HOPIT_R2_ACCOUNT_ID=<cloudflare-account-id>
+HOPIT_R2_BUCKET=hopit-blobs
+HOPIT_R2_ACCESS_KEY_ID=<r2-access-key-id>
+HOPIT_R2_SECRET_ACCESS_KEY=<r2-secret-access-key>
 ```
 
 Validate local configuration without printing secrets:
@@ -59,6 +71,34 @@ Convex functions now fail closed when `HOPIT_AGENT_TOKEN` is missing. `HOPIT_ALL
 For local development against a dev Convex deployment, use `npm run convex:dev`
 instead.
 
+## Object Blob Storage
+
+HopIt uses Convex for graph metadata, permissions, sessions, events, and dashboard reads. File bytes for production should live in object storage. The first provider is Cloudflare R2 through HopIt's S3-compatible adapter:
+
+```bash
+HOPIT_BLOB_PROVIDER=r2
+HOPIT_BLOB_PREFIX=production
+HOPIT_BLOB_FREE_ONLY=1
+HOPIT_BLOB_STORAGE_BUDGET_BYTES=8000000000
+HOPIT_R2_ACCOUNT_ID=<cloudflare-account-id>
+HOPIT_R2_BUCKET=hopit-blobs
+HOPIT_R2_ACCESS_KEY_ID=<r2-access-key-id>
+HOPIT_R2_SECRET_ACCESS_KEY=<r2-secret-access-key>
+```
+
+The agent uploads file bytes to R2 before committing Convex metadata. Convex stores `contentStorage=object-blob`, provider, object key, hash, and size; hydrate, refresh, export, and recovery download the object and verify the SHA-256 before writing it locally. For personal use, keep `HOPIT_BLOB_FREE_ONLY=1` and the default 8 GB budget so HopIt stops before crossing Cloudflare R2's free storage tier. To migrate to Backblaze B2 later, keep the same graph contract and switch the provider variables to `HOPIT_BLOB_PROVIDER=b2`, `HOPIT_B2_BUCKET`, `HOPIT_B2_ENDPOINT`, `HOPIT_B2_REGION`, `HOPIT_B2_KEY_ID`, and `HOPIT_B2_APPLICATION_KEY`.
+
+Current no-charge R2 posture:
+
+- Bucket: `hopit-blobs`
+- Default storage class: Standard
+- Public `r2.dev` access: disabled
+- Stored objects: `0`
+- Stored bytes: `0 B`
+- Lifecycle: `free-only-auto-delete` expires objects after 1 day and aborts incomplete multipart uploads after 1 day
+- Agent credentials: configured locally in `.env.local` and `~/.config/hopit/production.env` as a scoped account token with Object Read & Write access to `hopit-blobs` only
+- Verification: a 44-byte HopIt object-blob smoke file was uploaded through the R2 adapter, hydrated back through HopIt, deleted, and the bucket returned to `0 B`
+
 ## Vercel Dashboard
 
 Set these Vercel environment variables for Production, Preview, and Development unless a narrower scope is intentional:
@@ -72,6 +112,14 @@ HOPIT_AUTH_PROVIDER
 HOPIT_ALLOW_BASIC_AUTH_FALLBACK
 HOPIT_DASHBOARD_USERNAME
 HOPIT_DASHBOARD_PASSWORD
+HOPIT_BLOB_PROVIDER
+HOPIT_BLOB_PREFIX
+HOPIT_BLOB_FREE_ONLY
+HOPIT_BLOB_STORAGE_BUDGET_BYTES
+HOPIT_R2_ACCOUNT_ID
+HOPIT_R2_BUCKET
+HOPIT_R2_ACCESS_KEY_ID
+HOPIT_R2_SECRET_ACCESS_KEY
 ```
 
 Hosted HopIt requires Convex-backed status. The `/api/agent/command` route refuses local workspace commands on Vercel, and `src/proxy.ts` requires Basic authentication when deployed on Vercel. Vercel Deployment Protection can be enabled as an additional account-level guard.
@@ -90,6 +138,7 @@ Pinned until an owned HopIt domain exists:
 Continue without a domain:
 
 - Convex-backed dashboard reads.
+- R2-backed object blob sync from the local agent.
 - Local production-profile agent commands.
 - Git export/publish escape hatch.
 - Membership, invitation, code browser, issue, discussion, and release implementation that can run behind Basic Auth.
@@ -174,7 +223,7 @@ mutations, and agent events can use the scoped device token. Keep
 are present, normal commands prefer the scoped session token; pass
 `--agent-token` explicitly when you intend to use the bootstrap/admin secret.
 
-Start the local agent service manually. It runs the watcher and local status server from one background process, writes a pid file under the agent state root, and binds status to `127.0.0.1:4785` by default. `service start` only reports success after the status endpoint is reachable and the watcher is running.
+Start the local agent service manually. It runs the watcher and local status server from one background process, writes a pid file under the agent state root, and binds status to `127.0.0.1:4785` by default. `service start` only reports success after the status endpoint is reachable and the watcher is running, and the spawned `service run` process stays alive until it receives a stop signal.
 
 ```bash
 npm run hop:service:start -- --codebase-id "$HOPIT_CODEBASE_ID"
@@ -241,9 +290,13 @@ Production-profile defaults keep state and workspaces out of the source checkout
 
 ## Observability
 
-The local status server is intentionally read-only. Use it to confirm the
-daemon, journal, workspace dirty-state, remote cursor, and latest events before
-trusting a device handoff:
+The local status server is intentionally read-only. `/status` is a fast daemon
+health snapshot built from local agent state files; it avoids a full workspace
+dirty scan so it stays responsive even when the workspace is large. Use
+`hop status` or `hop doctor` when you need the heavier local clean/dirty audit.
+`/cloud` returns the visible graph for the dashboard without running that local
+workspace audit. Use these checks to confirm the daemon, journal, remote cursor,
+and latest events before trusting a device handoff:
 
 ```bash
 npm run hop -- status --profile production --codebase-id "$HOPIT_CODEBASE_ID"
@@ -260,7 +313,7 @@ Healthy personal-production service status should show:
 - `agent.watch.state: "watching"`.
 - `agent.journal.pendingCount: 0` before refresh or cross-device handoff.
 - `agent.journal.failedCount: 0`.
-- `agent.remotePull.state: "enabled"` when `HOPIT_REMOTE_PULL=1`.
+- `agent.remotePull.state: "enabled"` when `HOPIT_REMOTE_PULL=1`, unless the current service run has safely skipped because local work needs attention.
 
 If the LaunchAgent installer is used, logs go to
 `~/Library/Logs/HopIt/agent.out.log` and
@@ -336,7 +389,7 @@ their scoped session token for normal operation.
 
 - Hosted workspace commands are intentionally disabled; local workspace commands run through the local agent. Hosted collaboration/member/work-item APIs exist, but production is still guarded by the current Basic Auth/product-auth boundary.
 - Basic Auth is the current domain-deferred deployment guard. The repo has Clerk-backed product auth code, durable users, memberships, invitations, and first server-side permission checks, but production Clerk rollout is pinned until HopIt has an owned domain.
-- Convex now separates graph/file metadata from content-addressed `fileBlobs` for the agent text-file path and supports per-file revision-guarded mutations. Large-file/object storage, durable history reconstruction, and full product write-path coverage are still incomplete.
+- Convex now separates graph/file metadata from file bytes and supports object-backed blobs through the agent sync path with per-file revision-guarded mutations. Durable history reconstruction, garbage collection for unreferenced objects, and full product write-path coverage are still incomplete.
 - Git export/publish creates a clean local Git repo; it does not push to a remote.
 - The standalone artifact includes start-on-login support scripts, but it is not signed, notarized, or packaged as a native installer yet.
 - Token rotation is CLI/runbook driven; there is no dashboard UX for device credential recovery yet.

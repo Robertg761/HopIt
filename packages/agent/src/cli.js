@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from 'node:child_process'
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, createHmac, randomUUID } from 'node:crypto'
 import { existsSync, watch } from 'node:fs'
 import fs from 'node:fs/promises'
 import { createServer } from 'node:http'
@@ -40,6 +40,41 @@ const fileScope = {
   ownerPrivate: 'owner-private',
 }
 
+const entryKind = {
+  file: 'file',
+  symlink: 'symlink',
+  directory: 'directory',
+}
+
+const entryEncoding = {
+  utf8: 'utf8',
+  base64: 'base64',
+}
+
+const contentStorageMode = {
+  inline: 'inline',
+  convexFileBlob: 'convex-file-blob',
+  convexFileBlobBase64: 'convex-file-blob-base64',
+  objectBlob: 'object-blob',
+}
+
+const objectBlobProvider = {
+  filesystem: 'filesystem',
+  r2: 'r2',
+  s3: 's3',
+  b2: 'b2',
+}
+
+const convexFreeFileStorageBudgetBytes = 1_000_000_000
+const r2FreeStorageTierBytes = 10_000_000_000
+const r2DefaultFreeOnlyBudgetBytes = 8_000_000_000
+const serviceReadyTimeoutMs = 60_000
+const serviceStatusFetchTimeoutMs = 5_000
+const defaultMirrorSecretRoutes = new Map([
+  ['.env.local', '.private/env/repo-root/.env.local'],
+])
+const defaultLaunchAgentLabelPrefix = 'com.hopit.agent'
+
 class ConflictError extends Error {
   constructor(message, detail) {
     super(message)
@@ -67,6 +102,11 @@ async function main() {
 
   if (command === 'import-local') {
     await importLocalProject(options)
+    return
+  }
+
+  if (command === 'mirror-local') {
+    await mirrorLocalProject(options)
     return
   }
 
@@ -185,6 +225,7 @@ function normalizeCommand(command) {
     '-h': 'help',
     '--help': 'help',
     import: 'import-local',
+    mirror: 'mirror-local',
     sync: 'sync-once',
     review: 'review-open',
     export: 'export-git',
@@ -213,6 +254,7 @@ function parseOptions(args) {
     'start-service',
     'write-env',
     'launch-agent',
+    'skip-service-control',
   ])
 
   for (let i = 0; i < args.length; i += 1) {
@@ -428,6 +470,125 @@ async function importLocalProject(options) {
   await hydrateWorkspace(options)
 }
 
+async function mirrorLocalProject(options) {
+  if (!options.source) {
+    throw new Error('Missing --source <path> for mirror.')
+  }
+
+  const source = path.resolve(options.source)
+  const workspace = path.resolve(options.workspace)
+  const sourceStat = await fs.stat(source)
+  if (!sourceStat.isDirectory()) {
+    throw new Error(`Mirror source is not a directory: ${source}`)
+  }
+  await assertWorkspacePathSafe(options, { source })
+
+  const storageBudgetBytes = Number(options['storage-budget-bytes'] ?? process.env.HOPIT_STORAGE_BUDGET_BYTES ?? convexFreeFileStorageBudgetBytes)
+  if (!Number.isFinite(storageBudgetBytes) || storageBudgetBytes < 0) {
+    throw new Error(`Invalid --storage-budget-bytes value: ${options['storage-budget-bytes']}`)
+  }
+
+  const codebaseId = options['codebase-id'] ?? path.basename(workspace)
+  const launchAgentLabel = options['launch-agent-label'] ?? `${defaultLaunchAgentLabelPrefix}.${codebaseId}`
+  const routes = mirrorSecretRoutesFromOptions(options)
+  const startedAt = new Date().toISOString()
+  const stoppedService = options['skip-service-control']
+    ? { skipped: true, reason: 'skip-service-control' }
+    : await stopMirrorService(launchAgentLabel)
+
+  const backup = await backupWorkspaceForMirror(options, startedAt)
+  await fs.rm(workspace, { recursive: true, force: true })
+  await fs.mkdir(workspace, { recursive: true })
+
+  const copyResult = await copyLiteralMirrorSource(source, workspace, routes)
+  const sourceManifest = await buildLiteralMirrorManifest(source, { routes })
+  const destinationManifest = await buildLiteralMirrorManifest(workspace)
+  const diff = diffLiteralManifests(sourceManifest, destinationManifest)
+  const rootEnvExists = existsSync(path.join(workspace, '.env.local'))
+  const routedSecretExists = existsSync(path.join(workspace, '.private/env/repo-root/.env.local'))
+  const budget = storageBudgetReport(destinationManifest, storageBudgetBytes)
+
+  const result = {
+    ok: diff.clean && !rootEnvExists,
+    action: 'mirror-local',
+    source,
+    workspace,
+    codebaseId,
+    startedAt,
+    completedAt: new Date().toISOString(),
+    service: stoppedService,
+    backup,
+    copied: copyResult,
+    routes: [...routes.entries()].map(([from, to]) => ({ from, to })),
+    manifest: {
+      source: literalManifestSummary(sourceManifest),
+      destination: literalManifestSummary(destinationManifest),
+      diff,
+    },
+    secrets: {
+      rootEnvExists,
+      routedEnvExists: routedSecretExists,
+    },
+    storageBudget: budget,
+    sync: {
+      attempted: false,
+      skipped: true,
+      reason: budget.withinBudget ? null : 'storage_budget_exceeded',
+    },
+  }
+
+  if (!diff.clean) {
+    await emit(options, 'mirror.failed', {
+      reason: 'manifest_mismatch',
+      diff,
+      backup: backup.output,
+    })
+    console.log(JSON.stringify(result, null, 2))
+    process.exitCode = 1
+    return
+  }
+
+  if (rootEnvExists) {
+    await emit(options, 'mirror.failed', {
+      reason: 'root_env_local_present',
+      backup: backup.output,
+    })
+    console.log(JSON.stringify(result, null, 2))
+    process.exitCode = 1
+    return
+  }
+
+  if (!budget.withinBudget) {
+    await emit(options, 'mirror.sync_skipped', {
+      reason: 'storage_budget_exceeded',
+      storageBudget: budget,
+      backup: backup.output,
+      service: stoppedService,
+    })
+    console.log(JSON.stringify(result, null, 2))
+    return
+  }
+
+  const syncResult = await syncOnce(options, { trigger: 'literal-mirror' })
+  result.sync = {
+    attempted: true,
+    skipped: false,
+    reason: null,
+    result: syncResult,
+  }
+
+  if (!options['skip-service-control']) {
+    result.service.restart = await startMirrorService(launchAgentLabel)
+  }
+
+  await emit(options, 'mirror.complete', {
+    storageBudget: budget,
+    backup: backup.output,
+    sync: result.sync,
+  })
+  console.log(JSON.stringify(result, null, 2))
+}
+
 async function hydrateWorkspace(options) {
   await assertWorkspacePathSafe(options)
   const cloudService = createCloudGraphService(options)
@@ -437,14 +598,14 @@ async function hydrateWorkspace(options) {
 
   for (const [relativePath, file] of Object.entries(cloud.files)) {
     const scope = scopeForPath(relativePath)
-    const absolutePath = workspaceFilePath(options.workspace, relativePath)
-    await fs.mkdir(path.dirname(absolutePath), { recursive: true })
-    await fs.writeFile(absolutePath, file.content, 'utf8')
+    const entry = normalizeCloudFileEntry(relativePath, file)
+    await materializeCloudEntry(options.workspace, relativePath, entry, cloudService)
     await emit(options, 'file.hydrated', {
       path: relativePath,
       scope,
-      bytes: Buffer.byteLength(file.content),
-      revision: file.revision,
+      kind: entry.kind,
+      bytes: entry.size,
+      revision: entry.revision,
     })
   }
 
@@ -476,20 +637,17 @@ async function hydrateWorkspaceFile(options) {
   if (!file) {
     throw new Error(`File is not visible in the configured cloud graph: ${relativePath}`)
   }
-  if (typeof file.content !== 'string') {
-    throw new Error(`Cloud file is missing string content: ${relativePath}`)
-  }
 
-  const absolutePath = workspaceFilePath(options.workspace, relativePath)
-  await fs.mkdir(path.dirname(absolutePath), { recursive: true })
-  await fs.writeFile(absolutePath, file.content, 'utf8')
+  const entry = normalizeCloudFileEntry(relativePath, file)
+  await materializeCloudEntry(options.workspace, relativePath, entry, cloudService)
   const hydratedPaths = await hydratedPathUnion(options, cloud.codebase?.id, [relativePath])
 
   await emit(options, 'file.lazy_hydrated', {
     path: relativePath,
     scope: scopeForPath(relativePath),
-    bytes: Buffer.byteLength(file.content),
-    revision: file.revision,
+    kind: entry.kind,
+    bytes: entry.size,
+    revision: entry.revision,
     workspace: options.workspace,
     service: cloudService.type,
     contract: summarizeGraphContract(cloud),
@@ -527,10 +685,10 @@ async function dehydrateWorkspace(options) {
   const cloudService = createCloudGraphService(options)
   const cloud = await cloudService.readVisibleGraph(visibilityRequestFromOptions(options))
   const removedPaths = []
-  for (const relativePath of Object.keys(cloud.files ?? {})) {
+  for (const relativePath of sortPathsDeepestFirst(Object.keys(cloud.files ?? {}))) {
     const absolutePath = workspaceFilePath(options.workspace, relativePath)
     if (!existsSync(absolutePath)) continue
-    await fs.rm(absolutePath, { force: true })
+    await fs.rm(absolutePath, { recursive: true, force: true })
     await removeEmptyAncestorDirectories(options.workspace, path.dirname(relativePath))
     removedPaths.push(relativePath)
   }
@@ -753,7 +911,7 @@ async function refreshWorkspace(options) {
     throw new Error('Refresh blocked because the local workspace has unjournaled changes.')
   }
 
-  const result = await materializeCloudToWorkspace(options, cloud)
+  const result = await materializeCloudToWorkspace(options, cloud, cloudService)
   if (result.written > 0 || result.deleted > 0) {
     await emit(options, 'remote-update', {
       workspace: options.workspace,
@@ -784,10 +942,10 @@ async function refreshWorkspace(options) {
   })
 }
 
-async function materializeCloudToWorkspace(options, cloud) {
+async function materializeCloudToWorkspace(options, cloud, cloudService = null) {
   await fs.mkdir(options.workspace, { recursive: true })
 
-  const diskFiles = await readWorkspaceFiles(options.workspace)
+  const diskEntries = await readWorkspaceFiles(options.workspace)
   const cloudPaths = new Set(Object.keys(cloud.files ?? {}))
   const changedPaths = []
   const deletedPaths = []
@@ -796,28 +954,22 @@ async function materializeCloudToWorkspace(options, cloud) {
   let unchanged = 0
 
   for (const [relativePath, file] of Object.entries(cloud.files ?? {})) {
-    if (typeof file.content !== 'string') {
-      throw new Error(`Cloud file is missing string content: ${relativePath}`)
-    }
-
-    const content = file.content
-    const absolutePath = workspaceFilePath(options.workspace, relativePath)
-    await fs.mkdir(path.dirname(absolutePath), { recursive: true })
-
-    if (diskFiles[relativePath] === content) {
+    const entry = normalizeCloudFileEntry(relativePath, file)
+    const diskEntry = diskEntries[relativePath] ? normalizeCloudFileEntry(relativePath, diskEntries[relativePath]) : null
+    if (diskEntry && cloudEntryEquals(diskEntry, entry)) {
       unchanged += 1
       continue
     }
 
-    await fs.writeFile(absolutePath, content, 'utf8')
+    await materializeCloudEntry(options.workspace, relativePath, entry, cloudService)
     changedPaths.push(relativePath)
     written += 1
   }
 
-  for (const relativePath of Object.keys(diskFiles)) {
+  for (const relativePath of sortPathsDeepestFirst(Object.keys(diskEntries))) {
     if (cloudPaths.has(relativePath)) continue
 
-    await fs.rm(workspaceFilePath(options.workspace, relativePath), { force: true })
+    await fs.rm(workspaceFilePath(options.workspace, relativePath), { recursive: true, force: true })
     await removeEmptyAncestorDirectories(options.workspace, path.dirname(relativePath))
     deletedPaths.push(relativePath)
     deleted += 1
@@ -835,6 +987,48 @@ async function materializeCloudToWorkspace(options, cloud) {
     scopeCounts: countCloudScopes(cloud),
     hiddenScopeCounts: cloud.visibilityContext?.hiddenScopeCounts ?? { shared: 0, private: 0 },
   }
+}
+
+async function materializeCloudEntry(root, relativePath, file, cloudService = null) {
+  const entry = normalizeCloudFileEntry(relativePath, file)
+  const absolutePath = workspaceFilePath(root, relativePath)
+
+  await fs.mkdir(path.dirname(absolutePath), { recursive: true })
+
+  if (entry.kind === entryKind.directory) {
+    await replacePathIfWrongType(absolutePath, 'directory')
+    await fs.mkdir(absolutePath, { recursive: true })
+    return
+  }
+
+  if (entry.kind === entryKind.symlink) {
+    await fs.rm(absolutePath, { recursive: true, force: true })
+    await fs.symlink(entry.target, absolutePath)
+    return
+  }
+
+  await replacePathIfWrongType(absolutePath, 'file')
+  await fs.writeFile(absolutePath, await bufferFromCloudFileEntry(entry, cloudService))
+}
+
+async function replacePathIfWrongType(absolutePath, expectedType) {
+  if (!existsSync(absolutePath)) return
+
+  const stat = await fs.lstat(absolutePath)
+  const matches =
+    (expectedType === 'file' && stat.isFile()) ||
+    (expectedType === 'directory' && stat.isDirectory() && !stat.isSymbolicLink())
+
+  if (!matches) {
+    await fs.rm(absolutePath, { recursive: true, force: true })
+  }
+}
+
+function sortPathsDeepestFirst(paths) {
+  return [...paths].sort((a, b) => {
+    const depth = b.split('/').length - a.split('/').length
+    return depth || b.localeCompare(a)
+  })
 }
 
 async function syncOnce(options, context = {}) {
@@ -865,7 +1059,7 @@ async function syncOnce(options, context = {}) {
 async function performSyncOnce(options, contextDetail = {}) {
   const cloudService = createCloudGraphService(options)
   const cloud = await cloudService.readGraph()
-  const diskFiles = await readWorkspaceFiles(options.workspace)
+  const diskEntries = await readWorkspaceFiles(options.workspace)
   const visibilityContext = visibilityContextForGraph(cloud, visibilityRequestFromOptions(options))
   const visibleCloudPaths = Object.keys(cloud.files).filter((relativePath) =>
     canRequesterSeePath(visibilityContext, relativePath),
@@ -883,23 +1077,28 @@ async function performSyncOnce(options, contextDetail = {}) {
   const writeEvents = []
   const now = new Date().toISOString()
 
-  for (const [relativePath, content] of Object.entries(diskFiles)) {
+  for (const [relativePath, rawEntry] of Object.entries(diskEntries)) {
     if (!canRequesterSeePath(visibilityContext, relativePath)) continue
 
-    const nextHash = hashContent(content)
+    const entryPayload = normalizeCloudFileEntry(relativePath, rawEntry)
     const current = cloud.files[relativePath]
+      ? normalizeCloudFileEntry(relativePath, cloud.files[relativePath])
+      : null
     const scope = scopeForPath(relativePath)
     cloudPaths.delete(relativePath)
 
-    if (current?.hash === nextHash) continue
+    if (current && cloudEntryEquals(current, entryPayload)) continue
 
     const entry = {
       id: randomUUID(),
       type: current ? 'write' : 'create',
       path: relativePath,
+      kind: entryPayload.kind,
       scope,
-      hash: nextHash,
-      bytes: Buffer.byteLength(content),
+      hash: entryPayload.hash,
+      bytes: entryPayload.size,
+      encoding: entryPayload.encoding,
+      target: entryPayload.target ?? null,
       baseRevision: current?.revision ?? null,
       createdAt: now,
       status: 'pending',
@@ -910,7 +1109,7 @@ async function performSyncOnce(options, contextDetail = {}) {
     await emit(options, 'write.journaled', entry)
 
     const acknowledgement = await cloudService.commitJournalEntry(cloud, entry, {
-      content,
+      entry: entryPayload,
       now,
     })
     await emit(options, 'cloud.acknowledged', acknowledgement)
@@ -926,6 +1125,7 @@ async function performSyncOnce(options, contextDetail = {}) {
       id: randomUUID(),
       type: 'delete',
       path: relativePath,
+      kind: cloud.files[relativePath]?.kind ?? entryKind.file,
       scope,
       baseRevision: cloud.files[relativePath]?.revision ?? null,
       createdAt: now,
@@ -960,7 +1160,7 @@ async function performSyncOnce(options, contextDetail = {}) {
     reason: 'sync',
     lastEvent: 'sync.complete',
     hydrationState: workspaceIndexHydrationStateForSync(indexedCodebase),
-    hydratedPaths: hydratedPathsAfterSync(indexedCodebase, Object.keys(diskFiles), Object.keys(visibleCloud.files ?? {})),
+    hydratedPaths: hydratedPathsAfterSync(indexedCodebase, Object.keys(diskEntries), Object.keys(visibleCloud.files ?? {})),
   })
   return result
 }
@@ -988,7 +1188,7 @@ async function recoverJournal(options) {
     try {
       const recovery = await prepareRecovery(cloud, entry, options.workspace)
       const acknowledgement = await cloudService.commitJournalEntry(cloud, entry, {
-        content: recovery.content,
+        entry: recovery.entry,
         now,
       })
       await emit(options, 'cloud.acknowledged', {
@@ -1032,14 +1232,14 @@ async function recoverJournal(options) {
       cloud.codebase?.id ?? options['codebase-id'],
       options.workspace,
     )
-    const diskFiles = await readWorkspaceFiles(options.workspace)
+    const diskEntries = await readWorkspaceFiles(options.workspace)
     const hydrationState = workspaceIndexHydrationStateForSync(indexedCodebase)
     const visibleCloud = filterVisibleGraphForRequester(cloud, visibilityRequestFromOptions(options))
     await upsertWorkspaceIndexFromCloud(options, visibleCloud, {
       reason: 'recover',
       lastEvent: 'journal.recovery_complete',
       hydrationState,
-      hydratedPaths: hydratedPathsAfterSync(indexedCodebase, Object.keys(diskFiles), Object.keys(visibleCloud.files ?? {})),
+      hydratedPaths: hydratedPathsAfterSync(indexedCodebase, Object.keys(diskEntries), Object.keys(visibleCloud.files ?? {})),
       materialization: hydrationState === 'materialized' ? 'managed-folder' : 'partial-managed-folder',
     })
   }
@@ -1316,18 +1516,40 @@ async function snapshotWorkspace(root) {
 
   async function walk(dir) {
     const entries = await fs.readdir(dir, { withFileTypes: true })
+    let includedChildren = 0
+
     for (const entry of entries) {
       const absolutePath = path.join(dir, entry.name)
+      const relativePath = toCloudPath(path.relative(root, absolutePath))
+      if (shouldSkipWorkspacePath(relativePath, entry)) continue
+
+      if (entry.isSymbolicLink()) {
+        const target = await fs.readlink(absolutePath)
+        const stat = await fs.lstat(absolutePath)
+        files.push(`${relativePath}:symlink:${target}:${stat.mtimeMs}`)
+        includedChildren += 1
+        continue
+      }
+
       if (entry.isDirectory()) {
-        if (entry.name === '.git') continue
-        await walk(absolutePath)
+        const childCount = await walk(absolutePath)
+        if (childCount === 0) {
+          const stat = await fs.lstat(absolutePath)
+          files.push(`${relativePath}:directory:0:${stat.mtimeMs}`)
+          includedChildren += 1
+        } else {
+          includedChildren += childCount
+        }
         continue
       }
       if (!entry.isFile()) continue
 
-      const stat = await fs.stat(absolutePath)
-      files.push(`${toCloudPath(path.relative(root, absolutePath))}:${stat.size}:${stat.mtimeMs}`)
+      const stat = await fs.lstat(absolutePath)
+      files.push(`${relativePath}:file:${stat.size}:${stat.mtimeMs}`)
+      includedChildren += 1
     }
+
+    return includedChildren
   }
 
   await walk(root)
@@ -1588,25 +1810,24 @@ async function serveStatus(options) {
   const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url, `http://${request.headers.host ?? `${host}:${port}`}`)
-      const state = await readAgentState(options)
 
       if (url.pathname === '/' || url.pathname === '/status') {
-        sendJson(response, 200, state.status)
+        sendJson(response, 200, await readAgentStatusEndpoint(options))
         return
       }
 
       if (url.pathname === '/events') {
-        sendJson(response, 200, state.events)
+        sendJson(response, 200, await readAgentEventsEndpoint(options))
         return
       }
 
       if (url.pathname === '/journal') {
-        sendJson(response, 200, state.journal)
+        sendJson(response, 200, await readAgentJournalEndpoint(options))
         return
       }
 
       if (url.pathname === '/cloud') {
-        sendJson(response, 200, state.cloud)
+        sendJson(response, 200, await readAgentCloudEndpoint(options))
         return
       }
 
@@ -1665,14 +1886,27 @@ async function runServiceCommand(action, options) {
 async function runServiceProcess(options) {
   let statusServer = null
   let watchHandle = null
+  let resolveShutdown = null
+  const shutdown = new Promise((resolve) => {
+    resolveShutdown = resolve
+  })
+  const requestShutdown = () => {
+    resolveShutdown?.()
+  }
 
   try {
     statusServer = await serveStatus(options)
     watchHandle = await watchWorkspace(options)
+    process.once('SIGTERM', requestShutdown)
+    process.once('SIGINT', requestShutdown)
+    await shutdown
   } catch (error) {
+    throw error
+  } finally {
+    process.off('SIGTERM', requestShutdown)
+    process.off('SIGINT', requestShutdown)
     watchHandle?.close()
     statusServer?.close()
-    throw error
   }
 }
 
@@ -1686,6 +1920,7 @@ async function startService(options) {
   const pidPath = path.resolve(options.pid)
   await fs.mkdir(path.dirname(pidPath), { recursive: true })
   const logPath = path.join(path.dirname(pidPath), `${options['codebase-id'] ?? 'hopit'}.log`)
+  const logStartOffset = existsSync(logPath) ? (await fs.stat(logPath)).size : 0
   const logHandle = await fs.open(logPath, 'a')
   const childEnv = {
     ...process.env,
@@ -1714,6 +1949,7 @@ async function startService(options) {
     workspace: path.resolve(options.workspace),
     statusUrl: `http://${options.host}:${options.port}/status`,
     logPath,
+    logStartOffset,
   }
   await writeJson(pidPath, record)
   try {
@@ -1735,7 +1971,7 @@ async function startService(options) {
 }
 
 async function waitForServiceReady(options, waitOptions) {
-  const timeoutMs = waitOptions.timeoutMs ?? 15000
+  const timeoutMs = waitOptions.timeoutMs ?? serviceReadyTimeoutMs
   const startedAt = Date.now()
   let lastStatus = null
 
@@ -1803,7 +2039,7 @@ async function serviceStatus(options) {
   let timeout
   try {
     const controller = new AbortController()
-    timeout = setTimeout(() => controller.abort(), 1000)
+    timeout = setTimeout(() => controller.abort(), serviceStatusFetchTimeoutMs)
     const response = await fetch(`http://${options.host}:${options.port}/status`, {
       cache: 'no-store',
       signal: controller.signal,
@@ -1825,7 +2061,16 @@ async function serviceStatus(options) {
     if (timeout) clearTimeout(timeout)
   }
 
-  const running = processRunning || (endpointReachable && agent?.ok !== false)
+  if (processRunning && (!agent || error || !fresh)) {
+    const logAgent = await readServiceLogAgent(record)
+    if (logAgent) {
+      agent = agent ? { ...logAgent, ...agent, watch: agent.watch ?? logAgent.watch } : logAgent
+      error = null
+      fresh = true
+    }
+  }
+
+  const running = processRunning || (Boolean(record?.pid) && endpointReachable && agent?.ok !== false)
   return {
     ok: running && !error && fresh && agent?.ok !== false,
     running,
@@ -1835,6 +2080,41 @@ async function serviceStatus(options) {
     record,
     agent,
     error,
+  }
+}
+
+async function readServiceLogAgent(record) {
+  if (!record?.logPath || typeof record.pid !== 'number') return null
+
+  let content
+  try {
+    content = await fs.readFile(record.logPath, 'utf8')
+  } catch {
+    return null
+  }
+
+  const offset = Number.isSafeInteger(record.logStartOffset) ? record.logStartOffset : 0
+  const serviceLog = content.slice(offset)
+  const hasWatchStarted = serviceLog
+    .split(/\n/)
+    .some((line) => line.startsWith('watch.started '))
+  if (!hasWatchStarted) return null
+
+  return {
+    ok: true,
+    readiness: 'ready',
+    codebaseId: record.codebaseId ?? null,
+    workspace: {
+      path: record.workspace ?? null,
+    },
+    watch: {
+      state: 'watching',
+      lastStarted: {
+        at: record.startedAt ?? null,
+        source: 'service-log',
+      },
+    },
+    statusSource: 'service-log',
   }
 }
 
@@ -1940,11 +2220,14 @@ async function runDemo(options) {
 
   await syncOnce(demoOptions)
 
-  const cloud = await createCloudGraphService(demoOptions).readGraph()
-  const saved = cloud.files['README.md']?.content.includes('managed workspace folder')
+  const demoCloudService = createCloudGraphService(demoOptions)
+  const cloud = await demoCloudService.readGraph()
+  const readmeContent = await cloudFileTextForVerification(cloud.files['README.md'], demoCloudService)
+  const privateContent = await cloudFileTextForVerification(cloud.files[privatePath], demoCloudService)
+  const saved = readmeContent.includes('managed workspace folder')
   const privateSaved =
     cloud.files[privatePath]?.scope === fileScope.ownerPrivate &&
-    cloud.files[privatePath]?.content.includes('Owner-only demo snapshot.')
+    privateContent.includes('Owner-only demo snapshot.')
 
   await emit(demoOptions, 'demo.verified', {
     cloud: demoOptions.cloud,
@@ -1993,12 +2276,7 @@ async function exportGitSnapshot(options, exportOptions) {
 
   await prepareCleanOutputDirectory(output, options)
   for (const [relativePath, file] of Object.entries(files)) {
-    if (typeof file.content !== 'string') {
-      throw new Error(`Cannot export non-text file content for ${relativePath}.`)
-    }
-    const absolutePath = workspaceFilePath(output, relativePath)
-    await fs.mkdir(path.dirname(absolutePath), { recursive: true })
-    await fs.writeFile(absolutePath, file.content, 'utf8')
+    await materializeCloudEntry(output, relativePath, normalizeCloudFileEntry(relativePath, file), cloudService)
   }
 
   runGit(['init'], output)
@@ -2167,6 +2445,353 @@ async function backupAgentState(options) {
     files: files.length,
     manifest: path.join(output, 'manifest.json'),
   }, null, 2))
+}
+
+function mirrorSecretRoutesFromOptions(_options) {
+  return new Map(defaultMirrorSecretRoutes)
+}
+
+async function backupWorkspaceForMirror(options, startedAt) {
+  const workspace = path.resolve(options.workspace)
+  const output = path.resolve(path.join(
+    agentStateRootFromOptions(options),
+    'backups',
+    `workspace-mirror-${backupDirectoryName(options)}`,
+  ))
+  await assertBackupOutputSafe(output, options)
+  await fs.mkdir(path.dirname(output), { recursive: true })
+  await fs.rm(output, { recursive: true, force: true })
+  await fs.mkdir(output, { recursive: true })
+
+  const workspaceBackup = path.join(output, 'workspace')
+  if (existsSync(workspace)) {
+    await copyLiteralMirrorSource(workspace, workspaceBackup, new Map())
+  } else {
+    await fs.mkdir(workspaceBackup, { recursive: true })
+  }
+
+  const manifest = {
+    schemaVersion: 1,
+    createdAt: startedAt,
+    workspace,
+    backup: workspaceBackup,
+  }
+  await writeJson(path.join(output, 'manifest.json'), manifest)
+  return {
+    output,
+    workspace: workspaceBackup,
+    manifest: path.join(output, 'manifest.json'),
+  }
+}
+
+async function copyLiteralMirrorSource(source, destination, routes = new Map()) {
+  const result = {
+    files: 0,
+    symlinks: 0,
+    directories: 0,
+    routedSecrets: 0,
+    bytes: 0,
+  }
+
+  async function copyEntry(sourcePath, relativePath) {
+    const routedPath = routes.get(relativePath)
+    const targetRelativePath = routedPath ?? relativePath
+    const destinationPath = path.join(destination, ...targetRelativePath.split('/'))
+    const stat = await fs.lstat(sourcePath)
+
+    if (stat.isSymbolicLink()) {
+      const target = await fs.readlink(sourcePath)
+      await fs.mkdir(path.dirname(destinationPath), { recursive: true })
+      await fs.rm(destinationPath, { recursive: true, force: true })
+      await fs.symlink(target, destinationPath)
+      result.symlinks += 1
+      if (routedPath) result.routedSecrets += 1
+      return
+    }
+
+    if (stat.isDirectory()) {
+      if (routedPath) {
+        throw new Error(`Secret route source must be a file or symlink, got directory: ${relativePath}`)
+      }
+      await fs.mkdir(destinationPath, { recursive: true })
+      result.directories += 1
+      const entries = await fs.readdir(sourcePath, { withFileTypes: true })
+      for (const entry of entries) {
+        const childRelativePath = relativePath ? `${relativePath}/${entry.name}` : entry.name
+        if (shouldSkipLiteralMirrorPath(childRelativePath, entry)) continue
+        await copyEntry(path.join(sourcePath, entry.name), childRelativePath)
+      }
+      await fs.chmod(destinationPath, stat.mode)
+      await fs.utimes(destinationPath, stat.atime, stat.mtime)
+      return
+    }
+
+    if (!stat.isFile()) return
+
+    await fs.mkdir(path.dirname(destinationPath), { recursive: true })
+    await fs.copyFile(sourcePath, destinationPath)
+    await fs.chmod(destinationPath, stat.mode)
+    await fs.utimes(destinationPath, stat.atime, stat.mtime)
+    result.files += 1
+    result.bytes += stat.size
+    if (routedPath) result.routedSecrets += 1
+  }
+
+  await fs.mkdir(destination, { recursive: true })
+  const entries = await fs.readdir(source, { withFileTypes: true })
+  for (const entry of entries) {
+    if (shouldSkipLiteralMirrorPath(entry.name, entry)) continue
+    await copyEntry(path.join(source, entry.name), entry.name)
+  }
+
+  return result
+}
+
+async function buildLiteralMirrorManifest(root, options = {}) {
+  const routes = options.routes ?? new Map()
+  const entries = {}
+  const largestEntries = []
+
+  function addEntry(relativePath, entry) {
+    const normalizedPath = assertSafeCloudPath(relativePath)
+    if (entries[normalizedPath]) {
+      throw new Error(`Mirror manifest has duplicate routed path: ${normalizedPath}`)
+    }
+    entries[normalizedPath] = entry
+    largestEntries.push({ path: normalizedPath, kind: entry.kind, size: entry.size })
+    largestEntries.sort((a, b) => b.size - a.size || a.path.localeCompare(b.path))
+    largestEntries.splice(20)
+  }
+
+  async function walk(dir, relativeDir = '') {
+    const children = await fs.readdir(dir, { withFileTypes: true })
+    let includedChildren = 0
+
+    for (const child of children) {
+      const relativePath = relativeDir ? `${relativeDir}/${child.name}` : child.name
+      if (shouldSkipLiteralMirrorPath(relativePath, child)) continue
+      const routedPath = routes.get(relativePath)
+      const manifestPath = routedPath ?? relativePath
+      const absolutePath = path.join(dir, child.name)
+      const stat = await fs.lstat(absolutePath)
+
+      if (stat.isSymbolicLink()) {
+        const target = await fs.readlink(absolutePath)
+        addEntry(manifestPath, {
+          kind: entryKind.symlink,
+          hash: hashSymlinkTarget(target),
+          size: Buffer.byteLength(target),
+          encodedBytes: Buffer.byteLength(target),
+          scope: scopeForPath(manifestPath),
+          target,
+        })
+        includedChildren += 1
+        continue
+      }
+
+      if (stat.isDirectory()) {
+        if (routedPath) {
+          throw new Error(`Secret route source must be a file or symlink, got directory: ${relativePath}`)
+        }
+        const childCount = await walk(absolutePath, relativePath)
+        if (childCount === 0) {
+          addEntry(relativePath, {
+            kind: entryKind.directory,
+            hash: hashDirectoryEntry(relativePath),
+            size: 0,
+            encodedBytes: 0,
+            scope: scopeForPath(relativePath),
+            target: null,
+          })
+          includedChildren += 1
+        } else {
+          includedChildren += childCount
+        }
+        continue
+      }
+
+      if (!stat.isFile()) continue
+
+      const buffer = await fs.readFile(absolutePath)
+      addEntry(manifestPath, {
+        kind: entryKind.file,
+        hash: hashBuffer(buffer),
+        size: buffer.byteLength,
+        encodedBytes: base64EncodedLength(buffer.byteLength),
+        scope: scopeForPath(manifestPath),
+        target: null,
+      })
+      includedChildren += 1
+    }
+
+    return includedChildren
+  }
+
+  await walk(root)
+  const scopeCounts = countPathScopes(Object.keys(entries))
+  return {
+    schemaVersion: 1,
+    root: path.resolve(root),
+    entryCount: Object.keys(entries).length,
+    scopeCounts,
+    entries,
+    largestEntries,
+  }
+}
+
+function diffLiteralManifests(expected, actual) {
+  const addedPaths = []
+  const modifiedPaths = []
+  const deletedPaths = []
+
+  for (const relativePath of Object.keys(actual.entries).sort()) {
+    const expectedEntry = expected.entries[relativePath]
+    const actualEntry = actual.entries[relativePath]
+    if (!expectedEntry) {
+      addedPaths.push(relativePath)
+      continue
+    }
+    if (
+      expectedEntry.kind !== actualEntry.kind ||
+      expectedEntry.hash !== actualEntry.hash ||
+      expectedEntry.size !== actualEntry.size ||
+      expectedEntry.scope !== actualEntry.scope ||
+      (expectedEntry.target ?? null) !== (actualEntry.target ?? null)
+    ) {
+      modifiedPaths.push(relativePath)
+    }
+  }
+
+  for (const relativePath of Object.keys(expected.entries).sort()) {
+    if (!actual.entries[relativePath]) deletedPaths.push(relativePath)
+  }
+
+  return {
+    clean: addedPaths.length === 0 && modifiedPaths.length === 0 && deletedPaths.length === 0,
+    addedCount: addedPaths.length,
+    modifiedCount: modifiedPaths.length,
+    deletedCount: deletedPaths.length,
+    samplePaths: [...addedPaths, ...modifiedPaths, ...deletedPaths].slice(0, 20),
+  }
+}
+
+function literalManifestSummary(manifest) {
+  return {
+    root: manifest.root,
+    entryCount: manifest.entryCount,
+    scopeCounts: manifest.scopeCounts,
+    largestEntries: manifest.largestEntries.slice(0, 10),
+  }
+}
+
+function storageBudgetReport(manifest, budgetBytes) {
+  const uniquePayloads = new Map()
+  let totalRawBytes = 0
+  let totalEncodedBytes = 0
+
+  for (const entry of Object.values(manifest.entries)) {
+    if (entry.kind === entryKind.directory) continue
+    totalRawBytes += entry.size
+    totalEncodedBytes += entry.encodedBytes
+    if (!uniquePayloads.has(entry.hash)) {
+      uniquePayloads.set(entry.hash, {
+        rawBytes: entry.size,
+        encodedBytes: entry.encodedBytes,
+      })
+    }
+  }
+
+  let uniqueRawBytes = 0
+  let uniqueEncodedBytes = 0
+  for (const payload of uniquePayloads.values()) {
+    uniqueRawBytes += payload.rawBytes
+    uniqueEncodedBytes += payload.encodedBytes
+  }
+
+  return {
+    budgetBytes,
+    withinBudget: uniqueEncodedBytes <= budgetBytes,
+    totalRawBytes,
+    totalEncodedBytes,
+    uniqueRawBytes,
+    uniqueEncodedBytes,
+    uniquePayloads: uniquePayloads.size,
+    overByBytes: Math.max(0, uniqueEncodedBytes - budgetBytes),
+  }
+}
+
+function base64EncodedLength(byteLength) {
+  return Math.ceil(byteLength / 3) * 4
+}
+
+async function stopMirrorService(label) {
+  if (process.platform !== 'darwin') {
+    return { skipped: true, reason: 'launch-agent-only-on-darwin' }
+  }
+
+  const target = launchAgentTarget(label)
+  const result = spawnSync('launchctl', ['bootout', target], { encoding: 'utf8' })
+  if (result.status === 0) {
+    return { skipped: false, stopped: true, label, target }
+  }
+
+  const output = `${result.stdout ?? ''}${result.stderr ?? ''}`
+  if (/No such process|Could not find specified service|service already unloaded/i.test(output)) {
+    return { skipped: false, stopped: false, alreadyStopped: true, label, target }
+  }
+
+  return {
+    skipped: false,
+    stopped: false,
+    label,
+    target,
+    status: result.status,
+    error: output.trim() || 'launchctl bootout failed',
+  }
+}
+
+async function startMirrorService(label) {
+  if (process.platform !== 'darwin') {
+    return { skipped: true, reason: 'launch-agent-only-on-darwin' }
+  }
+
+  const plistPath = path.join(os.homedir(), 'Library', 'LaunchAgents', `${label}.plist`)
+  if (!existsSync(plistPath)) {
+    return { skipped: true, reason: 'launch-agent-plist-missing', label, plistPath }
+  }
+
+  const domain = launchAgentDomain()
+  const bootstrap = spawnSync('launchctl', ['bootstrap', domain, plistPath], { encoding: 'utf8' })
+  const bootstrapOutput = `${bootstrap.stdout ?? ''}${bootstrap.stderr ?? ''}`
+  if (bootstrap.status !== 0 && !/service already loaded|already exists/i.test(bootstrapOutput)) {
+    return {
+      skipped: false,
+      started: false,
+      label,
+      plistPath,
+      status: bootstrap.status,
+      error: bootstrapOutput.trim() || 'launchctl bootstrap failed',
+    }
+  }
+
+  const kickstart = spawnSync('launchctl', ['kickstart', '-k', launchAgentTarget(label)], { encoding: 'utf8' })
+  return {
+    skipped: false,
+    started: kickstart.status === 0,
+    label,
+    plistPath,
+    bootstrapStatus: bootstrap.status,
+    kickstartStatus: kickstart.status,
+    error: kickstart.status === 0 ? null : `${kickstart.stdout ?? ''}${kickstart.stderr ?? ''}`.trim(),
+  }
+}
+
+function launchAgentTarget(label) {
+  return `${launchAgentDomain()}/${label}`
+}
+
+function launchAgentDomain() {
+  return `gui/${typeof process.getuid === 'function' ? process.getuid() : 501}`
 }
 
 async function installAgent(options) {
@@ -2460,12 +3085,16 @@ async function assertAttachWorkspaceSafe(options, cloud, index) {
 function workspaceFileMetadata(options, relativePath, file, forceExists = false) {
   const absolutePath = workspaceFilePath(options.workspace, relativePath)
   const exists = forceExists || existsSync(absolutePath)
+  const entry = normalizeCloudFileEntry(relativePath, file)
   return {
     path: relativePath,
-    scope: file.scope ?? scopeForPath(relativePath),
-    revision: file.revision ?? null,
-    size: file.size ?? (typeof file.content === 'string' ? Buffer.byteLength(file.content) : null),
-    hash: file.hash ?? (typeof file.content === 'string' ? hashContent(file.content) : null),
+    kind: entry.kind,
+    scope: entry.scope,
+    revision: entry.revision ?? null,
+    size: entry.size,
+    hash: entry.hash,
+    encoding: entry.kind === entryKind.file ? entry.encoding : null,
+    target: entry.target ?? null,
     local: {
       path: absolutePath,
       exists,
@@ -2476,13 +3105,18 @@ function workspaceFileMetadata(options, relativePath, file, forceExists = false)
 
 async function writeWorkspaceMetadataManifest(options, cloud, detail = {}) {
   await fs.mkdir(path.join(options.workspace, '.hopit'), { recursive: true })
-  const files = Object.entries(cloud.files ?? {}).map(([relativePath, file]) => ({
-    path: relativePath,
-    scope: file.scope ?? scopeForPath(relativePath),
-    revision: file.revision ?? null,
-    size: file.size ?? null,
-    hash: file.hash ?? null,
-  }))
+  const files = Object.entries(cloud.files ?? {}).map(([relativePath, file]) => {
+    const entry = normalizeCloudFileEntry(relativePath, file)
+    return {
+      path: relativePath,
+      kind: entry.kind,
+      scope: entry.scope,
+      revision: entry.revision ?? null,
+      size: entry.size,
+      hash: entry.hash,
+      target: entry.target ?? null,
+    }
+  })
   await writeJson(path.join(options.workspace, '.hopit', 'metadata.json'), {
     schemaVersion: 1,
     generatedAt: new Date().toISOString(),
@@ -2820,12 +3454,14 @@ function contentManifestFromCloud(cloud, hydratedPaths = Object.keys(cloud.files
   for (const relativePath of uniqueCloudPaths(hydratedPaths)) {
     const file = cloud.files?.[relativePath]
     if (!file) continue
-    const content = typeof file.content === 'string' ? file.content : ''
+    const entry = normalizeCloudFileEntry(relativePath, file)
     files[relativePath] = {
-      hash: typeof file.hash === 'string' ? file.hash : hashContent(content),
-      size: Number.isInteger(file.size) ? file.size : Buffer.byteLength(content),
-      scope: file.scope ?? scopeForPath(relativePath),
-      revision: Number.isInteger(file.revision) ? file.revision : null,
+      kind: entry.kind,
+      hash: entry.hash,
+      size: entry.size,
+      scope: entry.scope ?? scopeForPath(relativePath),
+      revision: Number.isInteger(entry.revision) ? entry.revision : null,
+      target: entry.target ?? null,
     }
   }
 
@@ -2841,12 +3477,14 @@ async function contentManifestFromWorkspace(root) {
   const diskFiles = await readWorkspaceFiles(root)
   const files = {}
   for (const relativePath of Object.keys(diskFiles).sort()) {
-    const content = diskFiles[relativePath]
+    const entry = normalizeCloudFileEntry(relativePath, diskFiles[relativePath])
     files[relativePath] = {
-      hash: hashContent(content),
-      size: Buffer.byteLength(content),
-      scope: scopeForPath(relativePath),
+      kind: entry.kind,
+      hash: entry.hash,
+      size: entry.size,
+      scope: entry.scope,
       revision: null,
+      target: entry.target ?? null,
     }
   }
 
@@ -2935,7 +3573,13 @@ function diffContentManifests(baseline, disk) {
       addedPaths.push(relativePath)
       continue
     }
-    if (expected.hash !== actual.hash || expected.size !== actual.size || expected.scope !== actual.scope) {
+    if (
+      expected.kind !== actual.kind ||
+      expected.hash !== actual.hash ||
+      expected.size !== actual.size ||
+      expected.scope !== actual.scope ||
+      (expected.target ?? null) !== (actual.target ?? null)
+    ) {
       modifiedPaths.push(relativePath)
     }
   }
@@ -3164,6 +3808,384 @@ function runGit(args, cwd) {
   }
 
   return result
+}
+
+async function readAgentStatusEndpoint(options) {
+  const cloudService = createCloudGraphService(options)
+  const [journalEntries, eventEntries, workspaceIndex] = await Promise.all([
+    readNdjson(options.journal),
+    readNdjson(options.events),
+    readWorkspaceIndex(options),
+  ])
+  const journalState = classifyJournalEntries(journalEntries, eventEntries)
+  const eventsSummary = {
+    ...summarizeAgentEvents(eventEntries),
+    path: path.resolve(options.events),
+    exists: existsSync(options.events),
+  }
+  const journalSummary = {
+    ...summarizeAgentJournal(journalEntries, journalState),
+    path: path.resolve(options.journal),
+    exists: existsSync(options.journal),
+  }
+  const indexedCodebase = findIndexedCodebase(workspaceIndex, options['codebase-id'], options.workspace)
+  const cloudSummary = fastCloudSummaryFromIndex(options, cloudService, indexedCodebase)
+  const workspaceExists = existsSync(options.workspace)
+  const hydration = buildWorkspaceHydration({
+    cloudSummary,
+    workspaceExists,
+    lastWorkspaceReady: eventsSummary.lastWorkspaceReady,
+    lastRefreshComplete: eventsSummary.lastRefreshComplete,
+    indexedCodebase,
+  })
+  const syncHealth = buildSyncHealth(eventsSummary)
+  const refreshHealth = buildRefreshHealth(eventsSummary)
+  const watchHealth = buildWatchHealth(eventsSummary)
+  const remotePullHealth = buildRemotePullHealth(options, eventsSummary)
+  remotePullHealth.cursor = buildRemoteCursor({
+    cloudSummary,
+    eventsSummary,
+    hydration,
+  })
+  const initialized = cloudSummary.exists && (hydration.state === 'materialized' || hydration.state === 'partial')
+  const attached = cloudSummary.exists && hydration.state === 'metadata-only'
+  const readiness = initialized || watchHealth.state === 'watching' ? 'ready' : attached ? 'attached' : 'not_initialized'
+
+  return {
+    ok:
+      (readiness === 'ready' || readiness === 'attached') &&
+      journalSummary.failedCount === 0 &&
+      syncHealth.state !== 'failed' &&
+      refreshHealth.state !== 'blocked' &&
+      !watchHealth.state.endsWith('degraded') &&
+      watchHealth.state !== 'blocked',
+    generatedAt: new Date().toISOString(),
+    readiness,
+    mode: workspaceMode,
+    codebaseId: cloudSummary.codebase?.id ?? options['codebase-id'] ?? null,
+    codebaseName: cloudSummary.codebase?.name ?? null,
+    selectedStateType: cloudSummary.selectedState?.type ?? null,
+    activeChangeSetId:
+      cloudSummary.selectedState?.type === 'active-change-set' ? cloudSummary.selectedState.id : indexedCodebase?.activeChangeSetId ?? null,
+    mainId: cloudSummary.main?.id ?? indexedCodebase?.mainId ?? null,
+    ownerId: cloudSummary.owner?.id ?? cloudSummary.codebase?.ownerId ?? null,
+    sessionId: cloudSummary.session?.id ?? null,
+    requesterId: null,
+    requesterSessionId: cloudSummary.session?.id ?? null,
+    requesterRole: null,
+    visibleFileCount: cloudSummary.fileCount,
+    hiddenFileCount: cloudSummary.hiddenFileCount,
+    hiddenScopeCounts: cloudSummary.hiddenScopeCounts,
+    effectiveChangeSetVisibility:
+      cloudSummary.selectedState?.effectiveVisibility ?? cloudSummary.visibility?.effective ?? null,
+    review: {
+      state: cloudSummary.selectedState?.reviewState ?? 'not-open',
+      detail: cloudSummary.selectedState?.review ?? null,
+    },
+    merge: {
+      state: cloudSummary.selectedState?.mergeState ?? 'unmerged',
+      detail: cloudSummary.selectedState?.merge ?? null,
+      mainRevision: cloudSummary.main?.revision ?? null,
+    },
+    conflict: {
+      state: cloudSummary.selectedState?.conflictState ?? 'none',
+      detail: cloudSummary.selectedState?.conflict ?? null,
+    },
+    workspace: {
+      root: path.resolve(workspaceRootFromOptions(options)),
+      path: path.resolve(options.workspace),
+      exists: workspaceExists,
+      adapter: workspaceMode.adapter,
+      cacheMode: workspaceMode.cacheMode,
+      hydration,
+      localChanges: {
+        safe: true,
+        state: 'not_scanned',
+        reason: 'status_endpoint_avoids_workspace_scan',
+        addedCount: null,
+        modifiedCount: null,
+        deletedCount: null,
+        samplePaths: [],
+      },
+      contentManifest: contentManifestSummary(indexedCodebase?.contentManifest),
+      index: workspaceIndexSummary(options, workspaceIndex),
+      virtualized: false,
+    },
+    cloud: cloudSummary,
+    journal: {
+      path: journalSummary.path,
+      exists: journalSummary.exists,
+      totalEntries: journalSummary.totalEntries,
+      pendingCount: journalSummary.pendingCount,
+      failedCount: journalSummary.failedCount,
+      acknowledgedCount: journalSummary.acknowledgedCount,
+      scopeCounts: journalSummary.scopeCounts,
+      pendingScopeCounts: journalSummary.pendingScopeCounts,
+      failedScopeCounts: journalSummary.failedScopeCounts,
+      acknowledgedScopeCounts: journalSummary.acknowledgedScopeCounts,
+    },
+    sync: syncHealth,
+    refresh: refreshHealth,
+    remoteUpdate: {
+      state: eventsSummary.lastRemoteUpdate ? 'updated' : 'idle',
+      lastUpdate: eventsSummary.lastRemoteUpdate,
+    },
+    remotePull: remotePullHealth,
+    watch: watchHealth,
+    events: eventsSummary,
+  }
+}
+
+async function readAgentEventsEndpoint(options) {
+  return {
+    ...summarizeAgentEvents(await readNdjson(options.events)),
+    path: path.resolve(options.events),
+    exists: existsSync(options.events),
+  }
+}
+
+async function readAgentJournalEndpoint(options) {
+  const [journalEntries, eventEntries] = await Promise.all([
+    readNdjson(options.journal),
+    readNdjson(options.events),
+  ])
+  return {
+    ...summarizeAgentJournal(journalEntries, classifyJournalEntries(journalEntries, eventEntries)),
+    path: path.resolve(options.journal),
+    exists: existsSync(options.journal),
+  }
+}
+
+async function readAgentCloudEndpoint(options) {
+  const cloudService = createCloudGraphService(options)
+  const cloud = await cloudService.readOptionalVisibleGraph(visibilityRequestFromOptions(options))
+  const cloudFiles = cloud?.files ? Object.keys(cloud.files) : []
+  const cloudSummary = {
+    path: cloudService.location ?? path.resolve(options.cloud),
+    service: cloudService.type,
+    exists: Boolean(cloud),
+    schemaVersion: cloud?.schemaVersion ?? null,
+    codebase: cloud?.codebase
+      ? {
+          id: cloud.codebase.id ?? null,
+          name: cloud.codebase.name ?? null,
+          ownerId: cloud.codebase.ownerId ?? null,
+        }
+      : null,
+    main: cloud?.main
+      ? {
+          id: cloud.main.id ?? null,
+          revision: cloud.main.revision ?? null,
+        }
+      : null,
+    selectedState: cloud?.selectedState
+      ? {
+          type: cloud.selectedState.type ?? null,
+          id: cloud.selectedState.id ?? null,
+          ownerId: cloud.selectedState.ownerId ?? null,
+          baseMainId: cloud.selectedState.baseMainId ?? null,
+          baseRevision: cloud.selectedState.baseRevision ?? null,
+          revision: cloud.selectedState.revision ?? null,
+          visibility: cloud.selectedState.visibility ?? null,
+          effectiveVisibility: cloud.selectedState.effectiveVisibility ?? null,
+          reviewState: cloud.selectedState.reviewState ?? null,
+          mergeState: cloud.selectedState.mergeState ?? null,
+          conflictState: cloud.selectedState.conflictState ?? null,
+          conflict: cloud.selectedState.conflict ?? null,
+          review: cloud.selectedState.review ?? null,
+          merge: cloud.selectedState.merge ?? null,
+        }
+      : null,
+    owner: cloud?.owner
+      ? {
+          id: cloud.owner.id ?? null,
+        }
+      : null,
+    session: cloud?.session
+      ? {
+          id: cloud.session.id ?? null,
+          deviceName: cloud.session.deviceName ?? null,
+        }
+      : null,
+    requester: cloud?.visibilityContext ? summarizeRequester(cloud.visibilityContext) : null,
+    access: cloud?.visibilityContext ? summarizeRequester(cloud.visibilityContext) : null,
+    hiddenFileCount: cloud?.visibilityContext?.hiddenFileCount ?? null,
+    hiddenScopeCounts: cloud?.visibilityContext?.hiddenScopeCounts ?? null,
+    visibility: cloud?.visibility
+      ? {
+          productDefault: cloud.visibility.productDefault ?? null,
+          globalUserDefault: cloud.visibility.globalUserDefault ?? null,
+          codebaseOverride: cloud.visibility.codebaseOverride ?? null,
+          changeSetOverride: cloud.visibility.changeSetOverride ?? null,
+          effective: cloud.visibility.effective ?? null,
+        }
+      : null,
+    revision: cloud?.revision ?? null,
+    fileCount: cloudFiles.length,
+    scopeCounts: countCloudScopes(cloud),
+  }
+
+  return {
+    ...cloudSummary,
+    graph: cloud,
+  }
+}
+
+function summarizeAgentEvents(eventEntries) {
+  const lastAcknowledgement = findLastEvent(eventEntries, 'cloud.acknowledged')
+  const lastSync = findLastEvent(eventEntries, 'sync.complete')
+  const lastStartedSync = findLastEvent(eventEntries, 'sync.started')
+  const lastFailedSync = findLastEvent(eventEntries, 'sync.failed')
+  const lastRecoveredSync = findLastEvent(eventEntries, 'sync.recovered')
+  const latestSyncEvent = findLastEventOf(eventEntries, [
+    'sync.started',
+    'sync.complete',
+    'sync.failed',
+    'sync.recovered',
+  ])
+  const lastRefreshStarted = findLastEvent(eventEntries, 'refresh.started')
+  const lastRefreshBlocked = findLastEvent(eventEntries, 'refresh.blocked')
+  const lastRefreshComplete = findLastEvent(eventEntries, 'refresh.complete')
+  const lastWorkspaceReady = findLastEvent(eventEntries, 'workspace.ready')
+  const lastRemoteUpdate = findLastEvent(eventEntries, 'remote-update')
+  const lastRemotePullStarted = findLastEvent(eventEntries, 'remote-pull.started')
+  const lastRemotePullSkipped = findLastEvent(eventEntries, 'remote-pull.skipped')
+  const lastRemotePullFailed = findLastEvent(eventEntries, 'remote-pull.failed')
+  const lastRemotePullApplied = findLastEvent(eventEntries, 'remote-pull.applied')
+  const latestRemotePullEvent = findLastEventOf(eventEntries, [
+    'remote-pull.started',
+    'remote-pull.applied',
+    'remote-pull.skipped',
+    'remote-pull.failed',
+  ])
+  const latestRefreshEvent = findLastEventOf(eventEntries, [
+    'refresh.started',
+    'refresh.blocked',
+    'refresh.complete',
+  ])
+  const lastRecovery = findLastEvent(eventEntries, 'journal.recovery_complete')
+  const lastWatchStarted = findLastEvent(eventEntries, 'watch.started')
+  const lastWatchDegraded = findLastEvent(eventEntries, 'watch.degraded')
+  const lastWatchRecoveryBlocked = findLastEvent(eventEntries, 'watch.recovery_blocked')
+  const latestWatchEvent = findLastEventOf(eventEntries, [
+    'watch.started',
+    'watch.degraded',
+    'watch.recovery_blocked',
+  ])
+
+  return {
+    path: null,
+    exists: eventEntries.length > 0,
+    totalEntries: eventEntries.length,
+    recent: eventEntries.slice(-20),
+    lastAcknowledgement,
+    lastSync,
+    lastStartedSync,
+    lastFailedSync,
+    lastRecoveredSync,
+    latestSyncEvent,
+    lastWorkspaceReady,
+    lastRefreshStarted,
+    lastRefreshBlocked,
+    lastRefreshComplete,
+    lastRemoteUpdate,
+    lastRemotePullStarted,
+    lastRemotePullApplied,
+    lastRemotePullSkipped,
+    lastRemotePullFailed,
+    latestRemotePullEvent,
+    lastReviewOpened: findLastEvent(eventEntries, 'change_set.review_opened'),
+    lastChangeSetMerged: findLastEvent(eventEntries, 'change_set.merged'),
+    lastConflictDetected: findLastEvent(eventEntries, 'change_set.conflict_detected'),
+    latestRefreshEvent,
+    lastRecovery,
+    lastWatchStarted,
+    lastWatchDegraded,
+    lastWatchRecoveryBlocked,
+    latestWatchEvent,
+  }
+}
+
+function summarizeAgentJournal(journalEntries, journalState) {
+  const pendingJournalEntries = journalState.entries.filter((entry) => entry.recoveryStatus === 'pending')
+  const failedJournalEntries = journalState.entries.filter((entry) => entry.recoveryStatus === 'failed')
+  const acknowledgedJournalEntries = journalState.entries.filter(
+    (entry) => entry.recoveryStatus === 'acknowledged',
+  )
+
+  return {
+    path: null,
+    exists: journalEntries.length > 0,
+    totalEntries: journalEntries.length,
+    pendingCount: pendingJournalEntries.length,
+    failedCount: failedJournalEntries.length,
+    acknowledgedCount: acknowledgedJournalEntries.length,
+    scopeCounts: countEntryScopes(journalEntries),
+    pendingScopeCounts: countEntryScopes(pendingJournalEntries),
+    failedScopeCounts: countEntryScopes(failedJournalEntries),
+    acknowledgedScopeCounts: countEntryScopes(acknowledgedJournalEntries),
+    pendingEntries: pendingJournalEntries,
+    failedEntries: failedJournalEntries,
+    acknowledgedEntries: acknowledgedJournalEntries,
+    entries: journalState.entries,
+  }
+}
+
+function fastCloudSummaryFromIndex(options, cloudService, indexedCodebase) {
+  const codebaseId = indexedCodebase?.id ?? options['codebase-id'] ?? null
+  const selectedStateType = indexedCodebase?.activeChangeSetId ? 'active-change-set' : null
+  const revision = indexedCodebase?.remoteCursor?.graphRevision ?? indexedCodebase?.hydration?.lastMaterializedRevision ?? null
+  const selectedStateRevision = indexedCodebase?.remoteCursor?.selectedStateRevision ?? null
+
+  return {
+    path: cloudService.location ?? cloudLocationFromOptions(options, codebaseId),
+    service: cloudService.type,
+    exists: Boolean(indexedCodebase?.cloud?.exists ?? indexedCodebase),
+    schemaVersion: null,
+    codebase: codebaseId
+      ? {
+          id: codebaseId,
+          name: indexedCodebase?.name ?? codebaseId,
+          ownerId: null,
+        }
+      : null,
+    main: indexedCodebase?.mainId
+      ? {
+          id: indexedCodebase.mainId,
+          revision,
+        }
+      : null,
+    selectedState: selectedStateType
+      ? {
+          type: selectedStateType,
+          id: indexedCodebase.activeChangeSetId,
+          ownerId: null,
+          baseMainId: indexedCodebase.mainId ?? null,
+          baseRevision: null,
+          revision: selectedStateRevision,
+          visibility: null,
+          effectiveVisibility: null,
+          reviewState: 'not-open',
+          mergeState: 'unmerged',
+          conflictState: 'none',
+          conflict: null,
+          review: null,
+          merge: null,
+        }
+      : null,
+    owner: null,
+    session: {
+      id: options['session-id'] ?? null,
+      deviceName: options['device-name'] ?? null,
+    },
+    requester: null,
+    hiddenFileCount: indexedCodebase?.hiddenFileCount ?? null,
+    hiddenScopeCounts: indexedCodebase?.hiddenScopeCounts ?? null,
+    visibility: null,
+    revision,
+    fileCount: indexedCodebase?.visibleFileCount ?? indexedCodebase?.hydration?.hydratedPathCount ?? 0,
+    scopeCounts: indexedCodebase?.scopeCounts ?? null,
+  }
 }
 
 async function readAgentState(options) {
@@ -3505,6 +4527,8 @@ async function prepareRecovery(cloud, entry, workspace) {
 
   const scope = entry.scope ?? scopeForPath(entry.path)
   const cloudFile = cloud.files?.[entry.path]
+    ? normalizeCloudFileEntry(entry.path, cloud.files[entry.path])
+    : null
 
   if (entry.type === 'delete') {
     if (!cloudFile) return { reason: 'cloud_already_deleted' }
@@ -3515,8 +4539,8 @@ async function prepareRecovery(cloud, entry, workspace) {
     throw new Error(`unsupported journal entry type: ${entry.type}`)
   }
 
-  if (cloudFile?.hash === entry.hash && cloudFile.scope === scope) {
-    return { content: cloudFile.content, reason: 'cloud_already_matches' }
+  if (cloudFile?.hash === entry.hash && cloudFile.scope === scope && (entry.kind ?? cloudFile.kind) === cloudFile.kind) {
+    return { entry: cloudFile, reason: 'cloud_already_matches' }
   }
 
   if (!existsSync(workspace)) {
@@ -3528,13 +4552,12 @@ async function prepareRecovery(cloud, entry, workspace) {
     throw new Error('workspace_file_missing')
   }
 
-  const content = await fs.readFile(absolutePath, 'utf8')
-  const hash = hashContent(content)
-  if (hash !== entry.hash) {
-    throw new Error(`workspace_hash_mismatch: expected ${entry.hash}, got ${hash}`)
+  const diskEntry = normalizeCloudFileEntry(entry.path, await readSingleWorkspaceEntry(workspace, entry.path))
+  if (diskEntry.hash !== entry.hash || diskEntry.kind !== (entry.kind ?? diskEntry.kind)) {
+    throw new Error(`workspace_hash_mismatch: expected ${entry.hash}, got ${diskEntry.hash}`)
   }
 
-  return { content, reason: 'workspace_replayed' }
+  return { entry: diskEntry, reason: 'workspace_replayed' }
 }
 
 function applyJournalEntryToCloud(cloud, entry, options = {}) {
@@ -3562,6 +4585,7 @@ function applyJournalEntryToCloud(cloud, entry, options = {}) {
       id: entry.id,
       type: entry.type,
       path: entry.path,
+      kind: entry.kind ?? entryKind.file,
       scope,
       revision: cloud.revision,
       selectedStateType: cloud.selectedState?.type ?? null,
@@ -3570,26 +4594,45 @@ function applyJournalEntryToCloud(cloud, entry, options = {}) {
     }
   }
 
-  const content = options.content
-  if (typeof content !== 'string') {
-    throw new Error(`Cannot apply ${entry.type} without file content.`)
-  }
+  const payload = options.entry
+    ? normalizeCloudFileEntry(entry.path, options.entry)
+    : normalizeCloudFileEntry(entry.path, {
+        kind: entry.kind ?? entryKind.file,
+        content: options.content ?? '',
+        encoding: entry.encoding ?? entryEncoding.utf8,
+        target: entry.target ?? null,
+      })
 
-  const hash = hashContent(content)
-  if (entry.hash && hash !== entry.hash) {
-    throw new Error(`content_hash_mismatch: expected ${entry.hash}, got ${hash}`)
+  if (entry.hash && payload.hash !== entry.hash) {
+    throw new Error(`content_hash_mismatch: expected ${entry.hash}, got ${payload.hash}`)
   }
 
   const current = cloud.files[entry.path]
-  if (current?.hash !== hash || current.scope !== scope) {
+  const currentEntry = current ? normalizeCloudFileEntry(entry.path, current) : null
+  if (!currentEntry || !cloudEntryEquals(currentEntry, payload)) {
     cloud.revision += 1
     cloud.files[entry.path] = {
-      content,
-      hash,
-      size: Buffer.byteLength(content),
+      kind: payload.kind,
+      content: payload.content ?? '',
+      encoding: payload.encoding ?? entryEncoding.utf8,
+      target: payload.target ?? null,
+      hash: payload.hash,
+      size: payload.size,
       scope,
       revision: cloud.revision,
       updatedAt: now,
+    }
+    if (payload.kind === entryKind.file && payload.contentStorage) {
+      cloud.files[entry.path].contentStorage = payload.contentStorage
+    }
+    if (payload.kind === entryKind.file && payload.blobProvider) {
+      cloud.files[entry.path].blobProvider = payload.blobProvider
+    }
+    if (payload.kind === entryKind.file && payload.blobKey) {
+      cloud.files[entry.path].blobKey = payload.blobKey
+    }
+    if (payload.kind === entryKind.file && payload.blobHash) {
+      cloud.files[entry.path].blobHash = payload.blobHash
     }
     if (cloud.selectedState) cloud.selectedState.revision = cloud.revision
   }
@@ -3598,6 +4641,7 @@ function applyJournalEntryToCloud(cloud, entry, options = {}) {
     id: entry.id,
     type: entry.type,
     path: entry.path,
+    kind: payload.kind,
     scope,
     revision: cloud.revision,
     selectedStateType: cloud.selectedState?.type ?? null,
@@ -3812,15 +4856,22 @@ function buildWatchHealth(watchEvents) {
 
 function buildRemotePullHealth(options, remotePullEvents) {
   const enabled = remotePullEnabled(options)
+  const currentWatchStartedAt = remotePullEvents.lastWatchStarted?.at ?? null
+  const lastRemotePullStarted = eventAtOrAfter(remotePullEvents.lastRemotePullStarted, currentWatchStartedAt)
+  const lastRemotePullApplied = eventAtOrAfter(remotePullEvents.lastRemotePullApplied, currentWatchStartedAt)
+  const lastRemotePullSkipped = eventAtOrAfter(remotePullEvents.lastRemotePullSkipped, currentWatchStartedAt)
+  const lastRemotePullFailed = eventAtOrAfter(remotePullEvents.lastRemotePullFailed, currentWatchStartedAt)
+  const latestRemotePullEvent = eventAtOrAfter(remotePullEvents.latestRemotePullEvent, currentWatchStartedAt)
   const latestProblem = latestEvent([
-    remotePullEvents.lastRemotePullSkipped,
-    remotePullEvents.lastRemotePullFailed,
+    lastRemotePullSkipped,
+    lastRemotePullFailed,
   ])
+  const latestProblemIsCurrent = latestProblem && latestProblem === latestRemotePullEvent
   let state = enabled ? 'enabled' : 'disabled'
 
-  if (enabled && remotePullEvents.latestRemotePullEvent?.event === 'remote-pull.failed') {
+  if (enabled && latestRemotePullEvent?.event === 'remote-pull.failed') {
     state = 'failed'
-  } else if (enabled && remotePullEvents.latestRemotePullEvent?.event === 'remote-pull.skipped') {
+  } else if (enabled && latestRemotePullEvent?.event === 'remote-pull.skipped') {
     state = 'skipped'
   }
 
@@ -3829,13 +4880,18 @@ function buildRemotePullHealth(options, remotePullEvents) {
     state,
     intervalMs: enabled ? remoteRefreshIntervalMs(options) : null,
     safeRefreshOnly: enabled,
-    lastStarted: remotePullEvents.lastRemotePullStarted,
-    lastApplied: remotePullEvents.lastRemotePullApplied,
-    lastSkipped: remotePullEvents.lastRemotePullSkipped,
-    lastFailed: remotePullEvents.lastRemotePullFailed,
-    latestEvent: remotePullEvents.latestRemotePullEvent,
-    lastError: latestProblem?.detail?.reason ?? null,
+    lastStarted: lastRemotePullStarted,
+    lastApplied: lastRemotePullApplied,
+    lastSkipped: lastRemotePullSkipped,
+    lastFailed: lastRemotePullFailed,
+    latestEvent: latestRemotePullEvent,
+    lastError: latestProblemIsCurrent ? (latestProblem.detail?.reason ?? null) : null,
   }
+}
+
+function eventAtOrAfter(event, reference) {
+  if (!event || !reference) return event ?? null
+  return isTimestampAtOrAfter(event.at, reference) ? event : null
 }
 
 function latestEvent(events) {
@@ -3960,19 +5016,36 @@ async function readWorkspaceFiles(root) {
 
   async function walk(dir) {
     const entries = await fs.readdir(dir, { withFileTypes: true })
+    let includedChildren = 0
+
     for (const entry of entries) {
       const absolutePath = path.join(dir, entry.name)
       const relativePath = toCloudPath(path.relative(root, absolutePath))
       if (shouldSkipWorkspacePath(relativePath, entry)) continue
 
+      if (entry.isSymbolicLink()) {
+        result[relativePath] = await readWorkspaceSymlinkEntry(root, relativePath, absolutePath)
+        includedChildren += 1
+        continue
+      }
+
       if (entry.isDirectory()) {
-        await walk(absolutePath)
+        const childCount = await walk(absolutePath)
+        if (childCount === 0) {
+          result[relativePath] = workspaceDirectoryEntry(relativePath)
+          includedChildren += 1
+        } else {
+          includedChildren += childCount
+        }
         continue
       }
       if (!entry.isFile()) continue
 
-      result[relativePath] = await fs.readFile(absolutePath, 'utf8')
+      result[relativePath] = await readWorkspaceFileEntry(root, relativePath, absolutePath)
+      includedChildren += 1
     }
+
+    return includedChildren
   }
 
   await walk(root)
@@ -3982,8 +5055,67 @@ async function readWorkspaceFiles(root) {
 function shouldSkipWorkspacePath(relativePath, entry) {
   const parts = relativePath.split('/')
   if (parts.includes('.hopit')) return true
-  if (entry.isDirectory() && entry.name === '.git') return true
+  if (isLocalOnlySecretPath(relativePath)) return true
   return false
+}
+
+function shouldSkipLiteralMirrorPath(relativePath, _entry) {
+  const parts = relativePath.split('/')
+  if (parts.includes('.hopit')) return true
+  return false
+}
+
+function isLocalOnlySecretPath(relativePath) {
+  return relativePath === '.private/env' || relativePath.startsWith('.private/env/')
+}
+
+async function readWorkspaceFileEntry(_root, relativePath, absolutePath) {
+  const buffer = await fs.readFile(absolutePath)
+  const encoded = encodeBufferForCloud(buffer)
+  return {
+    kind: entryKind.file,
+    content: encoded.content,
+    encoding: encoded.encoding,
+    hash: hashBuffer(buffer),
+    size: buffer.byteLength,
+    scope: scopeForPath(relativePath),
+    revision: null,
+  }
+}
+
+async function readWorkspaceSymlinkEntry(_root, relativePath, absolutePath) {
+  const target = await fs.readlink(absolutePath)
+  return {
+    kind: entryKind.symlink,
+    content: target,
+    encoding: entryEncoding.utf8,
+    target,
+    hash: hashSymlinkTarget(target),
+    size: Buffer.byteLength(target),
+    scope: scopeForPath(relativePath),
+    revision: null,
+  }
+}
+
+async function readSingleWorkspaceEntry(root, relativePath) {
+  const absolutePath = workspaceFilePath(root, relativePath)
+  const stat = await fs.lstat(absolutePath)
+  if (stat.isSymbolicLink()) return readWorkspaceSymlinkEntry(root, relativePath, absolutePath)
+  if (stat.isDirectory()) return workspaceDirectoryEntry(relativePath)
+  if (stat.isFile()) return readWorkspaceFileEntry(root, relativePath, absolutePath)
+  throw new Error(`Unsupported workspace entry type: ${relativePath}`)
+}
+
+function workspaceDirectoryEntry(relativePath) {
+  return {
+    kind: entryKind.directory,
+    content: '',
+    encoding: entryEncoding.utf8,
+    hash: hashDirectoryEntry(relativePath),
+    size: 0,
+    scope: scopeForPath(relativePath),
+    revision: null,
+  }
 }
 
 async function readImportableProjectFiles(root) {
@@ -4075,6 +5207,472 @@ function shouldSkipImportPath(relativePath, entry) {
   return false
 }
 
+function createObjectBlobStore(options) {
+  const provider = normalizeBlobProvider(options['blob-provider'] ?? process.env.HOPIT_BLOB_PROVIDER)
+  if (!provider) return null
+
+  const prefix = normalizeBlobPrefix(options['blob-prefix'] ?? process.env.HOPIT_BLOB_PREFIX)
+  const budget = blobBudgetOptions(options, provider)
+
+  if (provider === objectBlobProvider.filesystem) {
+    const root = options['blob-root'] ?? process.env.HOPIT_BLOB_ROOT ?? path.join(path.dirname(options.cloud ?? defaultOptions.cloud), 'blobs')
+    return new FilesystemBlobStore({ root, prefix, budget })
+  }
+
+  if (provider === objectBlobProvider.r2) {
+    const accountId = requiredBlobConfig(options, 'r2-account-id', 'HOPIT_R2_ACCOUNT_ID')
+    const bucket = requiredBlobConfig(options, 'r2-bucket', 'HOPIT_R2_BUCKET')
+    const accessKeyId = requiredBlobConfig(options, 'r2-access-key-id', 'HOPIT_R2_ACCESS_KEY_ID')
+    const secretAccessKey = requiredBlobConfig(options, 'r2-secret-access-key', 'HOPIT_R2_SECRET_ACCESS_KEY')
+    const endpoint = options['r2-endpoint'] ?? process.env.HOPIT_R2_ENDPOINT ?? `https://${accountId}.r2.cloudflarestorage.com`
+    return new S3CompatibleBlobStore({
+      provider,
+      endpoint,
+      bucket,
+      region: options['r2-region'] ?? process.env.HOPIT_R2_REGION ?? 'auto',
+      accessKeyId,
+      secretAccessKey,
+      prefix,
+      forcePathStyle: true,
+      budget,
+    })
+  }
+
+  if (provider === objectBlobProvider.b2) {
+    const bucket = requiredBlobConfig(options, 'b2-bucket', 'HOPIT_B2_BUCKET')
+    const endpoint = requiredBlobConfig(options, 'b2-endpoint', 'HOPIT_B2_ENDPOINT')
+    const accessKeyId = requiredBlobConfig(options, 'b2-key-id', 'HOPIT_B2_KEY_ID')
+    const secretAccessKey = requiredBlobConfig(options, 'b2-application-key', 'HOPIT_B2_APPLICATION_KEY')
+    return new S3CompatibleBlobStore({
+      provider,
+      endpoint,
+      bucket,
+      region: options['b2-region'] ?? process.env.HOPIT_B2_REGION ?? process.env.HOPIT_S3_REGION ?? 'us-west-004',
+      accessKeyId,
+      secretAccessKey,
+      prefix,
+      forcePathStyle: true,
+      budget,
+    })
+  }
+
+  const endpoint = requiredBlobConfig(options, 's3-endpoint', 'HOPIT_S3_ENDPOINT')
+  const bucket = requiredBlobConfig(options, 's3-bucket', 'HOPIT_S3_BUCKET')
+  const accessKeyId = requiredBlobConfig(options, 's3-access-key-id', 'HOPIT_S3_ACCESS_KEY_ID')
+  const secretAccessKey = requiredBlobConfig(options, 's3-secret-access-key', 'HOPIT_S3_SECRET_ACCESS_KEY')
+  return new S3CompatibleBlobStore({
+    provider: objectBlobProvider.s3,
+    endpoint,
+    bucket,
+    region: options['s3-region'] ?? process.env.HOPIT_S3_REGION ?? 'us-east-1',
+    accessKeyId,
+    secretAccessKey,
+    prefix,
+    forcePathStyle: truthyEnv(options['s3-force-path-style'] ?? process.env.HOPIT_S3_FORCE_PATH_STYLE ?? '1'),
+    budget,
+  })
+}
+
+function blobBudgetOptions(options, provider) {
+  const freeOnly = blobFreeOnly(options, provider)
+  const defaultBudget = provider === objectBlobProvider.r2 && freeOnly ? r2DefaultFreeOnlyBudgetBytes : null
+  const budgetBytes = integerOption(
+    options['blob-storage-budget-bytes'] ?? process.env.HOPIT_BLOB_STORAGE_BUDGET_BYTES,
+    defaultBudget,
+    'HOPIT_BLOB_STORAGE_BUDGET_BYTES',
+  )
+  return {
+    freeOnly,
+    budgetBytes,
+  }
+}
+
+function blobFreeOnly(options, provider) {
+  const configured = options['blob-free-only'] ?? process.env.HOPIT_BLOB_FREE_ONLY
+  if (configured === undefined) return provider === objectBlobProvider.r2
+  return truthyEnv(configured)
+}
+
+function integerOption(value, defaultValue, name) {
+  if (value === undefined || value === null || value === '') return defaultValue
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed < 0) {
+    throw new Error(`${name} must be a non-negative integer.`)
+  }
+  return parsed
+}
+
+function normalizeBlobProvider(value) {
+  if (!value || value === 'inline' || value === 'convex') return null
+  if (value === 'local' || value === 'fs' || value === objectBlobProvider.filesystem) return objectBlobProvider.filesystem
+  if (value === objectBlobProvider.r2) return objectBlobProvider.r2
+  if (value === objectBlobProvider.b2 || value === 'backblaze') return objectBlobProvider.b2
+  if (value === objectBlobProvider.s3) return objectBlobProvider.s3
+  throw new Error(`Unsupported HOPIT_BLOB_PROVIDER: ${value}`)
+}
+
+function requiredBlobConfig(options, optionName, envName) {
+  const value = options[optionName] ?? process.env[envName]
+  if (!value) {
+    throw new Error(`Object blob provider requires --${optionName} or ${envName}.`)
+  }
+  return value
+}
+
+function normalizeBlobPrefix(value) {
+  return String(value ?? '')
+    .split('/')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .join('/')
+}
+
+function truthyEnv(value) {
+  return /^(1|true|yes|on)$/i.test(String(value ?? ''))
+}
+
+function blobKeyForHash(prefix, codebaseId, hash) {
+  const safeCodebaseId = encodeURIComponent(String(codebaseId ?? 'hopit'))
+  return [prefix, 'codebases', safeCodebaseId, 'blobs', 'sha256', hash.slice(0, 2), hash]
+    .filter(Boolean)
+    .join('/')
+}
+
+class FilesystemBlobStore {
+  constructor(options) {
+    this.provider = objectBlobProvider.filesystem
+    this.root = path.resolve(options.root)
+    this.prefix = options.prefix ?? ''
+    this.location = this.root
+    this.budget = options.budget ?? { freeOnly: false, budgetBytes: null }
+    this.usageCache = null
+  }
+
+  async putBlob({ codebaseId, hash, buffer }) {
+    const key = blobKeyForHash(this.prefix, codebaseId, hash)
+    const absolutePath = path.join(this.root, key)
+    if (existsSync(absolutePath)) {
+      const existing = await fs.readFile(absolutePath)
+      if (hashBuffer(existing) !== hash) {
+        throw new Error(`object_blob_hash_collision: existing filesystem blob differs for ${hash}.`)
+      }
+    } else {
+      await this.assertWithinBudget(buffer.byteLength)
+      await fs.mkdir(path.dirname(absolutePath), { recursive: true })
+      await fs.writeFile(absolutePath, buffer)
+      if (this.usageCache) this.usageCache.bytes += buffer.byteLength
+    }
+    return {
+      provider: this.provider,
+      key,
+      hash,
+      size: buffer.byteLength,
+      contentStorage: contentStorageMode.objectBlob,
+    }
+  }
+
+  async getBlob(file) {
+    if (!file.blobKey) throw new Error('Object-backed file is missing blobKey.')
+    return await fs.readFile(path.join(this.root, file.blobKey))
+  }
+
+  async assertWithinBudget(additionalBytes) {
+    if (!Number.isSafeInteger(this.budget.budgetBytes)) return
+    const usage = await this.readUsage()
+    if (usage.bytes + additionalBytes > this.budget.budgetBytes) {
+      throw new Error(
+        `object_blob_budget_exceeded: ${usage.bytes} existing bytes + ${additionalBytes} new bytes would exceed budget ${this.budget.budgetBytes}.`,
+      )
+    }
+  }
+
+  async readUsage() {
+    if (this.usageCache) return this.usageCache
+    const root = path.join(this.root, this.prefix)
+    let bytes = 0
+    let objects = 0
+
+    async function walk(dir) {
+      if (!existsSync(dir)) return
+      const entries = await fs.readdir(dir, { withFileTypes: true })
+      for (const entry of entries) {
+        const absolutePath = path.join(dir, entry.name)
+        if (entry.isDirectory()) {
+          await walk(absolutePath)
+          continue
+        }
+        if (!entry.isFile()) continue
+        const stat = await fs.stat(absolutePath)
+        bytes += stat.size
+        objects += 1
+      }
+    }
+
+    await walk(root)
+    this.usageCache = { bytes, objects }
+    return this.usageCache
+  }
+}
+
+class S3CompatibleBlobStore {
+  constructor(options) {
+    this.provider = options.provider
+    this.endpoint = new URL(options.endpoint)
+    this.bucket = options.bucket
+    this.region = options.region
+    this.accessKeyId = options.accessKeyId
+    this.secretAccessKey = options.secretAccessKey
+    this.prefix = options.prefix ?? ''
+    this.forcePathStyle = options.forcePathStyle !== false
+    this.location = `${this.provider}:${this.bucket}`
+    this.budget = options.budget ?? { freeOnly: false, budgetBytes: null }
+    this.usageCache = null
+  }
+
+  async putBlob({ codebaseId, hash, buffer }) {
+    const key = blobKeyForHash(this.prefix, codebaseId, hash)
+    if (await this.exists(key)) {
+      return {
+        provider: this.provider,
+        key,
+        hash,
+        size: buffer.byteLength,
+        contentStorage: contentStorageMode.objectBlob,
+      }
+    }
+
+    await this.assertWithinBudget(buffer.byteLength)
+    await this.request('PUT', key, {
+      body: buffer,
+      headers: {
+        'content-type': 'application/octet-stream',
+      },
+    })
+    if (this.usageCache) this.usageCache.bytes += buffer.byteLength
+    return {
+      provider: this.provider,
+      key,
+      hash,
+      size: buffer.byteLength,
+      contentStorage: contentStorageMode.objectBlob,
+    }
+  }
+
+  async getBlob(file) {
+    if (!file.blobKey) throw new Error('Object-backed file is missing blobKey.')
+    const response = await this.request('GET', file.blobKey)
+    return Buffer.from(await response.arrayBuffer())
+  }
+
+  async exists(key) {
+    const response = await this.request('HEAD', key, { allowNotFound: true })
+    return response.status !== 404
+  }
+
+  async assertWithinBudget(additionalBytes) {
+    if (!Number.isSafeInteger(this.budget.budgetBytes)) return
+    const usage = await this.readUsage()
+    if (usage.bytes + additionalBytes > this.budget.budgetBytes) {
+      const tierDetail = this.provider === objectBlobProvider.r2 && this.budget.freeOnly
+        ? ` R2 free-only mode is capped at ${this.budget.budgetBytes} bytes below the ${r2FreeStorageTierBytes} byte free tier.`
+        : ''
+      throw new Error(
+        `object_blob_budget_exceeded: ${usage.bytes} existing bytes + ${additionalBytes} new bytes would exceed budget ${this.budget.budgetBytes}.${tierDetail}`,
+      )
+    }
+  }
+
+  async readUsage() {
+    if (this.usageCache) return this.usageCache
+    const prefix = this.prefix ? `${this.prefix}/` : ''
+    let continuationToken = null
+    let bytes = 0
+    let objects = 0
+
+    do {
+      const query = {
+        'list-type': '2',
+        prefix,
+      }
+      if (continuationToken) query['continuation-token'] = continuationToken
+      const response = await this.request('GET', '', { query })
+      const xml = await response.text()
+      for (const size of parseS3ListObjectSizes(xml)) {
+        bytes += size
+        objects += 1
+      }
+      continuationToken = parseS3NextContinuationToken(xml)
+    } while (continuationToken)
+
+    this.usageCache = { bytes, objects }
+    return this.usageCache
+  }
+
+  async request(method, key, options = {}) {
+    const body = options.body ?? null
+    const url = this.objectUrl(key)
+    if (options.query) {
+      const search = new URLSearchParams()
+      for (const [name, value] of Object.entries(options.query)) {
+        if (value !== undefined && value !== null) search.set(name, String(value))
+      }
+      search.sort()
+      url.search = search.toString()
+    }
+    const payloadHash = body ? hashBuffer(body) : hashContent('')
+    const now = new Date()
+    const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '')
+    const dateStamp = amzDate.slice(0, 8)
+    const headers = {
+      host: url.host,
+      'x-amz-content-sha256': payloadHash,
+      'x-amz-date': amzDate,
+      ...(options.headers ?? {}),
+    }
+    const authorization = this.authorizationHeader({
+      method,
+      url,
+      headers,
+      payloadHash,
+      amzDate,
+      dateStamp,
+    })
+    headers.authorization = authorization
+
+    const response = await fetch(url, {
+      method,
+      headers,
+      body: body && method !== 'HEAD' ? body : undefined,
+    })
+    if (!response.ok && !(options.allowNotFound && response.status === 404)) {
+      const detail = await safeResponseText(response)
+      throw new Error(`${this.provider}_blob_request_failed: ${method} ${key} returned ${response.status}${detail ? ` ${detail}` : ''}`)
+    }
+    return response
+  }
+
+  objectUrl(key) {
+    const encodedKey = encodeS3Key(key)
+    if (this.forcePathStyle) {
+      const url = new URL(this.endpoint.toString())
+      url.pathname = joinUrlPath(url.pathname, this.bucket, encodedKey)
+      return url
+    }
+
+    const url = new URL(this.endpoint.toString())
+    url.hostname = `${this.bucket}.${url.hostname}`
+    url.pathname = joinUrlPath(url.pathname, encodedKey)
+    return url
+  }
+
+  authorizationHeader({ method, url, headers, payloadHash, amzDate, dateStamp }) {
+    const canonicalHeaders = Object.entries(headers)
+      .map(([name, value]) => [name.toLowerCase(), String(value).trim().replace(/\s+/g, ' ')])
+      .sort(([a], [b]) => a.localeCompare(b))
+    const signedHeaders = canonicalHeaders.map(([name]) => name).join(';')
+    const canonicalRequest = [
+      method,
+      url.pathname || '/',
+      url.search ? url.search.slice(1) : '',
+      canonicalHeaders.map(([name, value]) => `${name}:${value}\n`).join(''),
+      signedHeaders,
+      payloadHash,
+    ].join('\n')
+    const credentialScope = `${dateStamp}/${this.region}/s3/aws4_request`
+    const stringToSign = [
+      'AWS4-HMAC-SHA256',
+      amzDate,
+      credentialScope,
+      hashContent(canonicalRequest),
+    ].join('\n')
+    const signingKey = awsV4SigningKey(this.secretAccessKey, dateStamp, this.region, 's3')
+    const signature = createHmac('sha256', signingKey).update(stringToSign).digest('hex')
+
+    return `AWS4-HMAC-SHA256 Credential=${this.accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`
+  }
+}
+
+function parseS3ListObjectSizes(xml) {
+  const sizes = []
+  const contentMatches = xml.matchAll(/<Contents\b[^>]*>([\s\S]*?)<\/Contents>/g)
+  for (const match of contentMatches) {
+    const sizeMatch = match[1].match(/<Size>(\d+)<\/Size>/)
+    if (!sizeMatch) continue
+    sizes.push(Number(sizeMatch[1]))
+  }
+  return sizes
+}
+
+function parseS3NextContinuationToken(xml) {
+  const match = xml.match(/<NextContinuationToken>([\s\S]*?)<\/NextContinuationToken>/)
+  return match ? decodeXmlText(match[1]) : null
+}
+
+function decodeXmlText(value) {
+  return value
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+}
+
+function encodeS3Key(key) {
+  return key.split('/').map((part) => encodeURIComponent(part)).join('/')
+}
+
+function joinUrlPath(...parts) {
+  return `/${parts
+    .flatMap((part) => String(part ?? '').split('/'))
+    .filter(Boolean)
+    .join('/')}`
+}
+
+function awsV4SigningKey(secretAccessKey, dateStamp, region, service) {
+  const kDate = createHmac('sha256', `AWS4${secretAccessKey}`).update(dateStamp).digest()
+  const kRegion = createHmac('sha256', kDate).update(region).digest()
+  const kService = createHmac('sha256', kRegion).update(service).digest()
+  return createHmac('sha256', kService).update('aws4_request').digest()
+}
+
+async function safeResponseText(response) {
+  try {
+    const text = await response.text()
+    return text.trim().slice(0, 500)
+  } catch {
+    return ''
+  }
+}
+
+async function prepareGraphForBlobStorage(service, cloud) {
+  if (!service.blobStore) return cloud
+  const codebaseId = cloud.codebase?.id ?? service.codebaseId ?? 'hopit'
+  for (const [relativePath, file] of Object.entries(cloud.files ?? {})) {
+    const entry = normalizeCloudFileEntry(relativePath, file)
+    cloud.files[relativePath] = await prepareEntryForBlobStorage(service.blobStore, codebaseId, relativePath, entry)
+  }
+  return cloud
+}
+
+async function prepareEntryForBlobStorage(blobStore, codebaseId, relativePath, entry) {
+  const payload = normalizeCloudFileEntry(relativePath, entry)
+  if (!blobStore || payload.kind !== entryKind.file || isObjectStoredFileEntry(payload)) return payload
+  const buffer = bufferFromFileEntry(payload)
+  const descriptor = await blobStore.putBlob({
+    codebaseId,
+    hash: payload.hash,
+    buffer,
+  })
+  return {
+    ...payload,
+    content: '',
+    contentStorage: contentStorageMode.objectBlob,
+    blobProvider: descriptor.provider,
+    blobKey: descriptor.key,
+    blobHash: descriptor.hash,
+  }
+}
+
 function createCloudGraphService(options) {
   if (convexUrlFromOptions(options)) {
     return new ConvexCloudGraphService(options)
@@ -4084,15 +5682,16 @@ function createCloudGraphService(options) {
     throw new Error('Production profile requires --convex-url or HOPIT_CONVEX_URL. Use --allow-local-cloud only for local dry runs.')
   }
 
-  return new FixtureJsonCloudGraphService(options.cloud)
+  return new FixtureJsonCloudGraphService(options)
 }
 
 class FixtureJsonCloudGraphService {
-  constructor(cloudPath) {
-    this.path = cloudPath
+  constructor(options) {
+    this.path = options.cloud
     this.type = cloudServiceType
-    this.location = path.resolve(cloudPath)
+    this.location = path.resolve(options.cloud)
     this.usesAtomicFileMutations = false
+    this.blobStore = createObjectBlobStore(options)
   }
 
   async exists() {
@@ -4101,6 +5700,7 @@ class FixtureJsonCloudGraphService {
 
   async initialize(fixture) {
     const cloud = withComputedMetadata(fixture)
+    await prepareGraphForBlobStorage(this, cloud)
     await this.writeGraph(cloud)
     return cloud
   }
@@ -4124,7 +5724,9 @@ class FixtureJsonCloudGraphService {
   }
 
   async writeGraph(cloud) {
-    await writeJson(this.path, normalizeValidatedCloudGraph(cloud))
+    const normalized = normalizeValidatedCloudGraph(cloud)
+    await prepareGraphForBlobStorage(this, normalized)
+    await writeJson(this.path, normalized)
   }
 
   applyJournalEntry(cloud, entry, options = {}) {
@@ -4132,9 +5734,20 @@ class FixtureJsonCloudGraphService {
   }
 
   async commitJournalEntry(cloud, entry, options = {}) {
-    const acknowledgement = this.applyJournalEntry(cloud, entry, options)
+    const payload = options.entry
+      ? await prepareEntryForBlobStorage(this.blobStore, cloud.codebase?.id ?? 'hopit', entry.path, options.entry)
+      : null
+    const acknowledgement = this.applyJournalEntry(cloud, entry, {
+      ...options,
+      entry: payload ?? options.entry,
+    })
     await this.writeGraph(cloud)
     return acknowledgement
+  }
+
+  async readBlob(file) {
+    if (!this.blobStore) throw new Error('Object-backed file requires HOPIT_BLOB_PROVIDER.')
+    return await this.blobStore.getBlob(file)
   }
 }
 
@@ -4149,6 +5762,7 @@ class ConvexCloudGraphService {
     this.location = this.codebaseId ? `convex:${this.codebaseId}` : `convex:${this.url}`
     this.client = new ConvexHttpClient(this.url, { logger: false })
     this.usesAtomicFileMutations = true
+    this.blobStore = createObjectBlobStore(options)
   }
 
   async exists() {
@@ -4159,6 +5773,7 @@ class ConvexCloudGraphService {
     const cloud = withComputedMetadata(fixture)
     this.codebaseId = cloud.codebase.id
     this.location = `convex:${this.codebaseId}`
+    await prepareGraphForBlobStorage(this, cloud)
     await this.writeGraph(cloud)
     return cloud
   }
@@ -4195,6 +5810,7 @@ class ConvexCloudGraphService {
     const normalized = normalizeValidatedCloudGraph(cloud)
     this.codebaseId = normalized.codebase.id
     this.location = `convex:${this.codebaseId}`
+    await prepareGraphForBlobStorage(this, normalized)
     const args = { graph: normalized }
     Object.assign(args, this.credentialArgs())
 
@@ -4206,16 +5822,27 @@ class ConvexCloudGraphService {
   }
 
   async commitJournalEntry(cloud, entry, options = {}) {
+    const payload = options.entry
+      ? await prepareEntryForBlobStorage(this.blobStore, cloud.codebase?.id ?? this.codebaseId ?? 'hopit', entry.path, options.entry)
+      : null
     const args = {
       codebaseId: cloud.codebase.id,
       type: entry.type,
       path: entry.path,
+      kind: payload?.kind ?? entry.kind,
       baseRevision: Object.hasOwn(entry, 'baseRevision') ? entry.baseRevision : undefined,
       targetStateRevision: Object.hasOwn(entry, 'targetStateRevision') ? entry.targetStateRevision : undefined,
     }
-    if (entry.hash) args.hash = entry.hash
-    if (Number.isInteger(entry.bytes)) args.size = entry.bytes
-    if (typeof options.content === 'string') args.content = options.content
+    if (payload?.hash ?? entry.hash) args.hash = payload?.hash ?? entry.hash
+    if (Number.isInteger(payload?.size ?? entry.bytes)) args.size = payload?.size ?? entry.bytes
+    if (payload?.encoding) args.encoding = payload.encoding
+    if (payload?.target) args.target = payload.target
+    if (payload?.contentStorage) args.contentStorage = payload.contentStorage
+    if (payload?.blobProvider) args.blobProvider = payload.blobProvider
+    if (payload?.blobKey) args.blobKey = payload.blobKey
+    if (payload?.blobHash) args.blobHash = payload.blobHash
+    if (payload && typeof payload.content === 'string') args.content = payload.content
+    else if (typeof options.content === 'string') args.content = options.content
     Object.assign(args, this.credentialArgs())
 
     let remoteAcknowledgement
@@ -4232,12 +5859,20 @@ class ConvexCloudGraphService {
       }
     }
 
-    const localAcknowledgement = this.applyJournalEntry(cloud, entry, options)
+    const localAcknowledgement = this.applyJournalEntry(cloud, entry, {
+      ...options,
+      entry: payload ?? options.entry,
+    })
     return {
       ...localAcknowledgement,
       ...remoteAcknowledgement,
       storageMode: 'per-file-mutation',
     }
+  }
+
+  async readBlob(file) {
+    if (!this.blobStore) throw new Error('Object-backed file requires HOPIT_BLOB_PROVIDER.')
+    return await this.blobStore.getBlob(file)
   }
 
   async registerAgentSession(options = {}) {
@@ -4307,9 +5942,7 @@ async function removeEmptyAncestorDirectories(root, relativeDir) {
 function withComputedMetadata(cloud) {
   const next = normalizeCloudGraph(structuredClone(cloud))
   for (const [relativePath, file] of Object.entries(next.files)) {
-    file.hash = hashContent(file.content)
-    file.size = Buffer.byteLength(file.content)
-    file.scope = scopeForPath(relativePath)
+    next.files[relativePath] = normalizeCloudFileEntry(relativePath, file)
   }
   validateCloudGraphContract(next)
   return next
@@ -4426,7 +6059,22 @@ function validateCloudGraphContract(cloud) {
       errors.push(error.message)
     }
     if (!file || typeof file !== 'object') errors.push(`${relativePath} must be a file object.`)
-    if (typeof file?.content !== 'string') errors.push(`${relativePath}.content must be a string.`)
+    const kind = file?.kind ?? entryKind.file
+    if (!Object.values(entryKind).includes(kind)) errors.push(`${relativePath}.kind is invalid.`)
+    if (kind === entryKind.file && typeof file?.content !== 'string') errors.push(`${relativePath}.content must be a string.`)
+    if (kind === entryKind.file && file?.encoding !== undefined && !Object.values(entryEncoding).includes(file.encoding)) {
+      errors.push(`${relativePath}.encoding is invalid.`)
+    }
+    if (kind === entryKind.file && file?.contentStorage !== undefined && !Object.values(contentStorageMode).includes(file.contentStorage)) {
+      errors.push(`${relativePath}.contentStorage is invalid.`)
+    }
+    if (kind === entryKind.file && file?.contentStorage === contentStorageMode.objectBlob) {
+      if (!isNonEmptyString(file.blobProvider)) errors.push(`${relativePath}.blobProvider is required for object-backed files.`)
+      if (!isNonEmptyString(file.blobKey)) errors.push(`${relativePath}.blobKey is required for object-backed files.`)
+      if (!isNonEmptyString(file.blobHash ?? file.hash)) errors.push(`${relativePath}.blobHash is required for object-backed files.`)
+    }
+    if (kind === entryKind.symlink && typeof file?.target !== 'string') errors.push(`${relativePath}.target must be a string.`)
+    if (kind === entryKind.directory && file?.content !== '') errors.push(`${relativePath}.content must be empty for directories.`)
     if (file?.scope !== scopeForPath(relativePath)) {
       errors.push(`${relativePath}.scope must be ${scopeForPath(relativePath)}.`)
     }
@@ -4616,12 +6264,15 @@ function recordChangeSetConflict(cloud, detail) {
 
 function normalizeCloudScopes(cloud) {
   for (const [relativePath, file] of Object.entries(cloud.files ?? {})) {
-    file.scope = scopeForPath(relativePath)
+    cloud.files[relativePath] = normalizeCloudFileEntry(relativePath, file)
   }
 }
 
 function scopeForPath(relativePath) {
-  return relativePath === '.private' || relativePath.startsWith('.private/')
+  return relativePath === '.private' ||
+    relativePath.startsWith('.private/') ||
+    relativePath === '.git' ||
+    relativePath.startsWith('.git/')
     ? fileScope.ownerPrivate
     : fileScope.shared
 }
@@ -4657,6 +6308,141 @@ function countScopes(scopes) {
 
 function hashContent(content) {
   return createHash('sha256').update(content).digest('hex')
+}
+
+function hashBuffer(buffer) {
+  return createHash('sha256').update(buffer).digest('hex')
+}
+
+function hashSymlinkTarget(target) {
+  return hashContent(`symlink\0${target}`)
+}
+
+function hashDirectoryEntry(relativePath) {
+  return hashContent(`directory\0${relativePath}`)
+}
+
+function encodeBufferForCloud(buffer) {
+  if (isRoundTrippableUtf8(buffer) && !buffer.includes(0)) {
+    return {
+      content: buffer.toString('utf8'),
+      encoding: entryEncoding.utf8,
+    }
+  }
+
+  return {
+    content: buffer.toString('base64'),
+    encoding: entryEncoding.base64,
+  }
+}
+
+function isRoundTrippableUtf8(buffer) {
+  const text = buffer.toString('utf8')
+  return Buffer.from(text, 'utf8').equals(buffer)
+}
+
+function normalizeCloudFileEntry(relativePath, file) {
+  const value = file && typeof file === 'object' ? { ...file } : { content: '' }
+  value.kind = value.kind ?? entryKind.file
+  value.scope = scopeForPath(relativePath)
+
+  if (value.kind === entryKind.directory) {
+    value.content = ''
+    value.encoding = entryEncoding.utf8
+    value.target = null
+    value.size = 0
+    value.hash = typeof value.hash === 'string' ? value.hash : hashDirectoryEntry(relativePath)
+    return value
+  }
+
+  if (value.kind === entryKind.symlink) {
+    value.target = typeof value.target === 'string' ? value.target : String(value.content ?? '')
+    value.content = value.target
+    value.encoding = entryEncoding.utf8
+    value.size = Number.isInteger(value.size) ? value.size : Buffer.byteLength(value.target)
+    value.hash = typeof value.hash === 'string' ? value.hash : hashSymlinkTarget(value.target)
+    return value
+  }
+
+  value.kind = entryKind.file
+  value.encoding = value.encoding === entryEncoding.base64 ? entryEncoding.base64 : entryEncoding.utf8
+  value.content = typeof value.content === 'string' ? value.content : ''
+  value.contentStorage = normalizeContentStorageMode(value.contentStorage)
+  value.blobProvider = typeof value.blobProvider === 'string' ? value.blobProvider : null
+  value.blobKey = typeof value.blobKey === 'string' ? value.blobKey : null
+  value.blobHash = typeof value.blobHash === 'string' ? value.blobHash : (typeof value.hash === 'string' ? value.hash : null)
+  const buffer = bufferFromFileEntry(value)
+  value.size = Number.isInteger(value.size) ? value.size : buffer.byteLength
+  value.hash = typeof value.hash === 'string' ? value.hash : (isNonEmptyString(value.blobHash) ? value.blobHash : hashBuffer(buffer))
+  if (!value.blobHash) value.blobHash = value.hash
+  return value
+}
+
+function bufferFromFileEntry(file) {
+  if (file.kind && file.kind !== entryKind.file) return Buffer.alloc(0)
+  const content = typeof file.content === 'string' ? file.content : ''
+  return Buffer.from(content, file.encoding === entryEncoding.base64 ? 'base64' : 'utf8')
+}
+
+async function bufferFromCloudFileEntry(file, cloudService = null) {
+  if (file.kind && file.kind !== entryKind.file) return Buffer.alloc(0)
+  if (!isObjectStoredFileEntry(file)) return bufferFromFileEntry(file)
+  if (!cloudService?.readBlob) {
+    throw new Error(`Cannot read object-backed file without a configured blob store: ${file.blobKey ?? file.hash ?? '(missing key)'}`)
+  }
+
+  const buffer = await cloudService.readBlob(file)
+  const actualHash = hashBuffer(buffer)
+  const expectedHash = file.blobHash ?? file.hash
+  if (expectedHash && actualHash !== expectedHash) {
+    throw new Error(`object_blob_hash_mismatch: expected ${expectedHash}, got ${actualHash}`)
+  }
+  if (Number.isInteger(file.size) && buffer.byteLength !== file.size) {
+    throw new Error(`object_blob_size_mismatch: expected ${file.size}, got ${buffer.byteLength}`)
+  }
+  return buffer
+}
+
+async function cloudFileTextForVerification(file, cloudService = null) {
+  if (!file) return ''
+  const entry = normalizeCloudFileEntry('', file)
+  return (await bufferFromCloudFileEntry(entry, cloudService)).toString('utf8')
+}
+
+function isObjectStoredFileEntry(file) {
+  return file?.kind === entryKind.file && file.contentStorage === contentStorageMode.objectBlob
+}
+
+function normalizeContentStorageMode(value) {
+  if (value === contentStorageMode.objectBlob) return contentStorageMode.objectBlob
+  if (value === contentStorageMode.convexFileBlob) return contentStorageMode.convexFileBlob
+  if (value === contentStorageMode.convexFileBlobBase64) return contentStorageMode.convexFileBlobBase64
+  return contentStorageMode.inline
+}
+
+function cloudEntryContentBytes(relativePath, file) {
+  const entry = normalizeCloudFileEntry(relativePath, file)
+  if (entry.kind === entryKind.file) return entry.contentStorage === contentStorageMode.objectBlob ? entry.size : bufferFromFileEntry(entry).byteLength
+  if (entry.kind === entryKind.symlink) return Buffer.byteLength(entry.target ?? '')
+  return 0
+}
+
+function cloudEntryEncodedBytes(relativePath, file) {
+  const entry = normalizeCloudFileEntry(relativePath, file)
+  if (entry.kind === entryKind.file) return entry.contentStorage === contentStorageMode.objectBlob ? entry.size : Buffer.byteLength(entry.content ?? '')
+  if (entry.kind === entryKind.symlink) return Buffer.byteLength(entry.target ?? '')
+  return 0
+}
+
+function cloudEntryEquals(a, b) {
+  if (!a || !b) return false
+  return (
+    a.kind === b.kind &&
+    a.hash === b.hash &&
+    a.size === b.size &&
+    a.scope === b.scope &&
+    (a.target ?? null) === (b.target ?? null)
+  )
 }
 
 function toCloudPath(value) {
@@ -4817,6 +6603,7 @@ function printHelp() {
 Commands:
   init        Seed a local cloud file graph
   import      Import a real local folder into the HopIt graph and hydrate it
+  mirror      Literal-copy a local folder into the managed workspace with safety checks
   hydrate     Materialize cloud files into the managed workspace
   refresh     Update the managed workspace from cloud when journal and disk are safe
   remote-pull Run one safe remote refresh decision, matching watch/service polling
@@ -4839,10 +6626,15 @@ Commands:
   demo        Run init, hydrate, edit, sync, and verify
 
 Compatibility aliases:
-  import-local, sync-once, review-open, status-server, workspaces, device, devices, sessions
+  import-local, mirror-local, sync-once, review-open, status-server, workspaces, device, devices, sessions
 
 Options:
   --source <path>     Source folder for import
+  --storage-budget-bytes <n> mirror: maximum encoded bytes before cloud sync is skipped
+  --blob-provider <provider> Object blob provider: r2, b2, s3, or filesystem
+  --blob-free-only <1|0> Keep provider uploads under the configured free-only budget
+  --blob-storage-budget-bytes <n> Maximum existing+new object bytes before upload fails
+  --launch-agent-label <label> mirror: macOS LaunchAgent label to stop/restart
   --output <path>     Output folder for Git export/publish
   --path <cloud-path> Cloud file path for workspace hydrate-file
   --codebase-id <id>  Codebase id for import
@@ -4870,6 +6662,7 @@ Options:
   --start-service      install: start the production service after preparing paths
   --write-env          install: write hopit.env.example under the agent state root
   --launch-agent       install: write a macOS LaunchAgent for start-on-login
+  --skip-service-control mirror: do not stop or restart the macOS LaunchAgent
   --json              Accepted for scripting; commands already emit JSON where applicable
   --message <text>    Git commit message for export/publish
   --include-private   Include .private files in export only; publish always omits them

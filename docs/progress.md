@@ -16,11 +16,11 @@ This tracker is the working view of what is done, what is in progress, what is n
 
 ## Current Snapshot
 
-HopIt has a working local managed-folder agent spike plus a deployed personal production baseline. The agent can seed a cloud graph, hydrate a normal folder, capture local writes, journal them durably, acknowledge them into the selected active change set, recover unacknowledged writes after restart, safely refresh a second same-owner workspace, export/publish a clean Git escape hatch, and expose local status/event/journal/cloud state.
+HopIt has a working local managed-folder agent spike plus a deployed personal production baseline. The agent can seed a cloud graph, hydrate a normal folder, capture local writes, journal them durably, upload regular file bodies to S3-compatible object storage, acknowledge object metadata into the selected active change set, recover unacknowledged writes after restart, safely refresh a second same-owner workspace, export/publish a clean Git escape hatch, and expose local status/event/journal/cloud state.
 
-The solid v1 target is now broader than the current spike: a HopIt Workspace Root, managed-folder/lazy materialization first, production-grade automatic remote-update delivery, content-addressed storage with per-file revision guards, scoped device/session auth, and GitHub-like code/review/work-item/release surfaces. True native filesystem-provider work remains future research; v1 should prove the managed-folder Workspace Root before going there.
+The solid v1 target is now broader than the current spike: a HopIt Workspace Root, managed-folder/lazy materialization first, production-grade automatic remote-update delivery, object-backed content-addressed storage with per-file revision guards, scoped device/session auth, and GitHub-like code/review/work-item/release surfaces. True native filesystem-provider work remains future research; v1 should prove the managed-folder Workspace Root before going there.
 
-The web app polls `/api/agent/status`. In local mode that route reads the local agent status server's status/events/cloud endpoints; in production it reads the Convex `agent.dashboard` query. The local command route can run whitelisted sync, refresh, recover, review, and merge actions against the local agent, while hosted Convex-backed deployments remain read-only for workspace commands and require dashboard authentication.
+The web app polls `/api/agent/status`. In local mode that route requires the local agent `/status` response and treats `/events` and `/cloud` as best-effort payloads so a slow graph read does not take the dashboard offline; in production it reads the Convex `agent.dashboard` query. The local command route can run whitelisted sync, refresh, recover, review, and merge actions against the local agent, while hosted Convex-backed deployments remain read-only for workspace commands and require dashboard authentication.
 
 Fixture-backed conflict handling is in place for stale selected-state revisions, stale file/base revisions, and stale Main revisions. Conflicts are persisted on the selected active change set, emitted as `change_set.conflict_detected`, and surfaced through status while preserving local edits for review.
 
@@ -48,7 +48,7 @@ npm run package:hop
 
 Current verified result:
 
-- `npm run agent:test`: passes; the current sandbox run reports 47 passing tests plus six sandbox-skipped service/remote-pull tests when loopback listening is unavailable.
+- `node --test packages/agent/test/agent-cli.test.js --test-name-pattern "object blob provider"`: passes; the current sandbox run executes the full agent suite with 50 passing tests plus six sandbox-skipped service/remote-pull tests when loopback listening is unavailable.
 - `npm run lint`: passes.
 - `npm run check:production-config`: passes when `.env.local` is loaded.
 - `npm run package:hop`: builds the current macOS artifact with env/install support files.
@@ -63,8 +63,9 @@ Current verified result:
 | Local managed-folder agent | Done for spike | The agent proves hydration, journaling, sync acknowledgement, recovery, watch startup gating, safe refresh, status, and same-owner continuity. |
 | Lazy materialization | In progress | `workspace files`, `workspace hydrate-file`, and `workspace dehydrate --force` prove metadata listing, single-file hydration, and metadata-only state. V1 still needs automatic policy, editor/tool demand hydration, and broader cache pruning. |
 | Vercel/Convex production baseline | Done for personal dogfood | Vercel hosts the protected dashboard, Convex stores the seeded production graph, and the hosted API reads the graph successfully. |
-| Convex cloud graph | Mostly done | Convex functions persist graph metadata, files, content-addressed `fileBlobs`, and agent events; graph reads, per-file mutations, and event appends support service or scoped session tokens. Large-file/object-storage handling and full history reconstruction remain. |
-| `.private/` model | Done for spike | `.private/` files are synced/versioned and classified as owner-private; they are not ignored or skipped. |
+| Convex cloud graph | Mostly done | Convex functions persist graph metadata, file rows, object-blob references, fallback `fileBlobs`, and agent events; graph reads, per-file mutations, and event appends support service or scoped session tokens. Full history reconstruction, object retention/garbage collection, and non-agent product write paths remain. |
+| Object blob storage | Mostly done | The agent has an S3-compatible blob provider boundary, Cloudflare R2 env contract, Backblaze B2-compatible migration path, filesystem-backed tests, metadata-only Convex commits, and hash-verified hydrate/refresh/export. The live `hopit-blobs` R2 bucket exists, scoped local R2 credentials are configured for that bucket only, and a HopIt object-blob upload/hydrate/delete smoke test passed. Personal use keeps R2 free-only with an 8 GB cap, public access disabled, a 1-day auto-delete lifecycle rule, and the bucket currently back at `0 B`. Garbage collection remains. |
+| `.private/` model | Done for spike | `.private/` files are synced/versioned and classified as owner-private; they are not ignored or skipped. Temporary exception: `.private/env/` stays local-only until client-side encrypted secret sync exists. |
 | Safety journal | Done for spike | Pending, acknowledged, and failed entries are derived from journal/events and exposed through status. |
 | Watch loop | Done for spike | Watch startup runs recovery before hydration, blocks unsafe recovery, and syncs later editor writes. Service start waits for the watcher and status server to be ready before reporting success. |
 | Fixture cloud graph service boundary | Done | Commands now use a fixture-backed service boundary instead of direct command-level cloud JSON access. |
@@ -569,18 +570,18 @@ Risks:
 | `visibility.codebaseOverride` | Done | Nullable. |
 | `visibility.changeSetOverride` | Done | Nullable. |
 | `visibility.effective` | Done | Resolved effective visibility. |
-| file `content` | Done | Inline in fixture JSON for now. |
-| file `hash` | Done | Computed from content. |
-| file `size` | Done | Computed from content. |
+| file `content` | Done | Inline for fixture/dev fallback; object-backed production entries keep body bytes outside Convex. |
+| file `hash` | Done | Computed from raw bytes. |
+| file `size` | Done | Raw byte size. |
 | file `scope` | Done | Derived from path; `.private/` becomes owner-private. |
 | file `revision` | Done | Updated on acknowledged write. |
-| content-addressed blob refs | Not started | Needed for production-style storage. |
+| content-addressed blob refs | Mostly done | Agent sync can store file bodies in S3-compatible object storage and persist provider/key/hash metadata. |
 | snapshot indexes | Not started | Needed for review/merge/export. |
 | merge records | Not started | Needed for review/merge. |
 
 ## Immediate Next Queue
 
-The next major phase is a solid v1 workspace, not collaboration alone. The v1 sequence is: HopIt Workspace Root and hydration-state contract, content-addressed storage with per-file revision guards, production-grade automatic remote-update delivery, scoped device/session auth, and GitHub-like web surfaces. The collaboration track is still documented in [GitHub-Lite Collaboration Plan](github-lite-collaboration-plan.md), with sub-plans in [Auth And Collaboration Plan](auth-collaboration-plan.md), [Code Browsing, Review, Comments, And History Plan](review-code-browser-plan.md), and [HopIt Work Items, Projects, Discussions, And Releases Plan](work-items-releases-plan.md).
+The next major phase is a solid v1 workspace, not collaboration alone. The v1 sequence is: HopIt Workspace Root and hydration-state contract, object-backed content-addressed storage with per-file revision guards, production-grade automatic remote-update delivery, scoped device/session auth, and GitHub-like web surfaces. The collaboration track is still documented in [GitHub-Lite Collaboration Plan](github-lite-collaboration-plan.md), with sub-plans in [Auth And Collaboration Plan](auth-collaboration-plan.md), [Code Browsing, Review, Comments, And History Plan](review-code-browser-plan.md), and [HopIt Work Items, Projects, Discussions, And Releases Plan](work-items-releases-plan.md).
 
 Domain-dependent items are pinned until a HopIt domain is purchased: completing Clerk production DNS/issuer setup, rolling out `pk_live_`/`sk_live_`, retiring Basic Auth, and production OAuth/invite smoke tests on an owned domain. Continue building Workspace Root, storage, remote-update, permission checks, collaboration data, code browsing, review/history, issues, projects, discussions, releases, and scoped agent-session tokens behind the current Basic Auth guard.
 
@@ -624,10 +625,10 @@ Definition of done:
 
 Current foundation:
 
-- Convex stores graph metadata, file rows, hashes, sizes, revisions, and agent events.
-- Convex stores synced text content in content-addressed `fileBlobs` and lets the agent mutate individual files with revision guards.
+- Convex stores graph metadata, file rows, object-blob references, hashes, sizes, revisions, and agent events.
+- Convex can still store fallback `fileBlobs`, but production agent sync can upload file bytes to S3-compatible object storage before committing metadata with revision guards.
 - The local fixture validates graph shape and detects stale selected-state/file/Main revisions.
-- Bootstrap/import can still replace the graph as an admin operation; large-file/object storage and full history reconstruction remain.
+- Bootstrap/import can still replace the graph as an admin operation; full history reconstruction, object retention, garbage collection, and non-agent product write paths remain.
 
 ### 0.75. Automatic Remote-Update Delivery
 
@@ -669,7 +670,9 @@ Current foundation:
 
 - `scripts/package-hop.mjs` builds a standalone tarball with embedded Node, env example, and launchd/systemd user-service support scripts.
 - `hop service run` is available for supervisors; `service start` still owns pid-file/manual daemon mode.
+- `hop service run` stays alive until a stop signal, so manual `service start` does not return success and then let the child exit.
 - `service start` now carries scoped session-token env into the spawned child when passed through CLI options.
+- The HTTP status server keeps `/status` lightweight, serves `/cloud` as a graph-only dashboard endpoint, and uses the pid file as the ownership source of truth for `service status`.
 - `npm run hop:service:*`, `hop:backup`, `hop:private-export`, `hop:export`, and `hop:publish` wrap production-profile operations.
 - `docs/personal-production.md` covers install, login startup, observability, backup/export, and token rotation.
 - `scripts/check-production-config.mjs` performs stricter personal-production hygiene checks without printing secrets.
@@ -816,7 +819,7 @@ Definition of done:
 - Real account provider code exists, but production Clerk DNS/issuer/live-key rollout is pinned until HopIt has an owned domain.
 - Durable membership, role, invitation, hosted member/invite UI, and scoped agent-session token groundwork exist, but complete permission coverage is not done yet.
 - Convex-backed graph storage and auth-backed user APIs exist for the first collaboration slice, but not every product command has moved to user-scoped auth yet.
-- Convex now separates file metadata from content-addressed `fileBlobs` for synced text files, but large-file/object-blob storage and durable history reconstruction are not complete yet.
+- Convex now separates file metadata from file bytes for agent sync, but durable history reconstruction, object garbage collection, and full product write-path coverage are not complete yet.
 - Per-file revision-guarded mutation exists for the agent path, but the full product write surface has not moved to the same model yet.
 - Graph contract validators exist for the agent/Convex graph path, but product-level validation is not yet comprehensive across every future object type.
 - Requester-aware dashboard filtering exists, but the auth-backed collaborator permission model is not enforced across every user-facing write yet.

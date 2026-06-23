@@ -125,8 +125,13 @@ export default defineSchema({
   files: defineTable({
     codebaseId: v.string(),
     path: v.string(),
+    kind: v.optional(v.union(v.literal("file"), v.literal("symlink"), v.literal("directory"))),
     content: v.string(),
+    encoding: v.optional(v.union(v.literal("utf8"), v.literal("base64"))),
+    target: v.optional(v.union(v.string(), v.null())),
     blobHash: v.optional(v.string()),
+    blobProvider: v.optional(v.union(v.string(), v.null())),
+    blobKey: v.optional(v.union(v.string(), v.null())),
     contentStorage: v.optional(v.string()),
     hash: v.optional(v.string()),
     size: v.optional(v.number()),
@@ -141,6 +146,7 @@ export default defineSchema({
     codebaseId: v.string(),
     hash: v.string(),
     content: v.string(),
+    encoding: v.optional(v.union(v.literal("utf8"), v.literal("base64"))),
     size: v.number(),
     createdAt: v.string(),
   })

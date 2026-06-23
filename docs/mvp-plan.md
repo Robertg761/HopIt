@@ -69,6 +69,8 @@ An addressable cloud state for Main or an active change set at a point in time. 
 
 HopIt does not treat ignore files as a product sharing control. The reserved `.private/` directory is the v1 owner-only workspace area, and it still participates in snapshots, sync, and versioning. Files outside `.private/` can be shared, reviewed, and merged according to the active change set's visibility and codebase permissions.
 
+Temporary safety exception: `.private/env/` is local-only until client-side encrypted secret sync lands. Env files routed there should remain usable by the local owner, but their raw bytes must not be uploaded to Convex, R2, B2, or another cloud provider.
+
 ### Change-Set Visibility
 
 The visibility state for in-progress work outside `.private/`. V1 should support at least private, team-visible, and review-visible states. Settings are resolved in this order: per-change-set override, codebase override, global user default, product default. `.private/` remains owner-only regardless of the change-set setting.
@@ -76,6 +78,8 @@ The visibility state for in-progress work outside `.private/`. V1 should support
 ### Cloud File Graph
 
 The durable representation of directories, files, blobs, revisions, visibility metadata, Main state, active change sets, and snapshot metadata. Git can be imported from and exported to this graph, and a snapshot or merged state can be published as a Git commit, but the graph is optimized for live sync, device handoff, review, merge, and on-demand hydration. V1 needs content-addressed blob storage and per-file revision guards so concurrent devices do not rely on whole-graph overwrites.
+
+Before HopIt syncs secrets, the cloud file graph needs client-side encrypted secret entries. The intended user/device set should control the decryption keys, with cloud services storing only ciphertext and wrapped key material. The security target is that secret values remain unreadable even if the user's web account session, the Convex deployment, or the object storage provider is compromised.
 
 ## Workspace Modes
 
@@ -122,10 +126,11 @@ the current v1 proof gate.
 
 - Web app: Next.js product shell on Vercel for codebases, files, live sync state, active change sets, connected devices, recent activity, collaborators, review/merge state, and snapshots.
 - API: Next.js routes for hosted/local status and whitelisted local commands. Hosted deployments read Convex status and refuse local workspace commands.
-- Convex backend: production graph service for codebase metadata, file metadata, content-addressed `fileBlobs`, per-file agent mutations, agent events, graph validation, scoped session-token authorization, and dashboard reads.
+- Convex backend: production graph service for codebase metadata, file metadata, object-blob references, per-file agent mutations, agent events, graph validation, scoped session-token authorization, and dashboard reads.
+- Object storage: S3-compatible file-byte layer. Cloudflare R2 is the first personal-use provider with free-only budget guards enabled; Backblaze B2 can use the same adapter later by switching provider/env configuration when HopIt is ready for broader release.
 - Local agent: managed-folder process with service/session token support, workspace-root index, hydration cursor, local cache, safety journal, retry queue, service wrapper, and `.private/` visibility handling.
 - Installer/daemon: standalone package with embedded runtime, production env example, user-level launchd/systemd support scripts, manual service controls, supervised `service run`, backup/export runbook, token-rotation runbook, and stricter production config checks.
-- Storage today: Convex separates file metadata from content-addressed text blobs and protects agent writes with per-file/base revision guards. Solid v1 still needs large-file/object-blob handling, durable history reconstruction, and all product write paths on the same model.
+- Storage today: Convex separates graph/file metadata from file bytes. The agent can upload regular file bytes to S3-compatible object storage, store only `contentStorage`, provider, key, hash, and size metadata in Convex, and hydrate/refresh/export by downloading and verifying the object hash. Durable history reconstruction and all product write paths still need to move onto the same model.
 - Realtime today: polling through `/api/agent/status`, `remote-update` events emitted by explicit safe refresh, a per-workspace materialization cursor, and an opt-in `--remote-pull` polling loop for personal dogfooding. Solid v1 still needs production-grade automatic remote-update delivery for file changes, collaborator presence, sync status, visibility changes, review events, merge events, and device handoff.
 - Git interoperability: import/export/publish stays as snapshot interoperability, not the everyday sync model.
 
@@ -170,7 +175,7 @@ Current spike:
 Current next work:
 
 1. Finish the HopIt Workspace Root product contract: account-wide cloud codebase discovery, richer per-file cache metadata, and automatic lazy materialization policy on top of the current configured-codebase attach, metadata-only, and single-file hydrate primitives.
-2. Broaden content-addressed storage and per-file revision guards beyond the agent text-file path into full history, large files, and product write flows.
+2. Broaden object-backed content-addressed storage and per-file revision guards beyond the agent sync path into full history, large files, product write flows, retention, and garbage collection.
 3. Promote the opt-in remote-pull proof into production-grade automatic remote-update delivery so same-owner devices refresh safely without a manual command when the local journal is clean.
 4. Finish scoped device/session auth coverage and continue domain-independent membership, invitation, and permission work behind the Basic Auth production guard.
 5. Deepen the hosted code browser, diff/review/comment/history surface, issue/detail and discussion thread flows, releases, and project boards beyond the first dashboard slices.

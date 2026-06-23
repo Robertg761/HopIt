@@ -535,7 +535,12 @@ export function normalizeCodebaseRole(value: unknown, fallback: CodebaseRole): C
 }
 
 export function scopeForPath(filePath: string) {
-  return filePath === ".private" || filePath.startsWith(".private/") ? "owner-private" : "shared";
+  return filePath === ".private" ||
+    filePath.startsWith(".private/") ||
+    filePath === ".git" ||
+    filePath.startsWith(".git/")
+    ? "owner-private"
+    : "shared";
 }
 
 export function userIdFromIdentity(identity: AuthIdentity) {

@@ -8,6 +8,8 @@ Git compatibility still matters, but Git is not the primary day-to-day workspace
 
 HopIt does not use an ignore-file model for product sharing. Files under `.private/` are still snapshotted, synced, and versioned, but they are owner-visible only. Files outside `.private/` are eligible for collaboration, review, and merge according to the active change set's visibility settings and the codebase's permissions.
 
+Temporary secret-safety exception: `.private/env/` stays local-only until HopIt has client-side encrypted secret sync. Env files routed there are usable on this device but are not uploaded as raw bytes.
+
 ## Initial Scope
 
 - Cloud-backed codebase dashboard with live workspace and sync state.
@@ -19,7 +21,7 @@ HopIt does not use an ignore-file model for product sharing. Files under `.priva
 - Active change sets that receive live synced edits before review or merge into Main.
 - Change-set visibility controls with global defaults, per-codebase overrides, and per-change-set overrides.
 - Automatic remote-update delivery so same-owner devices can receive current active change-set state without a manual refresh ritual.
-- Production storage based on file metadata, content-addressed blobs, and per-file revision guards rather than whole-graph overwrites.
+- Production storage based on Convex metadata, S3-compatible object blobs, content hashes, and per-file revision guards rather than whole-graph overwrites.
 - Scoped device/session auth separate from human product auth.
 - Git compatibility as an import/export and publish layer, not the source of continuity.
 - Explicit `.private/` visibility: synced and versioned, but owner-visible only.
@@ -39,7 +41,7 @@ HopIt has moved past a local-only spike. The current dogfood baseline is a deplo
 - `hop device` / `hop session` can report local device identity, and Convex can issue, list, touch, revoke, and authorize scoped agent-session tokens for graph reads, per-file writes, and event sync.
 - The dashboard now includes provider sign-in routes, owner claim, member/invite management, a read-only code browser, and first issue/discussion/release workflows backed by Convex.
 
-The system is now usable as a one-person private dogfood environment, but it is not yet a full GitHub or Git replacement. The next major product phase is a solid v1 workspace: HopIt Workspace Root, managed-folder/lazy materialization, automatic remote update delivery, content-addressed storage with revision guards, scoped device/session auth, and GitHub-like collaboration surfaces. Work that requires an owned production domain, such as Clerk `pk_live_`/`sk_live_` rollout and retiring Basic Auth, is pinned until a domain is purchased.
+The system is now usable as a one-person private dogfood environment, but it is not yet a full GitHub or Git replacement. The next major product phase is a solid v1 workspace: HopIt Workspace Root, managed-folder/lazy materialization, automatic remote update delivery, broader history/review reconstruction on top of object blobs, scoped device/session auth, and GitHub-like collaboration surfaces. Work that requires an owned production domain, such as Clerk `pk_live_`/`sk_live_` rollout and retiring Basic Auth, is pinned until a domain is purchased.
 
 See [docs/github-lite-collaboration-plan.md](docs/github-lite-collaboration-plan.md) for the overall implementation plan, plus [docs/auth-collaboration-plan.md](docs/auth-collaboration-plan.md), [docs/review-code-browser-plan.md](docs/review-code-browser-plan.md), and [docs/work-items-releases-plan.md](docs/work-items-releases-plan.md) for the detailed sub-plans.
 
@@ -55,7 +57,7 @@ The v1 target is not a Git clone manager and not yet a true native filesystem pr
 - Other same-owner devices receive acknowledged changes automatically when the local journal is clean, or get a visible conflict/blocked state when it is not.
 - Web surfaces show code, diffs, review state, history, issues, discussions, projects, releases, members, invitations, and permissions.
 
-Today HopIt has the managed-folder spike, workspace-root command surface with a durable index, configured-codebase discovery, metadata-only attach, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, service wrapper, Convex graph, Basic Auth protected dashboard, first collaboration objects, explicit refresh-based two-session continuity, scoped agent-session token groundwork, and opt-in safe remote-pull polling plus one-shot remote-pull checks for personal dogfooding. Remaining v1 work is account-wide codebase discovery, full lazy materialization policy, production-grade push/subscription remote-update delivery, large-file/object storage, routeable diff/review/history UI, installer/tray setup, and broader cross-device verification.
+Today HopIt has the managed-folder spike, workspace-root command surface with a durable index, configured-codebase discovery, metadata-only attach, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, service wrapper, Convex graph metadata, S3-compatible object-blob storage support, Basic Auth protected dashboard, first collaboration objects, explicit refresh-based two-session continuity, scoped agent-session token groundwork, and opt-in safe remote-pull polling plus one-shot remote-pull checks for personal dogfooding. Remaining v1 work is account-wide codebase discovery, full lazy materialization policy, production-grade push/subscription remote-update delivery, routeable diff/review/history UI, installer/tray setup, and broader cross-device verification.
 
 ## Product Principles
 
@@ -135,7 +137,17 @@ HOPIT_REMOTE_PULL=1
 HOPIT_REMOTE_REFRESH_INTERVAL_MS=5000
 HOPIT_BACKUP_ROOT=/Users/you/HopIt-Backups
 HOPIT_EXPORT_ROOT=/Users/you/HopIt-Exports
+HOPIT_BLOB_PROVIDER=r2
+HOPIT_BLOB_PREFIX=production
+HOPIT_BLOB_FREE_ONLY=1
+HOPIT_BLOB_STORAGE_BUDGET_BYTES=8000000000
+HOPIT_R2_ACCOUNT_ID=replace-with-cloudflare-account-id
+HOPIT_R2_BUCKET=hopit-blobs
+HOPIT_R2_ACCESS_KEY_ID=replace-with-r2-access-key-id
+HOPIT_R2_SECRET_ACCESS_KEY=replace-with-r2-secret-access-key
 ```
+
+Convex is the graph, permission, event, and realtime coordination service. File bytes should use the object-blob layer for real production. `HOPIT_BLOB_PROVIDER=r2` targets Cloudflare R2 through HopIt's S3-compatible adapter. For current personal use, keep `HOPIT_BLOB_FREE_ONLY=1` and the 8 GB storage budget so HopIt stops before crossing Cloudflare R2's free storage tier. The same adapter can migrate to Backblaze B2 later by switching to `HOPIT_BLOB_PROVIDER=b2` plus the B2 S3 endpoint/key variables.
 
 Start Convex locally and link the project with:
 
@@ -170,7 +182,7 @@ npm run hop -- device register --profile production --codebase-id "$HOPIT_CODEBA
 The deployment-wide `HOPIT_AGENT_TOKEN` remains the bootstrap/admin secret. Installed devices should use scoped session tokens for normal reads, per-file sync, and event writes.
 When both tokens are present, normal commands prefer `HOPIT_AGENT_SESSION_TOKEN`; pass `--agent-token` explicitly for bootstrap/admin operations.
 
-For current personal production hosting, deploy the Next.js app to Vercel and set `HOPIT_CODEBASE_ID`, `HOPIT_AGENT_TOKEN`, `HOPIT_CONVEX_URL`, `NEXT_PUBLIC_CONVEX_URL`, `HOPIT_AUTH_PROVIDER=basic`, `HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1`, `HOPIT_DASHBOARD_USERNAME`, and `HOPIT_DASHBOARD_PASSWORD` as environment variables. Keep Clerk production variables unset until HopIt has an owned production domain. The hosted dashboard reads from Convex through `/api/agent/status`; local workspace commands still run through the local HopIt agent on your machine and are refused on Vercel.
+For current personal production hosting, deploy the Next.js app to Vercel and set `HOPIT_CODEBASE_ID`, `HOPIT_AGENT_TOKEN`, `HOPIT_CONVEX_URL`, `NEXT_PUBLIC_CONVEX_URL`, `HOPIT_AUTH_PROVIDER=basic`, `HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1`, `HOPIT_DASHBOARD_USERNAME`, `HOPIT_DASHBOARD_PASSWORD`, and the object-storage variables beginning with `HOPIT_BLOB_`/`HOPIT_R2_` as environment variables. Keep Clerk production variables unset until HopIt has an owned production domain. The hosted dashboard reads from Convex through `/api/agent/status`; local workspace commands still run through the local HopIt agent on your machine and are refused on Vercel.
 
 Validate production configuration with:
 

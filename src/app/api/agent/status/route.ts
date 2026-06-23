@@ -6,6 +6,7 @@ import { auth } from '@clerk/nextjs/server'
 export const dynamic = 'force-dynamic'
 
 const agentBaseUrl = process.env.HOPIT_AGENT_BASE_URL ?? 'http://127.0.0.1:4785'
+const localAgentTimeoutMs = 5000
 
 export async function GET() {
   const missingHostedConfig = requiredHostedConfigMissing()
@@ -65,11 +66,11 @@ export async function GET() {
   }
 
   const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 1500)
+  const timeout = setTimeout(() => controller.abort(), localAgentTimeoutMs)
 
   try {
-    const [status, events, cloud] = await Promise.all([
-      readAgentEndpoint('status', controller.signal),
+    const status = await readAgentEndpoint('status', controller.signal)
+    const [events, cloud] = await Promise.allSettled([
       readAgentEndpoint('events', controller.signal),
       readAgentEndpoint('cloud', controller.signal),
     ])
@@ -77,8 +78,9 @@ export async function GET() {
     return NextResponse.json(
       {
         status,
-        events,
-        cloud,
+        events: endpointValue(events),
+        cloud: endpointValue(cloud),
+        partialErrors: endpointErrors({ events, cloud }),
         capabilities: agentCapabilities('local-agent'),
       },
       {
@@ -132,6 +134,23 @@ async function readAgentEndpoint(endpoint: string, signal: AbortSignal) {
   }
 
   return response.json()
+}
+
+function endpointValue(result: PromiseSettledResult<unknown>) {
+  return result.status === 'fulfilled' ? result.value : null
+}
+
+function endpointErrors(results: Record<string, PromiseSettledResult<unknown>>) {
+  const errors = Object.entries(results)
+    .filter(([, result]) => result.status === 'rejected')
+    .map(([endpoint, result]) => ({
+      endpoint,
+      message: result.status === 'rejected' && result.reason instanceof Error
+        ? result.reason.message
+        : `Agent ${endpoint} endpoint is unavailable.`,
+    }))
+
+  return errors.length > 0 ? errors : undefined
 }
 
 function requiredHostedConfigMissing() {

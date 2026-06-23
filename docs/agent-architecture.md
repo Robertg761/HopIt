@@ -32,18 +32,23 @@ The cloud file graph is the durable model for a codebase:
 - workspace revision number
 - device/session sync state
 
-The spike stores a simplified single selected state in `.hopit-agent/cloud.json`. A production service should split metadata into a database and content into content-addressed blob storage, but expose the same graph-shaped API to the agent with explicit Main, active change-set, owner, and visibility fields.
+The spike stores a simplified single selected state in `.hopit-agent/cloud.json`. A production service splits metadata into Convex and file bytes into S3-compatible content-addressed object storage, but exposes the same graph-shaped API to the agent with explicit Main, active change-set, owner, and visibility fields.
 
 Solid v1 storage requirements:
 
 - file metadata and file content are separate records
-- file content is addressed by hash/blob id and deduplicated where practical
+- file content is addressed by SHA-256/object key and deduplicated where practical
+- the first production provider is Cloudflare R2; Backblaze B2 remains a compatible migration target through the same S3 adapter
 - writes are per-file mutations, not whole-graph replacement as the concurrency boundary
 - every write carries a base revision or known cloud revision
 - stale base revisions return explicit conflict state instead of silently winning
 - snapshots can be reconstructed from file metadata and blob references
 
 HopIt v1 does not have an ignore-file model. The graph should store visibility metadata for `.private/` paths: those files are snapshotted, synced, and versioned, but visible only to the owner. Files outside `.private/` are governed by the active change set's effective visibility and the codebase's permissions.
+
+Exception: `.private/env/` is local-only until HopIt ships client-side encrypted secret payloads. Routed env files can live there on disk, but the agent must not upload their raw bytes to Convex, R2, B2, or any other provider yet.
+
+Client-side encrypted secrets are a v1 security requirement before secrets become cloud-syncable. Secret payloads should be encrypted on the user's device before upload with keys controlled by the intended user/device set, so raw secret material remains unusable even if the HopIt account, Convex metadata store, object storage bucket, or provider operator is compromised. The cloud may store ciphertext, hashes, metadata, and wrapped keys; it must not be able to decrypt secret values without the user's local key material.
 
 ### Main And Active Change Sets
 
@@ -79,6 +84,7 @@ V1 managed-folder adapter:
 - scans the folder for edits
 - translates file creates, writes, and deletes into journal entries
 - marks `.private/` paths as owner-visible without skipping sync or versioning
+- keeps `.private/env/` local-only until client-side encrypted secret sync is implemented
 - preserves a "no clone to manage" product model
 
 Future optional mount research:
@@ -212,12 +218,12 @@ Suggested fields:
 - conflict state and latest conflict event for stale file/base or Main revision mismatches
 - connectivity state
 - cache mode and approximate memory/disk use
-- storage mode, such as inline prototype content or content-addressed blobs
+- storage mode, such as inline fixture content, Convex fallback blobs, or S3-compatible object blobs
 - device/session token scope and expiry summary
 - adapter type: managed folder, with optional research adapters later
 - recent error summary
 
-This can start as a local HTTP endpoint or CLI command. The current agent exposes the HTTP status surface with `npm run agent:serve` or `npm run agent:status-server`; `npm run agent:status` is the one-shot CLI status command. The important part is that status reads from agent state instead of guessing from files on disk.
+This can start as a local HTTP endpoint or CLI command. The current agent exposes the HTTP status surface with `npm run agent:serve` or `npm run agent:status-server`; `npm run agent:status` is the one-shot CLI status command. The HTTP `/status` path is intentionally lightweight and reads local agent state files rather than scanning the whole workspace, while `/cloud` returns the visible graph without the local dirty-state audit. Use `hop status` or `hop doctor` for the heavier local cleanliness check. The important part is that status reads from agent state instead of guessing from files on disk.
 
 ### Event Log
 

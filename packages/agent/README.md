@@ -12,9 +12,11 @@ It is intentionally not a real FUSE, OS filesystem provider, or clone manager. I
 
 The selected cloud state remains the source of truth for the managed folder. In the production model, day-to-day edits should sync into an active change set; Main advances only after review or merge. The local folder is a materialized cache that HopIt manages so OS file pickers, editors, CLIs, and search tools can work without a special mount or a user-managed clone.
 
-The solid v1 target is a HopIt Workspace Root, such as `~/HopIt Workspaces`, where cloud codebases appear as HopIt-managed project folders. This package currently proves selected managed folders, a durable workspace-root index, configured-codebase discovery and metadata-only attach, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, safe remote-pull polling plus one-shot remote-pull checks, and scoped Convex agent-session tokens. It does not yet provide account-wide codebase discovery, a full automatic lazy-materialization policy, or production-grade push/subscription remote-update delivery.
+The solid v1 target is a HopIt Workspace Root, such as `~/HopIt Workspaces`, where cloud codebases appear as HopIt-managed project folders. This package currently proves selected managed folders, a durable workspace-root index, configured-codebase discovery and metadata-only attach, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, S3-compatible object-blob storage for file bodies, safe remote-pull polling plus one-shot remote-pull checks, and scoped Convex agent-session tokens. It does not yet provide account-wide codebase discovery, a full automatic lazy-materialization policy, or production-grade push/subscription remote-update delivery.
 
 HopIt does not use ignore files as product sharing controls. Files under `.private/` are still snapshotted, synced, and versioned, but owner-visible only. Files outside `.private/` are governed by the active change set's effective visibility and the codebase's permissions.
+
+Temporary secret-safety exception: `.private/env/` is local-only until client-side encrypted secret sync ships. The agent skips routed env files there instead of uploading raw secret bytes to Convex or object storage.
 
 ## Commands
 
@@ -48,6 +50,21 @@ npm run hop -- import \
 Any command can use `--convex-url` and `--agent-token`; when those are present,
 the selected cloud graph is read from and written to Convex instead of the local
 JSON file. Local journal and event files still exist as the device safety log.
+
+Production file bytes should use the object-blob layer instead of Convex document/blob storage:
+
+```bash
+HOPIT_BLOB_PROVIDER=r2
+HOPIT_BLOB_PREFIX=production
+HOPIT_BLOB_FREE_ONLY=1
+HOPIT_BLOB_STORAGE_BUDGET_BYTES=8000000000
+HOPIT_R2_ACCOUNT_ID=<cloudflare-account-id>
+HOPIT_R2_BUCKET=hopit-blobs
+HOPIT_R2_ACCESS_KEY_ID=<r2-access-key-id>
+HOPIT_R2_SECRET_ACCESS_KEY=<r2-secret-access-key>
+```
+
+With those variables set, `hop sync` uploads regular file bytes to Cloudflare R2 first, then commits only metadata to Convex: storage mode, provider, object key, SHA-256, size, revision, path, and scope. `HOPIT_BLOB_FREE_ONLY=1` makes R2 use an 8 GB default budget, below Cloudflare R2's free storage tier, and fails before uploading a blob that would exceed that cap. `hydrate`, `refresh`, `hydrate-file`, recovery, export, and publish download object bytes and verify the hash before writing locally. Tests can use `--blob-provider filesystem --blob-root /tmp/hopit-blobs`. A later Backblaze B2 migration should use the same S3-compatible adapter with `HOPIT_BLOB_PROVIDER=b2`, `HOPIT_B2_BUCKET`, `HOPIT_B2_ENDPOINT`, `HOPIT_B2_REGION`, `HOPIT_B2_KEY_ID`, and `HOPIT_B2_APPLICATION_KEY`.
 
 Build a Node/npm-free artifact for the current macOS or Linux platform with:
 
@@ -327,15 +344,15 @@ Generated local agent state is demo/runtime state, not workspace content:
 Promote this selected managed-folder proof into the full HopIt Workspace Root
 contract. The root-level index, hydration/materialized revision state,
 metadata-only and single-file hydrate primitives, scoped agent-session tokens,
-content-addressed text blobs, per-file agent mutations, configured-codebase
+object-backed content-addressed blobs, per-file agent mutations, configured-codebase
 discover/attach, and opt-in remote-pull cursor are now in place. The next agent
 work should add account-wide cloud codebase discovery, richer per-file cache
 metadata, automatic lazy materialization policy, and production-grade
 remote-update delivery.
 
-In parallel, the cloud graph needs large-file/object-blob handling, durable
-history reconstruction, and full product write-path coverage before concurrent
-multi-device editing is treated as production safe. Git compatibility can
+In parallel, the cloud graph needs durable history reconstruction,
+object-retention/garbage-collection policy, and full product write-path coverage
+before concurrent multi-device editing is treated as production safe. Git compatibility can
 continue as an escape hatch on top of
 snapshots, but it should not displace Workspace Root, automatic device handoff,
 or active change sets as the primary v1 product path. A true virtual filesystem

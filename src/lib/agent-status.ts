@@ -82,10 +82,17 @@ export type AgentFile = {
   path: string
   name: string
   directory: string
+  kind: 'file' | 'symlink' | 'directory'
+  encoding: 'utf8' | 'base64' | null
+  target: string | null
   scope: 'shared' | 'owner-private'
   revision: number | null
   size: number | null
   hash: string | null
+  contentStorage: string | null
+  blobProvider: string | null
+  blobKey: string | null
+  blobHash: string | null
   contentPreview: string | null
   contentPreviewTruncated: boolean
 }
@@ -148,10 +155,17 @@ type RawAccessContext = {
 }
 
 type RawCloudFile = {
+  kind?: string
+  encoding?: string
+  target?: string | null
   scope?: string
   revision?: number
   size?: number
   hash?: string
+  contentStorage?: string | null
+  blobProvider?: string | null
+  blobKey?: string | null
+  blobHash?: string | null
   content?: string
 }
 
@@ -537,10 +551,17 @@ function mapCloudFiles(cloud: RawCloudResponse | null | undefined): AgentFile[] 
         path: filePath,
         name: pathName(filePath),
         directory: pathDirectory(filePath),
+        kind: fileKind(file.kind),
+        encoding: fileEncoding(file.encoding, file.kind),
+        target: typeof file.target === 'string' ? file.target : null,
         scope: fileScope(file.scope),
         revision: typeof file.revision === 'number' ? file.revision : null,
         size: typeof file.size === 'number' ? file.size : contentSize(file.content),
         hash: typeof file.hash === 'string' ? file.hash : null,
+        contentStorage: typeof file.contentStorage === 'string' ? file.contentStorage : null,
+        blobProvider: typeof file.blobProvider === 'string' ? file.blobProvider : null,
+        blobKey: typeof file.blobKey === 'string' ? file.blobKey : null,
+        blobHash: typeof file.blobHash === 'string' ? file.blobHash : null,
         contentPreview: preview.content,
         contentPreviewTruncated: preview.truncated,
       }
@@ -555,6 +576,16 @@ function backendName(value: string | undefined): AgentStatusSnapshot['backend'] 
 
 function fileScope(scope: string | undefined): AgentFile['scope'] {
   return scope === 'owner-private' ? 'owner-private' : 'shared'
+}
+
+function fileKind(kind: string | undefined): AgentFile['kind'] {
+  if (kind === 'symlink' || kind === 'directory') return kind
+  return 'file'
+}
+
+function fileEncoding(encoding: string | undefined, kind: string | undefined): AgentFile['encoding'] {
+  if (fileKind(kind) !== 'file') return null
+  return encoding === 'base64' ? 'base64' : 'utf8'
 }
 
 function pathName(filePath: string) {
@@ -574,7 +605,13 @@ function contentSize(content: string | undefined) {
 function contentPreview(file: RawCloudFile) {
   const maxPreviewCharacters = 2400
 
-  if (fileScope(file.scope) === 'owner-private' || typeof file.content !== 'string') {
+  if (
+    fileScope(file.scope) === 'owner-private' ||
+    fileKind(file.kind) !== 'file' ||
+    file.contentStorage === 'object-blob' ||
+    fileEncoding(file.encoding, file.kind) !== 'utf8' ||
+    typeof file.content !== 'string'
+  ) {
     return { content: null, truncated: false }
   }
 

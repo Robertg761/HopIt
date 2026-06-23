@@ -469,6 +469,10 @@ function hashContent(content) {
   return createHash('sha256').update(content).digest('hex')
 }
 
+function hashBuffer(buffer) {
+  return createHash('sha256').update(buffer).digest('hex')
+}
+
 async function appendJournalEntry(state, entry) {
   await fs.appendFile(state.journal, `${JSON.stringify(entry)}\n`, 'utf8')
 }
@@ -600,16 +604,153 @@ test('owner sync still journals and applies owner-private deletes', async () => 
 
   const sync = await runCli('sync-once', stateArgs(state))
   assert.match(sync.stdout, /sync\.complete/)
-  assert.match(sync.stdout, /"journaledScopeCounts":\{"shared":0,"private":1\}/)
+  assert.match(sync.stdout, /"journaledScopeCounts":\{"shared":0,"private":2\}/)
 
   const cloud = await readJson(state.cloud)
   assert.equal(cloud.files['.private/agent-note.md'], undefined)
+  assert.equal(cloud.files['.private'].kind, 'directory')
 
   const journal = await readNdjson(state.journal)
-  assert.equal(journal.length, 1)
-  assert.equal(journal[0].type, 'delete')
-  assert.equal(journal[0].path, '.private/agent-note.md')
-  assert.equal(journal[0].scope, 'owner-private')
+  assert.equal(journal.length, 2)
+  assert.deepEqual(
+    journal.map((entry) => [entry.type, entry.path, entry.kind, entry.scope]).sort(),
+    [
+      ['create', '.private', 'directory', 'owner-private'],
+      ['delete', '.private/agent-note.md', 'file', 'owner-private'],
+    ],
+  )
+})
+
+test('sync and hydrate round-trip binary files, symlinks, empty directories, and .git scope', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+
+  const binary = Buffer.from([0, 1, 2, 255, 42, 10])
+  await fs.writeFile(path.join(state.workspace, 'binary.bin'), binary)
+  await fs.mkdir(path.join(state.workspace, 'empty-dir'), { recursive: true })
+  await fs.symlink('README.md', path.join(state.workspace, 'readme-link'))
+  await fs.mkdir(path.join(state.workspace, '.git'), { recursive: true })
+  await fs.writeFile(path.join(state.workspace, '.git/config'), '[core]\nrepositoryformatversion = 0\n', 'utf8')
+
+  await runCli('sync-once', stateArgs(state))
+  const cloud = await readJson(state.cloud)
+
+  assert.equal(cloud.files['binary.bin'].kind, 'file')
+  assert.equal(cloud.files['binary.bin'].encoding, 'base64')
+  assert.equal(cloud.files['binary.bin'].hash, hashBuffer(binary))
+  assert.equal(cloud.files['empty-dir'].kind, 'directory')
+  assert.equal(cloud.files['readme-link'].kind, 'symlink')
+  assert.equal(cloud.files['readme-link'].target, 'README.md')
+  assert.equal(cloud.files['.git/config'].scope, 'owner-private')
+
+  await fs.rm(state.workspace, { recursive: true, force: true })
+  await runCli('hydrate', stateArgs(state))
+
+  assert.deepEqual(await fs.readFile(path.join(state.workspace, 'binary.bin')), binary)
+  assert.equal(await pathExists(path.join(state.workspace, 'empty-dir')), true)
+  assert.equal(await fs.readlink(path.join(state.workspace, 'readme-link')), 'README.md')
+  assert.match(await fs.readFile(path.join(state.workspace, '.git/config'), 'utf8'), /repositoryformatversion/)
+})
+
+test('object blob provider stores file bodies outside the cloud graph and hydrates by hash', async () => {
+  const state = await makeState()
+  const blobRoot = path.join(state.root, 'blob-store')
+  const blobArgs = ['--blob-provider', 'filesystem', '--blob-root', blobRoot]
+  await runCli('init', [...stateArgs(state), ...blobArgs, '--force'])
+  await runCli('hydrate', [...stateArgs(state), ...blobArgs])
+
+  const content = Buffer.from('object-backed sync body\n', 'utf8')
+  const binary = Buffer.from([0, 1, 255, 64, 10])
+  await fs.writeFile(path.join(state.workspace, 'object-backed.txt'), content)
+  await fs.writeFile(path.join(state.workspace, 'object-backed.bin'), binary)
+
+  await runCli('sync-once', [...stateArgs(state), ...blobArgs])
+  const cloud = await readJson(state.cloud)
+  const textEntry = cloud.files['object-backed.txt']
+  const binaryEntry = cloud.files['object-backed.bin']
+
+  assert.equal(textEntry.contentStorage, 'object-blob')
+  assert.equal(textEntry.blobProvider, 'filesystem')
+  assert.equal(textEntry.content, '')
+  assert.equal(textEntry.hash, hashBuffer(content))
+  assert.equal(textEntry.blobHash, hashBuffer(content))
+  assert.ok(textEntry.blobKey.includes(textEntry.hash))
+  assert.deepEqual(await fs.readFile(path.join(blobRoot, textEntry.blobKey)), content)
+
+  assert.equal(binaryEntry.contentStorage, 'object-blob')
+  assert.equal(binaryEntry.encoding, 'base64')
+  assert.equal(binaryEntry.content, '')
+  assert.deepEqual(await fs.readFile(path.join(blobRoot, binaryEntry.blobKey)), binary)
+
+  await fs.rm(state.workspace, { recursive: true, force: true })
+  await runCli('hydrate', [...stateArgs(state), ...blobArgs])
+
+  assert.deepEqual(await fs.readFile(path.join(state.workspace, 'object-backed.txt')), content)
+  assert.deepEqual(await fs.readFile(path.join(state.workspace, 'object-backed.bin')), binary)
+})
+
+test('object blob budget guard blocks upload before cloud metadata changes', async () => {
+  const state = await makeState()
+  const blobRoot = path.join(state.root, 'blob-store')
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+
+  await fs.writeFile(path.join(state.workspace, 'too-large.txt'), 'this should not upload\n', 'utf8')
+  const result = await runCliFailure('sync-once', [
+    ...stateArgs(state),
+    '--blob-provider',
+    'filesystem',
+    '--blob-root',
+    blobRoot,
+    '--blob-storage-budget-bytes',
+    '1',
+  ])
+
+  assert.match(result.stdout, /sync\.failed/)
+  assert.match(result.stdout, /object_blob_budget_exceeded/)
+  const cloud = await readJson(state.cloud)
+  assert.equal(cloud.files['too-large.txt'], undefined)
+})
+
+test('mirror routes root env secrets into .private and skips cloud sync when over budget', async () => {
+  const state = await makeState()
+  const source = path.join(state.root, 'source-project')
+  await fs.mkdir(path.join(source, '.git'), { recursive: true })
+  await fs.writeFile(path.join(source, 'README.md'), '# Literal mirror\n', 'utf8')
+  await fs.writeFile(path.join(source, '.env.local'), 'SECRET=route-me\n', 'utf8')
+  await fs.writeFile(path.join(source, '.env.example'), 'SECRET=\n', 'utf8')
+  await fs.writeFile(path.join(source, '.git/config'), '[core]\nrepositoryformatversion = 0\n', 'utf8')
+  await fs.mkdir(state.workspace, { recursive: true })
+  await fs.writeFile(path.join(state.workspace, 'old.txt'), 'old workspace\n', 'utf8')
+
+  const result = parseLastJsonObject((await runCli('mirror', [
+    ...stateArgs(state),
+    '--source',
+    source,
+    '--storage-budget-bytes',
+    '1',
+    '--skip-service-control',
+  ])).stdout)
+
+  assert.equal(result.ok, true)
+  assert.equal(result.sync.skipped, true)
+  assert.equal(result.sync.reason, 'storage_budget_exceeded')
+  assert.equal(result.secrets.rootEnvExists, false)
+  assert.equal(result.secrets.routedEnvExists, true)
+  assert.equal(await pathExists(path.join(state.workspace, 'old.txt')), false)
+  assert.equal(await pathExists(path.join(state.workspace, '.env.local')), false)
+  assert.match(await fs.readFile(path.join(state.workspace, '.private/env/repo-root/.env.local'), 'utf8'), /SECRET=route-me/)
+  assert.match(await fs.readFile(path.join(state.workspace, '.git/config'), 'utf8'), /repositoryformatversion/)
+  assert.equal(await pathExists(result.backup.manifest), true)
+
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('sync-once', stateArgs(state))
+  const cloud = await readJson(state.cloud)
+  assert.equal(cloud.files['.private/env/repo-root/.env.local'], undefined)
+  assert.equal(cloud.files['.private/env'], undefined)
+  assert.equal(cloud.files['.git/config'].scope, 'owner-private')
+  assert.equal(cloud.files['.env.example'].scope, 'shared')
 })
 
 test('import-local hydrates a real folder while skipping generated and sensitive files', async () => {

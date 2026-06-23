@@ -43,6 +43,12 @@ const fileMutationTypeValidator = v.union(
   v.literal("write"),
   v.literal("delete"),
 );
+const fileEntryKindValidator = v.union(
+  v.literal("file"),
+  v.literal("symlink"),
+  v.literal("directory"),
+);
+const fileEntryEncodingValidator = v.union(v.literal("utf8"), v.literal("base64"));
 const agentSessionCapabilityValidator = v.union(
   v.literal("read"),
   v.literal("write"),
@@ -568,34 +574,30 @@ export const saveGraph = mutation({
     const incomingPaths = new Set(Object.keys(graph.files));
 
     for (const [filePath, file] of Object.entries(graph.files)) {
-      const content = String((file as { content?: string }).content ?? "");
-      const hash = typeof (file as { hash?: unknown }).hash === "string"
-        ? (file as { hash: string }).hash
-        : null;
-      if (hash) {
-        await upsertFileBlob(ctx, codebaseId, hash, content, now);
+      const normalizedFile = normalizeFileEntryForStorage(filePath, file, graph.revision, now);
+      const content = normalizedFile.content;
+      const hash = normalizedFile.hash ?? null;
+      if (hash && normalizedFile.kind !== "directory" && normalizedFile.contentStorage !== "object-blob") {
+        await upsertFileBlob(ctx, codebaseId, hash, content, normalizedFile.encoding, normalizedFile.size, now);
       }
       const fileValue: any = {
         codebaseId,
         path: filePath,
-        content,
-        scope: scopeForPath(filePath),
-        revision:
-          typeof (file as { revision?: unknown }).revision === "number"
-            ? (file as { revision: number }).revision
-            : graph.revision,
-        updatedAt:
-          typeof (file as { updatedAt?: unknown }).updatedAt === "string"
-            ? (file as { updatedAt: string }).updatedAt
-            : now,
+        ...normalizedFile,
       };
-      if (hash) {
+      if (hash && normalizedFile.kind !== "directory") {
         fileValue.hash = hash;
         fileValue.blobHash = hash;
-        fileValue.contentStorage = "convex-file-blob";
-      }
-      if (typeof (file as { size?: unknown }).size === "number") {
-        fileValue.size = (file as { size: number }).size;
+        fileValue.contentStorage = normalizedFile.contentStorage === "object-blob"
+          ? "object-blob"
+          : normalizedFile.encoding === "base64"
+            ? "convex-file-blob-base64"
+            : "convex-file-blob";
+        if (normalizedFile.contentStorage === "object-blob") {
+          fileValue.blobProvider = normalizedFile.blobProvider;
+          fileValue.blobKey = normalizedFile.blobKey;
+          fileValue.blobHash = normalizedFile.blobHash ?? hash;
+        }
       }
       const existingFile = existingByPath.get(filePath);
 
@@ -626,7 +628,14 @@ export const applyFileMutation = mutation({
     codebaseId: v.string(),
     type: fileMutationTypeValidator,
     path: v.string(),
+    kind: v.optional(fileEntryKindValidator),
     content: v.optional(v.string()),
+    encoding: v.optional(fileEntryEncodingValidator),
+    target: v.optional(v.union(v.string(), v.null())),
+    contentStorage: v.optional(v.string()),
+    blobProvider: v.optional(v.union(v.string(), v.null())),
+    blobKey: v.optional(v.union(v.string(), v.null())),
+    blobHash: v.optional(v.string()),
     hash: v.optional(v.string()),
     size: v.optional(v.number()),
     baseRevision: v.optional(v.union(v.number(), v.null())),
@@ -675,36 +684,66 @@ export const applyFileMutation = mutation({
         await ctx.db.delete(existingFile._id);
       }
     } else {
-      if (typeof args.content !== "string") {
-        throw new Error(`File ${args.type} requires content.`);
-      }
-      if (!args.hash) {
+      const nextFile = normalizeFileEntryForStorage(args.path, {
+        kind: args.kind ?? "file",
+        content: args.content,
+        encoding: args.encoding,
+        target: args.target,
+        contentStorage: args.contentStorage,
+        blobProvider: args.blobProvider,
+        blobKey: args.blobKey,
+        blobHash: args.blobHash,
+        hash: args.hash,
+        size: args.size,
+      }, previousRevision + 1, now);
+      if (!nextFile.hash) {
         throw new Error(`File ${args.type} requires a content hash.`);
       }
 
-      const size = args.size ?? byteLength(args.content);
       const scope = scopeForPath(args.path) as "shared" | "owner-private";
       const changed =
         !existingFile ||
-        existingFile.hash !== args.hash ||
+        (existingFile.kind ?? "file") !== nextFile.kind ||
+        existingFile.hash !== nextFile.hash ||
         existingFile.scope !== scope ||
-        existingFile.content !== args.content;
+        existingFile.content !== nextFile.content ||
+        existingFile.contentStorage !== nextFile.contentStorage ||
+        (existingFile.blobProvider ?? null) !== (nextFile.blobProvider ?? null) ||
+        (existingFile.blobKey ?? null) !== (nextFile.blobKey ?? null) ||
+        (existingFile.target ?? null) !== (nextFile.target ?? null);
 
       if (changed) {
         nextRevision += 1;
-        await upsertFileBlob(ctx, args.codebaseId, args.hash, args.content, now);
-        const fileValue = {
+        if (nextFile.kind !== "directory" && nextFile.contentStorage !== "object-blob") {
+          await upsertFileBlob(ctx, args.codebaseId, nextFile.hash, nextFile.content, nextFile.encoding, nextFile.size, now);
+        }
+        const fileValue: any = {
           codebaseId: args.codebaseId,
           path: args.path,
-          content: args.content,
-          blobHash: args.hash,
-          contentStorage: "convex-file-blob",
-          hash: args.hash,
-          size,
+          kind: nextFile.kind,
+          content: nextFile.content,
+          encoding: nextFile.encoding,
+          target: nextFile.target,
+          contentStorage: nextFile.contentStorage,
+          blobProvider: nextFile.blobProvider,
+          blobKey: nextFile.blobKey,
+          hash: nextFile.hash,
+          size: nextFile.size,
           scope,
           revision: nextRevision,
           updatedAt: now,
         };
+        if (nextFile.kind !== "directory") {
+          fileValue.blobHash = nextFile.hash;
+          fileValue.contentStorage = nextFile.contentStorage === "object-blob"
+            ? "object-blob"
+            : nextFile.encoding === "base64" ? "convex-file-blob-base64" : "convex-file-blob";
+          if (nextFile.contentStorage === "object-blob") {
+            fileValue.blobProvider = nextFile.blobProvider;
+            fileValue.blobKey = nextFile.blobKey;
+            fileValue.blobHash = (nextFile as any).blobHash ?? nextFile.hash;
+          }
+        }
 
         if (existingFile) {
           await ctx.db.patch(existingFile._id, fileValue);
@@ -1276,11 +1315,16 @@ async function readGraph(ctx: { db: DatabaseReader }, codebaseId: string) {
     files.map((file) => [
       file.path,
       {
+        kind: file.kind ?? "file",
         content: file.content,
+        encoding: file.encoding ?? "utf8",
+        target: file.target ?? null,
         blobHash: file.blobHash ?? file.hash ?? null,
+        blobProvider: file.blobProvider ?? null,
+        blobKey: file.blobKey ?? null,
         contentStorage: file.contentStorage ?? "inline",
         hash: file.hash ?? null,
-        size: file.size ?? file.content.length,
+        size: file.size ?? byteLength(file.content),
         scope: file.scope,
         revision: file.revision,
         updatedAt: file.updatedAt,
@@ -1315,15 +1359,22 @@ async function readFileByPath(ctx: any, codebaseId: string, filePath: string) {
     .unique();
 }
 
-async function upsertFileBlob(ctx: any, codebaseId: string, hash: string, content: string, now: string) {
-  const size = byteLength(content);
+async function upsertFileBlob(
+  ctx: any,
+  codebaseId: string,
+  hash: string,
+  content: string,
+  encoding: "utf8" | "base64",
+  size: number,
+  now: string,
+) {
   const existingBlob = await ctx.db
     .query("fileBlobs")
     .withIndex("by_codebase_hash", (q: any) => q.eq("codebaseId", codebaseId).eq("hash", hash))
     .unique();
 
   if (existingBlob) {
-    if (existingBlob.content !== content || existingBlob.size !== size) {
+    if (existingBlob.content !== content || existingBlob.size !== size || (existingBlob.encoding ?? "utf8") !== encoding) {
       throw new Error(`content_hash_collision: existing blob content differs for ${hash}.`);
     }
     return existingBlob._id;
@@ -1333,9 +1384,85 @@ async function upsertFileBlob(ctx: any, codebaseId: string, hash: string, conten
     codebaseId,
     hash,
     content,
+    encoding,
     size,
     createdAt: now,
   });
+}
+
+function normalizeFileEntryForStorage(
+  filePath: string,
+  file: unknown,
+  revision: number,
+  now: string,
+) {
+  const value = file && typeof file === "object" ? { ...(file as Record<string, any>) } : {};
+  const kind = value.kind === "symlink" || value.kind === "directory" ? value.kind : "file";
+  const scope = scopeForPath(filePath) as "shared" | "owner-private";
+
+  if (kind === "directory") {
+    return {
+      kind,
+      content: "",
+      encoding: "utf8" as const,
+      target: null,
+      hash: typeof value.hash === "string" ? value.hash : hashText(`directory\0${filePath}`),
+      size: 0,
+      scope,
+      revision: typeof value.revision === "number" ? value.revision : revision,
+      updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : now,
+    };
+  }
+
+  if (kind === "symlink") {
+    const target = typeof value.target === "string" ? value.target : String(value.content ?? "");
+    return {
+      kind,
+      content: target,
+      encoding: "utf8" as const,
+      target,
+      hash: typeof value.hash === "string" ? value.hash : hashText(`symlink\0${target}`),
+      size: typeof value.size === "number" ? value.size : byteLength(target),
+      scope,
+      revision: typeof value.revision === "number" ? value.revision : revision,
+      updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : now,
+    };
+  }
+
+  const content = typeof value.content === "string" ? value.content : "";
+  const encoding = value.encoding === "base64" ? "base64" as const : "utf8" as const;
+  const contentStorage = value.contentStorage === "object-blob" ? "object-blob" : "inline";
+  const hash = typeof value.hash === "string"
+    ? value.hash
+    : typeof value.blobHash === "string"
+      ? value.blobHash
+      : hashText(content);
+  const blobHash = typeof value.blobHash === "string" ? value.blobHash : hash;
+  return {
+    kind,
+    content,
+    encoding,
+    target: null,
+    contentStorage,
+    blobProvider: contentStorage === "object-blob" && typeof value.blobProvider === "string" ? value.blobProvider : null,
+    blobKey: contentStorage === "object-blob" && typeof value.blobKey === "string" ? value.blobKey : null,
+    blobHash,
+    hash,
+    size: typeof value.size === "number" ? value.size : byteLength(content),
+    scope,
+    revision: typeof value.revision === "number" ? value.revision : revision,
+    updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : now,
+  };
+}
+
+function hashText(value: string) {
+  let hash = 0;
+  // Convex runtime does not expose Node crypto in queries/mutations, so this is
+  // only a deterministic fallback for legacy graphs missing agent-supplied hashes.
+  for (let index = 0; index < value.length; index += 1) {
+    hash = ((hash << 5) - hash + value.charCodeAt(index)) | 0;
+  }
+  return `legacy-${Math.abs(hash)}`;
 }
 
 function byteLength(value: string) {
@@ -1362,6 +1489,9 @@ function normalizeGraph(graph: unknown) {
   value.visibility ??= { productDefault: "private", effective: "private" };
   value.revision = Number.isInteger(value.revision) ? value.revision : 0;
   value.files = value.files && typeof value.files === "object" ? value.files : {};
+  for (const [filePath, file] of Object.entries(value.files)) {
+    value.files[filePath] = normalizeFileEntryForStorage(filePath, file, value.revision, new Date().toISOString());
+  }
 
   return value as {
     schemaVersion: number;
@@ -1438,6 +1568,28 @@ function validateGraph(graph: ReturnType<typeof normalizeGraph>) {
       errors.push(error instanceof Error ? error.message : String(error));
     }
     if (typeof value.content !== "string") errors.push(`${filePath}.content must be a string.`);
+    const kind = value.kind ?? "file";
+    if (kind !== "file" && kind !== "symlink" && kind !== "directory") errors.push(`${filePath}.kind is invalid.`);
+    if (kind === "file" && value.encoding !== "utf8" && value.encoding !== "base64") {
+      errors.push(`${filePath}.encoding is invalid.`);
+    }
+    if (
+      kind === "file" &&
+      value.contentStorage !== undefined &&
+      value.contentStorage !== "inline" &&
+      value.contentStorage !== "convex-file-blob" &&
+      value.contentStorage !== "convex-file-blob-base64" &&
+      value.contentStorage !== "object-blob"
+    ) {
+      errors.push(`${filePath}.contentStorage is invalid.`);
+    }
+    if (kind === "file" && value.contentStorage === "object-blob") {
+      if (!isNonEmptyString(value.blobProvider)) errors.push(`${filePath}.blobProvider is required for object-backed files.`);
+      if (!isNonEmptyString(value.blobKey)) errors.push(`${filePath}.blobKey is required for object-backed files.`);
+      if (!isNonEmptyString(value.blobHash ?? value.hash)) errors.push(`${filePath}.blobHash is required for object-backed files.`);
+    }
+    if (kind === "symlink" && typeof value.target !== "string") errors.push(`${filePath}.target must be a string.`);
+    if (kind === "directory" && value.content !== "") errors.push(`${filePath}.content must be empty for directories.`);
     if (value.scope !== scopeForPath(filePath)) errors.push(`${filePath}.scope must be ${scopeForPath(filePath)}.`);
     if (!Number.isInteger(value.revision)) errors.push(`${filePath}.revision must be an integer.`);
   }
