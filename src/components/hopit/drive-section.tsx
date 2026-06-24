@@ -62,7 +62,7 @@ export function DriveSection({ status }: DriveSectionProps) {
   const sharedFileCount = status.files.length - privateFileCount
 
   return (
-    <section className="flex flex-col rounded-2xl border border-border/60 bg-card shadow-sm">
+    <section className="panel-surface flex flex-col rounded-lg border border-border/70 shadow-sm">
       <div className="flex flex-col gap-3 border-b border-border/60 p-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-2">
@@ -82,11 +82,11 @@ export function DriveSection({ status }: DriveSectionProps) {
         </div>
 
         <div className="flex items-center gap-1.5">
-          <div className="flex items-center rounded-lg border border-border/60 bg-muted/50 p-0.5">
+          <div className="flex items-center rounded-md border border-border/60 bg-muted/50 p-0.5">
             <button
               onClick={() => setView('grid')}
               className={cn(
-                'rounded-md p-1.5 transition',
+                'rounded p-1.5 transition',
                 view === 'grid' ? 'bg-card shadow-sm' : 'text-muted-foreground',
               )}
               aria-label="Grid view"
@@ -96,7 +96,7 @@ export function DriveSection({ status }: DriveSectionProps) {
             <button
               onClick={() => setView('list')}
               className={cn(
-                'rounded-md p-1.5 transition',
+                'rounded p-1.5 transition',
                 view === 'list' ? 'bg-card shadow-sm' : 'text-muted-foreground',
               )}
               aria-label="List view"
@@ -107,7 +107,7 @@ export function DriveSection({ status }: DriveSectionProps) {
           <Button
             size="sm"
             disabled
-            className="gap-1.5 rounded-lg bg-grape text-grape-foreground hover:bg-grape/90"
+            className="gap-1.5 rounded-md bg-grape text-grape-foreground hover:bg-grape/90"
           >
             <CloudUpload className="size-3.5" />
             Import
@@ -117,7 +117,7 @@ export function DriveSection({ status }: DriveSectionProps) {
 
       <div className="border-b border-border/60 px-4 py-3">
         <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-muted/30 px-2.5 py-2 lg:max-w-sm lg:flex-1">
+          <div className="flex min-w-0 items-center gap-2 rounded-md border border-border/60 bg-muted/30 px-2.5 py-2 lg:max-w-sm lg:flex-1">
             <Search className="size-3.5 shrink-0 text-muted-foreground" />
             <input
               value={fileQuery}
@@ -179,13 +179,13 @@ export function DriveSection({ status }: DriveSectionProps) {
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: i * 0.04, duration: 0.3 }}
                 className={cn(
-                  'group flex items-center gap-2.5 rounded-xl border border-border/60 bg-background/40 p-3 text-left transition hover:border-grape/40 hover:bg-grape/5',
+                  'group flex items-center gap-2.5 rounded-lg border border-border/60 bg-background/40 p-3 text-left transition hover:border-grape/40 hover:bg-grape/5',
                   activeFolder === f.directory && 'border-hop/40 bg-hop/5 ring-1 ring-hop/20',
                 )}
               >
                 <div
                   className={cn(
-                    'flex size-9 items-center justify-center rounded-lg ring-1',
+                    'flex size-9 items-center justify-center rounded-md ring-1',
                     folderColorMap[f.color ?? 'hop'],
                   )}
                 >
@@ -240,7 +240,7 @@ function ScopeFilterButton({
       type="button"
       onClick={onClick}
       className={cn(
-        'rounded-lg px-2.5 py-1.5 text-xs font-medium transition',
+        'rounded-md px-2.5 py-1.5 text-xs font-medium transition',
         active
           ? 'bg-grape/10 text-grape ring-1 ring-grape/20'
           : 'bg-muted/40 text-muted-foreground hover:text-foreground',
@@ -254,7 +254,7 @@ function ScopeFilterButton({
 
 function EmptyFiles({ activeFolder }: { activeFolder: string }) {
   return (
-    <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 p-6 text-center">
+    <div className="rounded-lg border border-dashed border-border/70 bg-muted/20 p-6 text-center">
       <p className="text-sm font-medium">No files match this view</p>
       <p className="mt-1 text-xs text-muted-foreground">
         {activeFolder === 'all'
@@ -355,11 +355,11 @@ function FileGrid({ files }: { files: DriveBrowserFile[] }) {
             initial={{ opacity: 0, scale: 0.97 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ delay: i * 0.03, duration: 0.3 }}
-            className="group relative flex flex-col gap-2 rounded-xl border border-border/60 bg-card p-3 transition hover:-translate-y-0.5 hover:border-grape/30 hover:shadow-md"
+            className="group relative flex flex-col gap-2 rounded-lg border border-border/60 bg-card p-3 transition hover:-translate-y-0.5 hover:border-grape/30 hover:shadow-md"
           >
             <div className="flex items-center justify-between">
               <div
-                className="flex size-9 items-center justify-center rounded-lg"
+                className="flex size-9 items-center justify-center rounded-md"
                 style={{ background: `${color}15`, color }}
               >
                 <Icon className="size-4.5" />
@@ -398,7 +398,7 @@ function FileGrid({ files }: { files: DriveBrowserFile[] }) {
 
 function FileList({ files }: { files: DriveBrowserFile[] }) {
   return (
-    <ul className="divide-y divide-border/50 overflow-hidden rounded-lg border border-border/60">
+    <ul className="divide-y divide-border/50 overflow-hidden rounded-md border border-border/60">
       <li className="grid grid-cols-12 gap-2 bg-muted/40 px-3 py-2 text-[10px] font-medium uppercase text-muted-foreground">
         <span className="col-span-5">Name</span>
         <span className="col-span-3 hidden md:block">Directory</span>

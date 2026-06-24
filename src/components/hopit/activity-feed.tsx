@@ -69,7 +69,7 @@ export function ActivityFeed({ status }: ActivityFeedProps) {
   const items = liveItems.filter((a) => filter === 'all' || a.what === filter)
 
   return (
-    <section className="flex flex-col rounded-2xl border border-border/60 bg-card shadow-sm">
+    <section className="panel-surface flex flex-col rounded-lg border border-border/70 shadow-sm">
       <div className="flex flex-col gap-3 border-b border-border/60 p-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-2">
@@ -154,7 +154,7 @@ export function ActivityFeed({ status }: ActivityFeedProps) {
             </motion.li>
           )
         }) : (
-          <li className="rounded-xl border border-dashed border-border/70 bg-muted/20 p-6 text-center">
+          <li className="rounded-lg border border-dashed border-border/70 bg-muted/20 p-6 text-center">
             <p className="text-sm font-medium">No real agent activity yet</p>
             <p className="mt-1 text-xs text-muted-foreground">
               Import a local project or start the agent status server to populate this feed.

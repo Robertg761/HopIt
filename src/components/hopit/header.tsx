@@ -6,10 +6,12 @@ import {
   ChevronDown,
   Code2,
   Command,
+  HardDrive,
   Menu,
   Moon,
   Plus,
   Search,
+  ShieldCheck,
   Sun,
   Upload,
 } from 'lucide-react'
@@ -41,8 +43,8 @@ export function Header({ onOpenSidebar }: HeaderProps) {
   }, [])
 
   return (
-    <header className="sticky top-0 z-30 border-b border-border/60 bg-background/80 backdrop-blur-xl">
-      <div className="flex h-16 min-w-0 items-center gap-3 px-4 md:px-6">
+    <header className="sticky top-0 z-30 border-b border-border/70 bg-card/[0.88] backdrop-blur-xl">
+      <div className="flex h-14 min-w-0 items-center gap-3 px-4 md:px-6">
         {/* Mobile menu */}
         <button
           onClick={onOpenSidebar}
@@ -54,11 +56,13 @@ export function Header({ onOpenSidebar }: HeaderProps) {
 
         {/* Breadcrumb / context */}
         <div className="hidden items-center gap-2 md:flex">
-          <span className="text-sm font-medium text-foreground">HopIt Labs</span>
+          <span className="mono-label text-[10px] font-medium text-muted-foreground">
+            HopIt Labs
+          </span>
           <span className="text-muted-foreground/50">/</span>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <button className="flex items-center gap-1.5 rounded-md px-2 py-1 text-sm font-medium text-foreground hover:bg-muted">
+              <button className="flex items-center gap-1.5 rounded-md border border-border/60 bg-background px-2 py-1 text-sm font-medium text-foreground hover:bg-muted">
                 <Code2 className="size-3.5 text-hop" />
                 Workspace
                 <ChevronDown className="size-3 text-muted-foreground" />
@@ -85,11 +89,25 @@ export function Header({ onOpenSidebar }: HeaderProps) {
 
         {/* Actions */}
         <div className="flex items-center gap-1.5">
+          <button
+            className="hidden h-8 items-center gap-1.5 rounded-md border border-hop/20 bg-hop/5 px-2.5 text-xs font-medium text-hop lg:flex"
+            onClick={() => jumpTo('status')}
+          >
+            <HardDrive className="size-3.5" />
+            Agent
+          </button>
+          <button
+            className="hidden h-8 items-center gap-1.5 rounded-md border border-border/60 bg-background px-2.5 text-xs font-medium text-muted-foreground hover:text-foreground xl:flex"
+            onClick={() => jumpTo('status')}
+          >
+            <ShieldCheck className="size-3.5 text-hop" />
+            Private scope
+          </button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button
                 size="sm"
-                className="hidden gap-1.5 rounded-lg bg-hop px-3 text-hop-foreground shadow-sm hover:bg-hop/90 sm:flex"
+                className="hidden h-8 gap-1.5 rounded-md bg-hop px-3 text-hop-foreground shadow-sm hover:bg-hop/90 sm:flex"
               >
                 <Plus className="size-4" />
                 New
@@ -119,7 +137,7 @@ export function Header({ onOpenSidebar }: HeaderProps) {
           <Button
             size="sm"
             variant="outline"
-            className="hidden gap-1.5 rounded-lg md:flex"
+            className="hidden h-8 gap-1.5 rounded-md md:flex"
             onClick={() => jumpTo('files')}
           >
             <Upload className="size-4 text-grape" />
@@ -186,6 +204,12 @@ function GlobalSearch({ onNavigate }: { onNavigate: (id: string) => void }) {
         target?.tagName === 'TEXTAREA' ||
         target?.isContentEditable
 
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        inputRef.current?.focus()
+        setOpen(true)
+      }
+
       if (event.key === '/' && !isTyping) {
         event.preventDefault()
         inputRef.current?.focus()
@@ -220,8 +244,8 @@ function GlobalSearch({ onNavigate }: { onNavigate: (id: string) => void }) {
   }
 
   return (
-    <div ref={rootRef} className="relative mx-auto hidden min-w-0 flex-1 sm:block sm:max-w-xl">
-      <div className="flex items-center gap-2 rounded-xl bg-muted/70 px-3 py-2 text-sm ring-1 ring-inset ring-border/60 transition focus-within:ring-2 focus-within:ring-hop/40">
+    <div ref={rootRef} className="relative mx-auto hidden min-w-0 flex-1 sm:block sm:max-w-2xl">
+      <div className="flex h-9 items-center gap-2 rounded-md border border-border/70 bg-background px-3 text-sm shadow-inner shadow-slate-950/[0.02] transition focus-within:border-hop/50 focus-within:ring-2 focus-within:ring-hop/15">
         <Search className="size-4 shrink-0 text-muted-foreground" />
         <input
           ref={inputRef}
@@ -233,7 +257,7 @@ function GlobalSearch({ onNavigate }: { onNavigate: (id: string) => void }) {
           onFocus={() => setOpen(true)}
           onKeyDown={onSearchKeyDown}
           type="search"
-          placeholder="Search sections, files, people"
+          placeholder="Command + K to search workspace"
           className="min-w-0 flex-1 bg-transparent placeholder:text-muted-foreground focus:outline-none"
           aria-label="Global search"
           aria-autocomplete="list"
@@ -241,13 +265,13 @@ function GlobalSearch({ onNavigate }: { onNavigate: (id: string) => void }) {
           aria-expanded={open}
           role="combobox"
         />
-        <kbd className="hidden shrink-0 rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground md:inline">
-          /
+        <kbd className="hidden shrink-0 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground md:inline">
+          K
         </kbd>
       </div>
 
       {open ? (
-        <div className="absolute left-0 right-0 top-[calc(100%+0.5rem)] z-50 overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-xl">
+        <div className="absolute left-0 right-0 top-[calc(100%+0.45rem)] z-50 overflow-hidden rounded-lg border border-border/70 bg-popover text-popover-foreground shadow-xl">
           <div id={resultsId} role="listbox" className="max-h-[320px] overflow-auto p-1.5 scroll-thin">
             {results.length > 0 ? (
               results.map((section) => {

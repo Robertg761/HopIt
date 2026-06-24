@@ -266,7 +266,7 @@ export function MembersInvitationsPanel({ status, loading, onRefreshStatus }: Me
   }
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm">
+    <section className="panel-surface overflow-hidden rounded-lg border border-border/70 shadow-sm">
       <div className="flex flex-col gap-3 border-b border-border/60 p-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -374,7 +374,7 @@ function ViewerCard({
   onClaimOwner: () => void
 }) {
   return (
-    <div className="rounded-xl border border-border/60 bg-muted/20 p-3">
+    <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
       <p className="flex items-center gap-1.5 text-xs font-semibold">
         <ShieldCheck className="size-3.5 text-hop" />
         Current viewer
@@ -463,7 +463,7 @@ function MembersList({
   onRemove: (userId: string) => void
 }) {
   return (
-    <div className="rounded-xl border border-border/60 bg-muted/20">
+    <div className="rounded-lg border border-border/60 bg-muted/20">
       <div className="flex items-center justify-between border-b border-border/60 px-3 py-2.5">
         <p className="flex items-center gap-1.5 text-xs font-semibold">
           <Users className="size-3.5 text-grape" />
@@ -592,7 +592,7 @@ function InviteForm({
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
 }) {
   return (
-    <form onSubmit={onSubmit} className="rounded-xl border border-border/60 bg-muted/20 p-3">
+    <form onSubmit={onSubmit} className="rounded-lg border border-border/60 bg-muted/20 p-3">
       <p className="flex items-center gap-1.5 text-xs font-semibold">
         <MailPlus className="size-3.5 text-hop" />
         Create invitation
@@ -652,7 +652,7 @@ function PendingInvitations({
   const canRevoke = Boolean(invitations?.capabilities.revoke.enabled)
 
   return (
-    <div className="rounded-xl border border-border/60 bg-muted/20 p-3">
+    <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
       <div className="flex items-center justify-between gap-2">
         <p className="flex items-center gap-1.5 text-xs font-semibold">
           <KeyRound className="size-3.5 text-grape" />
@@ -761,7 +761,7 @@ function AcceptInviteForm({
   onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
 }) {
   return (
-    <form onSubmit={onSubmit} className="rounded-xl border border-border/60 bg-muted/20 p-3">
+    <form onSubmit={onSubmit} className="rounded-lg border border-border/60 bg-muted/20 p-3">
       <p className="flex items-center gap-1.5 text-xs font-semibold">
         <CheckCircle2 className="size-3.5 text-hop" />
         Accept invitation

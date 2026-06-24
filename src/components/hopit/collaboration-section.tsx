@@ -330,7 +330,7 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
         : releases.length
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm">
+    <section className="panel-surface overflow-hidden rounded-lg border border-border/70 shadow-sm">
       <div className="flex flex-col gap-3 border-b border-border/60 p-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -571,7 +571,7 @@ function WorkContextCard({
   const hasHiddenScope = status.hiddenFileCount > 0
 
   return (
-    <div className="rounded-xl border border-border/60 bg-muted/20 p-3">
+    <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
       <p className="flex items-center gap-1.5 text-xs font-semibold">
         <GitPullRequest className="size-3.5 text-grape" />
         Work context
@@ -637,7 +637,7 @@ function IssuesList({
       {issues.map((issue) => {
         const isSubmitting = submitting === `issue-${issue.id}`
         return (
-          <li key={issue.id} className="rounded-xl border border-border/60 bg-muted/20 p-3">
+          <li key={issue.id} className="rounded-lg border border-border/60 bg-muted/20 p-3">
             <ItemHeader
               icon={CircleDot}
               title={issue.title}
@@ -697,7 +697,7 @@ function DiscussionsList({
       {discussions.map((discussion) => {
         const isSubmitting = submitting === `discussion-${discussion.id}`
         return (
-          <li key={discussion.id} className="rounded-xl border border-border/60 bg-muted/20 p-3">
+          <li key={discussion.id} className="rounded-lg border border-border/60 bg-muted/20 p-3">
             <ItemHeader
               icon={MessageSquareText}
               title={discussion.title}
@@ -761,7 +761,7 @@ function ReleasesList({
       {releases.map((release) => {
         const isSubmitting = submitting === `release-${release.id}`
         return (
-          <li key={release.id} className="rounded-xl border border-border/60 bg-muted/20 p-3">
+          <li key={release.id} className="rounded-lg border border-border/60 bg-muted/20 p-3">
             <ItemHeader
               icon={Rocket}
               title={`${release.version}: ${release.title}`}
@@ -967,7 +967,7 @@ function ObjectForm({
   children: React.ReactNode
 }) {
   return (
-    <form onSubmit={onSubmit} className="rounded-xl border border-border/60 bg-muted/20 p-3">
+    <form onSubmit={onSubmit} className="rounded-lg border border-border/60 bg-muted/20 p-3">
       <p className="flex items-center gap-1.5 text-xs font-semibold">
         <Icon className="size-3.5 text-hop" />
         {title}
@@ -1117,7 +1117,7 @@ function StateNotice({
   spinning?: boolean
 }) {
   return (
-    <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 p-6 text-center">
+    <div className="rounded-lg border border-dashed border-border/70 bg-muted/20 p-6 text-center">
       <Icon className={cn('mx-auto size-5 text-muted-foreground', spinning && 'animate-spin')} />
       <p className="mt-2 text-sm font-medium">{title}</p>
       <p className="mt-1 text-xs text-muted-foreground">{detail}</p>

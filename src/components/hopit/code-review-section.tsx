@@ -98,11 +98,11 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
   }
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm">
+    <section className="panel-surface overflow-hidden rounded-lg border border-border/70 shadow-sm">
       <div className="flex flex-col gap-3 border-b border-border/60 p-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <div className="flex items-center gap-2">
-            <div className="flex size-8 items-center justify-center rounded-lg bg-ink text-ink-foreground">
+            <div className="flex size-8 items-center justify-center rounded-md bg-ink text-ink-foreground">
               <Code2 className="size-4" />
             </div>
             <div>
@@ -143,7 +143,7 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
       </div>
 
       <div className="grid gap-4 p-4 xl:grid-cols-[minmax(240px,0.85fr)_minmax(0,1.6fr)_minmax(250px,0.8fr)]">
-        <div className="min-w-0 rounded-xl border border-border/60 bg-muted/20">
+        <div className="min-w-0 rounded-lg border border-border/60 bg-muted/20">
           <div className="border-b border-border/60 px-3 py-2.5">
             <div className="flex items-center justify-between gap-2">
               <p className="flex min-w-0 items-center gap-1.5 text-xs font-semibold">
@@ -154,7 +154,7 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
                 {filteredRows.length}
               </span>
             </div>
-            <div className="mt-2 flex items-center gap-1 rounded-lg border border-border/60 bg-card px-2 py-1.5">
+            <div className="mt-2 flex items-center gap-1 rounded-md border border-border/60 bg-card px-2 py-1.5">
               <Search className="size-3.5 shrink-0 text-muted-foreground" />
               <input
                 value={fileQuery}
@@ -195,7 +195,7 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
                     setSelectedLine(null)
                   }}
                   className={cn(
-                    'mb-1 w-full rounded-lg px-2.5 py-2 text-left transition',
+                    'mb-1 w-full rounded-md px-2.5 py-2 text-left transition',
                     selectedFile?.path === row.file.path
                       ? 'bg-card text-foreground ring-1 ring-hop/30'
                       : 'text-muted-foreground hover:bg-card/70 hover:text-foreground',
@@ -224,7 +224,7 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
           )}
         </div>
 
-        <div className="min-w-0 overflow-hidden rounded-xl border border-border/60 bg-background/60">
+        <div className="min-w-0 overflow-hidden rounded-lg border border-border/60 bg-background/60">
           <div className="flex flex-col gap-2 border-b border-border/60 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between">
             <div className="min-w-0">
               <p className="truncate font-mono text-xs font-semibold">
@@ -344,7 +344,7 @@ function SelectedFileCard({
   const file = row?.file ?? null
 
   return (
-    <div className="rounded-xl border border-border/60 bg-muted/20 p-3">
+    <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
       <p className="flex items-center gap-1.5 text-xs font-semibold">
         <FileDiff className="size-3.5 text-hop" />
         File context
@@ -495,7 +495,7 @@ function ReviewStateCard({
   const hasPendingWrites = status.pendingWrites > 0 || status.failedWrites > 0
 
   return (
-    <div className="rounded-xl border border-border/60 bg-muted/20 p-3">
+    <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
       <p className="flex items-center gap-1.5 text-xs font-semibold">
         {conflicted ? (
           <AlertTriangle className="size-3.5 text-destructive" />
@@ -542,7 +542,7 @@ function HistoryCard({ events }: { events: AgentStatusSnapshot['events'] }) {
   const visibleEvents = events.slice(0, 4)
 
   return (
-    <div className="rounded-xl border border-border/60 bg-muted/20 p-3">
+    <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
       <p className="flex items-center gap-1.5 text-xs font-semibold">
         <History className="size-3.5 text-grape" />
         History signals

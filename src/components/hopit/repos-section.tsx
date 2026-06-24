@@ -39,7 +39,7 @@ export function ReposSection({ status }: ReposSectionProps) {
   return (
     <section
       aria-label="Codebases"
-      className="flex flex-col rounded-2xl border border-border/60 bg-card shadow-sm"
+      className="panel-surface flex flex-col rounded-lg border border-border/70 shadow-sm"
     >
       <SectionHeader
         title="Codebases"
@@ -89,13 +89,13 @@ function SectionHeader({
       </div>
 
       <div className="flex items-center gap-2">
-        <div className="flex items-center rounded-lg border border-border/60 bg-muted/50 p-0.5">
+        <div className="flex items-center rounded-md border border-border/60 bg-muted/50 p-0.5">
           {(['all', 'public', 'private'] as const).map((f) => (
             <button
               key={f}
               onClick={() => setFilter(f)}
               className={cn(
-                'rounded-md px-2.5 py-1 text-xs font-medium capitalize transition',
+                'rounded px-2.5 py-1 text-xs font-medium capitalize transition',
                 filter === f
                   ? 'bg-card text-foreground shadow-sm'
                   : 'text-muted-foreground hover:text-foreground',
@@ -110,7 +110,7 @@ function SectionHeader({
           variant="outline"
           disabled
           title="Codebase creation will land after account-wide discovery."
-          className="gap-1.5 rounded-lg border-dashed"
+          className="gap-1.5 rounded-md border-dashed"
         >
           <Plus className="size-3.5 text-hop" />
           New codebase
@@ -148,7 +148,7 @@ function codebasesWithLiveStatus(status: AgentStatusSnapshot): Codebase[] {
 
 function EmptyCodebases() {
   return (
-    <div className="md:col-span-2 rounded-xl border border-dashed border-border/70 bg-muted/20 p-6 text-center">
+    <div className="rounded-lg border border-dashed border-border/70 bg-muted/20 p-6 text-center md:col-span-2">
       <p className="text-sm font-medium">No real codebase connected</p>
       <p className="mt-1 text-xs text-muted-foreground">
         Import a local folder with the HopIt agent, then start the status server to populate this view.
@@ -168,13 +168,13 @@ function CodebaseCard({ codebase, index }: { codebase: Codebase; index: number }
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.04, duration: 0.35 }}
-      className="group relative flex flex-col gap-3 rounded-xl border border-border/60 bg-card p-4 transition hover:border-hop/30 hover:shadow-md"
+      className="group relative flex flex-col gap-3 rounded-lg border border-border/60 bg-card p-4 transition hover:border-hop/35 hover:shadow-md"
     >
       {/* header row */}
       <div className="flex items-start justify-between gap-2">
         <div className="flex min-w-0 items-center gap-2">
           <div
-            className="flex size-8 shrink-0 items-center justify-center rounded-lg text-xs font-bold text-white"
+            className="flex size-8 shrink-0 items-center justify-center rounded-md text-xs font-bold text-white"
             style={{
               background: `linear-gradient(135deg, ${codebase.languageColor}, ${codebase.languageColor}aa)`,
             }}
@@ -243,7 +243,7 @@ function CodebaseCard({ codebase, index }: { codebase: Codebase; index: number }
       </div>
 
       {/* latest snapshot */}
-      <div className="flex items-center gap-2 rounded-lg bg-muted/40 px-2.5 py-2">
+      <div className="flex items-center gap-2 rounded-md bg-muted/40 px-2.5 py-2">
         <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-hop-gradient text-[10px] font-bold text-white">
           {codebase.latestSnapshot.author
             .split(' ')

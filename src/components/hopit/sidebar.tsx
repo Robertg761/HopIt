@@ -4,8 +4,10 @@ import * as React from 'react'
 import { motion } from 'framer-motion'
 import {
   Bell,
+  HardDrive,
   Search,
   Settings,
+  ShieldCheck,
   Users,
   X,
 } from 'lucide-react'
@@ -101,14 +103,22 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       />
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex w-[284px] flex-col border-r border-white/10 bg-ink text-ink-foreground shadow-2xl transition-transform duration-300 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 lg:shadow-none',
+          'workspace-grid fixed inset-y-0 left-0 z-50 flex w-[292px] flex-col border-r border-white/10 bg-ink text-ink-foreground shadow-2xl transition-transform duration-300 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 lg:shadow-none',
           open ? 'translate-x-0' : '-translate-x-full',
         )}
         aria-label="Primary navigation"
       >
         {/* Brand */}
-        <div className="flex items-center justify-between px-5 pt-5 pb-4">
-          <HopItLogo size={34} />
+        <div className="flex items-center justify-between px-5 pt-5 pb-3">
+          <div className="min-w-0">
+            <HopItLogo size={34} />
+            <div className="mt-3 flex items-center gap-2">
+              <span className="size-1.5 rounded-full bg-hop live-pulse" />
+              <span className="mono-label text-[10px] text-ink-foreground/50">
+                Private workspace
+              </span>
+            </div>
+          </div>
           <button
             onClick={onClose}
             className="rounded-md p-1.5 text-ink-foreground/60 hover:bg-white/10 hover:text-ink-foreground lg:hidden"
@@ -119,13 +129,20 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         </div>
 
         {/* Tagline */}
-        <p className="px-5 -mt-1 pb-4 text-[11px] uppercase text-ink-foreground/40">
-          Code &amp; files. Together.
-        </p>
+        <div className="mx-5 mb-4 grid grid-cols-2 overflow-hidden rounded-md border border-white/10 bg-white/[0.04]">
+          <div className="border-r border-white/10 px-3 py-2">
+            <p className="mono-label text-[9px] text-ink-foreground/40">Scope</p>
+            <p className="mt-1 truncate text-xs font-medium">Owner safe</p>
+          </div>
+          <div className="px-3 py-2">
+            <p className="mono-label text-[9px] text-ink-foreground/40">Mode</p>
+            <p className="mt-1 truncate text-xs font-medium">Live sync</p>
+          </div>
+        </div>
 
         {/* Compact search */}
         <div className="px-3 pb-4">
-          <div className="flex items-center gap-2 rounded-lg bg-white/5 px-3 py-2 text-sm text-ink-foreground/60 ring-1 ring-inset ring-white/10">
+          <div className="flex items-center gap-2 rounded-md bg-white/5 px-3 py-2 text-sm text-ink-foreground/60 ring-1 ring-inset ring-white/10 transition focus-within:ring-hop/40">
             <Search className="size-4 shrink-0" />
             <input
               value={query}
@@ -139,7 +156,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         </div>
 
         {/* Primary nav */}
-        <nav className="px-3 space-y-0.5">
+        <nav className="space-y-1 px-3">
           {visibleSections.map((item) => (
             <NavButton
               key={item.id}
@@ -153,12 +170,12 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         {/* Collaborators */}
         <div className="mt-auto px-5 py-4">
           <div className="mb-2 flex items-center justify-between">
-            <p className="text-[11px] uppercase text-ink-foreground/40">
-              Online
+            <p className="mono-label text-[10px] text-ink-foreground/40">
+              Presence
             </p>
             <Users className="size-3.5 text-ink-foreground/40" />
           </div>
-          <div className="rounded-lg border border-white/10 bg-white/5 px-3 py-3">
+          <div className="rounded-md border border-white/10 bg-white/5 px-3 py-3">
             <p className="text-xs text-ink-foreground/70">No live teammates connected</p>
             <p className="mt-1 text-[10.5px] text-ink-foreground/40">
               Presence will appear here after a real workspace session connects.
@@ -167,30 +184,43 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         </div>
 
         {/* Bottom bar */}
-        <div className="flex items-center justify-between border-t border-white/5 px-5 py-3">
+        <div className="grid grid-cols-[1fr_auto] items-center gap-2 border-t border-white/5 px-5 py-3">
           <a
             href={sectionHref('activity')}
             onClick={(event) => {
               event.preventDefault()
               handleNavigate('activity')
             }}
-            className="flex items-center gap-2 text-xs text-ink-foreground/50 hover:text-ink-foreground/80"
+            className="flex min-w-0 items-center gap-2 text-xs text-ink-foreground/50 hover:text-ink-foreground/80"
             aria-label="Notifications"
           >
             <Bell className="size-3.5" />
-            <span>Notifications</span>
+            <span className="truncate">Activity stream</span>
           </a>
-          <a
-            href={sectionHref('status')}
-            onClick={(event) => {
-              event.preventDefault()
-              handleNavigate('status')
-            }}
-            className="text-ink-foreground/50 hover:text-ink-foreground/80"
-            aria-label="Settings"
-          >
-            <Settings className="size-3.5" />
-          </a>
+          <div className="flex items-center gap-1.5">
+            <a
+              href={sectionHref('status')}
+              onClick={(event) => {
+                event.preventDefault()
+                handleNavigate('status')
+              }}
+              className="rounded-md p-1.5 text-ink-foreground/50 hover:bg-white/10 hover:text-ink-foreground/80"
+              aria-label="Agent status"
+            >
+              <HardDrive className="size-3.5" />
+            </a>
+            <a
+              href={sectionHref('status')}
+              onClick={(event) => {
+                event.preventDefault()
+                handleNavigate('status')
+              }}
+              className="rounded-md p-1.5 text-ink-foreground/50 hover:bg-white/10 hover:text-ink-foreground/80"
+              aria-label="Settings"
+            >
+              <Settings className="size-3.5" />
+            </a>
+          </div>
         </div>
       </aside>
     </>
@@ -218,14 +248,21 @@ function NavButton({
       whileHover={{ x: 2 }}
       transition={{ type: 'spring', stiffness: 400, damping: 25 }}
       className={cn(
-        'group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
+        'group relative flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
         active
-          ? 'bg-hop/15 text-hop ring-1 ring-inset ring-hop/30'
+          ? 'bg-white/[0.08] text-ink-foreground ring-1 ring-inset ring-hop/30'
           : 'text-ink-foreground/70 hover:bg-white/5 hover:text-ink-foreground',
       )}
     >
-      <Icon className="size-4 shrink-0" />
+      <span
+        className={cn(
+          'absolute left-0 top-1/2 h-5 w-0.5 -translate-y-1/2 rounded-full bg-hop transition-opacity',
+          active ? 'opacity-100' : 'opacity-0',
+        )}
+      />
+      <Icon className={cn('size-4 shrink-0', active ? 'text-hop' : 'text-ink-foreground/60')} />
       <span className="flex-1 text-left">{item.label}</span>
+      {active ? <ShieldCheck className="size-3 text-hop" /> : null}
     </motion.a>
   )
 }

@@ -101,7 +101,7 @@ function AgentStatusPanel({
   const StatusIcon = status.state === 'offline' ? WifiOff : HardDrive
 
   return (
-    <section className="overflow-hidden rounded-2xl border border-border/60 bg-card shadow-sm">
+    <section className="panel-surface overflow-hidden rounded-lg border border-border/70 shadow-sm">
       <div className="border-b border-border/60 px-4 py-3">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
@@ -146,7 +146,7 @@ function AgentStatusPanel({
       </div>
 
       <div className="space-y-4 p-4">
-        <div className="rounded-xl border border-border/60 bg-muted/25 p-3">
+        <div className="rounded-lg border border-border/60 bg-muted/25 p-3">
           <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase text-muted-foreground">
             <FolderOpen className="size-3.5" />
             Workspace root preview
@@ -249,7 +249,7 @@ function AgentStatusPanel({
           />
         </div>
 
-        <div className="rounded-xl border border-border/60 bg-muted/20 p-3">
+        <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
           <div className="mb-2 flex items-center justify-between gap-2">
             <h3 className="text-xs font-semibold">Workspace actions</h3>
             {runningCommand ? (
@@ -321,7 +321,7 @@ function AgentStatusPanel({
                 initial={{ opacity: 0, y: 4 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ delay: index * 0.04, duration: 0.3 }}
-                className="rounded-lg border border-border/50 bg-background/45 p-2.5"
+                className="rounded-lg border border-border/50 bg-background/50 p-2.5"
               >
                 <div className="flex items-start justify-between gap-2">
                   <span
