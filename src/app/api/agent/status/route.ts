@@ -11,20 +11,11 @@ const localAgentTimeoutMs = 5000
 export async function GET() {
   const missingHostedConfig = requiredHostedConfigMissing()
   if (missingHostedConfig.length > 0) {
-    return NextResponse.json(
+    return unavailableStatusResponse(
+      'hosted_config_missing',
+      `Hosted HopIt requires Convex-backed status. Missing: ${missingHostedConfig.join(', ')}.`,
       {
-        status: null,
-        error: {
-          code: 'hosted_config_missing',
-          message: `Hosted HopIt requires Convex-backed status. Missing: ${missingHostedConfig.join(', ')}.`,
-          missing: missingHostedConfig,
-        },
-      },
-      {
-        status: 503,
-        headers: {
-          'Cache-Control': 'no-store',
-        },
+        missing: missingHostedConfig,
       },
     )
   }
@@ -47,21 +38,7 @@ export async function GET() {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown Convex status error'
 
-      return NextResponse.json(
-        {
-          status: null,
-          error: {
-            code: 'convex_unavailable',
-            message,
-          },
-        },
-        {
-          status: 503,
-          headers: {
-            'Cache-Control': 'no-store',
-          },
-        },
-      )
+      return unavailableStatusResponse('convex_unavailable', message)
     }
   }
 
@@ -92,25 +69,34 @@ export async function GET() {
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown agent connection error'
 
-    return NextResponse.json(
-      {
-        status: null,
-        error: {
-          code: 'agent_unavailable',
-          message,
-          agentBaseUrl,
-        },
-      },
-      {
-        status: 503,
-        headers: {
-          'Cache-Control': 'no-store',
-        },
-      },
-    )
+    return unavailableStatusResponse('agent_unavailable', message, { agentBaseUrl })
   } finally {
     clearTimeout(timeout)
   }
+}
+
+function unavailableStatusResponse(
+  code: string,
+  message: string,
+  details: Record<string, unknown> = {},
+) {
+  return NextResponse.json(
+    {
+      status: null,
+      error: {
+        code,
+        message,
+        ...details,
+      },
+    },
+    {
+      status: 200,
+      headers: {
+        'Cache-Control': 'no-store',
+        'X-HopIt-Status': 'unavailable',
+      },
+    },
+  )
 }
 
 async function readRequester() {
