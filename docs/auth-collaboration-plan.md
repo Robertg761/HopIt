@@ -2,6 +2,17 @@
 
 This plan is the identity and permissions sub-plan under the solid v1 dogfood track. It covers real accounts, authenticated access, durable codebase membership, and invitation flows. Code browsing, diffs, comments, issues, projects, discussions, and releases build on this access layer as it becomes enforced server-side.
 
+Permissions are necessary but not sufficient for private repos. Private and
+shared-private content also needs client-side encryption and wrapped key grants
+so only intended users/devices can decrypt it. The end-to-end encryption design
+lives in [HopIt Privacy And Encryption Plan](privacy-encryption-plan.md); this
+auth plan owns the identity, membership, invite, and permission checks that gate
+those key grants.
+
+Last updated: 2026-06-23
+
+Current live status: the repo contains Clerk/provider-auth wiring, Convex auth config, `/api/me`, durable users, memberships, invitations, owner claim, and member/invite UI. `hopit.dev` is live, Clerk production DNS/SSL are verified, Vercel has the redacted live Clerk env vars, Convex production trusts `https://clerk.hopit.dev`, and the live personal deployment now uses Clerk as the primary hosted auth provider. Basic Auth fallback remains enabled only until owner sign-in/OAuth and owner mapping are smoke-tested. The active setup details and config locations are recorded in [Personal Production Runbook](personal-production.md).
+
 ## Goals
 
 - Every user-facing read and write has an authenticated actor.
@@ -11,6 +22,10 @@ This plan is the identity and permissions sub-plan under the solid v1 dogfood tr
 - The server filters codebase state before returning it; the UI is never the permission boundary.
 - `.private/` remains owner-only regardless of codebase membership or active change-set visibility.
 - The current agent token remains a bootstrap/admin bridge while scoped device/session tokens cover normal installed-device operation.
+- Invite acceptance and membership changes eventually create, revoke, or rotate
+  wrapped key grants; a role alone must never decrypt private content.
+- Secret sharing is separate from repo membership and requires an explicit
+  owner-approved secret-group grant.
 
 ## Data Model
 
@@ -47,6 +62,33 @@ Invitation creation is also server-guarded against duplicate active membership b
 
 Session tokens are generated once with an `hst_` prefix, stored only as hashes plus a display prefix, and scoped to a single user/codebase pair. Re-registering an existing session id is only allowed for that same user and codebase; cross-user or cross-codebase reuse is rejected. Session expiry values must be valid future timestamps.
 
+### Device Keys And Wrapped Grants
+
+The first access-model foundation now exists:
+
+- `deviceKeys` records a user's trusted device public encryption/signing keys.
+- `userKeyrings` stores wrapped user vault keys, never raw vault keys.
+- `codebaseKeyrings` stores repo content, owner-private, Git-internals, and
+  secret-zone key ids.
+- `privacyZones` maps path prefixes to encryption zones.
+- `wrappedKeys` grants a user/device access to a repo, private zone, or secret
+  group by storing ciphertext only.
+- `keyAuditEvents` records grant, revoke, rotate, recovery, and device approval
+  actions.
+
+Convex now exposes agent-facing device/key APIs for registering trusted device
+public keys, listing device keys, ensuring user/codebase keyrings, creating and
+listing wrapped-key grants, and revoking wrapped keys. The local agent exposes
+`hop keys init-device`, `hop keys status`, and `hop keys export-recovery`; it
+stores device private keys locally, self-wraps the user vault key, and can use
+that vault key as the current routed-secret encryption bridge in memory.
+
+Membership and invitations decide who is eligible for a grant. Existing trusted
+devices or recovery flows should create the grant by wrapping the correct key.
+Convex should never see the raw key being granted. Full invite acceptance still
+needs to create repo-content grants automatically, leave `.private/` and secrets
+unshared by default, and expose device approval/recovery in the dashboard.
+
 ## Permission Rules
 
 1. Owners can see all codebase files, including `.private/`.
@@ -66,8 +108,14 @@ Session tokens are generated once with an `hst_` prefix, stored only as hashes p
 4. Add invitation create/accept/revoke mutations and write tests around email match, expiry, revocation, and duplicate acceptance.
 5. Make dashboard and graph reads requester-aware, returning visible file counts plus hidden scope counts without leaking hidden paths.
 6. Move write operations from deployment-wide agent-token authorization to scoped actor authorization: authenticated user for browser commands, scoped agent session token for local agent writes. Agent graph reads, per-file mutations, and event appends now support scoped session tokens; complete browser command/write coverage remains.
-7. Add audit events for membership and invitation changes.
-8. Replace the graph-local collaborator list as the source of truth once migration has backfilled memberships.
+7. Add trusted device keys, user keyrings, privacy zones, and wrapped key grants
+   to the membership/invitation flow.
+8. Make invite acceptance create normal repo-content key grants while leaving
+   `.private/` and secrets unshared by default.
+9. Add explicit secret-group grant/revoke/rotate flows separate from normal
+   membership.
+10. Add audit events for membership, invitation, device, and key-grant changes.
+11. Replace the graph-local collaborator list as the source of truth once migration has backfilled memberships.
 
 ## Current Patch Boundary
 
@@ -83,27 +131,47 @@ Status: backend plus first hosted UI/API slice landed.
 - Hardened hosted API token handling so collaboration routes derive Convex auth from the active Clerk server session instead of trusting arbitrary request bearer tokens.
 - Added `/api/me` Convex account sync, active-member invite rejection, future-only invite/session expiries, session id reuse checks, and `hst_` session-token format validation.
 
-## Domain-Deferred Rollout
+## Production Auth Rollout
 
-The provider-auth code remains valuable, but production Clerk rollout is pinned until HopIt has an owned domain. Current personal production should keep `HOPIT_AUTH_PROVIDER=basic`, `HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1`, and the Vercel-generated deployment URL.
+The provider-auth code is now active against the production Clerk domain. Current personal production uses `HOPIT_AUTH_PROVIDER=clerk` and keeps `HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1` only as an emergency recovery path until sign-in and owner mapping have been proven on `https://hopit.dev`.
 
-Continue building domain-independent pieces:
+Already completed for production setup:
+
+- Clerk production instance exists through the Vercel Marketplace integration `hopit-auth`.
+- `hopit.dev`, `clerk.hopit.dev`, `accounts.hopit.dev`, and Clerk mail/DKIM DNS are configured in Porkbun.
+- Clerk DNS is verified and SSL certificates are issued.
+- Vercel Production contains redacted `pk_live_`/`sk_live_` env vars plus `CLERK_JWT_ISSUER_DOMAIN=https://clerk.hopit.dev`.
+- Convex production contains `CLERK_JWT_ISSUER_DOMAIN=https://clerk.hopit.dev`.
+- Vercel Production has `HOPIT_AUTH_PROVIDER=clerk` and redirects signed-out users to `/sign-in`.
+- Valid Basic Auth fallback credentials still return the dashboard for emergency access.
+
+Continue building and hardening:
 
 - Permission helpers and server-side role checks.
 - Membership and invitation lifecycle behavior.
 - Requester-aware dashboard filtering.
 - Complete permission coverage for every browser and agent write path.
+- Production sign-in/sign-up smoke tests.
+- Production OAuth callback verification for any enabled social providers.
+- Owner claim/migration from seeded fixture identities into the real HopIt user.
+- Retiring product-level Basic Auth from the live deployment.
 
-Do not treat these as current blockers:
+Do not treat these as current blockers anymore:
 
 - Clerk production instance completion.
 - `pk_live_`/`sk_live_` Vercel environment rollout.
-- Production OAuth callback verification on an owned domain.
-- Retiring Basic Auth from the live deployment.
+- Clerk production DNS/issuer verification.
 
 ## Risks And Blockers
 
-- The production deployment has Clerk/Convex wiring in code, but production Clerk rollout is intentionally deferred until an owned HopIt domain exists. Basic Auth remains the current personal production guard.
+- The production deployment has Clerk/Convex wiring plus production Clerk DNS/env configured and active, but Basic Auth fallback remains enabled until the first owner account can sign in and be mapped safely.
 - The current agent can read graphs through scoped session tokens, but bootstrap/admin graph replacement still uses the shared service token. Retiring the shared token requires installer/setup flow, rotation UX, and complete write-path coverage.
 - Existing fixture identities such as `user_demo_owner` are not real auth subjects. Migration must map or claim those owners before production use.
 - Invitation emails are matched against HopIt `users.primaryEmail`, so duplicate-member rejection only works for accounts that have already signed in or otherwise been upserted.
+- The current permission model can hide content, and the first wrapped-key APIs
+  exist, but full private-repo byte encryption and invite-time grant enforcement
+  are not complete. Do not treat membership/invite completion as cryptographic
+  private-repo sharing yet.
+- Hosted-browser decryption has a trust caveat: a compromised web deployment
+  could serve JavaScript that mishandles keys. Secrets should prefer local-agent
+  or signed-desktop handling until that risk is deliberately accepted.

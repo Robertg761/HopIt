@@ -6,6 +6,7 @@ import {
   isHostedRuntime,
   shouldAllowBasicAuthFallback,
   shouldUseClerkAuth,
+  signInPath,
 } from '@/lib/auth-config'
 
 const AUTH_HEADER = 'WWW-Authenticate'
@@ -15,21 +16,23 @@ const isPublicRoute = createRouteMatcher(['/sign-in(.*)', '/sign-up(.*)'])
 const clerkProxy = clerkMiddleware(async (auth, request) => {
   if (isPublicRoute(request)) return NextResponse.next()
 
-  await auth.protect()
+  await auth.protect({ unauthenticatedUrl: new URL(signInPath, request.url).toString() })
   return NextResponse.next()
 })
 
 export function proxy(request: NextRequest, event: NextFetchEvent) {
   if (shouldUseClerkAuth()) {
     if (!isClerkServerConfigured()) return authProviderMissing()
+    if (!isPublicRoute(request) && shouldAllowBasicAuthFallback() && hasValidBasicCredentials(request)) {
+      return NextResponse.next()
+    }
     return clerkProxy(request, event)
   }
 
   if (!shouldRequireDashboardAuth()) return NextResponse.next()
   if (!shouldAllowBasicAuthFallback()) return authProviderMissing()
 
-  const expectedPassword = process.env.HOPIT_DASHBOARD_PASSWORD
-  if (!expectedPassword) {
+  if (!process.env.HOPIT_DASHBOARD_PASSWORD) {
     return new NextResponse('Hosted HopIt requires HOPIT_DASHBOARD_PASSWORD.', {
       status: 503,
       headers: {
@@ -38,14 +41,7 @@ export function proxy(request: NextRequest, event: NextFetchEvent) {
     })
   }
 
-  const expectedUsername = process.env.HOPIT_DASHBOARD_USERNAME ?? 'hopit'
-  const credentials = readBasicCredentials(request.headers.get('authorization'))
-
-  if (
-    credentials &&
-    credentials.username === expectedUsername &&
-    credentials.password === expectedPassword
-  ) {
+  if (hasValidBasicCredentials(request)) {
     return NextResponse.next()
   }
 
@@ -56,6 +52,20 @@ export function proxy(request: NextRequest, event: NextFetchEvent) {
       'Cache-Control': 'no-store',
     },
   })
+}
+
+function hasValidBasicCredentials(request: NextRequest) {
+  const expectedPassword = process.env.HOPIT_DASHBOARD_PASSWORD
+  if (!expectedPassword) return false
+
+  const expectedUsername = process.env.HOPIT_DASHBOARD_USERNAME ?? 'hopit'
+  const credentials = readBasicCredentials(request.headers.get('authorization'))
+
+  return Boolean(
+    credentials &&
+      credentials.username === expectedUsername &&
+      credentials.password === expectedPassword,
+  )
 }
 
 export const config = {

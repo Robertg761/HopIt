@@ -690,6 +690,59 @@ test('object blob provider stores file bodies outside the cloud graph and hydrat
   assert.deepEqual(await fs.readFile(path.join(state.workspace, 'object-backed.bin')), binary)
 })
 
+test('client-encrypted secret sync stores routed env bytes only as encrypted object blobs', async () => {
+  const state = await makeState()
+  const blobRoot = path.join(state.root, 'blob-store')
+  const key = Buffer.alloc(32, 7).toString('base64')
+  const blobArgs = [
+    '--blob-provider',
+    'filesystem',
+    '--blob-root',
+    blobRoot,
+    '--client-encryption-key',
+    `base64:${key}`,
+  ]
+
+  await runCli('init', [...stateArgs(state), ...blobArgs, '--force'])
+  await runCli('hydrate', [...stateArgs(state), ...blobArgs])
+
+  const secretPath = path.join(state.workspace, '.private/env/repo-root/.env.local')
+  await fs.mkdir(path.dirname(secretPath), { recursive: true })
+  await fs.writeFile(secretPath, 'SECRET=encrypted\n', 'utf8')
+
+  await runCli('sync-once', [...stateArgs(state), ...blobArgs])
+  const cloud = await readJson(state.cloud)
+  const entry = cloud.files['.private/env/repo-root/.env.local']
+
+  assert.equal(entry.scope, 'owner-private')
+  assert.equal(entry.contentStorage, 'object-blob')
+  assert.equal(entry.content, '')
+  assert.equal(entry.hash, hashBuffer('SECRET=encrypted\n'))
+  assert.notEqual(entry.blobHash, entry.hash)
+  assert.equal(entry.clientEncryption.state, 'client-encrypted')
+  assert.equal(entry.clientEncryption.algorithm, 'aes-256-gcm')
+  assert.equal(entry.clientEncryption.plaintextHash, entry.hash)
+  assert.equal(entry.clientEncryption.plaintextSize, Buffer.byteLength('SECRET=encrypted\n'))
+  assert.equal((await fs.readFile(path.join(blobRoot, entry.blobKey), 'utf8')).includes('SECRET=encrypted'), false)
+
+  await fs.rm(state.workspace, { recursive: true, force: true })
+  await runCli('hydrate', [...stateArgs(state), ...blobArgs])
+  assert.equal(await fs.readFile(secretPath, 'utf8'), 'SECRET=encrypted\n')
+
+  const wrongKey = Buffer.alloc(32, 8).toString('base64')
+  await fs.rm(state.workspace, { recursive: true, force: true })
+  const failure = await runCliFailure('hydrate', [
+    ...stateArgs(state),
+    '--blob-provider',
+    'filesystem',
+    '--blob-root',
+    blobRoot,
+    '--client-encryption-key',
+    `base64:${wrongKey}`,
+  ])
+  assert.match(failure.stderr, /client_encryption_key_mismatch|Unsupported state or unable to authenticate data/)
+})
+
 test('object blob budget guard blocks upload before cloud metadata changes', async () => {
   const state = await makeState()
   const blobRoot = path.join(state.root, 'blob-store')
@@ -751,6 +804,124 @@ test('mirror routes root env secrets into .private and skips cloud sync when ove
   assert.equal(cloud.files['.private/env'], undefined)
   assert.equal(cloud.files['.git/config'].scope, 'owner-private')
   assert.equal(cloud.files['.env.example'].scope, 'shared')
+})
+
+test('import-git production-safe mirror skips cloud sync when routed secrets are not encrypted', async () => {
+  const state = await makeState()
+  const source = path.join(state.root, 'git-source')
+  await fs.mkdir(path.join(source, '.git'), { recursive: true })
+  await fs.writeFile(path.join(source, 'README.md'), '# Git source\n', 'utf8')
+  await fs.writeFile(path.join(source, '.env.local'), 'SECRET=local-only\n', 'utf8')
+  await fs.writeFile(path.join(source, '.git/config'), '[core]\nrepositoryformatversion = 0\n', 'utf8')
+  await runCli('init', [...stateArgs(state), '--force'])
+
+  const result = parseLastJsonObject((await runCli('import-git', [
+    ...stateArgs(state),
+    '--source',
+    source,
+    '--skip-service-control',
+  ])).stdout)
+
+  assert.equal(result.action, 'import-git')
+  assert.equal(result.ok, true)
+  assert.equal(result.secrets.routedEnvExists, true)
+  assert.equal(result.secrets.encryptedSyncEnabled, false)
+  assert.equal(result.sync.skipped, true)
+  assert.equal(result.sync.reason, 'client_encryption_key_missing')
+
+  const cloud = await readJson(state.cloud)
+  assert.equal(cloud.files['README.md'].content.includes('Git source'), false)
+  assert.equal(cloud.files['.git/config'], undefined)
+  assert.equal(cloud.files['.private/env/repo-root/.env.local'], undefined)
+  assert.equal(await fs.readFile(path.join(state.workspace, '.private/env/repo-root/.env.local'), 'utf8'), 'SECRET=local-only\n')
+})
+
+test('import-git with client encryption syncs literal repo, .git metadata, and routed secrets', async () => {
+  const state = await makeState()
+  const source = path.join(state.root, 'git-source-encrypted')
+  const blobRoot = path.join(state.root, 'blob-store')
+  const key = Buffer.alloc(32, 11).toString('base64')
+  const blobArgs = [
+    '--blob-provider',
+    'filesystem',
+    '--blob-root',
+    blobRoot,
+    '--client-encryption-key',
+    `base64:${key}`,
+  ]
+
+  await fs.mkdir(path.join(source, '.git'), { recursive: true })
+  await fs.writeFile(path.join(source, 'README.md'), '# Git source encrypted\n', 'utf8')
+  await fs.writeFile(path.join(source, '.env.local'), 'SECRET=encrypted-import\n', 'utf8')
+  await fs.writeFile(path.join(source, '.git/config'), '[core]\nrepositoryformatversion = 0\n', 'utf8')
+  await runCli('init', [...stateArgs(state), ...blobArgs, '--force'])
+
+  const result = parseLastJsonObject((await runCli('import-git', [
+    ...stateArgs(state),
+    ...blobArgs,
+    '--source',
+    source,
+    '--skip-service-control',
+  ])).stdout)
+
+  assert.equal(result.action, 'import-git')
+  assert.equal(result.sync.skipped, false)
+  assert.equal(result.secrets.encryptedSyncEnabled, true)
+
+  const cloud = await readJson(state.cloud)
+  const secretEntry = cloud.files['.private/env/repo-root/.env.local']
+  assert.equal(cloud.files['README.md'].content, '')
+  assert.equal(cloud.files['README.md'].contentStorage, 'object-blob')
+  assert.equal(cloud.files['.git/config'].scope, 'owner-private')
+  assert.equal(secretEntry.scope, 'owner-private')
+  assert.equal(secretEntry.contentStorage, 'object-blob')
+  assert.equal(secretEntry.clientEncryption.state, 'client-encrypted')
+  assert.equal(secretEntry.hash, hashBuffer('SECRET=encrypted-import\n'))
+  assert.notEqual(secretEntry.blobHash, secretEntry.hash)
+  assert.equal((await fs.readFile(path.join(blobRoot, secretEntry.blobKey), 'utf8')).includes('encrypted-import'), false)
+
+  await fs.rm(state.workspace, { recursive: true, force: true })
+  await runCli('hydrate', [...stateArgs(state), ...blobArgs])
+  assert.equal(await fs.readFile(path.join(state.workspace, 'README.md'), 'utf8'), '# Git source encrypted\n')
+  assert.equal(await fs.readFile(path.join(state.workspace, '.private/env/repo-root/.env.local'), 'utf8'), 'SECRET=encrypted-import\n')
+  assert.match(await fs.readFile(path.join(state.workspace, '.git/config'), 'utf8'), /repositoryformatversion/)
+})
+
+test('storage gc dry-runs and deletes only orphaned managed filesystem blobs with execute', async () => {
+  const state = await makeState()
+  const blobRoot = path.join(state.root, 'blob-store')
+  const blobArgs = ['--blob-provider', 'filesystem', '--blob-root', blobRoot]
+  await runCli('init', [...stateArgs(state), ...blobArgs, '--force'])
+  await runCli('hydrate', [...stateArgs(state), ...blobArgs])
+  await fs.writeFile(path.join(state.workspace, 'kept.txt'), 'kept blob\n', 'utf8')
+  await runCli('sync-once', [...stateArgs(state), ...blobArgs])
+  const cloud = await readJson(state.cloud)
+  const keptKey = cloud.files['kept.txt'].blobKey
+  const orphanHash = createHash('sha256').update('orphan blob\n').digest('hex')
+  const orphanKey = ['codebases', cloud.codebase.id, 'blobs', 'sha256', orphanHash.slice(0, 2), orphanHash].join('/')
+  await fs.mkdir(path.dirname(path.join(blobRoot, orphanKey)), { recursive: true })
+  await fs.writeFile(path.join(blobRoot, orphanKey), 'orphan blob\n', 'utf8')
+
+  const planned = parseLastJsonObject((await runCli('storage', [
+    'gc',
+    ...stateArgs(state),
+    ...blobArgs,
+  ])).stdout)
+  assert.equal(planned.mode, 'dry-run')
+  assert.equal(planned.orphanedObjects, 1)
+  assert.equal(planned.deletedObjects, 0)
+  assert.equal(await pathExists(path.join(blobRoot, orphanKey)), true)
+
+  const executed = parseLastJsonObject((await runCli('storage', [
+    'gc',
+    ...stateArgs(state),
+    ...blobArgs,
+    '--execute',
+  ])).stdout)
+  assert.equal(executed.mode, 'execute')
+  assert.equal(executed.deletedObjects, 1)
+  assert.equal(await pathExists(path.join(blobRoot, orphanKey)), false)
+  assert.equal(await pathExists(path.join(blobRoot, keptKey)), true)
 })
 
 test('import-local hydrates a real folder while skipping generated and sensitive files', async () => {
@@ -1019,6 +1190,40 @@ test('status reports unjournaled local workspace drift from the materialized man
   assert.equal(status.workspace.localChanges.reason, 'workspace_has_unjournaled_changes')
   assert.equal(status.workspace.localChanges.modifiedCount, 1)
   assert.deepEqual(status.workspace.localChanges.samplePaths, ['README.md'])
+})
+
+test('status reports added workspace drift without reading untracked file bytes', async (t) => {
+  if (process.platform === 'win32') {
+    t.skip('mode-based unreadable file assertion is POSIX-specific')
+    return
+  }
+
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+
+  const untrackedDir = path.join(state.workspace, 'untracked')
+  await fs.mkdir(untrackedDir, { recursive: true })
+  for (let index = 0; index < 30; index += 1) {
+    await fs.writeFile(path.join(untrackedDir, `file-${String(index).padStart(2, '0')}.txt`), 'untracked\n', 'utf8')
+  }
+
+  const unreadablePath = path.join(untrackedDir, 'secret.bin')
+  await fs.writeFile(unreadablePath, 'this added file should not be read by status\n', 'utf8')
+  await fs.chmod(unreadablePath, 0o000)
+  t.after(async () => {
+    await fs.chmod(unreadablePath, 0o600).catch(() => {})
+  })
+
+  const status = JSON.parse((await runCli('status', stateArgs(state))).stdout)
+  assert.equal(status.ok, false)
+  assert.equal(status.workspace.localChanges.state, 'dirty')
+  assert.equal(status.workspace.localChanges.reason, 'workspace_has_unjournaled_changes')
+  assert.equal(status.workspace.localChanges.addedCount, 31)
+  assert.equal(status.workspace.localChanges.modifiedCount, 0)
+  assert.equal(status.workspace.localChanges.deletedCount, 0)
+  assert.equal(status.workspace.localChanges.samplePaths.length, 10)
+  assert.equal(status.workspace.localChanges.samplePaths[0], 'untracked/file-00.txt')
 })
 
 test('workspace ensure does not mark a cloud-backed empty folder as materialized', async () => {
@@ -1317,6 +1522,130 @@ test('device status reports configured session identity and token source', async
   assert.equal(status.session.id, 'session_test_device')
   assert.equal(status.session.deviceName, 'Test Device')
   assert.equal(status.credentials.sessionTokenConfigured, true)
+})
+
+test('keys init-device writes a redacted local device keyring with secure permissions', async () => {
+  const state = await makeState()
+  const secretSessionToken = 'hst_local_secret_token'
+  const result = JSON.parse((await runCli('keys', [
+    'init-device',
+    ...stateArgs(state),
+    '--codebase-id',
+    'hopit-core',
+    '--session-id',
+    'session_test_device',
+    '--device-name',
+    'Test Device',
+    '--session-token',
+    secretSessionToken,
+    '--skip-cloud-registration',
+  ])).stdout)
+
+  assert.equal(result.ok, true)
+  assert.equal(result.created, true)
+  assert.equal(result.keyring.exists, true)
+  assert.equal(result.keyring.deviceId.startsWith('dev_'), true)
+  assert.equal(result.keyring.device.sessionId, 'session_test_device')
+  assert.equal(result.keyring.device.sessionTokenConfigured, true)
+  assert.equal(result.keyring.clientEncryption.source, 'user-vault')
+  assert.equal(result.keyring.clientEncryption.configured, true)
+  assert.equal(result.cloudRegistration, null)
+  assert.equal(result.keyring.mode, process.platform === 'win32' ? result.keyring.mode : '0600')
+  assert.equal(result.keyring.path.endsWith(path.join('keys', 'hopit-core.device.json')), true)
+
+  const stdout = JSON.stringify(result)
+  assert.equal(stdout.includes(secretSessionToken), false)
+  assert.equal(stdout.includes('PRIVATE KEY'), false)
+  assert.equal(stdout.includes('wrappedKey'), false)
+
+  const keyring = await readJson(result.keyring.path)
+  assert.equal(keyring.kind, 'hopit-local-device-keyring')
+  assert.equal(keyring.codebaseId, 'hopit-core')
+  assert.equal(keyring.credentials.agentSessionToken, secretSessionToken)
+  assert.equal(keyring.userVault.wrappedKey.algorithm, 'x25519-aes-256-gcm')
+  assert.equal(Object.hasOwn(keyring.userVault, 'key'), false)
+  if (process.platform !== 'win32') {
+    const mode = (await fs.stat(result.keyring.path)).mode & 0o777
+    assert.equal(mode, 0o600)
+  }
+})
+
+test('local device keyring supplies session and encryption fallback for existing commands', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('keys', [
+    'init-device',
+    ...stateArgs(state),
+    '--codebase-id',
+    'hopit-core',
+    '--session-id',
+    'session_test_device',
+    '--device-name',
+    'Test Device',
+    '--session-token',
+    'hst_local_secret_token',
+    '--skip-cloud-registration',
+  ])
+
+  const keyStatus = JSON.parse((await runCli('keys', [
+    'status',
+    ...stateArgs(state),
+    '--codebase-id',
+    'hopit-core',
+  ])).stdout)
+  assert.equal(keyStatus.ok, true)
+  assert.equal(keyStatus.keyring.device.sessionTokenConfigured, true)
+  assert.equal(keyStatus.keyring.clientEncryption.configured, true)
+
+  const deviceStatus = JSON.parse((await runCli('device', [
+    'status',
+    ...stateArgs(state),
+    '--codebase-id',
+    'hopit-core',
+  ])).stdout)
+  assert.equal(deviceStatus.session.id, 'session_test_device')
+  assert.equal(deviceStatus.session.deviceName, 'Test Device')
+  assert.equal(deviceStatus.credentials.sessionTokenConfigured, true)
+})
+
+test('keys export-recovery writes an encrypted recovery file and updates keyring status', async () => {
+  const state = await makeState()
+  await runCli('keys', [
+    'init-device',
+    ...stateArgs(state),
+    '--codebase-id',
+    'hopit-core',
+    '--skip-cloud-registration',
+  ])
+  const output = path.join(state.root, 'recovery', 'hopit-recovery.json')
+  const passphrase = 'correct horse battery staple'
+  const result = JSON.parse((await runCli('keys', [
+    'export-recovery',
+    ...stateArgs(state),
+    '--codebase-id',
+    'hopit-core',
+    '--output',
+    output,
+    '--recovery-passphrase',
+    passphrase,
+  ])).stdout)
+
+  assert.equal(result.ok, true)
+  assert.equal(result.recovery.encrypted, true)
+  assert.equal(result.keyring.userVault.recoveryConfigured, true)
+  assert.equal(JSON.stringify(result).includes(passphrase), false)
+
+  const recovery = await readJson(output)
+  assert.equal(recovery.kind, 'hopit-recovery-key')
+  assert.equal(recovery.recovery.algorithm, 'pbkdf2-sha256-aes-256-gcm')
+  assert.equal(JSON.stringify(recovery).includes(passphrase), false)
+  if (process.platform !== 'win32') {
+    const mode = (await fs.stat(output)).mode & 0o777
+    assert.equal(mode, 0o600)
+  }
+
+  const keyring = await readJson(path.join(state.root, 'keys', 'hopit-core.device.json'))
+  assert.equal(keyring.userVault.recoveryConfigured, true)
 })
 
 test('remote-pull applied event clears a previous skipped health state', async () => {
@@ -2452,6 +2781,38 @@ test('validate rejects graph scope mismatches that could leak .private files', a
 
   const failure = await runCliFailure('validate', stateArgs(state))
   assert.match(failure.stderr, /scope mismatch/)
+})
+
+test('validate rejects plaintext secret-zone files', async () => {
+  const state = await makeState()
+  await runCli('init', stateArgs(state))
+  const cloud = await readJson(state.cloud)
+  cloud.files['.private/env/repo-root/.env.local'] = {
+    kind: 'file',
+    content: 'SECRET=plaintext\n',
+    encoding: 'utf8',
+    hash: hashBuffer('SECRET=plaintext\n'),
+    size: Buffer.byteLength('SECRET=plaintext\n'),
+    scope: 'owner-private',
+    privacyZone: 'secrets',
+    revision: 1,
+    updatedAt: new Date().toISOString(),
+  }
+  await writeJson(state.cloud, cloud)
+
+  const failure = await runCliFailure('validate', stateArgs(state))
+  assert.match(failure.stderr, /encrypted object-backed content/)
+})
+
+test('validate rejects graph privacy zone mismatches', async () => {
+  const state = await makeState()
+  await runCli('init', stateArgs(state))
+  const cloud = await readJson(state.cloud)
+  cloud.files['.private/agent-note.md'].privacyZone = 'repo-content'
+  await writeJson(state.cloud, cloud)
+
+  const failure = await runCliFailure('validate', stateArgs(state))
+  assert.match(failure.stderr, /privacy zone mismatch/)
 })
 
 test('recover surfaces stale file revision as reviewable conflict state', async () => {

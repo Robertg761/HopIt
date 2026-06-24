@@ -1,6 +1,6 @@
 # Code Browsing, Review, Comments, And History Plan
 
-Last updated: 2026-06-22
+Last updated: 2026-06-23
 
 ## Purpose
 
@@ -33,6 +33,8 @@ Already available in this repo:
 - The web UI maps visible file metadata, capped shared-file content previews, review state, merge state, conflict state, remote-update state, and recent events.
 - The dashboard has a read-only `CodeReviewSection` that lists visible files, supports path search and scope/status filters, renders capped content previews with line anchors, and groups review readiness/history signals.
 - Convex can persist the current graph, files, and agent events.
+
+Current live setup note: this browser/review work runs inside the Clerk-protected Vercel deployment at `https://hopit.dev` against Convex `https://sincere-jaguar-17.convex.cloud`. Basic Auth fallback remains enabled until owner sign-in/OAuth and owner mapping are verified. Routeable tree APIs, durable diffs, and review comments are still future work. Operational setup details are centralized in [Personal Production Runbook](personal-production.md).
 
 Not yet available:
 
@@ -313,6 +315,13 @@ Near-term bridge:
 ## Storage Plan
 
 The production model should split metadata from blobs.
+
+For private and shared-private repos, the browser/storage plan must also follow
+[HopIt Privacy And Encryption Plan](privacy-encryption-plan.md): file bytes are
+client-encrypted, `.private/` and secrets use separate privacy zones, and the
+hosted browser may only decrypt content on an approved device with the correct
+wrapped keys. Server routes should return encrypted metadata/ciphertext for
+private content, not plaintext.
 
 ### Core Tables Or Collections
 

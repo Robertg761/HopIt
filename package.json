@@ -25,6 +25,7 @@
     "package:hop": "node scripts/package-hop.mjs",
     "convex:dev": "convex dev",
     "convex:deploy": "convex deploy",
+    "convex:deploy:prod": "CONVEX_DEPLOYMENT=prod:sincere-jaguar-17 convex deploy",
     "agent:demo": "node packages/agent/src/cli.js demo",
     "agent:import": "node packages/agent/src/cli.js import",
     "agent:init": "node packages/agent/src/cli.js init",

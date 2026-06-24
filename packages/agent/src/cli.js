@@ -10,6 +10,24 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { ConvexHttpClient } from 'convex/browser'
 import { anyApi } from 'convex/server'
+import {
+  clientEncryptionConfigFromOptions,
+  clientEncryptionScopeFromOptions,
+  clientEncryptionScopes,
+  createDeviceKeyMaterial,
+  encryptRecoveryPayload,
+  hasPrivatePrivacyZone,
+  isLocalOnlySecretPath,
+  normalizeClientEncryptionMetadata,
+  prepareBlobPayload,
+  privacyZoneForPath,
+  publicDeviceKeyDescriptor,
+  rawClientEncryptionKey,
+  shouldEncryptWithConfig,
+  unwrapUserVaultKey,
+  unwrapBlobPayload,
+  validateClientEncryptionMetadata,
+} from './crypto.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -93,7 +111,10 @@ async function main() {
     command === 'workspace' && args[0] && !args[0].startsWith('--') ? args.shift() : 'status'
   const sessionAction =
     command === 'session' && args[0] && !args[0].startsWith('--') ? args.shift() : 'status'
-  const options = parseOptions(args)
+  const keysAction =
+    command === 'keys' && args[0] && !args[0].startsWith('--') ? args.shift() : 'status'
+  const parsedOptions = parseOptions(args)
+  const options = command === 'keys' ? parsedOptions : await applyLocalDeviceKeyring(parsedOptions)
 
   if (command === 'init') {
     await initCloud(options)
@@ -107,6 +128,16 @@ async function main() {
 
   if (command === 'mirror-local') {
     await mirrorLocalProject(options)
+    return
+  }
+
+  if (command === 'import-git') {
+    await importGitProject(options)
+    return
+  }
+
+  if (command === 'storage') {
+    await manageStorage(options, args)
     return
   }
 
@@ -186,6 +217,11 @@ async function main() {
     return
   }
 
+  if (command === 'keys') {
+    await runKeysCommand(keysAction, options)
+    return
+  }
+
   if (command === 'service') {
     await runServiceCommand(serviceAction, options)
     return
@@ -226,6 +262,7 @@ function normalizeCommand(command) {
     '--help': 'help',
     import: 'import-local',
     mirror: 'mirror-local',
+    'git-import': 'import-git',
     sync: 'sync-once',
     review: 'review-open',
     export: 'export-git',
@@ -234,6 +271,8 @@ function normalizeCommand(command) {
     workspaces: 'workspace',
     device: 'session',
     devices: 'session',
+    key: 'keys',
+    keyring: 'keys',
     sessions: 'session',
   }
 
@@ -255,6 +294,9 @@ function parseOptions(args) {
     'write-env',
     'launch-agent',
     'skip-service-control',
+    'production-safe',
+    'execute',
+    'skip-cloud-registration',
   ])
 
   for (let i = 0; i < args.length; i += 1) {
@@ -470,7 +512,7 @@ async function importLocalProject(options) {
   await hydrateWorkspace(options)
 }
 
-async function mirrorLocalProject(options) {
+async function mirrorLocalProject(options, context = {}) {
   if (!options.source) {
     throw new Error('Missing --source <path> for mirror.')
   }
@@ -491,6 +533,7 @@ async function mirrorLocalProject(options) {
   const codebaseId = options['codebase-id'] ?? path.basename(workspace)
   const launchAgentLabel = options['launch-agent-label'] ?? `${defaultLaunchAgentLabelPrefix}.${codebaseId}`
   const routes = mirrorSecretRoutesFromOptions(options)
+  const secretSync = secretSyncStatus(options)
   const startedAt = new Date().toISOString()
   const stoppedService = options['skip-service-control']
     ? { skipped: true, reason: 'skip-service-control' }
@@ -510,7 +553,7 @@ async function mirrorLocalProject(options) {
 
   const result = {
     ok: diff.clean && !rootEnvExists,
-    action: 'mirror-local',
+    action: context.action ?? 'mirror-local',
     source,
     workspace,
     codebaseId,
@@ -528,6 +571,9 @@ async function mirrorLocalProject(options) {
     secrets: {
       rootEnvExists,
       routedEnvExists: routedSecretExists,
+      encryptedSyncEnabled: secretSync.enabled,
+      encryptedSyncReason: secretSync.reason,
+      encryptionScope: secretSync.scope,
     },
     storageBudget: budget,
     sync: {
@@ -569,6 +615,18 @@ async function mirrorLocalProject(options) {
     return
   }
 
+  if (options['production-safe'] && routedSecretExists && !secretSync.enabled) {
+    result.sync.reason = secretSync.reason
+    await emit(options, 'mirror.sync_skipped', {
+      reason: secretSync.reason,
+      detail: 'Production-safe mirror kept routed secrets local because client-side encrypted secret sync is not configured.',
+      backup: backup.output,
+      service: stoppedService,
+    })
+    console.log(JSON.stringify(result, null, 2))
+    return
+  }
+
   const syncResult = await syncOnce(options, { trigger: 'literal-mirror' })
   result.sync = {
     attempted: true,
@@ -589,6 +647,117 @@ async function mirrorLocalProject(options) {
   console.log(JSON.stringify(result, null, 2))
 }
 
+async function importGitProject(options) {
+  if (!options.source) {
+    throw new Error('Missing --source <path> for import-git.')
+  }
+
+  const source = path.resolve(options.source)
+  const gitPath = path.join(source, '.git')
+  if (!existsSync(gitPath)) {
+    throw new Error(`import-git requires a Git checkout with a .git entry: ${source}`)
+  }
+
+  const nextOptions = {
+    ...options,
+    'production-safe': true,
+  }
+  await mirrorLocalProject(nextOptions, { action: 'import-git', requireGit: true })
+}
+
+async function manageStorage(options, args = []) {
+  const action = args.find((arg) => !arg.startsWith('--')) ?? 'status'
+  if (action === 'status') {
+    await storageStatus(options)
+    return
+  }
+  if (action === 'gc') {
+    await storageGc(options)
+    return
+  }
+  throw new Error(`Unknown storage action: ${action}`)
+}
+
+async function storageStatus(options) {
+  const cloudService = createCloudGraphService(options)
+  if (!cloudService.blobStore) {
+    throw new Error('storage status requires --blob-provider or HOPIT_BLOB_PROVIDER.')
+  }
+  const usage = await cloudService.blobStore.readUsage()
+  const cloud = await cloudService.readGraph()
+  const reachableKeys = reachableBlobKeysForCloud(cloud)
+  const result = {
+    ok: true,
+    action: 'storage.status',
+    provider: cloudService.blobStore.provider,
+    location: cloudService.blobStore.location,
+    codebaseId: cloud.codebase?.id ?? options['codebase-id'] ?? null,
+    usage,
+    reachableObjects: reachableKeys.size,
+  }
+  await emit(options, 'storage.status', result)
+  console.log(JSON.stringify(result, null, 2))
+}
+
+async function storageGc(options) {
+  const cloudService = createCloudGraphService(options)
+  if (!cloudService.blobStore) {
+    throw new Error('storage gc requires --blob-provider or HOPIT_BLOB_PROVIDER.')
+  }
+  if (!cloudService.blobStore.listBlobs || !cloudService.blobStore.deleteBlob) {
+    throw new Error(`storage gc is not supported by blob provider ${cloudService.blobStore.provider}.`)
+  }
+
+  const cloud = await cloudService.readGraph()
+  const codebaseId = cloud.codebase?.id ?? options['codebase-id'] ?? 'hopit'
+  const reachableKeys = reachableBlobKeysForCloud(cloud)
+  const listed = await cloudService.blobStore.listBlobs({ codebaseId })
+  const retentionMs = storageRetentionMsFromOptions(options)
+  const now = Date.now()
+  const orphaned = listed
+    .filter((blob) => !reachableKeys.has(blob.key))
+    .filter((blob) => {
+      if (!retentionMs) return true
+      if (!blob.lastModified) return false
+      return now - new Date(blob.lastModified).getTime() >= retentionMs
+    })
+  const execute = Boolean(options.execute)
+  let deleted = 0
+  let deletedBytes = 0
+
+  if (execute) {
+    for (const blob of orphaned) {
+      await cloudService.blobStore.deleteBlob(blob.key, { codebaseId })
+      deleted += 1
+      deletedBytes += blob.size ?? 0
+    }
+  }
+
+  const result = {
+    ok: true,
+    action: 'storage.gc',
+    mode: execute ? 'execute' : 'dry-run',
+    provider: cloudService.blobStore.provider,
+    location: cloudService.blobStore.location,
+    codebaseId,
+    listedObjects: listed.length,
+    listedBytes: listed.reduce((sum, blob) => sum + (blob.size ?? 0), 0),
+    reachableObjects: reachableKeys.size,
+    orphanedObjects: orphaned.length,
+    orphanedBytes: orphaned.reduce((sum, blob) => sum + (blob.size ?? 0), 0),
+    deletedObjects: deleted,
+    deletedBytes,
+    retentionMs,
+    sampleOrphans: orphaned.slice(0, 20).map((blob) => ({
+      key: blob.key,
+      size: blob.size ?? null,
+      lastModified: blob.lastModified ?? null,
+    })),
+  }
+  await emit(options, execute ? 'storage.gc.deleted' : 'storage.gc.planned', result)
+  console.log(JSON.stringify(result, null, 2))
+}
+
 async function hydrateWorkspace(options) {
   await assertWorkspacePathSafe(options)
   const cloudService = createCloudGraphService(options)
@@ -599,10 +768,13 @@ async function hydrateWorkspace(options) {
   for (const [relativePath, file] of Object.entries(cloud.files)) {
     const scope = scopeForPath(relativePath)
     const entry = normalizeCloudFileEntry(relativePath, file)
-    await materializeCloudEntry(options.workspace, relativePath, entry, cloudService)
+    await materializeCloudEntry(options.workspace, relativePath, entry, cloudService, {
+      codebaseId: cloud.codebase?.id ?? options['codebase-id'] ?? 'hopit',
+    })
     await emit(options, 'file.hydrated', {
       path: relativePath,
       scope,
+      privacyZone: entry.privacyZone ?? privacyZoneForPath(relativePath),
       kind: entry.kind,
       bytes: entry.size,
       revision: entry.revision,
@@ -945,7 +1117,7 @@ async function refreshWorkspace(options) {
 async function materializeCloudToWorkspace(options, cloud, cloudService = null) {
   await fs.mkdir(options.workspace, { recursive: true })
 
-  const diskEntries = await readWorkspaceFiles(options.workspace)
+  const diskEntries = await readWorkspaceFiles(options.workspace, options)
   const cloudPaths = new Set(Object.keys(cloud.files ?? {}))
   const changedPaths = []
   const deletedPaths = []
@@ -989,7 +1161,7 @@ async function materializeCloudToWorkspace(options, cloud, cloudService = null) 
   }
 }
 
-async function materializeCloudEntry(root, relativePath, file, cloudService = null) {
+async function materializeCloudEntry(root, relativePath, file, cloudService = null, context = {}) {
   const entry = normalizeCloudFileEntry(relativePath, file)
   const absolutePath = workspaceFilePath(root, relativePath)
 
@@ -1008,7 +1180,10 @@ async function materializeCloudEntry(root, relativePath, file, cloudService = nu
   }
 
   await replacePathIfWrongType(absolutePath, 'file')
-  await fs.writeFile(absolutePath, await bufferFromCloudFileEntry(entry, cloudService))
+  await fs.writeFile(absolutePath, await bufferFromCloudFileEntry(entry, cloudService, {
+    ...context,
+    relativePath,
+  }))
 }
 
 async function replacePathIfWrongType(absolutePath, expectedType) {
@@ -1059,7 +1234,7 @@ async function syncOnce(options, context = {}) {
 async function performSyncOnce(options, contextDetail = {}) {
   const cloudService = createCloudGraphService(options)
   const cloud = await cloudService.readGraph()
-  const diskEntries = await readWorkspaceFiles(options.workspace)
+  const diskEntries = await readWorkspaceFiles(options.workspace, options)
   const visibilityContext = visibilityContextForGraph(cloud, visibilityRequestFromOptions(options))
   const visibleCloudPaths = Object.keys(cloud.files).filter((relativePath) =>
     canRequesterSeePath(visibilityContext, relativePath),
@@ -1095,6 +1270,7 @@ async function performSyncOnce(options, contextDetail = {}) {
       path: relativePath,
       kind: entryPayload.kind,
       scope,
+      privacyZone: privacyZoneForPath(relativePath),
       hash: entryPayload.hash,
       bytes: entryPayload.size,
       encoding: entryPayload.encoding,
@@ -1127,6 +1303,7 @@ async function performSyncOnce(options, contextDetail = {}) {
       path: relativePath,
       kind: cloud.files[relativePath]?.kind ?? entryKind.file,
       scope,
+      privacyZone: privacyZoneForPath(relativePath),
       baseRevision: cloud.files[relativePath]?.revision ?? null,
       createdAt: now,
       status: 'pending',
@@ -1232,7 +1409,7 @@ async function recoverJournal(options) {
       cloud.codebase?.id ?? options['codebase-id'],
       options.workspace,
     )
-    const diskEntries = await readWorkspaceFiles(options.workspace)
+    const diskEntries = await readWorkspaceFiles(options.workspace, options)
     const hydrationState = workspaceIndexHydrationStateForSync(indexedCodebase)
     const visibleCloud = filterVisibleGraphForRequester(cloud, visibilityRequestFromOptions(options))
     await upsertWorkspaceIndexFromCloud(options, visibleCloud, {
@@ -1365,7 +1542,7 @@ async function watchWorkspace(options) {
   let remotePuller = null
   const degradeToPolling = async (error) => {
     if (!poller) {
-      poller = await createWorkspacePoller(options.workspace, scheduleSync)
+      poller = await createWorkspacePoller(options.workspace, scheduleSync, { agentOptions: options })
     }
     await emit(options, 'watch.degraded', {
       state: 'polling',
@@ -1482,14 +1659,15 @@ function createWatchSyncScheduler(options, schedulerOptions = {}) {
 
 async function createWorkspacePoller(workspace, onChange, pollerOptions = {}) {
   const intervalMs = pollerOptions.intervalMs ?? 1000
-  let previousSnapshot = await snapshotWorkspace(workspace)
+  const agentOptions = pollerOptions.agentOptions ?? {}
+  let previousSnapshot = await snapshotWorkspace(workspace, agentOptions)
   let running = false
 
   const interval = setInterval(() => {
     if (running) return
     running = true
 
-    snapshotWorkspace(workspace)
+    snapshotWorkspace(workspace, agentOptions)
       .then((nextSnapshot) => {
         if (nextSnapshot !== previousSnapshot) {
           previousSnapshot = nextSnapshot
@@ -1511,7 +1689,7 @@ async function createWorkspacePoller(workspace, onChange, pollerOptions = {}) {
   }
 }
 
-async function snapshotWorkspace(root) {
+async function snapshotWorkspace(root, options = {}) {
   const files = []
 
   async function walk(dir) {
@@ -1521,7 +1699,7 @@ async function snapshotWorkspace(root) {
     for (const entry of entries) {
       const absolutePath = path.join(dir, entry.name)
       const relativePath = toCloudPath(path.relative(root, absolutePath))
-      if (shouldSkipWorkspacePath(relativePath, entry)) continue
+      if (shouldSkipWorkspacePath(relativePath, entry, options)) continue
 
       if (entry.isSymbolicLink()) {
         const target = await fs.readlink(absolutePath)
@@ -2583,6 +2761,7 @@ async function buildLiteralMirrorManifest(root, options = {}) {
           size: Buffer.byteLength(target),
           encodedBytes: Buffer.byteLength(target),
           scope: scopeForPath(manifestPath),
+          privacyZone: privacyZoneForPath(manifestPath),
           target,
         })
         includedChildren += 1
@@ -2601,6 +2780,7 @@ async function buildLiteralMirrorManifest(root, options = {}) {
             size: 0,
             encodedBytes: 0,
             scope: scopeForPath(relativePath),
+            privacyZone: privacyZoneForPath(relativePath),
             target: null,
           })
           includedChildren += 1
@@ -2619,6 +2799,7 @@ async function buildLiteralMirrorManifest(root, options = {}) {
         size: buffer.byteLength,
         encodedBytes: base64EncodedLength(buffer.byteLength),
         scope: scopeForPath(manifestPath),
+        privacyZone: privacyZoneForPath(manifestPath),
         target: null,
       })
       includedChildren += 1
@@ -3074,7 +3255,7 @@ async function assertAttachWorkspaceSafe(options, cloud, index) {
   const codebaseId = cloud.codebase?.id ?? options['codebase-id']
   if (findIndexedCodebase(index, codebaseId, options.workspace)) return
 
-  const unmanagedFiles = await readWorkspaceFiles(options.workspace)
+  const unmanagedFiles = await readWorkspaceFiles(options.workspace, options)
   if (Object.keys(unmanagedFiles).length === 0) return
 
   throw new Error(
@@ -3090,6 +3271,7 @@ function workspaceFileMetadata(options, relativePath, file, forceExists = false)
     path: relativePath,
     kind: entry.kind,
     scope: entry.scope,
+    privacyZone: entry.privacyZone ?? privacyZoneForPath(relativePath),
     revision: entry.revision ?? null,
     size: entry.size,
     hash: entry.hash,
@@ -3111,6 +3293,7 @@ async function writeWorkspaceMetadataManifest(options, cloud, detail = {}) {
       path: relativePath,
       kind: entry.kind,
       scope: entry.scope,
+      privacyZone: entry.privacyZone ?? privacyZoneForPath(relativePath),
       revision: entry.revision ?? null,
       size: entry.size,
       hash: entry.hash,
@@ -3221,6 +3404,413 @@ async function runSessionCommand(action, options) {
       session: result,
     }, null, 2))
   }
+}
+
+async function runKeysCommand(action, options) {
+  const normalizedAction = action === 'init' ? 'init-device' : action === 'recovery' ? 'export-recovery' : action
+  const allowedActions = new Set(['status', 'init-device', 'export-recovery'])
+  if (!allowedActions.has(normalizedAction)) {
+    throw new Error(`Unknown keys action: ${action}`)
+  }
+
+  if (normalizedAction === 'status') {
+    const keyring = await readLocalDeviceKeyring(options)
+    console.log(JSON.stringify({
+      ok: true,
+      action: normalizedAction,
+      keyring: await summarizeLocalDeviceKeyring(options, keyring),
+    }, null, 2))
+    return
+  }
+
+  if (normalizedAction === 'init-device') {
+    const initialized = await initializeLocalDeviceKeyring(options)
+    let cloudRegistration = null
+    let keyring = initialized.keyring
+
+    if (!options['skip-cloud-registration']) {
+      cloudRegistration = await registerLocalDeviceKeyringWithCloud(options, keyring)
+      if (cloudRegistration?.registered) {
+        keyring = {
+          ...keyring,
+          updatedAt: new Date().toISOString(),
+          cloud: {
+            ...(keyring.cloud ?? {}),
+            registeredAt: cloudRegistration.registeredAt,
+            deviceKey: cloudRegistration.deviceKey,
+            userKeyring: cloudRegistration.userKeyring,
+            userVaultWrap: cloudRegistration.userVaultWrap,
+          },
+        }
+        await writeLocalDeviceKeyring(options, keyring)
+      }
+    }
+
+    console.log(JSON.stringify({
+      ok: true,
+      action: normalizedAction,
+      created: initialized.created,
+      keyring: await summarizeLocalDeviceKeyring(options, keyring),
+      cloudRegistration: summarizeKeyCloudRegistration(cloudRegistration),
+    }, null, 2))
+    return
+  }
+
+  if (normalizedAction === 'export-recovery') {
+    const keyring = await requireLocalDeviceKeyring(options)
+    const output = options.output
+    if (!output) throw new Error('keys export-recovery requires --output.')
+    if (!options.force && existsSync(output)) {
+      throw new Error(`Recovery export already exists at ${output}. Use --force to overwrite.`)
+    }
+
+    const passphrase = options['recovery-passphrase'] ?? process.env.HOPIT_RECOVERY_PASSPHRASE
+    const userVaultKey = unwrapUserVaultKey(keyring)
+    const now = new Date().toISOString()
+    const recovery = {
+      schemaVersion: 1,
+      kind: 'hopit-recovery-key',
+      codebaseId: keyring.codebaseId ?? codebaseIdFromOptions(options),
+      deviceId: keyring.deviceId,
+      userVaultKeyId: keyring.userVault.keyId,
+      currentVersion: keyring.userVault.currentVersion,
+      createdAt: now,
+      recovery: encryptRecoveryPayload({
+        key: userVaultKey,
+        passphrase,
+        context: recoveryContextForKeyring(keyring),
+      }),
+    }
+    await writeSecureJson(output, recovery)
+
+    const updatedKeyring = {
+      ...keyring,
+      updatedAt: now,
+      userVault: {
+        ...keyring.userVault,
+        recoveryConfigured: true,
+        recoveryExportedAt: now,
+      },
+    }
+    await writeLocalDeviceKeyring(options, updatedKeyring)
+
+    console.log(JSON.stringify({
+      ok: true,
+      action: normalizedAction,
+      output: path.resolve(output),
+      keyring: await summarizeLocalDeviceKeyring(options, updatedKeyring),
+      recovery: {
+        kind: recovery.kind,
+        userVaultKeyId: recovery.userVaultKeyId,
+        currentVersion: recovery.currentVersion,
+        createdAt: recovery.createdAt,
+        encrypted: true,
+      },
+    }, null, 2))
+  }
+}
+
+function summarizeKeyCloudRegistration(registration) {
+  if (!registration) return null
+  if (!registration.registered) return registration
+  return {
+    registered: true,
+    registeredAt: registration.registeredAt,
+    deviceKey: {
+      deviceId: registration.deviceKey?.deviceId ?? null,
+      status: registration.deviceKey?.status ?? null,
+      userId: registration.deviceKey?.userId ?? null,
+    },
+    userKeyring: {
+      userId: registration.userKeyring?.userId ?? null,
+      vaultKeyId: registration.userKeyring?.vaultKeyId ?? null,
+      currentVersion: registration.userKeyring?.currentVersion ?? null,
+      status: registration.userKeyring?.status ?? null,
+      recoveryConfigured: Boolean(registration.userKeyring?.recoveryConfigured),
+    },
+    userVaultWrap: {
+      wrapId: registration.userVaultWrap?.wrapId ?? null,
+      wrappedKeyId: registration.userVaultWrap?.wrappedKeyId ?? null,
+      recipientType: registration.userVaultWrap?.recipientType ?? null,
+      recipientId: registration.userVaultWrap?.recipientId ?? null,
+      status: registration.userVaultWrap?.status ?? null,
+    },
+  }
+}
+
+async function applyLocalDeviceKeyring(options) {
+  const keyring = await readLocalDeviceKeyring(options)
+  if (!keyring) return options
+
+  const next = {
+    ...options,
+    _localDeviceKeyring: keyring,
+  }
+  const provided = options._provided ?? new Set()
+
+  if (!provided.has('device-id') && !process.env.HOPIT_DEVICE_ID && keyring.deviceId) {
+    next['device-id'] = keyring.deviceId
+  }
+  if (!provided.has('device-name') && !process.env.HOPIT_DEVICE_NAME && keyring.deviceName) {
+    next['device-name'] = keyring.deviceName
+  }
+  if (!provided.has('session-id') && !process.env.HOPIT_SESSION_ID && keyring.device?.sessionId) {
+    next['session-id'] = keyring.device.sessionId
+  }
+  if (!provided.has('session-token') && !process.env.HOPIT_AGENT_SESSION_TOKEN && keyring.credentials?.agentSessionToken) {
+    next['session-token'] = keyring.credentials.agentSessionToken
+  }
+  if (!rawClientEncryptionKey(options)) {
+    const userVaultKey = unwrapUserVaultKey(keyring)
+    next['client-encryption-key'] = `base64:${userVaultKey.toString('base64')}`
+    next['client-encryption-key-id'] = keyring.userVault.keyId
+  }
+  if (!provided.has('client-encryption-scope') && !process.env.HOPIT_CLIENT_ENCRYPTION_SCOPE) {
+    next['client-encryption-scope'] = keyring.clientEncryption?.scope ?? clientEncryptionScopes.secrets
+  }
+
+  return next
+}
+
+async function initializeLocalDeviceKeyring(options) {
+  const existing = await readLocalDeviceKeyring(options)
+  if (existing && !options.force) {
+    const next = mergeExistingLocalDeviceKeyring(existing, options)
+    if (JSON.stringify(next) !== JSON.stringify(existing)) {
+      await writeLocalDeviceKeyring(options, next)
+    }
+    return { created: false, keyring: next }
+  }
+
+  const keyring = buildLocalDeviceKeyringDocument(createDeviceKeyMaterial({
+    deviceId: options['device-id'] ?? `dev_${randomUUID()}`,
+    deviceName: options['device-name'] ?? os.hostname() ?? 'local-device',
+    platform: `${process.platform}-${process.arch}`,
+  }), options)
+  await writeLocalDeviceKeyring(options, keyring)
+  return { created: true, keyring }
+}
+
+function buildLocalDeviceKeyringDocument(material, options) {
+  const now = material.createdAt ?? new Date().toISOString()
+  const sessionId = options['session-id'] ?? process.env.HOPIT_SESSION_ID ?? undefined
+  const sessionToken = agentSessionTokenFromOptions(options) ?? undefined
+  const clientEncryptionScope =
+    options['client-encryption-scope'] ?? process.env.HOPIT_CLIENT_ENCRYPTION_SCOPE ?? clientEncryptionScopes.secrets
+
+  const document = {
+    ...material,
+    kind: 'hopit-local-device-keyring',
+    profile: options.profile,
+    codebaseId: codebaseIdFromOptions(options),
+    updatedAt: material.updatedAt ?? now,
+    device: {
+      deviceId: material.deviceId,
+      deviceName: material.deviceName,
+    },
+    credentials: {},
+    clientEncryption: {
+      source: 'user-vault',
+      keyId: material.userVault.keyId,
+      scope: clientEncryptionScope,
+    },
+  }
+  if (sessionId) document.device.sessionId = sessionId
+  if (sessionToken) document.credentials.agentSessionToken = sessionToken
+  return document
+}
+
+function mergeExistingLocalDeviceKeyring(keyring, options) {
+  const now = new Date().toISOString()
+  const next = {
+    ...keyring,
+    kind: keyring.kind ?? 'hopit-local-device-keyring',
+    profile: keyring.profile ?? options.profile,
+    codebaseId: keyring.codebaseId ?? codebaseIdFromOptions(options),
+    updatedAt: now,
+    device: {
+      ...(keyring.device ?? {}),
+      deviceId: keyring.device?.deviceId ?? keyring.deviceId,
+      deviceName: options['device-name'] ?? keyring.device?.deviceName ?? keyring.deviceName,
+    },
+    credentials: {
+      ...(keyring.credentials ?? {}),
+    },
+    clientEncryption: {
+      source: 'user-vault',
+      keyId: keyring.userVault.keyId,
+      scope: keyring.clientEncryption?.scope ?? clientEncryptionScopes.secrets,
+      ...(keyring.clientEncryption ?? {}),
+    },
+  }
+  if (options['session-id']) next.device.sessionId = options['session-id']
+  const sessionToken = options._provided?.has('session-token') || process.env.HOPIT_AGENT_SESSION_TOKEN
+    ? agentSessionTokenFromOptions(options)
+    : null
+  if (sessionToken) next.credentials.agentSessionToken = sessionToken
+  return next
+}
+
+async function registerLocalDeviceKeyringWithCloud(options, keyring) {
+  const cloudOptions = {
+    ...options,
+  }
+  if (!agentSessionTokenFromOptions(cloudOptions) && keyring.credentials?.agentSessionToken) {
+    cloudOptions['session-token'] = keyring.credentials.agentSessionToken
+  }
+  if (!convexUrlFromOptions(cloudOptions)) {
+    return { registered: false, reason: 'convex_not_configured' }
+  }
+  const cloudService = createCloudGraphService(cloudOptions)
+  if (!(cloudService instanceof ConvexCloudGraphService)) {
+    return { registered: false, reason: 'convex_not_configured' }
+  }
+
+  const registeredAt = new Date().toISOString()
+  const deviceKey = await cloudService.registerDeviceKey(publicDeviceKeyDescriptor(keyring))
+  const userKeyring = await cloudService.ensureUserKeyring({
+    vaultKeyId: keyring.userVault.keyId,
+    currentVersion: keyring.userVault.currentVersion,
+    recoveryConfigured: Boolean(keyring.userVault.recoveryConfigured),
+  })
+  const userVaultWrap = await cloudService.createWrappedKey({
+    wrapId: stableWrapId({
+      codebaseId: keyring.codebaseId ?? codebaseIdFromOptions(options),
+      wrappedKeyId: keyring.userVault.keyId,
+      keyVersion: keyring.userVault.currentVersion,
+      recipientType: 'device',
+      recipientId: keyring.deviceId,
+    }),
+    wrappedKeyId: keyring.userVault.keyId,
+    wrappedKeyType: 'user-vault',
+    keyVersion: keyring.userVault.currentVersion,
+    recipientType: 'device',
+    recipientId: keyring.deviceId,
+    wrappingPublicKeyId: keyring.deviceId,
+    algorithm: keyring.userVault.wrappedKey.algorithm,
+    ciphertext: JSON.stringify(keyring.userVault.wrappedKey),
+    createdByDeviceId: keyring.deviceId,
+  })
+
+  return {
+    registered: true,
+    registeredAt,
+    deviceKey,
+    userKeyring,
+    userVaultWrap,
+  }
+}
+
+async function readLocalDeviceKeyring(options) {
+  const keyringPath = localDeviceKeyringPath(options)
+  try {
+    return await readJson(keyringPath)
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null
+    throw error
+  }
+}
+
+async function requireLocalDeviceKeyring(options) {
+  const keyring = await readLocalDeviceKeyring(options)
+  if (!keyring) throw new Error(`No local HopIt device keyring found at ${localDeviceKeyringPath(options)}. Run: hop keys init-device`)
+  return keyring
+}
+
+async function writeLocalDeviceKeyring(options, keyring) {
+  await writeSecureJson(localDeviceKeyringPath(options), keyring)
+}
+
+function localDeviceKeyringPath(options) {
+  const override = options['device-keys'] ?? options.keyring ?? process.env.HOPIT_DEVICE_KEYS_PATH
+  if (override) return path.resolve(override)
+  return path.join(agentStateRootFromOptions(options), 'keys', `${codebaseIdFromOptions(options)}.device.json`)
+}
+
+async function summarizeLocalDeviceKeyring(options, keyring) {
+  const keyringPath = localDeviceKeyringPath(options)
+  const mode = await secureFileMode(keyringPath)
+  if (!keyring) {
+    return {
+      path: path.resolve(keyringPath),
+      exists: false,
+      mode,
+      deviceConfigured: false,
+      clientEncryptionConfigured: false,
+      sessionTokenConfigured: false,
+    }
+  }
+
+  return {
+    path: path.resolve(keyringPath),
+    exists: true,
+    mode,
+    schemaVersion: keyring.schemaVersion ?? null,
+    kind: keyring.kind ?? null,
+    profile: keyring.profile ?? null,
+    codebaseId: keyring.codebaseId ?? codebaseIdFromOptions(options),
+    deviceId: keyring.deviceId ?? null,
+    deviceName: keyring.deviceName ?? null,
+    platform: keyring.platform ?? null,
+    encryption: {
+      algorithm: keyring.encryption?.algorithm ?? null,
+      publicKeyEncoding: keyring.encryption?.publicKeyEncoding ?? null,
+      publicKeyFingerprint: keyring.encryption?.publicKeyPem ? fingerprintText(keyring.encryption.publicKeyPem) : null,
+    },
+    signing: {
+      algorithm: keyring.signing?.algorithm ?? null,
+      publicKeyEncoding: keyring.signing?.publicKeyEncoding ?? null,
+      publicKeyFingerprint: keyring.signing?.publicKeyPem ? fingerprintText(keyring.signing.publicKeyPem) : null,
+    },
+    userVault: {
+      keyId: keyring.userVault?.keyId ?? null,
+      currentVersion: keyring.userVault?.currentVersion ?? null,
+      recoveryConfigured: Boolean(keyring.userVault?.recoveryConfigured),
+    },
+    device: {
+      sessionId: keyring.device?.sessionId ?? null,
+      sessionTokenConfigured: Boolean(keyring.credentials?.agentSessionToken),
+    },
+    clientEncryption: {
+      source: keyring.clientEncryption?.source ?? 'user-vault',
+      keyId: keyring.clientEncryption?.keyId ?? keyring.userVault?.keyId ?? null,
+      scope: keyring.clientEncryption?.scope ?? clientEncryptionScopes.secrets,
+      configured: Boolean(keyring.userVault?.wrappedKey && keyring.encryption?.privateKeyPem),
+    },
+    cloud: keyring.cloud ? {
+      registeredAt: keyring.cloud.registeredAt ?? null,
+      deviceKeyStatus: keyring.cloud.deviceKey?.status ?? null,
+      userKeyringStatus: keyring.cloud.userKeyring?.status ?? null,
+      userVaultWrapStatus: keyring.cloud.userVaultWrap?.status ?? null,
+    } : null,
+  }
+}
+
+async function secureFileMode(filePath) {
+  try {
+    const stats = await fs.stat(filePath)
+    return `0${(stats.mode & 0o777).toString(8)}`
+  } catch (error) {
+    if (error?.code === 'ENOENT') return null
+    throw error
+  }
+}
+
+function codebaseIdFromOptions(options) {
+  return options['codebase-id'] ?? process.env.HOPIT_CODEBASE_ID ?? 'hopit'
+}
+
+function stableWrapId({ codebaseId, wrappedKeyId, keyVersion, recipientType, recipientId }) {
+  const hash = hashContent(`${codebaseId}:${wrappedKeyId}:${keyVersion}:${recipientType}:${recipientId}`).slice(0, 40)
+  return `wrap_${hash}`
+}
+
+function recoveryContextForKeyring(keyring) {
+  return `user-vault:${keyring.userVault.keyId}:device:${keyring.deviceId}`
+}
+
+function fingerprintText(value) {
+  return createHash('sha256').update(String(value)).digest('base64url').slice(0, 22)
 }
 
 async function readWorkspaceIndex(options) {
@@ -3460,6 +4050,7 @@ function contentManifestFromCloud(cloud, hydratedPaths = Object.keys(cloud.files
       hash: entry.hash,
       size: entry.size,
       scope: entry.scope ?? scopeForPath(relativePath),
+      privacyZone: entry.privacyZone ?? privacyZoneForPath(relativePath),
       revision: Number.isInteger(entry.revision) ? entry.revision : null,
       target: entry.target ?? null,
     }
@@ -3483,6 +4074,7 @@ async function contentManifestFromWorkspace(root) {
       hash: entry.hash,
       size: entry.size,
       scope: entry.scope,
+      privacyZone: entry.privacyZone ?? privacyZoneForPath(relativePath),
       revision: null,
       target: entry.target ?? null,
     }
@@ -3520,8 +4112,8 @@ async function workspaceLocalChanges(options, indexedCodebase) {
 
   const baseline = indexedCodebase?.contentManifest
   if (!baseline?.files) {
-    const disk = await contentManifestFromWorkspace(options.workspace)
-    if (Object.keys(disk.files).length === 0) {
+    const hasEntries = await workspaceHasIncludedEntries(options.workspace, options)
+    if (!hasEntries) {
       return {
         safe: true,
         state: 'clean',
@@ -3544,19 +4136,147 @@ async function workspaceLocalChanges(options, indexedCodebase) {
     }
   }
 
-  const disk = await contentManifestFromWorkspace(options.workspace)
-  const diff = diffContentManifests(baseline, disk)
-  const dirty = diff.addedPaths.length > 0 || diff.modifiedPaths.length > 0 || diff.deletedPaths.length > 0
+  const diff = await diffWorkspaceAgainstManifest(options.workspace, baseline, options)
+  const dirty = diff.addedCount > 0 || diff.modifiedCount > 0 || diff.deletedCount > 0
 
   return {
     safe: !dirty,
     state: dirty ? 'dirty' : 'clean',
     reason: dirty ? 'workspace_has_unjournaled_changes' : null,
-    addedCount: diff.addedPaths.length,
-    modifiedCount: diff.modifiedPaths.length,
-    deletedCount: diff.deletedPaths.length,
-    samplePaths: [...diff.addedPaths, ...diff.modifiedPaths, ...diff.deletedPaths].slice(0, 10),
+    addedCount: diff.addedCount,
+    modifiedCount: diff.modifiedCount,
+    deletedCount: diff.deletedCount,
+    samplePaths: diff.samplePaths,
   }
+}
+
+async function workspaceHasIncludedEntries(root, options = {}) {
+  let found = false
+
+  async function walk(dir) {
+    if (found) return 0
+    const entries = await sortedDirEntries(dir)
+    let includedChildren = 0
+
+    for (const entry of entries) {
+      const absolutePath = path.join(dir, entry.name)
+      const relativePath = toCloudPath(path.relative(root, absolutePath))
+      if (shouldSkipWorkspacePath(relativePath, entry, options)) continue
+
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        const childCount = await walk(absolutePath)
+        if (childCount === 0) {
+          found = true
+          includedChildren += 1
+        } else {
+          includedChildren += childCount
+        }
+      } else {
+        found = true
+        includedChildren += 1
+      }
+
+      if (found) return includedChildren
+    }
+
+    return includedChildren
+  }
+
+  await walk(root)
+  return found
+}
+
+async function diffWorkspaceAgainstManifest(root, baseline, options = {}) {
+  const baselineFiles = baseline?.files ?? {}
+  const seen = new Set()
+  const samplePaths = []
+  let addedCount = 0
+  let modifiedCount = 0
+
+  function sample(relativePath) {
+    if (samplePaths.length < 10) samplePaths.push(relativePath)
+  }
+
+  function recordAdded(relativePath) {
+    addedCount += 1
+    sample(relativePath)
+  }
+
+  async function compareEntry(relativePath, actualFactory) {
+    const expected = baselineFiles[relativePath]
+    if (!expected) {
+      recordAdded(relativePath)
+      return
+    }
+
+    seen.add(relativePath)
+    const actual = await actualFactory()
+    if (manifestEntryChanged(expected, actual)) {
+      modifiedCount += 1
+      sample(relativePath)
+    }
+  }
+
+  async function walk(dir) {
+    const entries = await sortedDirEntries(dir)
+    let includedChildren = 0
+
+    for (const entry of entries) {
+      const absolutePath = path.join(dir, entry.name)
+      const relativePath = toCloudPath(path.relative(root, absolutePath))
+      if (shouldSkipWorkspacePath(relativePath, entry, options)) continue
+
+      if (entry.isSymbolicLink()) {
+        await compareEntry(relativePath, () => readWorkspaceSymlinkEntry(root, relativePath, absolutePath))
+        includedChildren += 1
+        continue
+      }
+
+      if (entry.isDirectory()) {
+        const childCount = await walk(absolutePath)
+        if (childCount === 0) {
+          await compareEntry(relativePath, () => workspaceDirectoryEntry(relativePath))
+          includedChildren += 1
+        } else {
+          includedChildren += childCount
+        }
+        continue
+      }
+
+      if (!entry.isFile()) continue
+
+      await compareEntry(relativePath, () => readWorkspaceFileEntry(root, relativePath, absolutePath))
+      includedChildren += 1
+    }
+
+    return includedChildren
+  }
+
+  await walk(root)
+
+  let deletedCount = 0
+  for (const relativePath of Object.keys(baselineFiles).sort()) {
+    if (seen.has(relativePath)) continue
+    deletedCount += 1
+    sample(relativePath)
+  }
+
+  return {
+    addedCount,
+    modifiedCount,
+    deletedCount,
+    samplePaths,
+  }
+}
+
+function manifestEntryChanged(expected, actual) {
+  return (
+    expected.kind !== actual.kind ||
+    expected.hash !== actual.hash ||
+    expected.size !== actual.size ||
+    expected.scope !== actual.scope ||
+    (expected.target ?? null) !== (actual.target ?? null)
+  )
 }
 
 function diffContentManifests(baseline, disk) {
@@ -4587,6 +5307,7 @@ function applyJournalEntryToCloud(cloud, entry, options = {}) {
       path: entry.path,
       kind: entry.kind ?? entryKind.file,
       scope,
+      privacyZone: privacyZoneForPath(entry.path),
       revision: cloud.revision,
       selectedStateType: cloud.selectedState?.type ?? null,
       selectedStateId: cloud.selectedState?.id ?? null,
@@ -4619,6 +5340,7 @@ function applyJournalEntryToCloud(cloud, entry, options = {}) {
       hash: payload.hash,
       size: payload.size,
       scope,
+      privacyZone: privacyZoneForPath(entry.path),
       revision: cloud.revision,
       updatedAt: now,
     }
@@ -4634,6 +5356,12 @@ function applyJournalEntryToCloud(cloud, entry, options = {}) {
     if (payload.kind === entryKind.file && payload.blobHash) {
       cloud.files[entry.path].blobHash = payload.blobHash
     }
+    if (payload.kind === entryKind.file && Number.isInteger(payload.blobSize)) {
+      cloud.files[entry.path].blobSize = payload.blobSize
+    }
+    if (payload.kind === entryKind.file && payload.clientEncryption) {
+      cloud.files[entry.path].clientEncryption = payload.clientEncryption
+    }
     if (cloud.selectedState) cloud.selectedState.revision = cloud.revision
   }
 
@@ -4643,6 +5371,7 @@ function applyJournalEntryToCloud(cloud, entry, options = {}) {
     path: entry.path,
     kind: payload.kind,
     scope,
+    privacyZone: privacyZoneForPath(entry.path),
     revision: cloud.revision,
     selectedStateType: cloud.selectedState?.type ?? null,
     selectedStateId: cloud.selectedState?.id ?? null,
@@ -5010,18 +5739,18 @@ function isPathInside(candidate, root) {
   return Boolean(relative) && !relative.startsWith('..') && !path.isAbsolute(relative)
 }
 
-async function readWorkspaceFiles(root) {
+async function readWorkspaceFiles(root, options = {}) {
   const result = {}
   if (!existsSync(root)) return result
 
   async function walk(dir) {
-    const entries = await fs.readdir(dir, { withFileTypes: true })
+    const entries = await sortedDirEntries(dir)
     let includedChildren = 0
 
     for (const entry of entries) {
       const absolutePath = path.join(dir, entry.name)
       const relativePath = toCloudPath(path.relative(root, absolutePath))
-      if (shouldSkipWorkspacePath(relativePath, entry)) continue
+      if (shouldSkipWorkspacePath(relativePath, entry, options)) continue
 
       if (entry.isSymbolicLink()) {
         result[relativePath] = await readWorkspaceSymlinkEntry(root, relativePath, absolutePath)
@@ -5052,10 +5781,15 @@ async function readWorkspaceFiles(root) {
   return result
 }
 
-function shouldSkipWorkspacePath(relativePath, entry) {
+async function sortedDirEntries(dir) {
+  const entries = await fs.readdir(dir, { withFileTypes: true })
+  return entries.sort((a, b) => a.name.localeCompare(b.name))
+}
+
+function shouldSkipWorkspacePath(relativePath, entry, options = {}) {
   const parts = relativePath.split('/')
   if (parts.includes('.hopit')) return true
-  if (isLocalOnlySecretPath(relativePath)) return true
+  if (isLocalOnlySecretPath(relativePath) && !shouldSyncLocalOnlySecretPath(relativePath, options)) return true
   return false
 }
 
@@ -5065,8 +5799,38 @@ function shouldSkipLiteralMirrorPath(relativePath, _entry) {
   return false
 }
 
-function isLocalOnlySecretPath(relativePath) {
-  return relativePath === '.private/env' || relativePath.startsWith('.private/env/')
+function shouldSyncLocalOnlySecretPath(relativePath, options = {}) {
+  return hasObjectBlobProvider(options) && shouldEncryptClientSide(relativePath, options)
+}
+
+function secretSyncStatus(options = {}) {
+  const hasKey = Boolean(rawClientEncryptionKey(options))
+  const hasBlobStore = hasObjectBlobProvider(options)
+  const scope = clientEncryptionScopeFromOptions(options)
+  const enabled = hasKey && hasBlobStore && scope !== clientEncryptionScopes.off
+  let reason = null
+  if (!hasKey) reason = 'client_encryption_key_missing'
+  else if (!hasBlobStore) reason = 'object_blob_provider_missing'
+  else if (scope === clientEncryptionScopes.off) reason = 'client_encryption_disabled'
+
+  return {
+    enabled,
+    reason,
+    scope,
+  }
+}
+
+function hasObjectBlobProvider(options = {}) {
+  return Boolean(normalizeBlobProvider(options['blob-provider'] ?? process.env.HOPIT_BLOB_PROVIDER))
+}
+
+function shouldEncryptClientSide(relativePath, options = {}) {
+  if (!rawClientEncryptionKey(options)) return false
+  const scope = clientEncryptionScopeFromOptions(options)
+  if (scope === clientEncryptionScopes.off) return false
+  if (scope === clientEncryptionScopes.all) return true
+  if (scope === clientEncryptionScopes.ownerPrivate) return hasPrivatePrivacyZone(relativePath)
+  return isLocalOnlySecretPath(relativePath)
 }
 
 async function readWorkspaceFileEntry(_root, relativePath, absolutePath) {
@@ -5079,6 +5843,7 @@ async function readWorkspaceFileEntry(_root, relativePath, absolutePath) {
     hash: hashBuffer(buffer),
     size: buffer.byteLength,
     scope: scopeForPath(relativePath),
+    privacyZone: privacyZoneForPath(relativePath),
     revision: null,
   }
 }
@@ -5093,6 +5858,7 @@ async function readWorkspaceSymlinkEntry(_root, relativePath, absolutePath) {
     hash: hashSymlinkTarget(target),
     size: Buffer.byteLength(target),
     scope: scopeForPath(relativePath),
+    privacyZone: privacyZoneForPath(relativePath),
     revision: null,
   }
 }
@@ -5114,6 +5880,7 @@ function workspaceDirectoryEntry(relativePath) {
     hash: hashDirectoryEntry(relativePath),
     size: 0,
     scope: scopeForPath(relativePath),
+    privacyZone: privacyZoneForPath(relativePath),
     revision: null,
   }
 }
@@ -5152,6 +5919,7 @@ async function readImportableProjectFiles(root) {
       files[relativePath] = {
         content,
         scope: scopeForPath(relativePath),
+        privacyZone: privacyZoneForPath(relativePath),
         revision: 1,
         updatedAt: new Date().toISOString(),
       }
@@ -5213,10 +5981,11 @@ function createObjectBlobStore(options) {
 
   const prefix = normalizeBlobPrefix(options['blob-prefix'] ?? process.env.HOPIT_BLOB_PREFIX)
   const budget = blobBudgetOptions(options, provider)
+  const encryptionConfig = clientEncryptionConfigFromOptions(options)
 
   if (provider === objectBlobProvider.filesystem) {
     const root = options['blob-root'] ?? process.env.HOPIT_BLOB_ROOT ?? path.join(path.dirname(options.cloud ?? defaultOptions.cloud), 'blobs')
-    return new FilesystemBlobStore({ root, prefix, budget })
+    return new FilesystemBlobStore({ root, prefix, budget, encryptionConfig })
   }
 
   if (provider === objectBlobProvider.r2) {
@@ -5235,6 +6004,7 @@ function createObjectBlobStore(options) {
       prefix,
       forcePathStyle: true,
       budget,
+      encryptionConfig,
     })
   }
 
@@ -5253,6 +6023,7 @@ function createObjectBlobStore(options) {
       prefix,
       forcePathStyle: true,
       budget,
+      encryptionConfig,
     })
   }
 
@@ -5270,6 +6041,7 @@ function createObjectBlobStore(options) {
     prefix,
     forcePathStyle: truthyEnv(options['s3-force-path-style'] ?? process.env.HOPIT_S3_FORCE_PATH_STYLE ?? '1'),
     budget,
+    encryptionConfig,
   })
 }
 
@@ -5338,6 +6110,55 @@ function blobKeyForHash(prefix, codebaseId, hash) {
     .join('/')
 }
 
+function managedBlobPrefix(prefix, codebaseId) {
+  const safeCodebaseId = encodeURIComponent(String(codebaseId ?? 'hopit'))
+  return [prefix, 'codebases', safeCodebaseId, 'blobs', 'sha256']
+    .filter(Boolean)
+    .join('/')
+}
+
+function isManagedBlobKey(key, prefix, codebaseId) {
+  const root = managedBlobPrefix(prefix, codebaseId)
+  const pattern = new RegExp(`^${escapeRegex(root)}/[0-9a-f]{2}/[0-9a-f]{64}$`)
+  return pattern.test(key)
+}
+
+function assertManagedBlobKey(key, prefix, codebaseId) {
+  if (!isManagedBlobKey(key, prefix, codebaseId)) {
+    throw new Error(`Refusing to delete unmanaged blob key: ${key}`)
+  }
+}
+
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function reachableBlobKeysForCloud(cloud) {
+  const keys = new Set()
+  for (const file of Object.values(cloud.files ?? {})) {
+    if (file?.kind !== entryKind.file && file?.kind !== undefined) continue
+    if (file?.contentStorage !== contentStorageMode.objectBlob) continue
+    if (typeof file.blobKey === 'string' && file.blobKey) keys.add(file.blobKey)
+  }
+  return keys
+}
+
+function storageRetentionMsFromOptions(options) {
+  const days = options['retention-days'] ?? process.env.HOPIT_BLOB_GC_RETENTION_DAYS
+  if (days !== undefined) {
+    const parsed = Number(days)
+    if (!Number.isFinite(parsed) || parsed < 0) throw new Error('HOPIT_BLOB_GC_RETENTION_DAYS must be non-negative.')
+    return parsed * 24 * 60 * 60 * 1000
+  }
+  const ms = options['retention-ms'] ?? process.env.HOPIT_BLOB_GC_RETENTION_MS
+  if (ms !== undefined) {
+    const parsed = Number(ms)
+    if (!Number.isFinite(parsed) || parsed < 0) throw new Error('HOPIT_BLOB_GC_RETENTION_MS must be non-negative.')
+    return parsed
+  }
+  return 0
+}
+
 class FilesystemBlobStore {
   constructor(options) {
     this.provider = objectBlobProvider.filesystem
@@ -5346,34 +6167,85 @@ class FilesystemBlobStore {
     this.location = this.root
     this.budget = options.budget ?? { freeOnly: false, budgetBytes: null }
     this.usageCache = null
+    this.encryptionConfig = options.encryptionConfig ?? null
   }
 
-  async putBlob({ codebaseId, hash, buffer }) {
-    const key = blobKeyForHash(this.prefix, codebaseId, hash)
+  shouldEncrypt(relativePath) {
+    return shouldEncryptWithConfig(relativePath, this.encryptionConfig)
+  }
+
+  async putBlob({ codebaseId, relativePath, hash, buffer, encrypt = false }) {
+    const prepared = prepareBlobPayload({
+      codebaseId,
+      relativePath,
+      plaintextHash: hash,
+      buffer,
+      encrypt,
+      encryptionConfig: this.encryptionConfig,
+    })
+    const key = blobKeyForHash(this.prefix, codebaseId, prepared.blobHash)
     const absolutePath = path.join(this.root, key)
     if (existsSync(absolutePath)) {
       const existing = await fs.readFile(absolutePath)
-      if (hashBuffer(existing) !== hash) {
-        throw new Error(`object_blob_hash_collision: existing filesystem blob differs for ${hash}.`)
+      if (hashBuffer(existing) !== prepared.blobHash) {
+        throw new Error(`object_blob_hash_collision: existing filesystem blob differs for ${prepared.blobHash}.`)
       }
     } else {
-      await this.assertWithinBudget(buffer.byteLength)
+      await this.assertWithinBudget(prepared.buffer.byteLength)
       await fs.mkdir(path.dirname(absolutePath), { recursive: true })
-      await fs.writeFile(absolutePath, buffer)
-      if (this.usageCache) this.usageCache.bytes += buffer.byteLength
+      await fs.writeFile(absolutePath, prepared.buffer)
+      if (this.usageCache) this.usageCache.bytes += prepared.buffer.byteLength
     }
     return {
       provider: this.provider,
       key,
       hash,
       size: buffer.byteLength,
+      blobHash: prepared.blobHash,
+      blobSize: prepared.buffer.byteLength,
+      clientEncryption: prepared.clientEncryption,
       contentStorage: contentStorageMode.objectBlob,
     }
   }
 
-  async getBlob(file) {
+  async getBlob(file, context = {}) {
     if (!file.blobKey) throw new Error('Object-backed file is missing blobKey.')
-    return await fs.readFile(path.join(this.root, file.blobKey))
+    const buffer = await fs.readFile(path.join(this.root, file.blobKey))
+    return unwrapBlobPayload(buffer, file, context, this.encryptionConfig)
+  }
+
+  async listBlobs({ codebaseId }) {
+    const root = path.join(this.root, managedBlobPrefix(this.prefix, codebaseId))
+    const result = []
+    const storeRoot = this.root
+
+    async function walk(dir) {
+      if (!existsSync(dir)) return
+      const entries = await fs.readdir(dir, { withFileTypes: true })
+      for (const entry of entries) {
+        const absolutePath = path.join(dir, entry.name)
+        if (entry.isDirectory()) {
+          await walk(absolutePath)
+          continue
+        }
+        if (!entry.isFile()) continue
+        const stat = await fs.stat(absolutePath)
+        result.push({
+          key: toCloudPath(path.relative(storeRoot, absolutePath)),
+          size: stat.size,
+          lastModified: stat.mtime.toISOString(),
+        })
+      }
+    }
+
+    await walk(root)
+    return result
+  }
+
+  async deleteBlob(key, { codebaseId }) {
+    assertManagedBlobKey(key, this.prefix, codebaseId)
+    await fs.rm(path.join(this.root, key), { force: true })
+    this.usageCache = null
   }
 
   async assertWithinBudget(additionalBytes) {
@@ -5427,41 +6299,87 @@ class S3CompatibleBlobStore {
     this.location = `${this.provider}:${this.bucket}`
     this.budget = options.budget ?? { freeOnly: false, budgetBytes: null }
     this.usageCache = null
+    this.encryptionConfig = options.encryptionConfig ?? null
   }
 
-  async putBlob({ codebaseId, hash, buffer }) {
-    const key = blobKeyForHash(this.prefix, codebaseId, hash)
+  shouldEncrypt(relativePath) {
+    return shouldEncryptWithConfig(relativePath, this.encryptionConfig)
+  }
+
+  async putBlob({ codebaseId, relativePath, hash, buffer, encrypt = false }) {
+    const prepared = prepareBlobPayload({
+      codebaseId,
+      relativePath,
+      plaintextHash: hash,
+      buffer,
+      encrypt,
+      encryptionConfig: this.encryptionConfig,
+    })
+    const key = blobKeyForHash(this.prefix, codebaseId, prepared.blobHash)
     if (await this.exists(key)) {
       return {
         provider: this.provider,
         key,
         hash,
         size: buffer.byteLength,
+        blobHash: prepared.blobHash,
+        blobSize: prepared.buffer.byteLength,
+        clientEncryption: prepared.clientEncryption,
         contentStorage: contentStorageMode.objectBlob,
       }
     }
 
-    await this.assertWithinBudget(buffer.byteLength)
+    await this.assertWithinBudget(prepared.buffer.byteLength)
     await this.request('PUT', key, {
-      body: buffer,
+      body: prepared.buffer,
       headers: {
         'content-type': 'application/octet-stream',
       },
     })
-    if (this.usageCache) this.usageCache.bytes += buffer.byteLength
+    if (this.usageCache) this.usageCache.bytes += prepared.buffer.byteLength
     return {
       provider: this.provider,
       key,
       hash,
       size: buffer.byteLength,
+      blobHash: prepared.blobHash,
+      blobSize: prepared.buffer.byteLength,
+      clientEncryption: prepared.clientEncryption,
       contentStorage: contentStorageMode.objectBlob,
     }
   }
 
-  async getBlob(file) {
+  async getBlob(file, context = {}) {
     if (!file.blobKey) throw new Error('Object-backed file is missing blobKey.')
     const response = await this.request('GET', file.blobKey)
-    return Buffer.from(await response.arrayBuffer())
+    const buffer = Buffer.from(await response.arrayBuffer())
+    return unwrapBlobPayload(buffer, file, context, this.encryptionConfig)
+  }
+
+  async listBlobs({ codebaseId }) {
+    const prefix = `${managedBlobPrefix(this.prefix, codebaseId)}/`
+    let continuationToken = null
+    const result = []
+
+    do {
+      const query = {
+        'list-type': '2',
+        prefix,
+      }
+      if (continuationToken) query['continuation-token'] = continuationToken
+      const response = await this.request('GET', '', { query })
+      const xml = await response.text()
+      result.push(...parseS3ListObjects(xml))
+      continuationToken = parseS3NextContinuationToken(xml)
+    } while (continuationToken)
+
+    return result
+  }
+
+  async deleteBlob(key, { codebaseId }) {
+    assertManagedBlobKey(key, this.prefix, codebaseId)
+    await this.request('DELETE', key)
+    this.usageCache = null
   }
 
   async exists(key) {
@@ -5603,6 +6521,23 @@ function parseS3ListObjectSizes(xml) {
   return sizes
 }
 
+function parseS3ListObjects(xml) {
+  const objects = []
+  const contentMatches = xml.matchAll(/<Contents\b[^>]*>([\s\S]*?)<\/Contents>/g)
+  for (const match of contentMatches) {
+    const keyMatch = match[1].match(/<Key>([\s\S]*?)<\/Key>/)
+    if (!keyMatch) continue
+    const sizeMatch = match[1].match(/<Size>(\d+)<\/Size>/)
+    const modifiedMatch = match[1].match(/<LastModified>([\s\S]*?)<\/LastModified>/)
+    objects.push({
+      key: decodeXmlText(keyMatch[1]),
+      size: sizeMatch ? Number(sizeMatch[1]) : null,
+      lastModified: modifiedMatch ? decodeXmlText(modifiedMatch[1]) : null,
+    })
+  }
+  return objects
+}
+
 function parseS3NextContinuationToken(xml) {
   const match = xml.match(/<NextContinuationToken>([\s\S]*?)<\/NextContinuationToken>/)
   return match ? decodeXmlText(match[1]) : null
@@ -5660,8 +6595,10 @@ async function prepareEntryForBlobStorage(blobStore, codebaseId, relativePath, e
   const buffer = bufferFromFileEntry(payload)
   const descriptor = await blobStore.putBlob({
     codebaseId,
+    relativePath,
     hash: payload.hash,
     buffer,
+    encrypt: blobStore.shouldEncrypt?.(relativePath) ?? false,
   })
   return {
     ...payload,
@@ -5669,7 +6606,9 @@ async function prepareEntryForBlobStorage(blobStore, codebaseId, relativePath, e
     contentStorage: contentStorageMode.objectBlob,
     blobProvider: descriptor.provider,
     blobKey: descriptor.key,
-    blobHash: descriptor.hash,
+    blobHash: descriptor.blobHash ?? descriptor.hash,
+    blobSize: descriptor.blobSize ?? descriptor.size,
+    clientEncryption: descriptor.clientEncryption ?? null,
   }
 }
 
@@ -5745,9 +6684,9 @@ class FixtureJsonCloudGraphService {
     return acknowledgement
   }
 
-  async readBlob(file) {
+  async readBlob(file, context = {}) {
     if (!this.blobStore) throw new Error('Object-backed file requires HOPIT_BLOB_PROVIDER.')
-    return await this.blobStore.getBlob(file)
+    return await this.blobStore.getBlob(file, context)
   }
 }
 
@@ -5841,6 +6780,9 @@ class ConvexCloudGraphService {
     if (payload?.blobProvider) args.blobProvider = payload.blobProvider
     if (payload?.blobKey) args.blobKey = payload.blobKey
     if (payload?.blobHash) args.blobHash = payload.blobHash
+    if (Number.isInteger(payload?.blobSize)) args.blobSize = payload.blobSize
+    if (payload?.clientEncryption) args.clientEncryption = payload.clientEncryption
+    if (payload?.privacyZone) args.privacyZone = payload.privacyZone
     if (payload && typeof payload.content === 'string') args.content = payload.content
     else if (typeof options.content === 'string') args.content = options.content
     Object.assign(args, this.credentialArgs())
@@ -5870,9 +6812,9 @@ class ConvexCloudGraphService {
     }
   }
 
-  async readBlob(file) {
+  async readBlob(file, context = {}) {
     if (!this.blobStore) throw new Error('Object-backed file requires HOPIT_BLOB_PROVIDER.')
-    return await this.blobStore.getBlob(file)
+    return await this.blobStore.getBlob(file, context)
   }
 
   async registerAgentSession(options = {}) {
@@ -5912,6 +6854,66 @@ class ConvexCloudGraphService {
     Object.assign(args, this.credentialArgs())
 
     return await this.client.mutation(anyApi.agent.revokeAgentSession, args)
+  }
+
+  async registerDeviceKey(options = {}) {
+    const args = {
+      codebaseId: requireConvexCodebaseId(this.codebaseId),
+      ...options,
+    }
+    Object.assign(args, this.credentialArgs())
+
+    return await this.client.mutation(anyApi.agent.registerDeviceKey, args)
+  }
+
+  async listDeviceKeys(options = {}) {
+    const args = {
+      codebaseId: requireConvexCodebaseId(this.codebaseId),
+      ...options,
+    }
+    Object.assign(args, this.credentialArgs())
+
+    return await this.client.query(anyApi.agent.listDeviceKeys, args)
+  }
+
+  async ensureUserKeyring(options = {}) {
+    const args = {
+      codebaseId: requireConvexCodebaseId(this.codebaseId),
+      ...options,
+    }
+    Object.assign(args, this.credentialArgs())
+
+    return await this.client.mutation(anyApi.agent.ensureUserKeyring, args)
+  }
+
+  async createWrappedKey(options = {}) {
+    const args = {
+      codebaseId: requireConvexCodebaseId(this.codebaseId),
+      ...options,
+    }
+    Object.assign(args, this.credentialArgs())
+
+    return await this.client.mutation(anyApi.agent.createWrappedKey, args)
+  }
+
+  async listWrappedKeys(options = {}) {
+    const args = {
+      codebaseId: requireConvexCodebaseId(this.codebaseId),
+      ...options,
+    }
+    Object.assign(args, this.credentialArgs())
+
+    return await this.client.query(anyApi.agent.listWrappedKeys, args)
+  }
+
+  async revokeWrappedKey(options = {}) {
+    const args = {
+      codebaseId: requireConvexCodebaseId(this.codebaseId),
+      ...options,
+    }
+    Object.assign(args, this.credentialArgs())
+
+    return await this.client.mutation(anyApi.agent.revokeWrappedKey, args)
   }
 
   credentialArgs() {
@@ -6017,6 +7019,9 @@ function validateRawCloudGraphContract(cloud) {
     if (file?.scope && file.scope !== scopeForPath(relativePath)) {
       throw new Error(`Cloud graph scope mismatch for ${relativePath}: expected ${scopeForPath(relativePath)}, got ${file.scope}.`)
     }
+    if (file?.privacyZone && file.privacyZone !== privacyZoneForPath(relativePath)) {
+      throw new Error(`Cloud graph privacy zone mismatch for ${relativePath}: expected ${privacyZoneForPath(relativePath)}, got ${file.privacyZone}.`)
+    }
   }
 }
 
@@ -6072,11 +7077,26 @@ function validateCloudGraphContract(cloud) {
       if (!isNonEmptyString(file.blobProvider)) errors.push(`${relativePath}.blobProvider is required for object-backed files.`)
       if (!isNonEmptyString(file.blobKey)) errors.push(`${relativePath}.blobKey is required for object-backed files.`)
       if (!isNonEmptyString(file.blobHash ?? file.hash)) errors.push(`${relativePath}.blobHash is required for object-backed files.`)
+      errors.push(...validateClientEncryptionMetadata(file.clientEncryption, `${relativePath}.clientEncryption`))
+    }
+    if (
+      kind === entryKind.file &&
+      privacyZoneForPath(relativePath) === 'secrets' &&
+      !(
+        file?.contentStorage === contentStorageMode.objectBlob &&
+        file?.clientEncryption?.state === 'client-encrypted' &&
+        validateClientEncryptionMetadata(file.clientEncryption, `${relativePath}.clientEncryption`).length === 0
+      )
+    ) {
+      errors.push(`${relativePath} must be stored as encrypted object-backed content because it is in the secrets privacy zone.`)
     }
     if (kind === entryKind.symlink && typeof file?.target !== 'string') errors.push(`${relativePath}.target must be a string.`)
     if (kind === entryKind.directory && file?.content !== '') errors.push(`${relativePath}.content must be empty for directories.`)
     if (file?.scope !== scopeForPath(relativePath)) {
       errors.push(`${relativePath}.scope must be ${scopeForPath(relativePath)}.`)
+    }
+    if (file?.privacyZone !== undefined && file.privacyZone !== privacyZoneForPath(relativePath)) {
+      errors.push(`${relativePath}.privacyZone must be ${privacyZoneForPath(relativePath)}.`)
     }
     if (!Number.isInteger(file?.revision)) errors.push(`${relativePath}.revision must be an integer.`)
     if (file?.hash !== undefined && file.hash !== null && typeof file.hash !== 'string') {
@@ -6345,6 +7365,7 @@ function normalizeCloudFileEntry(relativePath, file) {
   const value = file && typeof file === 'object' ? { ...file } : { content: '' }
   value.kind = value.kind ?? entryKind.file
   value.scope = scopeForPath(relativePath)
+  value.privacyZone = privacyZoneForPath(relativePath)
 
   if (value.kind === entryKind.directory) {
     value.content = ''
@@ -6371,10 +7392,13 @@ function normalizeCloudFileEntry(relativePath, file) {
   value.blobProvider = typeof value.blobProvider === 'string' ? value.blobProvider : null
   value.blobKey = typeof value.blobKey === 'string' ? value.blobKey : null
   value.blobHash = typeof value.blobHash === 'string' ? value.blobHash : (typeof value.hash === 'string' ? value.hash : null)
+  value.blobSize = Number.isInteger(value.blobSize) ? value.blobSize : null
+  value.clientEncryption = normalizeClientEncryptionMetadata(value.clientEncryption)
   const buffer = bufferFromFileEntry(value)
   value.size = Number.isInteger(value.size) ? value.size : buffer.byteLength
   value.hash = typeof value.hash === 'string' ? value.hash : (isNonEmptyString(value.blobHash) ? value.blobHash : hashBuffer(buffer))
   if (!value.blobHash) value.blobHash = value.hash
+  if (!value.blobSize && value.contentStorage === contentStorageMode.objectBlob) value.blobSize = value.size
   return value
 }
 
@@ -6384,21 +7408,21 @@ function bufferFromFileEntry(file) {
   return Buffer.from(content, file.encoding === entryEncoding.base64 ? 'base64' : 'utf8')
 }
 
-async function bufferFromCloudFileEntry(file, cloudService = null) {
+async function bufferFromCloudFileEntry(file, cloudService = null, context = {}) {
   if (file.kind && file.kind !== entryKind.file) return Buffer.alloc(0)
   if (!isObjectStoredFileEntry(file)) return bufferFromFileEntry(file)
   if (!cloudService?.readBlob) {
     throw new Error(`Cannot read object-backed file without a configured blob store: ${file.blobKey ?? file.hash ?? '(missing key)'}`)
   }
 
-  const buffer = await cloudService.readBlob(file)
+  const buffer = await cloudService.readBlob(file, context)
   const actualHash = hashBuffer(buffer)
-  const expectedHash = file.blobHash ?? file.hash
+  const expectedHash = file.hash
   if (expectedHash && actualHash !== expectedHash) {
-    throw new Error(`object_blob_hash_mismatch: expected ${expectedHash}, got ${actualHash}`)
+    throw new Error(`object_blob_plaintext_hash_mismatch: expected ${expectedHash}, got ${actualHash}`)
   }
   if (Number.isInteger(file.size) && buffer.byteLength !== file.size) {
-    throw new Error(`object_blob_size_mismatch: expected ${file.size}, got ${buffer.byteLength}`)
+    throw new Error(`object_blob_plaintext_size_mismatch: expected ${file.size}, got ${buffer.byteLength}`)
   }
   return buffer
 }
@@ -6441,6 +7465,7 @@ function cloudEntryEquals(a, b) {
     a.hash === b.hash &&
     a.size === b.size &&
     a.scope === b.scope &&
+    (a.privacyZone ?? null) === (b.privacyZone ?? null) &&
     (a.target ?? null) === (b.target ?? null)
   )
 }
@@ -6476,6 +7501,25 @@ async function writeJson(filePath, value) {
   const tempPath = path.join(path.dirname(filePath), `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`)
   await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
   await fs.rename(tempPath, filePath)
+}
+
+async function writeSecureJson(filePath, value) {
+  const dir = path.dirname(filePath)
+  await fs.mkdir(dir, { recursive: true, mode: 0o700 })
+  await chmodIfSupported(dir, 0o700)
+  const tempPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${randomUUID()}.tmp`)
+  await fs.writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, {
+    encoding: 'utf8',
+    mode: 0o600,
+  })
+  await chmodIfSupported(tempPath, 0o600)
+  await fs.rename(tempPath, filePath)
+  await chmodIfSupported(filePath, 0o600)
+}
+
+async function chmodIfSupported(filePath, mode) {
+  if (process.platform === 'win32') return
+  await fs.chmod(filePath, mode)
 }
 
 async function appendNdjson(filePath, value) {
@@ -6603,6 +7647,7 @@ function printHelp() {
 Commands:
   init        Seed a local cloud file graph
   import      Import a real local folder into the HopIt graph and hydrate it
+  import-git  Production-safe literal Git checkout conversion into HopIt
   mirror      Literal-copy a local folder into the managed workspace with safety checks
   hydrate     Materialize cloud files into the managed workspace
   refresh     Update the managed workspace from cloud when journal and disk are safe
@@ -6619,6 +7664,8 @@ Commands:
   install     Prepare production state, workspace, env, and optional launch agent
   workspace   Manage/list/discover/attach the configured HopIt workspace root and codebase
   session     Manage this device/session registration (alias: device)
+  keys        Manage local encryption device keys and recovery exports
+  storage     Inspect object storage usage and dry-run or execute blob GC
   service     Manage the local agent service: start, stop, restart, status, run
   watch       Hydrate and watch the workspace for edits
   status      Print read-only local agent status JSON
@@ -6626,7 +7673,7 @@ Commands:
   demo        Run init, hydrate, edit, sync, and verify
 
 Compatibility aliases:
-  import-local, mirror-local, sync-once, review-open, status-server, workspaces, device, devices, sessions
+  import-local, mirror-local, sync-once, review-open, status-server, workspaces, device, devices, sessions, key, keyring
 
 Options:
   --source <path>     Source folder for import
@@ -6634,6 +7681,12 @@ Options:
   --blob-provider <provider> Object blob provider: r2, b2, s3, or filesystem
   --blob-free-only <1|0> Keep provider uploads under the configured free-only budget
   --blob-storage-budget-bytes <n> Maximum existing+new object bytes before upload fails
+  --client-encryption-key <key> Local-only 32-byte base64:/hex: key for encrypted secret sync
+  --client-encryption-scope <scope> Encrypt secrets, owner-private, all, or off
+  --device-keys <path> Override local per-codebase device keyring path
+  --recovery-passphrase <secret> One-shot passphrase for keys export-recovery
+  --production-safe import-git/mirror: skip cloud sync if routed secrets are not encrypted
+  --execute          storage gc: delete planned orphaned blobs; default is dry-run
   --launch-agent-label <label> mirror: macOS LaunchAgent label to stop/restart
   --output <path>     Output folder for Git export/publish
   --path <cloud-path> Cloud file path for workspace hydrate-file

@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { existsSync } from 'node:fs'
 import path from 'node:path'
 
 const env = process.env
@@ -32,7 +33,7 @@ if (authProvider === 'clerk') {
 } else if (authProvider === 'basic') {
   checks.push(exact('HOPIT_ALLOW_BASIC_AUTH_FALLBACK', '1'))
   checks.push(secret('HOPIT_DASHBOARD_PASSWORD', { minLength: 16 }))
-  warnings.push('HOPIT_AUTH_PROVIDER=basic is the domain-deferred personal production guard, not final product auth.')
+  warnings.push('HOPIT_AUTH_PROVIDER=basic is a rollback/recovery mode. Normal production should use Clerk with only HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1 kept temporarily until owner sign-in/OAuth and owner mapping are verified.')
   if (!env.HOPIT_DASHBOARD_USERNAME) {
     warnings.push('HOPIT_DASHBOARD_USERNAME is unset; hosted dashboard auth will use "hopit".')
   }
@@ -122,6 +123,28 @@ if (!env.HOPIT_BLOB_PROVIDER) {
     })
   }
 }
+if (env.HOPIT_DEVICE_KEYS_PATH) {
+  checks.push(absolutePath('HOPIT_DEVICE_KEYS_PATH'))
+}
+const configuredDeviceKeyringPath = productionDeviceKeyringPath()
+if (!env.HOPIT_CLIENT_ENCRYPTION_KEY && !configuredDeviceKeyringPath) {
+  warnings.push('No local secret encryption key source is configured; .private/env remains local-only and routed secrets will not cloud-sync.')
+} else if (!env.HOPIT_CLIENT_ENCRYPTION_KEY && configuredDeviceKeyringPath && !existsSync(configuredDeviceKeyringPath)) {
+  warnings.push(`HOPIT_CLIENT_ENCRYPTION_KEY is unset and the local device keyring was not found at ${configuredDeviceKeyringPath}; .private/env remains local-only until hop keys init-device is run.`)
+} else {
+  if (env.HOPIT_CLIENT_ENCRYPTION_KEY) {
+    checks.push(secret('HOPIT_CLIENT_ENCRYPTION_KEY', { minLength: 32 }))
+  }
+  if (configuredDeviceKeyringPath && (!env.HOPIT_CLIENT_ENCRYPTION_KEY || env.HOPIT_DEVICE_KEYS_PATH)) {
+    checks.push({
+      name: 'HOPIT_DEVICE_KEYS_PATH or default device keyring',
+      failures: existsSync(configuredDeviceKeyringPath) ? [] : [`Local device keyring was not found at ${configuredDeviceKeyringPath}.`],
+    })
+  }
+}
+if (env.HOPIT_CLIENT_ENCRYPTION_SCOPE) {
+  checks.push(oneOf('HOPIT_CLIENT_ENCRYPTION_SCOPE', ['secrets', 'owner-private', 'private', 'all', 'off']))
+}
 if (!env.HOPIT_BACKUP_ROOT) {
   warnings.push('HOPIT_BACKUP_ROOT is unset; restorable agent-state backups should use an explicit output path.')
 } else {
@@ -161,6 +184,12 @@ function required(name) {
   return { name, failures }
 }
 
+function productionDeviceKeyringPath() {
+  if (env.HOPIT_DEVICE_KEYS_PATH) return env.HOPIT_DEVICE_KEYS_PATH
+  if (!env.HOPIT_AGENT_STATE_ROOT || !env.HOPIT_CODEBASE_ID) return null
+  return path.join(env.HOPIT_AGENT_STATE_ROOT, 'keys', `${env.HOPIT_CODEBASE_ID}.device.json`)
+}
+
 function requiredOneOf(names) {
   const hasValue = names.some((name) => Boolean(env[name]))
   return {
@@ -184,6 +213,15 @@ function exact(name, expected) {
   const value = env[name]
   const failures = []
   if (value !== expected) failures.push(`${name} must be "${expected}".`)
+  return { name, failures }
+}
+
+function oneOf(name, allowedValues) {
+  const value = env[name]
+  const failures = []
+  if (value && !allowedValues.includes(value)) {
+    failures.push(`${name} must be one of ${allowedValues.join(', ')}.`)
+  }
   return { name, failures }
 }
 

@@ -2,6 +2,8 @@
 
 HopIt's local agent materializes selected cloud codebase state under a HopIt Workspace Root. For accepted project state that selected state can be Main; for day-to-day editing it is usually the user's active change set. The v1 architecture should optimize for OS and editor compatibility: a normal local folder, agent-owned cache metadata, lazy materialization where safe, a safety journal, automatic remote-update delivery, a status API, and an event log. A true OS filesystem mount is future optional research, not the default product path.
 
+Current production-shaped dogfood uses the hosted dashboard at `https://hopit.dev`, packaged `hop-darwin-arm64` runtime from `/Users/robert/Library/Application Support/HopIt/Runtime`, LaunchAgent `com.hopit.agent.hopit`, workspace root `/Users/robert/HopIt Workspaces`, Convex production graph `https://sincere-jaguar-17.convex.cloud`, and private Cloudflare R2 bucket `hopit-blobs` for object blobs. Concrete account ids, DNS records, auth state, env locations, log paths, and temporary/long-term setup notes live in [Personal Production Runbook](personal-production.md).
+
 ## Core Pieces
 
 ### HopIt Workspace Root
@@ -39,6 +41,7 @@ Solid v1 storage requirements:
 - file metadata and file content are separate records
 - file content is addressed by SHA-256/object key and deduplicated where practical
 - the first production provider is Cloudflare R2; Backblaze B2 remains a compatible migration target through the same S3 adapter
+- personal dogfood keeps R2 private, free-only, and lifecycle-limited; public release storage needs a longer-term retention and billing posture
 - writes are per-file mutations, not whole-graph replacement as the concurrency boundary
 - every write carries a base revision or known cloud revision
 - stale base revisions return explicit conflict state instead of silently winning
@@ -46,9 +49,49 @@ Solid v1 storage requirements:
 
 HopIt v1 does not have an ignore-file model. The graph should store visibility metadata for `.private/` paths: those files are snapshotted, synced, and versioned, but visible only to the owner. Files outside `.private/` are governed by the active change set's effective visibility and the codebase's permissions.
 
-Exception: `.private/env/` is local-only until HopIt ships client-side encrypted secret payloads. Routed env files can live there on disk, but the agent must not upload their raw bytes to Convex, R2, B2, or any other provider yet.
+Exception: `.private/env/` is local-only unless object storage and a local decrypt-capable key source are configured. Today that source can be the legacy `HOPIT_CLIENT_ENCRYPTION_KEY` or a `hop keys init-device` keyring that unwraps the user vault key locally. Routed env files can live there on disk, and the agent may upload them only as client-encrypted object blobs; it must never upload their raw bytes to Convex, R2, B2, or any other provider.
 
 Client-side encrypted secrets are a v1 security requirement before secrets become cloud-syncable. Secret payloads should be encrypted on the user's device before upload with keys controlled by the intended user/device set, so raw secret material remains unusable even if the HopIt account, Convex metadata store, object storage bucket, or provider operator is compromised. The cloud may store ciphertext, hashes, metadata, and wrapped keys; it must not be able to decrypt secret values without the user's local key material.
+
+The full privacy model extends this beyond secrets. Private and shared-private
+repos should encrypt normal file bytes too, and should use separate privacy
+zones for repo content, `.private/`, `.private/env/`, Git internals, and public
+published snapshots. See [HopIt Privacy And Encryption Plan](privacy-encryption-plan.md)
+for the full key hierarchy, key-grant workflow, invite-time wrapping, revocation,
+recovery, and private-metadata plan.
+
+### Privacy And Encryption Contract
+
+The agent must eventually treat encryption as part of the file graph contract,
+not as an optional storage adapter detail.
+
+Required agent responsibilities:
+
+- classify every path into a privacy zone before sync
+- choose the correct repo, owner-private, secret-group, or public key policy
+- encrypt private file bytes locally before object upload
+- journal the intended privacy zone and encrypted envelope metadata
+- refuse to upload raw bytes for private or secret zones
+- hydrate only when the local device can unwrap the required keys
+- verify ciphertext hash, envelope AAD, revision id, zone id, and size before
+  writing plaintext to the managed workspace
+- keep `.private/` and `.private/env/` separate from normal collaborator access
+- expose encryption health, key-grant status, and decryption failures through
+  `hop status` and the local service API
+
+Required cloud responsibilities:
+
+- store ciphertext metadata and wrapped keys, never raw private keys
+- enforce membership and role checks before returning encrypted graph metadata
+- enforce key-grant mutations server-side and audit every grant/revoke/rotate
+- reject file mutations whose actor lacks permission for the target zone
+- keep public publish/export paths from including private zones
+
+The current routed-secret encryption path is still a dogfood bridge. The first
+device/user keyring layer exists through `hop keys`, but normal private repo
+bytes still need repo/zone keys, per-file data-encryption keys, invite-time
+grants, recovery import, and revoke/rotate flows before this becomes the final
+model.
 
 ### Main And Active Change Sets
 
@@ -84,7 +127,7 @@ V1 managed-folder adapter:
 - scans the folder for edits
 - translates file creates, writes, and deletes into journal entries
 - marks `.private/` paths as owner-visible without skipping sync or versioning
-- keeps `.private/env/` local-only until client-side encrypted secret sync is implemented
+- keeps `.private/env/` local-only unless client-side encrypted secret sync is configured
 - preserves a "no clone to manage" product model
 
 Future optional mount research:

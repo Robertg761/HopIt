@@ -1,5 +1,7 @@
 # HopIt MVP Plan
 
+Last updated: 2026-06-23
+
 ## Goal
 
 Build the smallest useful version of a cloud-native managed workspace for codebases. The MVP should prove that a developer can choose a HopIt Workspace Root on a device, see cloud codebases as normal local project folders, edit with normal tools, and have those changes become cloud-backed active change-set state automatically.
@@ -13,6 +15,39 @@ HopIt should start as a managed-folder Workspace Root for codebases, not as soci
 The v1 sharing model has two layers. Path visibility is controlled by `.private/`: files under `.private/` are snapshotted, synced, and versioned like any other workspace file, but they are visible only to the owner. Change-set visibility controls whether in-progress work outside `.private/` is private, visible to the team, or opened for review.
 
 Change-set visibility should be configurable as a global user default, a per-codebase override, and a per-change-set override. The effective rule is: per-change-set override, then codebase override, then global user default, then product default. The product default should be conservative: private until shared or opened for review.
+
+The long-term privacy model adds a third layer: encryption grants. Private and
+shared-private repos need client-side encrypted file bytes, device trust, repo
+keys, owner-private keys, secret-group keys, and invite-time key wrapping so
+only intended users/devices can decrypt the right zones. The detailed
+implementation plan is [HopIt Privacy And Encryption Plan](privacy-encryption-plan.md).
+
+## Current Personal Production Baseline
+
+The current real-use setup is a private dogfood baseline, not the final public product:
+
+- Hosted dashboard: Vercel project `robertg761s-projects/hopit`, project id `prj_hO8U1QmyliQjGODz4R339UkgE86S`, at `https://hopit.dev`.
+- Domain and product auth: Porkbun-owned `hopit.dev` points at Vercel; Clerk production DNS, SSL, live Vercel env, Convex issuer, and `HOPIT_AUTH_PROVIDER=clerk` are active, while Basic Auth fallback remains temporarily enabled for recovery.
+- Cloud graph: Convex project `robertgordon761/hopit`, production URL `https://sincere-jaguar-17.convex.cloud`.
+- Object storage: Cloudflare R2 bucket `hopit-blobs`, private public-access-disabled bucket, free-only app budget enabled, 1-day lifecycle rule for current no-charge dogfooding.
+- Local device: packaged `hop-darwin-arm64` runtime installed under `/Users/robert/Library/Application Support/HopIt/Runtime`, supervised by LaunchAgent `com.hopit.agent.hopit`.
+- Local workspace root: `/Users/robert/HopIt Workspaces`, with current codebase folder `/Users/robert/HopIt Workspaces/hopit`.
+- Config source of truth: `.env.local` for this checkout and `/Users/robert/.config/hopit/production.env` for the installed agent. Both contain secrets and must not be committed.
+
+Temporary choices:
+
+- Clerk guards the hosted deployment; Basic Auth fallback remains until production Clerk sign-in/OAuth and owner mapping are smoke-tested safely.
+- R2 is the first low-cost object storage provider and keeps the storage contract S3-compatible for a later Backblaze B2 or larger production-storage migration.
+- `.private/env/` remains local-only unless object storage and a local decrypt-capable key source are configured; when configured through either `HOPIT_CLIENT_ENCRYPTION_KEY` or `hop keys` user-vault bridging, routed secrets sync only as client-encrypted object blobs.
+- The current full-repo literal mirror path can copy `.git/`, binary files, symlinks, empty directories, and generated files, but a full cloud upload of the current repository should not be treated as complete or safe by default.
+- Full private-repo encryption is not complete yet. The current encrypted file
+  support is routed-secret-only, but local device keyrings, encrypted recovery
+  export, trusted-device public-key registration, and first wrapped-key APIs now
+  exist. The next security milestone is repo/privacy-zone keys, per-file private
+  encryption, invite-time grants, independent secret sharing, and complete
+  revocation/rekey support.
+
+The operational source of truth is [Personal Production Runbook](personal-production.md). The implementation ledger is [Progress Tracker](progress.md).
 
 ## First-Version Experience
 
@@ -69,7 +104,24 @@ An addressable cloud state for Main or an active change set at a point in time. 
 
 HopIt does not treat ignore files as a product sharing control. The reserved `.private/` directory is the v1 owner-only workspace area, and it still participates in snapshots, sync, and versioning. Files outside `.private/` can be shared, reviewed, and merged according to the active change set's visibility and codebase permissions.
 
-Temporary safety exception: `.private/env/` is local-only until client-side encrypted secret sync lands. Env files routed there should remain usable by the local owner, but their raw bytes must not be uploaded to Convex, R2, B2, or another cloud provider.
+Temporary safety exception: `.private/env/` is local-only unless client-side encrypted secret sync is configured. Env files routed there should remain usable by the local owner, and their raw bytes must not be uploaded to Convex, R2, B2, or another cloud provider.
+
+### Privacy Zones And Key Grants
+
+Path visibility decides what should be shown to a user. Encryption grants decide
+what a user/device can actually decrypt. Private repos need these to be separate
+contracts:
+
+- normal repo content uses a repo content key
+- `.private/**` uses an owner-private key
+- `.private/env/**` and other secret bundles use separate secret-group keys
+- `.git/**` and converted Git internals are owner-private by default
+- public snapshots exclude private zones and can be published separately
+
+Adding a collaborator should grant the normal repo content key only. Sharing
+secrets or owner-private content requires a separate explicit grant. Revoking
+access removes permissions immediately and rotates keys for future writes when
+strong revocation is needed.
 
 ### Change-Set Visibility
 
@@ -79,7 +131,12 @@ The visibility state for in-progress work outside `.private/`. V1 should support
 
 The durable representation of directories, files, blobs, revisions, visibility metadata, Main state, active change sets, and snapshot metadata. Git can be imported from and exported to this graph, and a snapshot or merged state can be published as a Git commit, but the graph is optimized for live sync, device handoff, review, merge, and on-demand hydration. V1 needs content-addressed blob storage and per-file revision guards so concurrent devices do not rely on whole-graph overwrites.
 
-Before HopIt syncs secrets, the cloud file graph needs client-side encrypted secret entries. The intended user/device set should control the decryption keys, with cloud services storing only ciphertext and wrapped key material. The security target is that secret values remain unreadable even if the user's web account session, the Convex deployment, or the object storage provider is compromised.
+Before HopIt syncs secrets or claims private-repo security, the cloud file graph
+needs client-side encrypted entries and wrapped key material. The intended
+user/device set should control the decryption keys, with cloud services storing
+only ciphertext, encrypted metadata, and wrapped key material. The security
+target is that private content and secret values remain unreadable to Convex,
+object storage, Vercel, and unapproved devices.
 
 ## Workspace Modes
 
@@ -130,7 +187,7 @@ the current v1 proof gate.
 - Object storage: S3-compatible file-byte layer. Cloudflare R2 is the first personal-use provider with free-only budget guards enabled; Backblaze B2 can use the same adapter later by switching provider/env configuration when HopIt is ready for broader release.
 - Local agent: managed-folder process with service/session token support, workspace-root index, hydration cursor, local cache, safety journal, retry queue, service wrapper, and `.private/` visibility handling.
 - Installer/daemon: standalone package with embedded runtime, production env example, user-level launchd/systemd support scripts, manual service controls, supervised `service run`, backup/export runbook, token-rotation runbook, and stricter production config checks.
-- Storage today: Convex separates graph/file metadata from file bytes. The agent can upload regular file bytes to S3-compatible object storage, store only `contentStorage`, provider, key, hash, and size metadata in Convex, and hydrate/refresh/export by downloading and verifying the object hash. Durable history reconstruction and all product write paths still need to move onto the same model.
+- Storage today: Convex separates graph/file metadata from file bytes. The agent can upload regular file bytes to S3-compatible object storage, store only `contentStorage`, provider, key, hash, and size metadata in Convex, and hydrate/refresh/export by downloading and verifying the object hash. Routed secrets can be client-encrypted with the legacy local key or the `hop keys` user-vault bridge. Durable history reconstruction, full private-repo encryption, repo/zone key use, private metadata, and all product write paths still need to move onto the same model.
 - Realtime today: polling through `/api/agent/status`, `remote-update` events emitted by explicit safe refresh, a per-workspace materialization cursor, and an opt-in `--remote-pull` polling loop for personal dogfooding. Solid v1 still needs production-grade automatic remote-update delivery for file changes, collaborator presence, sync status, visibility changes, review events, merge events, and device handoff.
 - Git interoperability: import/export/publish stays as snapshot interoperability, not the everyday sync model.
 
@@ -176,9 +233,12 @@ Current next work:
 
 1. Finish the HopIt Workspace Root product contract: account-wide cloud codebase discovery, richer per-file cache metadata, and automatic lazy materialization policy on top of the current configured-codebase attach, metadata-only, and single-file hydrate primitives.
 2. Broaden object-backed content-addressed storage and per-file revision guards beyond the agent sync path into full history, large files, product write flows, retention, and garbage collection.
-3. Promote the opt-in remote-pull proof into production-grade automatic remote-update delivery so same-owner devices refresh safely without a manual command when the local journal is clean.
-4. Finish scoped device/session auth coverage and continue domain-independent membership, invitation, and permission work behind the Basic Auth production guard.
-5. Deepen the hosted code browser, diff/review/comment/history surface, issue/detail and discussion thread flows, releases, and project boards beyond the first dashboard slices.
+3. Implement the privacy/encryption framework: device trust, user vault keys,
+   repo/private/secret zone keys, encrypted blobs, key grants, invite-time key
+   wrapping, revocation, recovery, and path-metadata privacy.
+4. Promote the opt-in remote-pull proof into production-grade automatic remote-update delivery so same-owner devices refresh safely without a manual command when the local journal is clean.
+5. Finish scoped device/session auth coverage and continue membership, invitation, and permission work behind Clerk auth while Basic Auth fallback remains available until the owner handoff is proven.
+6. Deepen the hosted code browser, diff/review/comment/history surface, issue/detail and discussion thread flows, releases, and project boards beyond the first dashboard slices.
 
 ### Milestone 3: Recovery And Watch Loop
 
@@ -198,6 +258,21 @@ Current next work:
 - Store file graph metadata and revisions.
 - Add per-file mutation APIs with base revision checks and conflict responses.
 - Reconstruct a Main or active change-set snapshot from metadata and blobs.
+
+### Milestone 4.5: Privacy, Encryption, And Key Grants
+
+- Replace the current routed-secret bridge with trusted device keys, user vault
+  keys, repo content keys, owner-private keys, secret-group keys, and wrapped
+  key grants. First device/user-vault/wrapped-key foundations exist; repo and
+  zone keys remain.
+- Encrypt all private/shared-private repo file bytes before object upload.
+- Keep `.private/`, `.private/env/`, secrets, and Git internals in separate
+  privacy zones with separate sharing rules.
+- Grant repo access during invitation acceptance by wrapping repo keys to the
+  recipient's trusted devices, while leaving secrets unshared by default.
+- Add recovery, device approval, revocation, rotation, and audit events.
+- Move private repo metadata toward encrypted paths and keyed path ids before
+  marketing HopIt as fully zero-knowledge.
 
 ### Milestone 5: Two-Session Continuity
 

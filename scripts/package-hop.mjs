@@ -226,10 +226,16 @@ async function writeSupportFiles() {
 HOPIT_AGENT_TOKEN=replace-with-a-long-random-bootstrap-token
 HOPIT_CONVEX_URL=https://your-convex-deployment.convex.cloud
 NEXT_PUBLIC_CONVEX_URL=https://your-convex-deployment.convex.cloud
-HOPIT_AUTH_PROVIDER=basic
+HOPIT_AUTH_PROVIDER=clerk
 HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1
 HOPIT_DASHBOARD_USERNAME=hopit
 HOPIT_DASHBOARD_PASSWORD=replace-with-a-long-random-dashboard-password
+# Clerk production auth for hopit.dev. Keep HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1
+# until production sign-in/OAuth and owner mapping are verified.
+NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_live_replace-with-your-clerk-publishable-key
+CLERK_SECRET_KEY=sk_live_replace-with-your-clerk-secret-key
+CLERK_JWT_ISSUER_DOMAIN=https://clerk.hopit.dev
+HOPIT_OWNER_EMAIL=you@example.com
 HOPIT_AGENT_STATE_ROOT="${envDefaults.stateRoot}"
 HOPIT_WORKSPACE_ROOT="${envDefaults.workspaceRoot}"
 HOPIT_WORKSPACE_INDEX="${envDefaults.workspaceIndex}"
@@ -249,6 +255,14 @@ HOPIT_R2_ACCOUNT_ID=replace-with-cloudflare-account-id
 HOPIT_R2_BUCKET=hopit-blobs
 HOPIT_R2_ACCESS_KEY_ID=replace-with-r2-access-key-id
 HOPIT_R2_SECRET_ACCESS_KEY=replace-with-r2-secret-access-key
+# Local-only secret-sync bridge. Prefer \`hop keys init-device\` for new devices;
+# it can derive this in memory from the local user-vault keyring.
+HOPIT_CLIENT_ENCRYPTION_KEY=base64:replace-with-32-random-bytes
+HOPIT_CLIENT_ENCRYPTION_SCOPE=secrets
+# Optional override. Default: $HOPIT_AGENT_STATE_ROOT/keys/<codebaseId>.device.json
+# HOPIT_DEVICE_KEYS_PATH=$HOME/.config/hopit/keys/hopit.device.json
+# One-shot recovery export only; do not leave this passphrase in persistent env.
+# HOPIT_RECOVERY_PASSPHRASE=replace-only-when-running-hop-keys-export-recovery
 
 # Backblaze B2 migration path:
 # HOPIT_BLOB_PROVIDER=b2

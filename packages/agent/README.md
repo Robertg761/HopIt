@@ -16,7 +16,20 @@ The solid v1 target is a HopIt Workspace Root, such as `~/HopIt Workspaces`, whe
 
 HopIt does not use ignore files as product sharing controls. Files under `.private/` are still snapshotted, synced, and versioned, but owner-visible only. Files outside `.private/` are governed by the active change set's effective visibility and the codebase's permissions.
 
-Temporary secret-safety exception: `.private/env/` is local-only until client-side encrypted secret sync ships. The agent skips routed env files there instead of uploading raw secret bytes to Convex or object storage.
+Temporary secret-safety exception: `.private/env/` is local-only unless client-side encrypted secret sync is configured. With either the legacy local `HOPIT_CLIENT_ENCRYPTION_KEY` or a `hop keys init-device` keyring plus `HOPIT_CLIENT_ENCRYPTION_SCOPE=secrets` and an object-blob provider, routed env files sync as encrypted object blobs. Without a local decrypt-capable key source, production-safe mirror/import leaves those secrets local and skips cloud sync rather than uploading raw secret bytes.
+
+The full security target is broader than this package's current routed-secret
+bridge. Private repos should eventually encrypt all private file bytes, grant
+decryption through trusted device keyrings and wrapped keys, keep `.private/`
+and secret groups on separate keys, and rotate/revoke grants independently. The
+first local device-key layer now exists through `hop keys`, and the end-to-end
+plan lives in [../../docs/privacy-encryption-plan.md](../../docs/privacy-encryption-plan.md).
+The current foundation for that work is `src/crypto.js`, which owns privacy-zone
+classification, legacy secret-envelope encryption/decryption, device key
+generation, wrapped-key helpers, passphrase recovery export, blob wrap/unwrap,
+and envelope validation shared by the CLI and tests.
+
+Current personal production setup details, including the `hopit.dev` domain, active Vercel/Convex/Clerk/R2 accounts, LaunchAgent paths, env file locations, and temporary safety boundaries, live in [../../docs/personal-production.md](../../docs/personal-production.md).
 
 ## Commands
 
@@ -35,6 +48,69 @@ npm run hop -- import --source /path/to/project --force
 The import path skips `.git`, `.hopit-agent`, `node_modules`, build outputs,
 `.env*`, common logs, large files, and binary-ish assets, then hydrates the
 managed workspace from the imported cloud graph.
+
+For a literal local mirror into a managed workspace, use `mirror` instead of
+`import`. The mirror path copies regular files as byte-safe payloads, binary
+files, symlinks, empty directories, generated folders, and `.git/`; routes root
+`.env.local` to `.private/env/repo-root/.env.local`; backs up the destination;
+compares source and destination manifests; and skips cloud sync when the
+storage budget or encrypted-secret prerequisites are not satisfied.
+
+For Git checkout conversion, use:
+
+```bash
+npm run hop -- import-git --source /path/to/repo --production-safe
+```
+
+`import-git` requires a `.git` entry and uses the literal mirror path. With a
+local `HOPIT_CLIENT_ENCRYPTION_KEY`, routed secrets can sync as encrypted object
+blobs; without it, the local mirror completes but cloud sync is skipped.
+
+Object storage maintenance is dry-run by default:
+
+```bash
+npm run hop -- storage status
+npm run hop -- storage gc
+npm run hop -- storage gc --execute
+```
+
+`storage gc` only deletes HopIt-managed, content-addressed object keys that are
+not reachable from the current graph, and `--execute` is required for deletion.
+
+```bash
+npm run hop -- mirror \
+  --profile production \
+  --source /path/to/project \
+  --codebase-id "$HOPIT_CODEBASE_ID" \
+  --storage-budget-bytes "$HOPIT_BLOB_STORAGE_BUDGET_BYTES" \
+  --production-safe
+```
+
+Normal sync skips `.private/env/` unless object storage and the local
+`HOPIT_CLIENT_ENCRYPTION_KEY` or `hop keys` user-vault bridge are configured;
+when configured, those files sync only as client-encrypted object blobs.
+`.git/` entries are owner-private when present in a literal graph, but uploading
+Git internals is still a sensitive operation and should only happen after the
+budget, retention, and data-sensitivity policy is deliberate.
+
+Initialize or inspect the local encryption device keyring:
+
+```bash
+npm run hop -- keys init-device --profile production
+npm run hop -- keys status --profile production
+npm run hop -- keys export-recovery --profile production --output "$HOME/HopIt-Backups/hopit-recovery.json"
+```
+
+By default, keyrings live under
+`$HOPIT_AGENT_STATE_ROOT/keys/<codebaseId>.device.json` with mode `0600`; the
+parent `keys` directory is mode `0700`. The keyring stores device private keys
+locally and stores the user vault key only as a self-wrapped payload. `keys
+status` prints only redacted fingerprints and booleans. `keys export-recovery`
+encrypts the user vault key with a passphrase; set the passphrase only for that
+one command through `--recovery-passphrase` or `HOPIT_RECOVERY_PASSPHRASE`, and
+do not leave it in persistent env files. Use `--skip-cloud-registration` only
+for local fixture tests or offline setup; production devices should register
+their public device key and wrapped user-vault grant in Convex.
 
 Point the same import at the real Convex backend with:
 
@@ -269,6 +345,13 @@ Workspaces` unless `HOPIT_AGENT_STATE_ROOT` or `HOPIT_WORKSPACE_ROOT` overrides
 those defaults. `service start` waits for the local status endpoint and watcher
 to become ready before it reports success, and failed startup removes the pid
 file instead of leaving stale service state behind.
+
+For user-level supervisors such as launchd or systemd, run the foreground
+`hop service run` process. In the current macOS LaunchAgent install, launchd is
+the process owner, so health is verified with `launchctl print` plus
+`curl http://127.0.0.1:4785/status`. `hop service status` remains pid-file
+oriented for the `service start` debug path until direct supervisor-owned
+`service run` installs write a pid record.
 
 Service mode syncs local workspace edits from the current device. It does not
 run an automatic remote-pull loop by default, so the conservative cross-device

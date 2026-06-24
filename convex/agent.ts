@@ -49,6 +49,13 @@ const fileEntryKindValidator = v.union(
   v.literal("directory"),
 );
 const fileEntryEncodingValidator = v.union(v.literal("utf8"), v.literal("base64"));
+const privacyZoneKindValidator = v.union(
+  v.literal("repo-content"),
+  v.literal("owner-private"),
+  v.literal("secrets"),
+  v.literal("git-internals"),
+  v.literal("public-snapshot"),
+);
 const agentSessionCapabilityValidator = v.union(
   v.literal("read"),
   v.literal("write"),
@@ -60,6 +67,30 @@ const agentSessionCapabilityValidator = v.union(
 const agentSessionStatusValidator = v.union(
   v.literal("active"),
   v.literal("revoked"),
+);
+const deviceKeyStatusValidator = v.union(
+  v.literal("pending"),
+  v.literal("trusted"),
+  v.literal("revoked"),
+  v.literal("lost"),
+);
+const wrappedKeyTypeValidator = v.union(
+  v.literal("user-vault"),
+  v.literal("repo-content"),
+  v.literal("owner-private"),
+  v.literal("git-internals"),
+  v.literal("secret-group"),
+  v.literal("file-dek"),
+);
+const wrappedKeyRecipientTypeValidator = v.union(
+  v.literal("device"),
+  v.literal("user"),
+  v.literal("recovery"),
+);
+const wrappedKeyStatusValidator = v.union(
+  v.literal("active"),
+  v.literal("revoked"),
+  v.literal("expired"),
 );
 
 export const getGraph = query({
@@ -584,6 +615,8 @@ export const saveGraph = mutation({
         codebaseId,
         path: filePath,
         ...normalizedFile,
+        privacyZone: privacyZoneForPath(filePath),
+        zoneId: zoneIdForPath(codebaseId, filePath),
       };
       if (hash && normalizedFile.kind !== "directory") {
         fileValue.hash = hash;
@@ -597,6 +630,9 @@ export const saveGraph = mutation({
           fileValue.blobProvider = normalizedFile.blobProvider;
           fileValue.blobKey = normalizedFile.blobKey;
           fileValue.blobHash = normalizedFile.blobHash ?? hash;
+          fileValue.blobSize = normalizedFile.blobSize ?? normalizedFile.size ?? null;
+          fileValue.clientEncryption = normalizedFile.clientEncryption ?? null;
+          fileValue.encryption = normalizedFile.encryption ?? null;
         }
       }
       const existingFile = existingByPath.get(filePath);
@@ -636,6 +672,11 @@ export const applyFileMutation = mutation({
     blobProvider: v.optional(v.union(v.string(), v.null())),
     blobKey: v.optional(v.union(v.string(), v.null())),
     blobHash: v.optional(v.string()),
+    blobSize: v.optional(v.union(v.number(), v.null())),
+    clientEncryption: v.optional(v.union(v.any(), v.null())),
+    encryption: v.optional(v.union(v.any(), v.null())),
+    privacyZone: v.optional(privacyZoneKindValidator),
+    zoneId: v.optional(v.union(v.string(), v.null())),
     hash: v.optional(v.string()),
     size: v.optional(v.number()),
     baseRevision: v.optional(v.union(v.number(), v.null())),
@@ -693,6 +734,11 @@ export const applyFileMutation = mutation({
         blobProvider: args.blobProvider,
         blobKey: args.blobKey,
         blobHash: args.blobHash,
+        blobSize: args.blobSize,
+        clientEncryption: args.clientEncryption,
+        encryption: args.encryption,
+        privacyZone: args.privacyZone,
+        zoneId: args.zoneId,
         hash: args.hash,
         size: args.size,
       }, previousRevision + 1, now);
@@ -730,6 +776,8 @@ export const applyFileMutation = mutation({
           hash: nextFile.hash,
           size: nextFile.size,
           scope,
+          privacyZone: privacyZoneForPath(args.path),
+          zoneId: zoneIdForPath(args.codebaseId, args.path),
           revision: nextRevision,
           updatedAt: now,
         };
@@ -742,6 +790,9 @@ export const applyFileMutation = mutation({
             fileValue.blobProvider = nextFile.blobProvider;
             fileValue.blobKey = nextFile.blobKey;
             fileValue.blobHash = (nextFile as any).blobHash ?? nextFile.hash;
+            fileValue.blobSize = (nextFile as any).blobSize ?? nextFile.size ?? null;
+            fileValue.clientEncryption = (nextFile as any).clientEncryption ?? null;
+            fileValue.encryption = (nextFile as any).encryption ?? null;
           }
         }
 
@@ -907,6 +958,378 @@ export const revokeAgentSession = mutation({
     });
 
     return summarizeAgentSession(await requireAgentSessionById(ctx, session._id));
+  },
+});
+
+export const registerDeviceKey = mutation({
+  args: {
+    codebaseId: v.string(),
+    deviceId: v.string(),
+    displayName: v.optional(v.string()),
+    platform: v.optional(v.string()),
+    encryptionPublicKey: v.string(),
+    encryptionPublicKeyAlgorithm: v.string(),
+    encryptionPublicKeyEncoding: v.string(),
+    signingPublicKey: v.optional(v.string()),
+    signingPublicKeyAlgorithm: v.optional(v.string()),
+    signingPublicKeyEncoding: v.optional(v.string()),
+    token: v.optional(v.string()),
+    sessionToken: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await resolveKeyActor(ctx, args, "read");
+    const now = new Date().toISOString();
+    const deviceId = normalizeKeyEntityId(args.deviceId, "Device id");
+    assertDevicePublicKeyDescriptor(args);
+
+    const existing = await ctx.db
+      .query("deviceKeys")
+      .withIndex("by_device_id", (q: any) => q.eq("deviceId", deviceId))
+      .unique();
+
+    if (existing) {
+      if (existing.userId !== actor.userId) {
+        throw new Error(`Device key ${deviceId} already belongs to another user.`);
+      }
+      if (existing.status === "revoked" || existing.status === "lost") {
+        throw new Error(`Device key ${deviceId} is ${existing.status} and cannot be reused.`);
+      }
+      assertSameDevicePublicKeys(existing, args);
+      await ctx.db.patch(existing._id, {
+        displayName: optionalText(args.displayName) ?? existing.displayName,
+        platform: optionalText(args.platform) ?? existing.platform,
+        status: "trusted",
+        trustedAt: existing.trustedAt ?? now,
+        lastSeenAt: now,
+      });
+      const current = await ctx.db.get(existing._id);
+      return summarizeDeviceKey(current);
+    }
+
+    const deviceKeyId = await ctx.db.insert("deviceKeys", {
+      deviceId,
+      userId: actor.userId,
+      displayName: optionalText(args.displayName) ?? undefined,
+      platform: optionalText(args.platform) ?? undefined,
+      encryptionPublicKey: args.encryptionPublicKey,
+      encryptionPublicKeyAlgorithm: args.encryptionPublicKeyAlgorithm,
+      encryptionPublicKeyEncoding: args.encryptionPublicKeyEncoding,
+      signingPublicKey: optionalText(args.signingPublicKey) ?? undefined,
+      signingPublicKeyAlgorithm: optionalText(args.signingPublicKeyAlgorithm) ?? undefined,
+      signingPublicKeyEncoding: optionalText(args.signingPublicKeyEncoding) ?? undefined,
+      status: "trusted",
+      createdAt: now,
+      trustedAt: now,
+      lastSeenAt: now,
+    });
+    await appendKeyAuditEvent(ctx, {
+      codebaseId: args.codebaseId,
+      actorUserId: actor.userId,
+      actorDeviceId: actor.deviceId,
+      eventType: "device_key.trusted",
+      targetUserId: actor.userId,
+      targetDeviceId: deviceId,
+    });
+
+    return summarizeDeviceKey(await ctx.db.get(deviceKeyId));
+  },
+});
+
+export const listDeviceKeys = query({
+  args: {
+    codebaseId: v.string(),
+    userId: v.optional(v.string()),
+    status: v.optional(deviceKeyStatusValidator),
+    token: v.optional(v.string()),
+    sessionToken: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await resolveKeyActor(ctx, args, "read");
+    const targetUserId = optionalText(args.userId) ?? actor.userId;
+    if (targetUserId !== actor.userId && actor.kind !== "service") {
+      await requireKeyActorCapability(ctx, args.codebaseId, actor, "manage_members");
+    }
+
+    const devices = await ctx.db
+      .query("deviceKeys")
+      .withIndex("by_user", (q: any) => q.eq("userId", targetUserId))
+      .collect();
+
+    return devices
+      .filter((device) => !args.status || device.status === args.status)
+      .sort((a, b) => String(b.lastSeenAt ?? b.createdAt).localeCompare(String(a.lastSeenAt ?? a.createdAt)))
+      .map(summarizeDeviceKey);
+  },
+});
+
+export const ensureUserKeyring = mutation({
+  args: {
+    codebaseId: v.string(),
+    vaultKeyId: v.string(),
+    currentVersion: v.optional(v.number()),
+    recoveryConfigured: v.optional(v.boolean()),
+    token: v.optional(v.string()),
+    sessionToken: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await resolveKeyActor(ctx, args, "read");
+    const now = new Date().toISOString();
+    const vaultKeyId = normalizeKeyEntityId(args.vaultKeyId, "User vault key id");
+    const currentVersion = normalizePositiveInteger(args.currentVersion ?? 1, "User vault key version");
+    const existing = await ctx.db
+      .query("userKeyrings")
+      .withIndex("by_user", (q: any) => q.eq("userId", actor.userId))
+      .unique();
+
+    if (existing) {
+      if (existing.vaultKeyId !== vaultKeyId) {
+        throw new Error(`User ${actor.userId} already has a different vault key.`);
+      }
+      await ctx.db.patch(existing._id, {
+        currentVersion: Math.max(existing.currentVersion ?? 1, currentVersion),
+        recoveryConfigured: existing.recoveryConfigured || args.recoveryConfigured === true,
+        status: "active",
+        updatedAt: now,
+      });
+      return summarizeUserKeyring(await ctx.db.get(existing._id));
+    }
+
+    const id = await ctx.db.insert("userKeyrings", {
+      userId: actor.userId,
+      vaultKeyId,
+      currentVersion,
+      status: "active",
+      recoveryConfigured: args.recoveryConfigured === true,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await appendKeyAuditEvent(ctx, {
+      codebaseId: args.codebaseId,
+      actorUserId: actor.userId,
+      actorDeviceId: actor.deviceId,
+      eventType: "user_keyring.created",
+      targetUserId: actor.userId,
+      keyId: vaultKeyId,
+    });
+
+    return summarizeUserKeyring(await ctx.db.get(id));
+  },
+});
+
+export const ensureCodebaseKeyring = mutation({
+  args: {
+    codebaseId: v.string(),
+    repoContentKeyId: v.string(),
+    ownerPrivateKeyId: v.string(),
+    gitInternalsKeyId: v.string(),
+    defaultSecretKeyId: v.string(),
+    token: v.optional(v.string()),
+    sessionToken: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await resolveKeyActor(ctx, args, "manage_members");
+    const now = new Date().toISOString();
+    const next = {
+      repoContentKeyId: normalizeKeyEntityId(args.repoContentKeyId, "Repo content key id"),
+      ownerPrivateKeyId: normalizeKeyEntityId(args.ownerPrivateKeyId, "Owner private key id"),
+      gitInternalsKeyId: normalizeKeyEntityId(args.gitInternalsKeyId, "Git internals key id"),
+      defaultSecretKeyId: normalizeKeyEntityId(args.defaultSecretKeyId, "Default secret key id"),
+    };
+    const existing = await ctx.db
+      .query("codebaseKeyrings")
+      .withIndex("by_codebase", (q: any) => q.eq("codebaseId", args.codebaseId))
+      .unique();
+
+    if (existing) {
+      assertSameCodebaseKeyring(existing, next);
+      await ctx.db.patch(existing._id, { updatedAt: now });
+      return summarizeCodebaseKeyring(await ctx.db.get(existing._id));
+    }
+
+    const id = await ctx.db.insert("codebaseKeyrings", {
+      codebaseId: args.codebaseId,
+      ...next,
+      createdAt: now,
+      updatedAt: now,
+    });
+    await appendKeyAuditEvent(ctx, {
+      codebaseId: args.codebaseId,
+      actorUserId: actor.userId,
+      actorDeviceId: actor.deviceId,
+      eventType: "codebase_keyring.created",
+    });
+
+    return summarizeCodebaseKeyring(await ctx.db.get(id));
+  },
+});
+
+export const createWrappedKey = mutation({
+  args: {
+    codebaseId: v.string(),
+    wrapId: v.optional(v.string()),
+    wrappedKeyId: v.string(),
+    wrappedKeyType: wrappedKeyTypeValidator,
+    keyVersion: v.number(),
+    recipientType: wrappedKeyRecipientTypeValidator,
+    recipientId: v.string(),
+    zoneId: v.optional(v.string()),
+    wrappingKeyId: v.optional(v.string()),
+    wrappingPublicKeyId: v.optional(v.string()),
+    algorithm: v.string(),
+    ciphertext: v.string(),
+    createdByDeviceId: v.optional(v.string()),
+    expiresAt: v.optional(v.string()),
+    token: v.optional(v.string()),
+    sessionToken: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const capability = capabilityForWrappedKey(args);
+    const actor = await resolveKeyActor(ctx, args, capability);
+    const now = new Date().toISOString();
+    const wrapId = normalizeKeyEntityId(args.wrapId ?? createWrappedKeyId(), "Wrapped key id");
+    const wrappedKeyId = normalizeKeyEntityId(args.wrappedKeyId, "Wrapped key id");
+    const keyVersion = normalizePositiveInteger(args.keyVersion, "Wrapped key version");
+    const recipientId = normalizeKeyEntityId(args.recipientId, "Wrapped key recipient id");
+    const expiresAt = normalizeFutureTimestamp(args.expiresAt, "Wrapped key expiry");
+    assertWrappedKeyEnvelope(args);
+    const recipientDevice = await requireTrustedRecipientDevice(ctx, {
+      recipientType: args.recipientType,
+      recipientId,
+    });
+    if (args.wrappedKeyType === "user-vault" && recipientDevice?.userId !== actor.userId) {
+      throw new Error("User vault keys can only be wrapped to the owner's trusted devices.");
+    }
+    if (
+      recipientDevice &&
+      recipientDevice.userId !== actor.userId &&
+      actor.kind !== "service"
+    ) {
+      await requireKeyActorCapability(ctx, args.codebaseId, actor, "manage_members");
+    }
+
+    const existing = await ctx.db
+      .query("wrappedKeys")
+      .withIndex("by_wrap_id", (q: any) => q.eq("wrapId", wrapId))
+      .unique();
+    const value: any = {
+      wrapId,
+      wrappedKeyId,
+      wrappedKeyType: args.wrappedKeyType,
+      keyVersion,
+      recipientType: args.recipientType,
+      recipientId,
+      codebaseId: args.codebaseId,
+      zoneId: optionalText(args.zoneId) ?? undefined,
+      wrappingKeyId: optionalText(args.wrappingKeyId) ?? undefined,
+      wrappingPublicKeyId: optionalText(args.wrappingPublicKeyId) ?? undefined,
+      algorithm: args.algorithm,
+      ciphertext: args.ciphertext,
+      createdByUserId: actor.userId,
+      createdByDeviceId: optionalText(args.createdByDeviceId) ?? actor.deviceId ?? undefined,
+      createdAt: now,
+      expiresAt,
+      status: "active" as const,
+    };
+
+    if (existing) {
+      assertSameWrappedKey(existing, value);
+      return summarizeWrappedKey(existing);
+    }
+    await assertNoDuplicateActiveWrappedKey(ctx, value);
+
+    const id = await ctx.db.insert("wrappedKeys", value);
+    await appendKeyAuditEvent(ctx, {
+      codebaseId: args.codebaseId,
+      actorUserId: actor.userId,
+      actorDeviceId: actor.deviceId,
+      eventType: "wrapped_key.created",
+      targetUserId: recipientDevice?.userId,
+      targetDeviceId: recipientDevice?.deviceId,
+      zoneId: value.zoneId,
+      keyId: wrappedKeyId,
+      wrapId,
+    });
+
+    return summarizeWrappedKey(await ctx.db.get(id));
+  },
+});
+
+export const listWrappedKeys = query({
+  args: {
+    codebaseId: v.string(),
+    recipientType: v.optional(wrappedKeyRecipientTypeValidator),
+    recipientId: v.optional(v.string()),
+    wrappedKeyId: v.optional(v.string()),
+    zoneId: v.optional(v.string()),
+    status: v.optional(wrappedKeyStatusValidator),
+    includeExpired: v.optional(v.boolean()),
+    token: v.optional(v.string()),
+    sessionToken: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await resolveKeyActor(ctx, args, "read");
+    const actorDeviceIds = actor.kind === "service"
+      ? new Set<string>()
+      : new Set((await ctx.db
+        .query("deviceKeys")
+        .withIndex("by_user", (q: any) => q.eq("userId", actor.userId))
+        .collect()).map((device: any) => device.deviceId));
+    const rows = await ctx.db
+      .query("wrappedKeys")
+      .withIndex("by_codebase", (q: any) => q.eq("codebaseId", args.codebaseId))
+      .collect();
+    const now = Date.now();
+
+    return rows
+      .filter((row) => !args.recipientType || row.recipientType === args.recipientType)
+      .filter((row) => !args.recipientId || row.recipientId === args.recipientId)
+      .filter((row) => !args.wrappedKeyId || row.wrappedKeyId === args.wrappedKeyId)
+      .filter((row) => !args.zoneId || row.zoneId === args.zoneId)
+      .filter((row) => !args.status || effectiveWrappedKeyStatus(row, now) === args.status)
+      .filter((row) => args.includeExpired || effectiveWrappedKeyStatus(row, now) !== "expired")
+      .filter((row) => canActorReadWrappedKey(row, actor, actorDeviceIds))
+      .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)))
+      .map((row) => summarizeWrappedKey({
+        ...row,
+        status: effectiveWrappedKeyStatus(row, now),
+      }));
+  },
+});
+
+export const revokeWrappedKey = mutation({
+  args: {
+    codebaseId: v.string(),
+    wrapId: v.string(),
+    token: v.optional(v.string()),
+    sessionToken: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await resolveKeyActor(ctx, args, "manage_members");
+    const wrapId = normalizeKeyEntityId(args.wrapId, "Wrapped key id");
+    const existing = await ctx.db
+      .query("wrappedKeys")
+      .withIndex("by_wrap_id", (q: any) => q.eq("wrapId", wrapId))
+      .unique();
+    if (!existing || existing.codebaseId !== args.codebaseId) {
+      throw new Error(`Wrapped key ${wrapId} was not found.`);
+    }
+    const now = new Date().toISOString();
+    await ctx.db.patch(existing._id, {
+      status: "revoked",
+      revokedAt: now,
+    });
+    await appendKeyAuditEvent(ctx, {
+      codebaseId: args.codebaseId,
+      actorUserId: actor.userId,
+      actorDeviceId: actor.deviceId,
+      eventType: "wrapped_key.revoked",
+      targetDeviceId: existing.recipientType === "device" ? existing.recipientId : undefined,
+      zoneId: existing.zoneId,
+      keyId: existing.wrappedKeyId,
+      wrapId,
+    });
+
+    return summarizeWrappedKey(await ctx.db.get(existing._id));
   },
 });
 
@@ -1105,6 +1528,321 @@ function normalizeAgentSessionCapabilities(capabilities: string[] | undefined) {
 function agentSessionHasCapability(session: any, capability: string) {
   const capabilities = Array.isArray(session.capabilities) ? session.capabilities : [];
   return capabilities.includes("admin") || capabilities.includes(capability);
+}
+
+async function resolveKeyActor(ctx: any, args: any, capability: Capability) {
+  if (args.sessionToken && args.token === undefined) {
+    const agentCapability = agentCapabilityForCodebaseCapability(capability);
+    const access = await requireAgentAccess(ctx, args.codebaseId, {
+      sessionToken: args.sessionToken,
+    }, agentCapability, { touch: true });
+    return {
+      kind: "agent-session" as const,
+      userId: access.userId,
+      deviceId: access.session?.sessionId,
+      sessionToken: args.sessionToken,
+    };
+  }
+
+  const actor = await resolveReadActor(ctx, args.token);
+  const { codebase } = await requireCodebaseCapabilityForActor(ctx, args.codebaseId, actor, capability);
+  return {
+    kind: actor.kind,
+    userId: actor.kind === "service" ? (codebase.ownerId ?? actor.userId) : actor.userId,
+    deviceId: undefined,
+  };
+}
+
+async function requireKeyActorCapability(ctx: any, codebaseId: string, actor: any, capability: Capability) {
+  if (actor.kind === "agent-session") {
+    await requireAgentAccess(ctx, codebaseId, {
+      sessionToken: actor.sessionToken,
+    }, agentCapabilityForCodebaseCapability(capability), { touch: true });
+    return;
+  }
+  await requireCodebaseCapabilityForActor(ctx, codebaseId, {
+    kind: actor.kind,
+    userId: actor.userId,
+  }, capability);
+}
+
+function agentCapabilityForCodebaseCapability(capability: Capability) {
+  if (capability === "manage_members") return "admin";
+  return capability;
+}
+
+function capabilityForWrappedKey(args: any): Capability {
+  if (args.wrappedKeyType === "user-vault") return "read";
+  if (args.wrappedKeyType === "repo-content") return "write";
+  if (args.wrappedKeyType === "file-dek" && isPrivateZoneId(optionalText(args.zoneId) ?? null)) {
+    return "manage_members";
+  }
+  if (args.wrappedKeyType === "file-dek") return "write";
+  return "manage_members";
+}
+
+function isPrivateZoneId(zoneId: string | null) {
+  if (!zoneId) return false;
+  return (
+    zoneId.endsWith(":owner-private") ||
+    zoneId.endsWith(":secrets") ||
+    zoneId.endsWith(":git-internals") ||
+    zoneId.includes("owner-private") ||
+    zoneId.includes("secrets") ||
+    zoneId.includes("git-internals")
+  );
+}
+
+function normalizeKeyEntityId(value: string, label: string) {
+  const id = optionalText(value);
+  if (!id) throw new Error(`${label} is required.`);
+  if (!/^[A-Za-z0-9_.:-]{3,180}$/.test(id)) {
+    throw new Error(`${label} may only contain letters, numbers, dots, underscores, colons, and dashes.`);
+  }
+  return id;
+}
+
+function normalizePositiveInteger(value: number, label: string) {
+  if (!Number.isInteger(value) || value <= 0) throw new Error(`${label} must be a positive integer.`);
+  return value;
+}
+
+function assertDevicePublicKeyDescriptor(args: any) {
+  if (args.encryptionPublicKeyAlgorithm !== "x25519") {
+    throw new Error("Device encryption public key algorithm must be x25519.");
+  }
+  if (args.encryptionPublicKeyEncoding !== "spki-pem") {
+    throw new Error("Device encryption public key encoding must be spki-pem.");
+  }
+  if (!looksLikePem(args.encryptionPublicKey, "PUBLIC KEY")) {
+    throw new Error("Device encryption public key must be a PEM public key.");
+  }
+  if (args.signingPublicKey !== undefined) {
+    if (args.signingPublicKeyAlgorithm !== "ed25519") {
+      throw new Error("Device signing public key algorithm must be ed25519.");
+    }
+    if (args.signingPublicKeyEncoding !== "spki-pem") {
+      throw new Error("Device signing public key encoding must be spki-pem.");
+    }
+    if (!looksLikePem(args.signingPublicKey, "PUBLIC KEY")) {
+      throw new Error("Device signing public key must be a PEM public key.");
+    }
+  }
+}
+
+function looksLikePem(value: unknown, block: string) {
+  const text = typeof value === "string" ? optionalText(value) : null;
+  return Boolean(text && text.includes(`-----BEGIN ${block}-----`) && text.includes(`-----END ${block}-----`));
+}
+
+function assertSameDevicePublicKeys(existing: any, args: any) {
+  const checks = [
+    ["encryptionPublicKey", args.encryptionPublicKey],
+    ["encryptionPublicKeyAlgorithm", args.encryptionPublicKeyAlgorithm],
+    ["encryptionPublicKeyEncoding", args.encryptionPublicKeyEncoding],
+    ["signingPublicKey", optionalText(args.signingPublicKey) ?? undefined],
+    ["signingPublicKeyAlgorithm", optionalText(args.signingPublicKeyAlgorithm) ?? undefined],
+    ["signingPublicKeyEncoding", optionalText(args.signingPublicKeyEncoding) ?? undefined],
+  ];
+  for (const [field, value] of checks) {
+    if ((existing[field] ?? undefined) !== value) {
+      throw new Error(`Device key ${existing.deviceId} already exists with different public key material.`);
+    }
+  }
+}
+
+function assertSameCodebaseKeyring(existing: any, next: any) {
+  for (const field of ["repoContentKeyId", "ownerPrivateKeyId", "gitInternalsKeyId", "defaultSecretKeyId"]) {
+    if (existing[field] !== next[field]) {
+      throw new Error("Codebase keyring already exists with different key ids. Use a rotation flow instead.");
+    }
+  }
+}
+
+function assertWrappedKeyEnvelope(args: any) {
+  if (args.algorithm !== "x25519-aes-256-gcm" && args.algorithm !== "pbkdf2-sha256-aes-256-gcm") {
+    throw new Error("Wrapped key algorithm is not supported.");
+  }
+  const ciphertext = optionalText(args.ciphertext);
+  if (!ciphertext || ciphertext.length > 256_000) {
+    throw new Error("Wrapped key ciphertext must be a non-empty bounded string.");
+  }
+
+  let envelope: any = null;
+  try {
+    envelope = JSON.parse(ciphertext);
+  } catch {
+    throw new Error("Wrapped key ciphertext must be a serialized JSON envelope.");
+  }
+  if (!envelope || typeof envelope !== "object") {
+    throw new Error("Wrapped key envelope must be an object.");
+  }
+  if (envelope.algorithm !== args.algorithm) {
+    throw new Error("Wrapped key envelope algorithm must match the stored algorithm.");
+  }
+  if (typeof envelope.context === "string") {
+    if (!envelope.context.includes(args.wrappedKeyId) || !envelope.context.includes(args.recipientId)) {
+      throw new Error("Wrapped key envelope context must bind the wrapped key and recipient.");
+    }
+  }
+}
+
+async function requireTrustedRecipientDevice(ctx: any, args: { recipientType: string; recipientId: string }) {
+  if (args.recipientType !== "device") return null;
+  const device = await ctx.db
+    .query("deviceKeys")
+    .withIndex("by_device_id", (q: any) => q.eq("deviceId", args.recipientId))
+    .unique();
+  if (!device) throw new Error(`Recipient device ${args.recipientId} was not found.`);
+  if (device.status !== "trusted") {
+    throw new Error(`Recipient device ${args.recipientId} is not trusted.`);
+  }
+  return device;
+}
+
+async function assertNoDuplicateActiveWrappedKey(ctx: any, value: any) {
+  const existing = await ctx.db
+    .query("wrappedKeys")
+    .withIndex("by_wrapped_key", (q: any) => q.eq("wrappedKeyId", value.wrappedKeyId))
+    .collect();
+  const duplicate = existing.find((row: any) => (
+    row.codebaseId === value.codebaseId &&
+    row.wrappedKeyType === value.wrappedKeyType &&
+    row.keyVersion === value.keyVersion &&
+    row.recipientType === value.recipientType &&
+    row.recipientId === value.recipientId &&
+    effectiveWrappedKeyStatus(row, Date.now()) === "active"
+  ));
+  if (duplicate) {
+    throw new Error(`An active wrapped key already exists for ${value.wrappedKeyId} and recipient ${value.recipientId}.`);
+  }
+}
+
+function assertSameWrappedKey(existing: any, value: any) {
+  if (effectiveWrappedKeyStatus(existing, Date.now()) !== "active") {
+    throw new Error(`Wrapped key ${existing.wrapId} is not active and cannot be reused.`);
+  }
+  for (const field of [
+    "wrappedKeyId",
+    "wrappedKeyType",
+    "keyVersion",
+    "recipientType",
+    "recipientId",
+    "codebaseId",
+    "zoneId",
+    "wrappingKeyId",
+    "wrappingPublicKeyId",
+    "algorithm",
+    "ciphertext",
+  ]) {
+    if ((existing[field] ?? undefined) !== (value[field] ?? undefined)) {
+      throw new Error(`Wrapped key ${existing.wrapId} already exists with different metadata.`);
+    }
+  }
+}
+
+function effectiveWrappedKeyStatus(row: any, now: number) {
+  if (row.status !== "active") return row.status;
+  if (row.expiresAt && Date.parse(row.expiresAt) <= now) return "expired";
+  return "active";
+}
+
+function canActorReadWrappedKey(row: any, actor: any, actorDeviceIds: Set<string>) {
+  if (actor.kind === "service") return true;
+  if (row.createdByUserId === actor.userId) return true;
+  if (row.recipientType === "user" && row.recipientId === actor.userId) return true;
+  if (row.recipientType === "device" && actorDeviceIds.has(row.recipientId)) return true;
+  return false;
+}
+
+async function appendKeyAuditEvent(ctx: any, event: any) {
+  await ctx.db.insert("keyAuditEvents", {
+    eventId: `kae_${randomBase64Url(12)}`,
+    codebaseId: event.codebaseId,
+    actorUserId: event.actorUserId,
+    actorDeviceId: event.actorDeviceId,
+    eventType: event.eventType,
+    targetUserId: event.targetUserId,
+    targetDeviceId: event.targetDeviceId,
+    zoneId: event.zoneId,
+    keyId: event.keyId,
+    wrapId: event.wrapId,
+    createdAt: new Date().toISOString(),
+  });
+}
+
+function summarizeDeviceKey(device: any) {
+  if (!device) return null;
+  return {
+    deviceId: device.deviceId,
+    userId: device.userId,
+    displayName: device.displayName ?? null,
+    platform: device.platform ?? null,
+    encryptionPublicKeyAlgorithm: device.encryptionPublicKeyAlgorithm,
+    encryptionPublicKeyEncoding: device.encryptionPublicKeyEncoding,
+    signingPublicKeyAlgorithm: device.signingPublicKeyAlgorithm ?? null,
+    signingPublicKeyEncoding: device.signingPublicKeyEncoding ?? null,
+    status: device.status,
+    createdAt: device.createdAt,
+    trustedAt: device.trustedAt ?? null,
+    revokedAt: device.revokedAt ?? null,
+    lastSeenAt: device.lastSeenAt ?? null,
+  };
+}
+
+function summarizeUserKeyring(keyring: any) {
+  if (!keyring) return null;
+  return {
+    userId: keyring.userId,
+    vaultKeyId: keyring.vaultKeyId,
+    currentVersion: keyring.currentVersion,
+    status: keyring.status,
+    recoveryConfigured: keyring.recoveryConfigured,
+    createdAt: keyring.createdAt,
+    updatedAt: keyring.updatedAt,
+  };
+}
+
+function summarizeCodebaseKeyring(keyring: any) {
+  if (!keyring) return null;
+  return {
+    codebaseId: keyring.codebaseId,
+    repoContentKeyId: keyring.repoContentKeyId,
+    ownerPrivateKeyId: keyring.ownerPrivateKeyId,
+    gitInternalsKeyId: keyring.gitInternalsKeyId,
+    defaultSecretKeyId: keyring.defaultSecretKeyId,
+    rotationState: keyring.rotationState ?? null,
+    createdAt: keyring.createdAt,
+    updatedAt: keyring.updatedAt,
+  };
+}
+
+function summarizeWrappedKey(wrappedKey: any) {
+  if (!wrappedKey) return null;
+  return {
+    wrapId: wrappedKey.wrapId,
+    wrappedKeyId: wrappedKey.wrappedKeyId,
+    wrappedKeyType: wrappedKey.wrappedKeyType,
+    keyVersion: wrappedKey.keyVersion,
+    recipientType: wrappedKey.recipientType,
+    recipientId: wrappedKey.recipientId,
+    codebaseId: wrappedKey.codebaseId ?? null,
+    zoneId: wrappedKey.zoneId ?? null,
+    wrappingKeyId: wrappedKey.wrappingKeyId ?? null,
+    wrappingPublicKeyId: wrappedKey.wrappingPublicKeyId ?? null,
+    algorithm: wrappedKey.algorithm,
+    ciphertext: wrappedKey.ciphertext,
+    createdByUserId: wrappedKey.createdByUserId ?? null,
+    createdByDeviceId: wrappedKey.createdByDeviceId ?? null,
+    createdAt: wrappedKey.createdAt,
+    expiresAt: wrappedKey.expiresAt ?? null,
+    revokedAt: wrappedKey.revokedAt ?? null,
+    status: wrappedKey.status,
+  };
+}
+
+function createWrappedKeyId() {
+  return `wrap_${randomBase64Url(18)}`;
 }
 
 async function createAgentSessionToken() {
@@ -1322,6 +2060,11 @@ async function readGraph(ctx: { db: DatabaseReader }, codebaseId: string) {
         blobHash: file.blobHash ?? file.hash ?? null,
         blobProvider: file.blobProvider ?? null,
         blobKey: file.blobKey ?? null,
+        blobSize: file.blobSize ?? null,
+        clientEncryption: (file as any).clientEncryption ?? null,
+        encryption: (file as any).encryption ?? null,
+        privacyZone: (file as any).privacyZone ?? privacyZoneForPath(file.path),
+        zoneId: (file as any).zoneId ?? zoneIdForPath(codebaseId, file.path),
         contentStorage: file.contentStorage ?? "inline",
         hash: file.hash ?? null,
         size: file.size ?? byteLength(file.content),
@@ -1399,6 +2142,7 @@ function normalizeFileEntryForStorage(
   const value = file && typeof file === "object" ? { ...(file as Record<string, any>) } : {};
   const kind = value.kind === "symlink" || value.kind === "directory" ? value.kind : "file";
   const scope = scopeForPath(filePath) as "shared" | "owner-private";
+  const privacyZone = privacyZoneForPath(filePath);
 
   if (kind === "directory") {
     return {
@@ -1409,6 +2153,8 @@ function normalizeFileEntryForStorage(
       hash: typeof value.hash === "string" ? value.hash : hashText(`directory\0${filePath}`),
       size: 0,
       scope,
+      privacyZone,
+      zoneId: typeof value.zoneId === "string" ? value.zoneId : null,
       revision: typeof value.revision === "number" ? value.revision : revision,
       updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : now,
     };
@@ -1424,6 +2170,8 @@ function normalizeFileEntryForStorage(
       hash: typeof value.hash === "string" ? value.hash : hashText(`symlink\0${target}`),
       size: typeof value.size === "number" ? value.size : byteLength(target),
       scope,
+      privacyZone,
+      zoneId: typeof value.zoneId === "string" ? value.zoneId : null,
       revision: typeof value.revision === "number" ? value.revision : revision,
       updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : now,
     };
@@ -1447,9 +2195,14 @@ function normalizeFileEntryForStorage(
     blobProvider: contentStorage === "object-blob" && typeof value.blobProvider === "string" ? value.blobProvider : null,
     blobKey: contentStorage === "object-blob" && typeof value.blobKey === "string" ? value.blobKey : null,
     blobHash,
+    blobSize: contentStorage === "object-blob" && typeof value.blobSize === "number" ? value.blobSize : null,
+    clientEncryption: contentStorage === "object-blob" && value.clientEncryption && typeof value.clientEncryption === "object" ? value.clientEncryption : null,
+    encryption: contentStorage === "object-blob" && value.encryption && typeof value.encryption === "object" ? value.encryption : null,
     hash,
     size: typeof value.size === "number" ? value.size : byteLength(content),
     scope,
+    privacyZone,
+    zoneId: typeof value.zoneId === "string" ? value.zoneId : null,
     revision: typeof value.revision === "number" ? value.revision : revision,
     updatedAt: typeof value.updatedAt === "string" ? value.updatedAt : now,
   };
@@ -1523,6 +2276,10 @@ function validateRawGraph(graph: unknown) {
     if (typeof scope === "string" && scope !== scopeForPath(filePath)) {
       throw new Error(`HopIt graph scope mismatch for ${filePath}: expected ${scopeForPath(filePath)}, got ${scope}.`);
     }
+    const privacyZone = (file as { privacyZone?: unknown })?.privacyZone;
+    if (typeof privacyZone === "string" && privacyZone !== privacyZoneForPath(filePath)) {
+      throw new Error(`HopIt graph privacy zone mismatch for ${filePath}: expected ${privacyZoneForPath(filePath)}, got ${privacyZone}.`);
+    }
   }
 }
 
@@ -1587,16 +2344,112 @@ function validateGraph(graph: ReturnType<typeof normalizeGraph>) {
       if (!isNonEmptyString(value.blobProvider)) errors.push(`${filePath}.blobProvider is required for object-backed files.`);
       if (!isNonEmptyString(value.blobKey)) errors.push(`${filePath}.blobKey is required for object-backed files.`);
       if (!isNonEmptyString(value.blobHash ?? value.hash)) errors.push(`${filePath}.blobHash is required for object-backed files.`);
+      errors.push(...validateLegacyClientEncryptionMetadata(value.clientEncryption, `${filePath}.clientEncryption`, value.blobHash, value.blobSize));
+      errors.push(...validateCanonicalEncryptionMetadata(value.encryption, `${filePath}.encryption`, value.blobHash, value.blobSize));
+    }
+    if (kind === "file" && privacyZoneForPath(filePath) === "secrets" && !hasValidEncryptedPayload(value)) {
+      errors.push(`${filePath} must be stored as encrypted object-backed content because it is in the secrets privacy zone.`);
     }
     if (kind === "symlink" && typeof value.target !== "string") errors.push(`${filePath}.target must be a string.`);
     if (kind === "directory" && value.content !== "") errors.push(`${filePath}.content must be empty for directories.`);
     if (value.scope !== scopeForPath(filePath)) errors.push(`${filePath}.scope must be ${scopeForPath(filePath)}.`);
+    if (value.privacyZone !== privacyZoneForPath(filePath)) {
+      errors.push(`${filePath}.privacyZone must be ${privacyZoneForPath(filePath)}.`);
+    }
+    if (value.zoneId !== null && value.zoneId !== zoneIdForPath(graph.codebase.id, filePath)) {
+      errors.push(`${filePath}.zoneId must be ${zoneIdForPath(graph.codebase.id, filePath)}.`);
+    }
     if (!Number.isInteger(value.revision)) errors.push(`${filePath}.revision must be an integer.`);
   }
 
   if (errors.length > 0) {
     throw new Error(`Invalid HopIt cloud graph: ${errors.join(" ")}`);
   }
+}
+
+function privacyZoneForPath(filePath: string) {
+  if (filePath === ".private/env" || filePath.startsWith(".private/env/")) return "secrets";
+  if (filePath === ".git" || filePath.startsWith(".git/")) return "git-internals";
+  if (filePath === ".private" || filePath.startsWith(".private/")) return "owner-private";
+  return "repo-content";
+}
+
+function zoneIdForPath(codebaseId: string, filePath: string) {
+  return `${codebaseId}:${privacyZoneForPath(filePath)}`;
+}
+
+function hasValidEncryptedPayload(value: any) {
+  if (value?.contentStorage !== "object-blob") return false;
+  const hasLegacyEnvelope = value.clientEncryption?.state === "client-encrypted";
+  const hasCanonicalEnvelope = Boolean(value.encryption);
+  return (
+    (hasLegacyEnvelope && validateLegacyClientEncryptionMetadata(value.clientEncryption, "clientEncryption", value.blobHash, value.blobSize).length === 0) ||
+    (hasCanonicalEnvelope && validateCanonicalEncryptionMetadata(value.encryption, "encryption", value.blobHash, value.blobSize).length === 0)
+  );
+}
+
+function validateLegacyClientEncryptionMetadata(
+  metadata: any,
+  label: string,
+  blobHash: unknown,
+  blobSize: unknown,
+) {
+  const errors: string[] = [];
+  if (!metadata || metadata.state !== "client-encrypted") {
+    return errors;
+  }
+  if (metadata.version !== undefined && metadata.version !== 1) errors.push(`${label}.version is invalid.`);
+  if (metadata.algorithm !== "aes-256-gcm") errors.push(`${label}.algorithm is invalid.`);
+  if (metadata.aadVersion !== undefined && metadata.aadVersion !== "hopit-file-v1") errors.push(`${label}.aadVersion is invalid.`);
+  if (!isNonEmptyString(metadata.keyId)) errors.push(`${label}.keyId is required.`);
+  if (!isNonEmptyString(metadata.nonce)) errors.push(`${label}.nonce is required.`);
+  if (!isNonEmptyString(metadata.authTag)) errors.push(`${label}.authTag is required.`);
+  if (!isNonEmptyString(metadata.plaintextHash)) errors.push(`${label}.plaintextHash is required.`);
+  if (typeof metadata.plaintextSize !== "number") errors.push(`${label}.plaintextSize is required.`);
+  if (metadata.zone !== undefined && !isKnownPrivacyZone(metadata.zone)) errors.push(`${label}.zone is invalid.`);
+  if (metadata.ciphertextHash !== undefined && metadata.ciphertextHash !== blobHash) errors.push(`${label}.ciphertextHash must match blobHash.`);
+  if (metadata.ciphertextSize !== undefined && metadata.ciphertextSize !== blobSize) errors.push(`${label}.ciphertextSize must match blobSize.`);
+  return errors;
+}
+
+function validateCanonicalEncryptionMetadata(
+  metadata: any,
+  label: string,
+  blobHash: unknown,
+  blobSize: unknown,
+) {
+  const errors: string[] = [];
+  if (metadata === null || metadata === undefined) return errors;
+  if (!metadata || typeof metadata !== "object") {
+    return [`${label} must be an object.`];
+  }
+  if (metadata.version !== 2) errors.push(`${label}.version must be 2.`);
+  if (metadata.state !== "client-encrypted") errors.push(`${label}.state is invalid.`);
+  if (metadata.algorithm !== "aes-256-gcm" && metadata.algorithm !== "xchacha20-poly1305") errors.push(`${label}.algorithm is invalid.`);
+  if (!isNonEmptyString(metadata.keyId)) errors.push(`${label}.keyId is required.`);
+  if (!isNonEmptyString(metadata.zoneId)) errors.push(`${label}.zoneId is required.`);
+  if (!isNonEmptyString(metadata.fileDekWrapId)) errors.push(`${label}.fileDekWrapId is required.`);
+  if (!isNonEmptyString(metadata.nonce)) errors.push(`${label}.nonce is required.`);
+  if (!isNonEmptyString(metadata.authTag)) errors.push(`${label}.authTag is required.`);
+  if (!isNonEmptyString(metadata.aadVersion)) errors.push(`${label}.aadVersion is required.`);
+  if (!isNonEmptyString(metadata.ciphertextHash)) errors.push(`${label}.ciphertextHash is required.`);
+  if (!Number.isFinite(metadata.ciphertextSize)) errors.push(`${label}.ciphertextSize is required.`);
+  if (!isNonEmptyString(metadata.plaintextFingerprint)) errors.push(`${label}.plaintextFingerprint is required.`);
+  if (!isNonEmptyString(metadata.createdByDeviceId)) errors.push(`${label}.createdByDeviceId is required.`);
+  if (!isNonEmptyString(metadata.createdAt)) errors.push(`${label}.createdAt is required.`);
+  if (metadata.ciphertextHash !== undefined && metadata.ciphertextHash !== blobHash) errors.push(`${label}.ciphertextHash must match blobHash.`);
+  if (metadata.ciphertextSize !== undefined && metadata.ciphertextSize !== blobSize) errors.push(`${label}.ciphertextSize must match blobSize.`);
+  return errors;
+}
+
+function isKnownPrivacyZone(value: unknown) {
+  return (
+    value === "repo-content" ||
+    value === "owner-private" ||
+    value === "secrets" ||
+    value === "git-internals" ||
+    value === "public-snapshot"
+  );
 }
 
 function assertSafeGraphPath(filePath: string) {

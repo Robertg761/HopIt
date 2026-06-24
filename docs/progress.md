@@ -1,6 +1,6 @@
 # HopIt Progress Tracker
 
-Last updated: 2026-06-22
+Last updated: 2026-06-23
 
 This tracker is the working view of what is done, what is in progress, what is next, and what is still deliberately out of scope. The roadmap source remains [MVP Plan](mvp-plan.md), and the agent contract source remains [Local Agent Architecture](agent-architecture.md). This file turns those plans into a practical implementation ledger.
 
@@ -27,18 +27,47 @@ Fixture-backed conflict handling is in place for stale selected-state revisions,
 Current live deployment:
 
 - Vercel project: `robertg761s-projects/hopit`
-- Production URL: `https://hopit-ten.vercel.app`
+- Vercel project id: `prj_hO8U1QmyliQjGODz4R339UkgE86S`
+- Vercel org/team id: `team_x1SyEPIryEghBSkkwoXSTIZ2`
+- Production URL: `https://hopit.dev`
+- Secondary production alias: `https://www.hopit.dev`
+- Current Vercel deployment URL: `https://hopit-nmhao5mbm-robertg761s-projects.vercel.app`
 - Convex project: `robertgordon761/hopit`
 - Production Convex URL: `https://sincere-jaguar-17.convex.cloud`
+- Production Convex site URL: `https://sincere-jaguar-17.convex.site`
+- Cloudflare R2 bucket: `hopit-blobs`, private public-access-disabled object storage for HopIt blobs
+- Clerk production domain: `hopit.dev`, with `https://clerk.hopit.dev` as the verified production issuer/frontend API
+- Local LaunchAgent: `com.hopit.agent.hopit`
+- Production env file: `/Users/robert/.config/hopit/production.env`
+- Production device keyring: `/Users/robert/Library/Application Support/HopIt/Agent/keys/hopit.device.json`
+- Production trusted device id: `dev_70cbc6c5-737c-451e-b39e-db630be69e55`
+- Production user vault key id: `uvk_99d350e5-2b2e-453a-b7a4-739cdb8893a7`
 - Seeded codebase id: `hopit`
 - Seeded graph size: 58 source files
 - Production workspace: `/Users/robert/HopIt Workspaces/hopit`
 
-Domain-dependent production auth work is pinned for now. The current personal production path stays on the generated Vercel URL behind Basic Auth while domain-independent collaboration work continues.
+Domain-dependent production auth setup is no longer pinned. `hopit.dev` is live, Clerk production DNS/SSL are verified, Vercel has the redacted live Clerk env vars, Convex production has `CLERK_JWT_ISSUER_DOMAIN=https://clerk.hopit.dev`, and Vercel Production now uses `HOPIT_AUTH_PROVIDER=clerk`. Basic Auth fallback remains enabled until production sign-in/sign-up/OAuth and owner mapping are smoke-tested.
+
+The current setup source of truth is [Personal Production Runbook](personal-production.md). It records the Vercel, Convex, R2, LaunchAgent, local env, workspace, backup, and export locations without documenting secret values.
+
+The literal mirror path can copy binary files, symlinks, empty directories, generated folders, `.git/`, and route root `.env.local` into `.private/env/repo-root/.env.local`. Routed secrets stay local-only unless object storage and a local decrypt-capable key source are configured; with the current Mac config they can sync as client-encrypted object blobs through the legacy local key or the new `hop keys` user-vault bridge. The full repository should still be converted through `hop import-git --production-safe`/`hop mirror --production-safe` and verified before assuming it is uploaded to R2; the current no-charge R2 posture is still private dogfood, not a public-release storage commitment.
+
+The full privacy/security framework is documented in [HopIt Privacy And
+Encryption Plan](privacy-encryption-plan.md). The current implementation
+encrypts routed secrets with either the legacy local key bridge or the new local
+device keyring user-vault bridge. Device keyrings, passphrase-encrypted recovery
+export, trusted-device public-key registration, user/codebase keyring metadata,
+wrapped-key grants, and key audit events now have first implementations. Full
+private-repo encryption, repo/private/secret zone keys, invite-time key sharing,
+independent secret grants, private path metadata, and complete revocation/rekey
+flows remain next work.
+
+The installed macOS service is owned by LaunchAgent `com.hopit.agent.hopit`; verify it with `launchctl print` plus `curl http://127.0.0.1:4785/status`. `hop service status` is still pid-file oriented and can report `running: false` for the direct launchd-owned `service run` process even when `/status` is healthy.
 
 Current proof commands:
 
 ```bash
+node --test packages/agent/test/agent-cli.test.js
 npm run agent:test
 npm run lint
 set -a; source .env.local; set +a
@@ -48,10 +77,19 @@ npm run package:hop
 
 Current verified result:
 
-- `node --test packages/agent/test/agent-cli.test.js --test-name-pattern "object blob provider"`: passes; the current sandbox run executes the full agent suite with 50 passing tests plus six sandbox-skipped service/remote-pull tests when loopback listening is unavailable.
+- `npm run agent:test`: passes with 75 tests total, 69 passing, 0 failures, and 6 expected loopback service skips in this sandbox; coverage includes object blobs, budget guard, literal mirror secret routing, binary files, symlinks, empty directories, `.git` owner-private scope, bounded dirty detection for large added workspace trees, encrypted routed-secret sync, device keyrings, encrypted recovery export, import-git production-safe behavior, object GC, and regression coverage for sync/refresh/recovery/export.
 - `npm run lint`: passes.
+- `npx tsc --noEmit --pretty false`: passes.
 - `npm run check:production-config`: passes when `.env.local` is loaded.
+- `npm run build`: passes.
 - `npm run package:hop`: builds the current macOS artifact with env/install support files.
+- `npm run convex:deploy:prod`: deployed the current schema/functions to `https://sincere-jaguar-17.convex.cloud` with Convex's existing warning that the project is above Free plan limits.
+- `hop keys status --profile production`: packaged runtime reports the local keyring at `/Users/robert/Library/Application Support/HopIt/Agent/keys/hopit.device.json`, mode `0600`, device key `trusted`, user keyring `active`, and user vault wrap `active`.
+- `launchctl print gui/501/com.hopit.agent.hopit` plus `curl http://127.0.0.1:4785/status`: installed LaunchAgent is running and `/status` reports `ok: true`, `readiness: ready`, and `watch.state: watching`.
+- `vercel alias ls --scope robertg761s-projects`: confirms `hopit.dev` and `www.hopit.dev` point at `hopit-nmhao5mbm-robertg761s-projects.vercel.app`.
+- `curl -I https://hopit.dev/`: returns `HTTP/2 307` to `/sign-in` for signed-out users, confirming Clerk protects the dashboard.
+- Valid Basic Auth fallback credentials still return the dashboard with `200` for emergency recovery.
+- `npx convex env get --prod CLERK_JWT_ISSUER_DOMAIN`: returns `https://clerk.hopit.dev`.
 
 ## Executive Progress
 
@@ -63,9 +101,10 @@ Current verified result:
 | Local managed-folder agent | Done for spike | The agent proves hydration, journaling, sync acknowledgement, recovery, watch startup gating, safe refresh, status, and same-owner continuity. |
 | Lazy materialization | In progress | `workspace files`, `workspace hydrate-file`, and `workspace dehydrate --force` prove metadata listing, single-file hydration, and metadata-only state. V1 still needs automatic policy, editor/tool demand hydration, and broader cache pruning. |
 | Vercel/Convex production baseline | Done for personal dogfood | Vercel hosts the protected dashboard, Convex stores the seeded production graph, and the hosted API reads the graph successfully. |
-| Convex cloud graph | Mostly done | Convex functions persist graph metadata, file rows, object-blob references, fallback `fileBlobs`, and agent events; graph reads, per-file mutations, and event appends support service or scoped session tokens. Full history reconstruction, object retention/garbage collection, and non-agent product write paths remain. |
-| Object blob storage | Mostly done | The agent has an S3-compatible blob provider boundary, Cloudflare R2 env contract, Backblaze B2-compatible migration path, filesystem-backed tests, metadata-only Convex commits, and hash-verified hydrate/refresh/export. The live `hopit-blobs` R2 bucket exists, scoped local R2 credentials are configured for that bucket only, and a HopIt object-blob upload/hydrate/delete smoke test passed. Personal use keeps R2 free-only with an 8 GB cap, public access disabled, a 1-day auto-delete lifecycle rule, and the bucket currently back at `0 B`. Garbage collection remains. |
-| `.private/` model | Done for spike | `.private/` files are synced/versioned and classified as owner-private; they are not ignored or skipped. Temporary exception: `.private/env/` stays local-only until client-side encrypted secret sync exists. |
+| Convex cloud graph | Mostly done | Convex functions persist graph metadata, file rows, object-blob references, fallback `fileBlobs`, and agent events; graph reads, per-file mutations, and event appends support service or scoped session tokens. Full history reconstruction, production retention policy, history-aware garbage collection, and non-agent product write paths remain. |
+| Object blob storage | Mostly done | The agent has an S3-compatible blob provider boundary, Cloudflare R2 env contract, Backblaze B2-compatible migration path, filesystem-backed tests, metadata-only Convex commits, hash-verified hydrate/refresh/export, client-encrypted secret-object metadata, and dry-run-by-default storage GC. The live `hopit-blobs` R2 bucket exists, scoped local R2 credentials are configured for that bucket only, and read/write/hydrate/delete smoke coverage exists. Personal use keeps R2 free-only with an 8 GB cap, public access disabled, and a 1-day auto-delete lifecycle rule. Production retention policy and storage tier decisions remain. |
+| `.private/` model | Done for spike | `.private/` files are synced/versioned and classified as owner-private; they are not ignored or skipped. Routed `.private/env/` secrets remain local-only by default, and sync only when object storage plus the legacy local key or `hop keys` user-vault bridge are configured so raw secret bytes never go to Convex/R2. |
+| Privacy/encryption key model | In progress | The end-to-end plan is documented; agent crypto/envelope helpers now cover file envelopes, X25519 device wraps, user-vault unwrap, and encrypted recovery export; `hop keys` can create/status/export local keyrings; file entries carry derived privacy-zone metadata; Convex has key-management tables and first device/keyring/wrapped-key APIs; plaintext secret-zone files are rejected. Repo/private/secret zone keys, full private-repo file encryption, invite-time grants, independent secret grants, dashboard approval/recovery, revocation/rekey, and private path metadata remain. |
 | Safety journal | Done for spike | Pending, acknowledged, and failed entries are derived from journal/events and exposed through status. |
 | Watch loop | Done for spike | Watch startup runs recovery before hydration, blocks unsafe recovery, and syncs later editor writes. Service start waits for the watcher and status server to be ready before reporting success. |
 | Fixture cloud graph service boundary | Done | Commands now use a fixture-backed service boundary instead of direct command-level cloud JSON access. |
@@ -77,9 +116,9 @@ Current verified result:
 | Review and merge | Done for fixture | Fixture commands open the selected active change set for review, merge it into Main, emit review/merge events, and expose review/merge state through status. |
 | Conflict handling | Done for fixture | Stale selected-state, file/base, and Main revisions become reviewable conflict state. |
 | Packaging | Mostly done | The current packager builds macOS/Linux `x64`/`arm64` tarballs with an embedded Node runtime, verifies help plus production-profile status, ships a production env example, and includes user-level launchd/systemd support scripts. |
-| Installer/daemon hygiene | In progress | Manual service start, supervised `service run`, env-file install templates, production config checks, scoped-token rotation runbook, backup/export roots, and read-only observability endpoints are documented. Native signed installers and tray UX remain. |
+| Installer/daemon hygiene | In progress | Manual service start, supervised `service run`, env-file install templates, production config checks, scoped-token rotation runbook, backup/export roots, read-only observability endpoints, packaged runtime install, and the current macOS LaunchAgent are documented. `hop service status` still needs direct launchd-owned `service run` awareness. Native signed installers, notarization, and tray UX remain. |
 | Git compatibility | In progress | Safe export/publish now creates clean Git repos while omitting `.private/` from publish, but ancestry preservation and remote publishing are still not started. |
-| Real accounts/auth | In progress | The repo now has Clerk sign-in routes, middleware, Convex auth config, `/api/me`, provider-token forwarding, owner email config, and a Convex JWT template; production Clerk rollout is pinned until HopIt has an owned domain, so Basic Auth remains the personal production guard. |
+| Real accounts/auth | In progress | The repo now has Clerk sign-in routes, middleware, Convex auth config, `/api/me`, provider-token forwarding, owner email config, and a Convex JWT template. The production Clerk instance, DNS, SSL, Vercel live env, Convex issuer, and `HOPIT_AUTH_PROVIDER=clerk` are active for `hopit.dev`; Basic Auth fallback remains only until sign-in/OAuth smoke and owner mapping are complete. |
 | Permissions and invitations | In progress | Durable memberships, invitation tables, requester-aware dashboard filtering, owner claim, member management, invite create/accept/revoke UI, and scoped agent-session token groundwork are in place; complete permission coverage remains. |
 | Code browsing/reviews/issues/releases | In progress | The dashboard now has a read-only code-review browser slice plus issue/discussion/release UI backed by Convex; real diffs, review comments, routeable history, project-board UI, and immutable release publishing remain. |
 | Native mount/FUSE/RAM-only cache | Later | Explicitly not the first v1 implementation path. Revisit only after the managed-folder Workspace Root proves core value. |
@@ -581,9 +620,9 @@ Risks:
 
 ## Immediate Next Queue
 
-The next major phase is a solid v1 workspace, not collaboration alone. The v1 sequence is: HopIt Workspace Root and hydration-state contract, object-backed content-addressed storage with per-file revision guards, production-grade automatic remote-update delivery, scoped device/session auth, and GitHub-like web surfaces. The collaboration track is still documented in [GitHub-Lite Collaboration Plan](github-lite-collaboration-plan.md), with sub-plans in [Auth And Collaboration Plan](auth-collaboration-plan.md), [Code Browsing, Review, Comments, And History Plan](review-code-browser-plan.md), and [HopIt Work Items, Projects, Discussions, And Releases Plan](work-items-releases-plan.md).
+The next major phase is a solid v1 workspace, not collaboration alone. The v1 sequence is: HopIt Workspace Root and hydration-state contract, object-backed content-addressed storage with per-file revision guards, privacy/encryption key grants, production-grade automatic remote-update delivery, scoped device/session auth, and GitHub-like web surfaces. The collaboration track is documented in [GitHub-Lite Collaboration Plan](github-lite-collaboration-plan.md), the privacy/security track is documented in [HopIt Privacy And Encryption Plan](privacy-encryption-plan.md), and the sub-plans remain [Auth And Collaboration Plan](auth-collaboration-plan.md), [Code Browsing, Review, Comments, And History Plan](review-code-browser-plan.md), and [HopIt Work Items, Projects, Discussions, And Releases Plan](work-items-releases-plan.md).
 
-Domain-dependent items are pinned until a HopIt domain is purchased: completing Clerk production DNS/issuer setup, rolling out `pk_live_`/`sk_live_`, retiring Basic Auth, and production OAuth/invite smoke tests on an owned domain. Continue building Workspace Root, storage, remote-update, permission checks, collaboration data, code browsing, review/history, issues, projects, discussions, releases, and scoped agent-session tokens behind the current Basic Auth guard.
+Domain-dependent infrastructure is now configured and active: `hopit.dev` routes to Vercel, Clerk production DNS/SSL are verified, Vercel has the redacted `pk_live_`/`sk_live_` values, Convex production trusts `https://clerk.hopit.dev`, and Vercel Production uses `HOPIT_AUTH_PROVIDER=clerk`. The remaining handoff is to smoke-test production sign-in/sign-up/OAuth, map the seeded owner to a real user, then retire Basic Auth fallback. Continue building Workspace Root, storage, remote-update, permission checks, collaboration data, code browsing, review/history, issues, projects, discussions, releases, and scoped agent-session tokens behind Clerk auth.
 
 ### 0. HopIt Workspace Root And Lazy Materialization
 
@@ -629,6 +668,53 @@ Current foundation:
 - Convex can still store fallback `fileBlobs`, but production agent sync can upload file bytes to S3-compatible object storage before committing metadata with revision guards.
 - The local fixture validates graph shape and detects stale selected-state/file/Main revisions.
 - Bootstrap/import can still replace the graph as an admin operation; full history reconstruction, object retention, garbage collection, and non-agent product write paths remain.
+
+### 0.6. Privacy, Encryption, And Key Grants
+
+Status: `In progress`
+
+Definition of done:
+
+- Classify every path into an explicit privacy zone before sync.
+- Encrypt all private/shared-private repo file bytes before object upload.
+- Keep repo content, `.private/`, `.private/env/`, Git internals, and public
+  snapshots under separate keys and sharing rules.
+- Store trusted device public keys, user vault key wraps, repo/private/secret
+  keyrings, wrapped grants, and key audit events.
+- Make invitation acceptance grant normal repo content only, with `.private/`
+  and secrets unshared by default.
+- Add explicit secret-group grant/revoke/rotate flows.
+- Require device approval or recovery before a new device can decrypt existing
+  private data.
+- Move private repos toward encrypted path manifests and keyed path ids.
+
+Current foundation:
+
+- `.private/` is already classified as owner-private.
+- `.private/env/` stays local-only unless encrypted secret sync is configured.
+- The agent can upload routed secrets as client-encrypted object blobs with the
+  current local key bridge.
+- Object blob metadata can carry encrypted-payload metadata.
+- `packages/agent/src/crypto.js` now owns key decoding, privacy-zone
+  classification, AES-GCM envelope encrypt/decrypt, X25519 device key wrapping,
+  user-vault unwrap, PBKDF2 recovery export, blob wrap/unwrap, and envelope
+  validation for the current secret-sync bridge.
+- File metadata now carries a derived `privacyZone`; Convex file rows also carry
+  server-derived `zoneId`.
+- Convex schema includes first-pass `privacyZones`, `deviceKeys`,
+  `userKeyrings`, `codebaseKeyrings`, `wrappedKeys`, and `keyAuditEvents`
+  tables, plus first APIs to register/list device keys, ensure user/codebase
+  keyrings, create/list/revoke wrapped keys, and write key audit events.
+- `hop keys init-device`, `hop keys status`, and `hop keys export-recovery`
+  create a local per-codebase device keyring, keep the user vault key
+  self-wrapped, register public device/wrapped vault metadata in Convex when
+  production credentials are available, and write encrypted recovery exports.
+- Local and Convex graph validation reject plaintext `.private/env/**` file
+  entries unless they are encrypted object-backed content.
+- Requester-aware reads can hide `.private/` from non-owner requesters.
+- Clerk auth, durable memberships, invitations, and scoped agent sessions are
+  available as the permission layer that key grants will build on.
+- The full implementation plan is [HopIt Privacy And Encryption Plan](privacy-encryption-plan.md).
 
 ### 0.75. Automatic Remote-Update Delivery
 
@@ -693,7 +779,7 @@ Current foundation:
 - Convex schema now includes `users` and `authIdentities`.
 - Convex exposes `viewer` and `upsertViewer`.
 - The Next app includes Clerk provider wrapping, sign-in/sign-up pages, protected middleware, `/api/me`, and server-side Clerk-to-Convex token forwarding.
-- The hosted dashboard has provider-auth code, but production Clerk rollout is pinned until HopIt has an owned domain; Basic Auth stays in place for personal production.
+- The hosted dashboard has provider-auth code and production Clerk infrastructure active; Basic Auth fallback stays in place for personal production until sign-in/OAuth and owner mapping are verified.
 
 ### 1.5. Scoped Device And Session Auth
 
@@ -816,10 +902,15 @@ Definition of done:
 
 - No full HopIt Workspace Root contract yet: the root-level codebase/workspace index, configured-codebase discovery, metadata-only attach, hydration cursor, metadata-only state, and single-file hydrate primitive exist, but account-wide discovery, richer per-file lazy states, and automatic lazy materialization policy remain.
 - The current managed folder path still defaults to eager hydrate/refresh for normal operation; metadata-only and single-file hydrate are CLI primitives rather than a complete editor/tool demand-hydration system.
-- Real account provider code exists, but production Clerk DNS/issuer/live-key rollout is pinned until HopIt has an owned domain.
+- Real account provider code exists and production Clerk DNS/issuer/live-key rollout is active, but the live app still needs sign-in/OAuth and owner-mapping smoke tests before Basic Auth fallback is retired.
 - Durable membership, role, invitation, hosted member/invite UI, and scoped agent-session token groundwork exist, but complete permission coverage is not done yet.
+- The full private-repo encryption/key-grant model is documented but not
+  implemented. Current client encryption is limited to routed secrets with a
+  local key bridge; normal private repo files, private paths/metadata, per-device
+  key grants, invite-time wrapping, independent secret grants, revocation, and
+  recovery remain.
 - Convex-backed graph storage and auth-backed user APIs exist for the first collaboration slice, but not every product command has moved to user-scoped auth yet.
-- Convex now separates file metadata from file bytes for agent sync, but durable history reconstruction, object garbage collection, and full product write-path coverage are not complete yet.
+- Convex now separates file metadata from file bytes for agent sync, and the agent has dry-run-by-default orphan object GC. Durable history reconstruction, production retention policy, history-aware garbage collection, and full product write-path coverage are not complete yet.
 - Per-file revision-guarded mutation exists for the agent path, but the full product write surface has not moved to the same model yet.
 - Graph contract validators exist for the agent/Convex graph path, but product-level validation is not yet comprehensive across every future object type.
 - Requester-aware dashboard filtering exists, but the auth-backed collaborator permission model is not enforced across every user-facing write yet.
@@ -828,7 +919,7 @@ Definition of done:
 - No production-grade push/subscription remote-update delivery yet; explicit refresh, per-workspace cursor state, and opt-in polling remote-pull are personal-dogfood proof rather than the final v1 delivery model.
 - Service mode syncs local edits and serves status. Local two-service simulation proves device A edits sync through the watcher, while device B pulls them through explicit safe refresh before switching devices.
 - No conflict resolution UI yet; fixture conflict detection/status exists.
-- No Git history import, ancestry preservation, or remote publish yet.
+- `hop import-git` now provides a production-safe literal Git checkout conversion path for snapshot-style repo migration, including `.git/` as owner-private metadata and encrypted routed secrets. Full Git history import, ancestry preservation, and remote publish are still pending.
 - No local cache pruning yet.
 - No offline mode yet.
 - No signed production installer, notarization, native package manager integration, or tray/menu agent wrapper yet.

@@ -21,6 +21,35 @@ const invitationStatus = v.union(
   v.literal("revoked"),
   v.literal("expired"),
 );
+const privacyZoneKind = v.union(
+  v.literal("repo-content"),
+  v.literal("owner-private"),
+  v.literal("secrets"),
+  v.literal("git-internals"),
+  v.literal("public-snapshot"),
+);
+const privacyZoneStatus = v.union(v.literal("active"), v.literal("rotating"), v.literal("retired"));
+const deviceKeyStatus = v.union(
+  v.literal("pending"),
+  v.literal("trusted"),
+  v.literal("revoked"),
+  v.literal("lost"),
+);
+const keyringStatus = v.union(v.literal("active"), v.literal("disabled"));
+const wrappedKeyType = v.union(
+  v.literal("user-vault"),
+  v.literal("repo-content"),
+  v.literal("owner-private"),
+  v.literal("git-internals"),
+  v.literal("secret-group"),
+  v.literal("file-dek"),
+);
+const wrappedKeyRecipientType = v.union(
+  v.literal("device"),
+  v.literal("user"),
+  v.literal("recovery"),
+);
+const wrappedKeyStatus = v.union(v.literal("active"), v.literal("revoked"), v.literal("expired"));
 
 export default defineSchema({
   users: defineTable({
@@ -122,6 +151,111 @@ export default defineSchema({
     .index("by_user", ["userId"])
     .index("by_codebase", ["codebaseId"]),
 
+  privacyZones: defineTable({
+    zoneId: v.string(),
+    codebaseId: v.string(),
+    kind: privacyZoneKind,
+    pathPrefix: v.string(),
+    matchPriority: v.number(),
+    defaultGrantPolicy: v.string(),
+    currentKeyId: v.optional(v.union(v.string(), v.null())),
+    currentKeyVersion: v.optional(v.union(v.number(), v.null())),
+    status: privacyZoneStatus,
+    createdAt: v.string(),
+    updatedAt: v.string(),
+  })
+    .index("by_zone_id", ["zoneId"])
+    .index("by_codebase", ["codebaseId"])
+    .index("by_codebase_kind", ["codebaseId", "kind"]),
+
+  deviceKeys: defineTable({
+    deviceId: v.string(),
+    userId: v.string(),
+    displayName: v.optional(v.string()),
+    platform: v.optional(v.string()),
+    encryptionPublicKey: v.string(),
+    encryptionPublicKeyAlgorithm: v.string(),
+    encryptionPublicKeyEncoding: v.string(),
+    signingPublicKey: v.optional(v.string()),
+    signingPublicKeyAlgorithm: v.optional(v.string()),
+    signingPublicKeyEncoding: v.optional(v.string()),
+    status: deviceKeyStatus,
+    createdAt: v.string(),
+    trustedAt: v.optional(v.string()),
+    revokedAt: v.optional(v.string()),
+    lastSeenAt: v.optional(v.string()),
+  })
+    .index("by_device_id", ["deviceId"])
+    .index("by_user", ["userId"])
+    .index("by_user_status", ["userId", "status"]),
+
+  userKeyrings: defineTable({
+    userId: v.string(),
+    vaultKeyId: v.string(),
+    currentVersion: v.number(),
+    status: keyringStatus,
+    recoveryConfigured: v.boolean(),
+    createdAt: v.string(),
+    updatedAt: v.string(),
+  }).index("by_user", ["userId"]),
+
+  codebaseKeyrings: defineTable({
+    codebaseId: v.string(),
+    repoContentKeyId: v.string(),
+    ownerPrivateKeyId: v.string(),
+    gitInternalsKeyId: v.string(),
+    defaultSecretKeyId: v.string(),
+    rotationState: v.optional(v.string()),
+    createdAt: v.string(),
+    updatedAt: v.string(),
+  }).index("by_codebase", ["codebaseId"]),
+
+  wrappedKeys: defineTable({
+    wrapId: v.string(),
+    wrappedKeyId: v.string(),
+    wrappedKeyType,
+    keyVersion: v.number(),
+    recipientType: wrappedKeyRecipientType,
+    recipientId: v.string(),
+    codebaseId: v.optional(v.string()),
+    zoneId: v.optional(v.string()),
+    wrappingKeyId: v.optional(v.string()),
+    wrappingPublicKeyId: v.optional(v.string()),
+    algorithm: v.string(),
+    ciphertext: v.string(),
+    createdByUserId: v.optional(v.string()),
+    createdByDeviceId: v.optional(v.string()),
+    createdAt: v.string(),
+    expiresAt: v.optional(v.string()),
+    revokedAt: v.optional(v.string()),
+    status: wrappedKeyStatus,
+  })
+    .index("by_wrap_id", ["wrapId"])
+    .index("by_wrapped_key", ["wrappedKeyId"])
+    .index("by_recipient", ["recipientType", "recipientId"])
+    .index("by_codebase", ["codebaseId"])
+    .index("by_zone", ["zoneId"]),
+
+  keyAuditEvents: defineTable({
+    eventId: v.string(),
+    codebaseId: v.optional(v.string()),
+    actorUserId: v.optional(v.string()),
+    actorDeviceId: v.optional(v.string()),
+    eventType: v.string(),
+    targetUserId: v.optional(v.string()),
+    targetDeviceId: v.optional(v.string()),
+    zoneId: v.optional(v.string()),
+    keyId: v.optional(v.string()),
+    wrapId: v.optional(v.string()),
+    createdAt: v.string(),
+    signature: v.optional(v.string()),
+    signatureAlgorithm: v.optional(v.string()),
+  })
+    .index("by_event_id", ["eventId"])
+    .index("by_codebase", ["codebaseId"])
+    .index("by_actor_user", ["actorUserId"])
+    .index("by_zone", ["zoneId"]),
+
   files: defineTable({
     codebaseId: v.string(),
     path: v.string(),
@@ -132,6 +266,11 @@ export default defineSchema({
     blobHash: v.optional(v.string()),
     blobProvider: v.optional(v.union(v.string(), v.null())),
     blobKey: v.optional(v.union(v.string(), v.null())),
+    blobSize: v.optional(v.union(v.number(), v.null())),
+    clientEncryption: v.optional(v.union(v.any(), v.null())),
+    encryption: v.optional(v.union(v.any(), v.null())),
+    privacyZone: v.optional(privacyZoneKind),
+    zoneId: v.optional(v.union(v.string(), v.null())),
     contentStorage: v.optional(v.string()),
     hash: v.optional(v.string()),
     size: v.optional(v.number()),

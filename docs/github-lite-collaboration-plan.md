@@ -1,21 +1,34 @@
 # GitHub-Lite Collaboration Plan
 
-Last updated: 2026-06-22
+Last updated: 2026-06-23
 
 This is the collaboration sub-plan under the solid v1 dogfood track. HopIt is moving toward a production-shaped Workspace Root first, while also turning the deployed personal dogfood system into a private GitHub-lite collaboration surface. The current foundation is a Vercel-hosted dashboard, a Convex production graph, a production-profile local agent, a seeded `hopit` codebase, and a managed workspace hydrated outside the source checkout.
 
 This plan covers the collaboration goals that sit beside Workspace Root, storage, scoped device auth, and automatic device-handoff work before deeper Git-replacement internals resume.
 
+Private collaboration also depends on the encryption/key-grant model in
+[HopIt Privacy And Encryption Plan](privacy-encryption-plan.md). This document
+tracks the GitHub-like product layer; the privacy plan tracks which users and
+devices can decrypt private repo content, `.private/`, and secrets.
+
 ## Current Baseline
 
-- Production app: `https://hopit-ten.vercel.app`
+- Production app: `https://hopit.dev`
+- Secondary production alias: `https://www.hopit.dev`
+- Vercel project: `robertg761s-projects/hopit`, project id `prj_hO8U1QmyliQjGODz4R339UkgE86S`, org/team id `team_x1SyEPIryEghBSkkwoXSTIZ2`
 - Production Convex graph: `https://sincere-jaguar-17.convex.cloud`
+- Convex project: `robertgordon761/hopit`
+- Object storage: private Cloudflare R2 bucket `hopit-blobs`, currently free-only/lifecycle-limited for personal dogfooding
 - Current codebase id: `hopit`
 - Current production graph contents: 58 source files
 - Current workspace: `/Users/robert/HopIt Workspaces/hopit`
-- Hosted dashboard: code-ready for Clerk product auth, currently still protected by Basic Auth in production while owned-domain-dependent Clerk rollout is pinned; read-only for workspace commands
+- Current local service: LaunchAgent `com.hopit.agent.hopit` running the packaged `hop-darwin-arm64` runtime
+- Current config locations: `.env.local` for this checkout and `/Users/robert/.config/hopit/production.env` for the installed local agent
+- Hosted dashboard: Clerk production auth is active for `hopit.dev`; Basic Auth fallback remains enabled until the sign-in/OAuth smoke test and owner mapping are complete; read-only for workspace commands
 - Local agent: can import, hydrate, sync, refresh, recover, open review, merge, export, publish, validate, and report status
 - Git compatibility: export/publish exists as a local escape hatch; history import, ancestry preservation, and remote publish are still future work
+
+The current setup details live in [Personal Production Runbook](personal-production.md). This document is the implementation plan for the missing GitHub-like product layer, not the operational source of truth.
 
 ## Current Implementation Slice
 
@@ -29,20 +42,29 @@ The first collaboration slice is now started in the repo:
 - The dashboard includes member/invite management plus first issue, discussion, and release workflows.
 - Convex has initial permission-gated tables/functions for issues, projects, discussions, releases, release assets, and per-codebase counters.
 - Convex has scoped agent-session token registration/list/touch/revoke plus token authorization for graph reads, per-file agent writes, and event sync.
+- Secret-only client encryption exists for routed `.private/env/` object blobs,
+  but full private-repo encryption, invite-time key grants, independent secret
+  sharing, path encryption, and revocation/rekey flows are still pending.
 
-This is still a foundation layer, but it is no longer only backend scaffolding. The repo has Clerk-backed sign-in routes, auth middleware, Convex auth config, member/invite UI, work-item UI, owner email config, scoped agent-session token groundwork, and a Convex JWT template. Clerk production rollout and retiring Basic Auth are intentionally deferred until HopIt has an owned domain. Real diffs, inline review comments, routeable history, project-board UI, immutable release publishing, and complete permission coverage remain pending.
+This is still a foundation layer, but it is no longer only backend scaffolding. The repo has Clerk-backed sign-in routes, auth middleware, Convex auth config, member/invite UI, work-item UI, owner email config, scoped agent-session token groundwork, and a Convex JWT template. Clerk production DNS, SSL, live Vercel env, Convex issuer, and `HOPIT_AUTH_PROVIDER=clerk` are active for `hopit.dev`; retiring Basic Auth fallback is intentionally deferred until production sign-in/OAuth and owner mapping are verified. Real diffs, inline review comments, routeable history, project-board UI, immutable release publishing, and complete permission coverage remain pending.
 
 ## Phase Principle
 
 Build identity and collaboration as first-class product contracts, not as dashboard-only decoration. Every object below must eventually be permission checked server-side and tied to durable codebase, change-set, Main, and user identities.
 
-While domain-dependent work is pinned, keep the hosted deployment private behind Basic Auth and continue with domain-independent product work: permissions, role checks, code browsing, reviews, issues, discussions, releases, and local-agent/service-token hardening.
+For private repos, permission checks must be paired with encryption grants.
+Membership can make a user eligible to read something, but only wrapped keys
+should make that content decryptable on a trusted device.
+
+Until the owner handoff is proven, keep Basic Auth fallback available and continue product work behind Clerk: permissions, role checks, code browsing, reviews, issues, discussions, releases, and local-agent/service-token hardening.
 
 ## Goal 1: Real Accounts And Auth
 
 ### Product Outcome
 
 Users sign in as real HopIt users. The hosted dashboard no longer depends on shared Basic Auth as the product identity layer. Every server read/write can resolve the requester to a durable user id.
+
+Current status: code support and production Clerk infrastructure are active, but Basic Auth fallback remains enabled until the production sign-in/OAuth path and owner mapping are smoke-tested.
 
 ### Implementation Plan
 
@@ -84,6 +106,50 @@ Codebases have owners and members. Invitations can bring a user into a codebase 
 - Invited users can accept an invite and become members.
 - Role checks are enforced server-side, not only hidden in UI.
 - `.private/` remains owner-only even for maintainers/developers unless a future explicit sharing model changes that.
+
+## Goal 2.5: Private Repo Encryption And Secret Grants
+
+### Product Outcome
+
+A private or shared-private HopIt repo can be uploaded completely, including
+files that Git would ignore, while only intended users/devices can decrypt the
+right content. Normal collaborator access grants normal repo files only.
+`.private/`, `.private/env/`, and secret groups stay owner-private unless the
+owner explicitly shares them.
+
+Current status: routed secrets can sync as encrypted object blobs with the
+legacy local key or the new `hop keys` user-vault bridge. Trusted device
+keyrings, recovery export, and first wrapped-key APIs exist. Full repo-wide
+private encryption, repo/zone keys, invite-time grants, independent secret
+grants, and revoke/rotate flows are not implemented yet.
+
+### Implementation Plan
+
+1. Add privacy zones for repo content, owner-private content, secrets, Git
+   internals, and public snapshots.
+2. Add trusted device public keys, user vault keys, codebase keyrings, and
+   wrapped key grants. First local/Convex foundations exist; repo/zone key use
+   and product sharing flows remain.
+3. Extend the object-blob pipeline so all private repo file bytes are encrypted
+   locally before upload.
+4. Make invitation acceptance grant the normal repo content key only, and only
+   after a recipient trusted device is available.
+5. Add explicit secret-group grants for `.private/env/**` and other configured
+   secret prefixes.
+6. Add revoke, rotate, recovery, and audit events for devices, members, repo
+   keys, private-zone keys, and secret keys.
+7. Move private repo metadata toward encrypted path manifests and keyed path ids.
+
+### Definition Of Done
+
+- Private repo normal files are ciphertext in object storage.
+- Invited members can decrypt only granted repo zones.
+- `.private/` and secrets remain unavailable to collaborators by default.
+- Secret sharing is separate, explicit, audited, and revocable for future
+  updates.
+- New devices cannot decrypt existing private content until approved or
+  recovered.
+- Public export/publish cannot include private zones.
 
 ## Goal 3: Web Code Browsing
 
@@ -189,5 +255,5 @@ HopIt can name accepted Main states as releases and attach notes/artifacts later
 - Unit tests for permission helpers and schema validators.
 - Convex function tests or CLI smoke checks for seeded data and query/mutation behavior.
 - Browser smoke for auth redirect, code browsing, invite acceptance, review open/comment/merge, issue creation, and release creation.
-- Production smoke on `https://hopit-ten.vercel.app` after each deployment.
+- Production smoke on `https://hopit.dev` after each deployment.
 - Explicit negative tests for non-member reads, viewer write attempts, expired invites, `.private/` access, and merge without permission.

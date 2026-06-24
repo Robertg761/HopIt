@@ -1,6 +1,6 @@
 # HopIt Work Items, Projects, Discussions, And Releases Plan
 
-Last updated: 2026-06-22
+Last updated: 2026-06-23
 
 ## Purpose
 
@@ -16,6 +16,8 @@ The goal is not to turn HopIt into a social Git host. HopIt should keep its curr
 - Git import/export/publish as compatibility, not the everyday workflow
 
 The collaboration layer should add the missing project-management objects developers expect around that core: issues, project boards, discussions, and releases.
+
+Current live setup note: first issue, discussion, release, and member/invite slices exist behind the Clerk-protected Vercel deployment at `https://hopit.dev`. Basic Auth fallback remains enabled until sign-in/OAuth and owner-mapping smoke tests are complete. Project boards, richer release artifacts, durable review linkage, notifications, and complete permission coverage remain future work. Operational setup details, active accounts, and config locations are centralized in [Personal Production Runbook](personal-production.md).
 
 ## Product Principles
 
@@ -283,7 +285,7 @@ smaller than a full GitHub replacement:
 
 ## Risks And Open Decisions
 
-- Production Clerk rollout is still domain-deferred; the current hosted deployment can expose these functions privately behind Basic Auth while permission coverage continues.
+- Production Clerk infrastructure is active, but Basic Auth fallback remains enabled until sign-in/OAuth and owner mapping are smoke-tested.
 - Per-codebase counters need to remain mutation-owned to avoid duplicate public numbers.
 - Project item ordering needs a real reorder strategy before a UI board depends on it.
 - Release targets need durable snapshot and merge-record ids before releases become authoritative.
