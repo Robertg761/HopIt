@@ -95,7 +95,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       <motion.button
         type="button"
         className={cn(
-          'fixed inset-0 z-40 bg-ink/55 backdrop-blur-md transition-opacity lg:hidden',
+          'fixed inset-0 z-40 bg-ink/55 backdrop-blur-md transition-opacity',
           open ? 'opacity-100' : 'pointer-events-none opacity-0',
         )}
         onClick={onClose}
@@ -103,7 +103,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
       />
       <aside
         className={cn(
-          'workspace-grid fixed inset-y-0 left-0 z-50 flex w-[292px] flex-col border-r border-white/10 bg-ink text-ink-foreground shadow-2xl transition-transform duration-300 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 lg:shadow-none',
+          'workspace-grid fixed inset-y-0 left-0 z-50 flex w-[292px] flex-col border-r border-white/10 bg-ink text-ink-foreground shadow-2xl transition-transform duration-300',
           open ? 'translate-x-0' : '-translate-x-full',
         )}
         aria-label="Primary navigation"
@@ -121,7 +121,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           </div>
           <button
             onClick={onClose}
-            className="rounded-md p-1.5 text-ink-foreground/60 hover:bg-white/10 hover:text-ink-foreground lg:hidden"
+            className="rounded-md p-1.5 text-ink-foreground/60 hover:bg-white/10 hover:text-ink-foreground"
             aria-label="Close sidebar"
           >
             <X className="size-4" />

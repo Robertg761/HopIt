@@ -48,7 +48,7 @@ export function Header({ onOpenSidebar }: HeaderProps) {
         {/* Mobile menu */}
         <button
           onClick={onOpenSidebar}
-          className="rounded-md p-2 hover:bg-muted lg:hidden"
+          className="rounded-md p-2 hover:bg-muted"
           aria-label="Open sidebar"
         >
           <Menu className="size-5" />
