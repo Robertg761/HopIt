@@ -4,10 +4,6 @@ import * as React from 'react'
 import { motion } from 'framer-motion'
 import {
   Bell,
-  Clock,
-  Code2,
-  Folder,
-  Home,
   Search,
   Settings,
   Users,
@@ -15,21 +11,12 @@ import {
 } from 'lucide-react'
 import { HopItLogo } from './logo'
 import { cn } from '@/lib/utils'
-
-type NavItem = {
-  id: string
-  label: string
-  icon: React.ComponentType<{ className?: string }>
-  badge?: string
-  active?: boolean
-}
-
-const navItems: NavItem[] = [
-  { id: 'home', label: 'Home', icon: Home, active: true },
-  { id: 'codebases', label: 'Codebases', icon: Code2 },
-  { id: 'files', label: 'Files', icon: Folder },
-  { id: 'activity', label: 'Activity', icon: Clock },
-]
+import {
+  dashboardSections,
+  navigateToSection,
+  sectionHref,
+  type DashboardSection,
+} from '@/components/hopit/navigation'
 
 type SidebarProps = {
   open: boolean
@@ -37,20 +24,84 @@ type SidebarProps = {
 }
 
 export function Sidebar({ open, onClose }: SidebarProps) {
+  const [activeSection, setActiveSection] = React.useState(dashboardSections[0].id)
+  const [query, setQuery] = React.useState('')
+  const visibleSections = React.useMemo(() => {
+    const normalized = query.trim().toLowerCase()
+    if (!normalized) return dashboardSections
+
+    return dashboardSections.filter((item) =>
+      [item.label, item.description, ...item.keywords]
+        .join(' ')
+        .toLowerCase()
+        .includes(normalized),
+    )
+  }, [query])
+
+  React.useEffect(() => {
+    const sections = dashboardSections
+      .map((item) => document.getElementById(item.id))
+      .filter(Boolean) as HTMLElement[]
+
+    if (sections.length === 0) return
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries
+          .filter((entry) => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0]
+
+        if (visible?.target.id) setActiveSection(visible.target.id)
+      },
+      {
+        rootMargin: '-18% 0px -68% 0px',
+        threshold: [0.1, 0.25, 0.5],
+      },
+    )
+
+    sections.forEach((section) => observer.observe(section))
+
+    return () => observer.disconnect()
+  }, [])
+
+  React.useEffect(() => {
+    if (!open) return
+
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === 'Escape') onClose()
+    }
+
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [onClose, open])
+
+  function handleNavigate(id: string) {
+    setActiveSection(id)
+    navigateToSection(id)
+    onClose()
+  }
+
   return (
     <>
       {/* Mobile backdrop */}
-      <div
+      <motion.button
+        type="button"
         className={cn(
-          'fixed inset-0 z-40 bg-black/50 backdrop-blur-sm transition-opacity lg:hidden',
+          'fixed inset-0 z-40 bg-ink/55 backdrop-blur-md transition-opacity lg:hidden',
           open ? 'opacity-100' : 'pointer-events-none opacity-0',
         )}
         onClick={onClose}
-        aria-hidden="true"
+        aria-label="Close sidebar overlay"
       />
       <aside
         className={cn(
-          'fixed inset-y-0 left-0 z-50 flex w-[264px] flex-col bg-ink text-ink-foreground transition-transform duration-300 lg:static lg:translate-x-0',
+          'fixed inset-y-0 left-0 z-50 flex w-[284px] flex-col border-r border-white/10 bg-ink text-ink-foreground shadow-2xl transition-transform duration-300 lg:sticky lg:top-0 lg:h-screen lg:translate-x-0 lg:shadow-none',
           open ? 'translate-x-0' : '-translate-x-full',
         )}
         aria-label="Primary navigation"
@@ -68,7 +119,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         </div>
 
         {/* Tagline */}
-        <p className="px-5 -mt-1 pb-4 text-[11px] uppercase tracking-[0.18em] text-ink-foreground/40">
+        <p className="px-5 -mt-1 pb-4 text-[11px] uppercase text-ink-foreground/40">
           Code &amp; files. Together.
         </p>
 
@@ -77,28 +128,32 @@ export function Sidebar({ open, onClose }: SidebarProps) {
           <div className="flex items-center gap-2 rounded-lg bg-white/5 px-3 py-2 text-sm text-ink-foreground/60 ring-1 ring-inset ring-white/10">
             <Search className="size-4 shrink-0" />
             <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
               type="search"
-              placeholder="Jump to codebase, file…"
+              placeholder="Filter sections"
               className="w-full bg-transparent text-ink-foreground placeholder:text-ink-foreground/40 focus:outline-none"
-              aria-label="Search codebases and files"
+              aria-label="Filter navigation sections"
             />
-            <kbd className="hidden shrink-0 rounded border border-white/10 bg-white/5 px-1.5 py-0.5 font-mono text-[10px] text-ink-foreground/50 sm:inline">
-              ⌘K
-            </kbd>
           </div>
         </div>
 
         {/* Primary nav */}
         <nav className="px-3 space-y-0.5">
-          {navItems.map((item) => (
-            <NavButton key={item.id} item={item} />
+          {visibleSections.map((item) => (
+            <NavButton
+              key={item.id}
+              item={item}
+              active={activeSection === item.id}
+              onNavigate={() => handleNavigate(item.id)}
+            />
           ))}
         </nav>
 
         {/* Collaborators */}
         <div className="mt-auto px-5 py-4">
           <div className="mb-2 flex items-center justify-between">
-            <p className="text-[11px] uppercase tracking-[0.18em] text-ink-foreground/40">
+            <p className="text-[11px] uppercase text-ink-foreground/40">
               Online
             </p>
             <Users className="size-3.5 text-ink-foreground/40" />
@@ -113,52 +168,64 @@ export function Sidebar({ open, onClose }: SidebarProps) {
 
         {/* Bottom bar */}
         <div className="flex items-center justify-between border-t border-white/5 px-5 py-3">
-          <button
+          <a
+            href={sectionHref('activity')}
+            onClick={(event) => {
+              event.preventDefault()
+              handleNavigate('activity')
+            }}
             className="flex items-center gap-2 text-xs text-ink-foreground/50 hover:text-ink-foreground/80"
             aria-label="Notifications"
           >
             <Bell className="size-3.5" />
             <span>Notifications</span>
-          </button>
-          <button
+          </a>
+          <a
+            href={sectionHref('status')}
+            onClick={(event) => {
+              event.preventDefault()
+              handleNavigate('status')
+            }}
             className="text-ink-foreground/50 hover:text-ink-foreground/80"
             aria-label="Settings"
           >
             <Settings className="size-3.5" />
-          </button>
+          </a>
         </div>
       </aside>
     </>
   )
 }
 
-function NavButton({ item }: { item: NavItem }) {
+function NavButton({
+  item,
+  active,
+  onNavigate,
+}: {
+  item: DashboardSection
+  active: boolean
+  onNavigate: () => void
+}) {
   const Icon = item.icon
   return (
-    <motion.button
+    <motion.a
+      href={sectionHref(item.id)}
+      onClick={(event) => {
+        event.preventDefault()
+        onNavigate()
+      }}
+      aria-current={active ? 'page' : undefined}
       whileHover={{ x: 2 }}
       transition={{ type: 'spring', stiffness: 400, damping: 25 }}
       className={cn(
         'group flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm transition-colors',
-        item.active
+        active
           ? 'bg-hop/15 text-hop ring-1 ring-inset ring-hop/30'
           : 'text-ink-foreground/70 hover:bg-white/5 hover:text-ink-foreground',
       )}
     >
       <Icon className="size-4 shrink-0" />
       <span className="flex-1 text-left">{item.label}</span>
-      {item.badge && (
-        <span
-          className={cn(
-            'rounded-full px-1.5 py-0.5 text-[10px] font-medium',
-            item.active
-              ? 'bg-hop/20 text-hop'
-              : 'bg-white/10 text-ink-foreground/50',
-          )}
-        >
-          {item.badge}
-        </span>
-      )}
-    </motion.button>
+    </motion.a>
   )
 }

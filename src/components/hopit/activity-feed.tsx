@@ -73,7 +73,7 @@ export function ActivityFeed({ status }: ActivityFeedProps) {
       <div className="flex flex-col gap-3 border-b border-border/60 p-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-2">
-            <h2 className="text-base font-semibold tracking-tight">Activity</h2>
+            <h2 className="text-base font-semibold">Activity</h2>
             <span className="flex items-center gap-1 rounded-full bg-hop/10 px-1.5 py-0.5 text-[10px] font-medium text-hop">
               <span className="size-1.5 rounded-full bg-hop live-pulse" />
               Live
@@ -164,8 +164,11 @@ export function ActivityFeed({ status }: ActivityFeedProps) {
       </ol>
 
       <div className="border-t border-border/60 p-3 text-center">
-        <button className="text-xs text-muted-foreground hover:text-foreground">
-          Load older activity →
+        <button
+          disabled
+          className="text-xs text-muted-foreground/70 disabled:cursor-not-allowed"
+        >
+          No older activity loaded
         </button>
       </div>
     </section>

@@ -2,7 +2,7 @@
 
 This runbook is the first real-use path for one-person HopIt dogfooding. It keeps the local JSON graph as a development fallback, but treats Convex as the canonical cloud graph and Vercel as the protected hosted dashboard. Hosted workspace commands are disabled; hosted collaboration/member/work-item mutations exist in the codebase behind Clerk product auth, with Basic Auth kept only as a temporary emergency fallback.
 
-Last updated: 2026-06-23
+Last updated: 2026-06-24
 
 ## Current Deployment
 
@@ -20,6 +20,8 @@ Last updated: 2026-06-23
 - Clerk account portal: `https://accounts.hopit.dev`
 - Clerk DNS status: verified
 - Clerk SSL status: issued
+- Google OAuth provider: enabled in Clerk production through Google Cloud project `hopit-auth-prod-rg`
+- Google Auth Platform status: Testing, with `robertgordon761@gmail.com` added as the current test user
 - Convex project: `robertgordon761/hopit`
 - Convex dev URL: `https://vibrant-ermine-445.convex.cloud`
 - Convex production URL: `https://sincere-jaguar-17.convex.cloud`
@@ -43,6 +45,7 @@ These are the accounts and source-of-truth locations for the current personal pr
 | Domain and DNS | Porkbun domain `hopit.dev` | Porkbun dashboard/API DNS records | Owns the production hostname and routes app plus Clerk subdomains without using temporary generated URLs as the canonical address. |
 | Hosted dashboard | Vercel project `robertg761s-projects/hopit` | `.vercel/project.json`, Vercel project env, Vercel dashboard | Hosts the private Next.js dashboard on a production-shaped deployment at `hopit.dev`. |
 | Product auth | Clerk production instance through Vercel Marketplace app `hopit-auth` | Clerk dashboard, Vercel Marketplace integration, Vercel env, Convex `CLERK_JWT_ISSUER_DOMAIN` | Provides real account sign-in for hosted HopIt. Basic Auth remains enabled only as a temporary recovery fallback. |
+| Google OAuth | Google Cloud project `HopIt` / `hopit-auth-prod-rg` under `robertgordon761@gmail.com` | Google Cloud Console Auth Platform, Clerk social connection settings, macOS Keychain credential entries | Enables Sign in with Google for the production Clerk instance without putting OAuth secrets in Vercel, Convex, docs, or repo files. |
 | Cloud graph | Convex project `robertgordon761/hopit` | Convex dashboard, `convex/`, `NEXT_PUBLIC_CONVEX_URL`, `HOPIT_CONVEX_URL` | Stores graph metadata, memberships, invitations, work items, releases, sessions, and events. |
 | Object blobs | Cloudflare R2 bucket `hopit-blobs` | Cloudflare dashboard, `HOPIT_R2_*`, `HOPIT_BLOB_*` | Stores file bytes through an S3-compatible adapter so Convex is not used for large repository content. |
 | Local agent service | macOS LaunchAgent `com.hopit.agent.hopit` | `/Users/robert/Library/LaunchAgents/com.hopit.agent.hopit.plist` | Keeps the production-profile watcher/status service running outside the source checkout. |
@@ -64,9 +67,11 @@ This is intentionally close to the future installed-device model: packaged binar
 ## What Is Temporary
 
 - Clerk is now the primary hosted auth provider on `hopit.dev`.
-- Basic Auth fallback is still enabled as a temporary recovery path. It is not the long-term product auth model and should be removed after owner sign-in/OAuth and owner mapping are verified.
-- Clerk production auth is configured for `hopit.dev` with live Vercel env vars, a verified Clerk frontend API DNS target, a verified account portal DNS target, and issued SSL certificates. The remaining temporary step is the deliberate handoff cleanup: verify production sign-in/sign-up and any enabled OAuth provider credentials, claim or migrate the owner identity, then remove Basic Auth fallback.
+- Basic Auth fallback is still enabled as a temporary recovery path. It is not the long-term product auth model and should be removed after owner sign-in and owner mapping are verified.
+- Clerk production auth is configured for `hopit.dev` with live Vercel env vars, a verified Clerk frontend API DNS target, a verified account portal DNS target, issued SSL certificates, and production Google OAuth. The remaining temporary step is the deliberate handoff cleanup: complete a real owner sign-in/sign-up, claim or migrate the owner identity, then remove Basic Auth fallback.
+- Google Auth Platform remains in Testing mode for personal dogfooding. Before public release, add public privacy policy and terms pages for `hopit.dev`, publish/verify the Google OAuth app, and re-check the OAuth consent screen branding/scopes.
 - Cloudflare R2 is the first object-storage provider because it has a useful free tier and an S3-compatible API. Personal use keeps `HOPIT_BLOB_FREE_ONLY=1`, an 8 GB app budget, public access disabled, and a 1-day auto-delete lifecycle. A public release should move to a production storage posture before storing real customer data long term.
+- Convex may continue to show a Free-plan warning for the current billing period because past database bandwidth is already over the free threshold. The root cause was repeated full `agent.getGraph` reads from remote-pull polling, not object storage. Production now has `agent.getGraphHead`, and the installed agent checks that codebase-level cursor before any full graph read.
 - Backblaze B2 remains the planned compatible migration path, but it is not active in the current personal setup.
 - `.private/env/` is local-only unless the local client encryption key is configured. Secrets routed there are usable on this Mac and can sync as client-encrypted object blobs with the current key; without that key, production-safe import/mirror skips cloud sync.
 - The current local workspace is a managed folder, not a native filesystem provider. Native mount/FUSE/RAM-only experiments remain later research.
@@ -264,6 +269,16 @@ Current Clerk/Vercel auth state:
 - Clerk SSL certificates: issued
 - Vercel Production env contains redacted `pk_live_`/`sk_live_` Clerk values plus `CLERK_JWT_ISSUER_DOMAIN=https://clerk.hopit.dev`
 - Convex production env contains `CLERK_JWT_ISSUER_DOMAIN=https://clerk.hopit.dev`
+- Clerk Google social connection: enabled for sign-up and sign-in
+- Clerk Google social connection: email subaddress blocking enabled
+- Google Cloud account used for OAuth setup: Robert Gordon (`robertgordon761@gmail.com`)
+- Google Cloud project: `HopIt` (`hopit-auth-prod-rg`)
+- Google OAuth client: `HopIt Clerk Production`, type `Web application`
+- Google OAuth authorized JavaScript origins: `https://hopit.dev`, `https://www.hopit.dev`
+- Google OAuth authorized redirect URI: `https://clerk.hopit.dev/v1/oauth_callback`
+- Google Auth Platform publishing status: Testing
+- Google Auth Platform test user: `robertgordon761@gmail.com`
+- Google OAuth credentials: stored in macOS Keychain for account `hopit-auth-prod-rg:HopIt Clerk Production` under services `HopIt Google OAuth Client ID` and `HopIt Google OAuth Client Secret`
 
 Current safe runtime posture:
 
@@ -271,14 +286,14 @@ Current safe runtime posture:
 - `https://hopit.dev/sign-in` renders the Clerk sign-in route.
 - Valid Basic Auth fallback credentials still return the dashboard with `200` for emergency access.
 - Clerk production is configured and `HOPIT_AUTH_PROVIDER=clerk` is active in Vercel Production.
+- Google Auth Platform Audience shows `1 user (1 test, 0 other) / 100 user cap` with `robertgordon761@gmail.com`.
 - Local agent and R2-backed object sync continue through the production profile; hosted workspace commands remain disabled.
 
 Remaining auth handoff steps:
 
-1. Verify which sign-in methods are enabled in the Clerk production instance and add production OAuth credentials for any social providers that are enabled.
-2. Smoke-test `https://hopit.dev/sign-in` and `https://hopit.dev/sign-up` with the owner account.
-3. Confirm `/api/me` upserts the owner into Convex and map or claim the seeded `hopit` codebase owner.
-4. After recovery is proven, set `HOPIT_ALLOW_BASIC_AUTH_FALLBACK=0` or remove the Basic Auth variables, then redeploy.
+1. Smoke-test `https://hopit.dev/sign-in` and `https://hopit.dev/sign-up` with the owner account, including the Google OAuth callback.
+2. Confirm `/api/me` upserts the owner into Convex and map or claim the seeded `hopit` codebase owner.
+3. After recovery is proven, set `HOPIT_ALLOW_BASIC_AUTH_FALLBACK=0` or remove the Basic Auth variables, then redeploy.
 
 Pull Vercel envs locally only after the project is linked:
 
@@ -457,6 +472,7 @@ Healthy personal-production service status should show:
 - `journal.pendingCount: 0` before refresh or cross-device handoff.
 - `journal.failedCount: 0`.
 - `remotePull.enabled: true` when `HOPIT_REMOTE_PULL=1`, with `remotePull.state` possibly `skipped` when local work needs attention.
+- `hop remote-pull --profile production` should return `state: "up-to-date"` without a `remote-pull.skipped` event when the codebase-level Convex graph head matches the local materialized cursor.
 
 Known current nuance: when launchd owns the foreground `service run` process
 directly, `hop service status` can report `running: false` if there is no
@@ -541,7 +557,7 @@ their scoped session token for normal operation.
 ## Current Limits
 
 - Hosted workspace commands are intentionally disabled; local workspace commands run through the local agent. Hosted collaboration/member/work-item APIs exist behind Clerk product auth.
-- Basic Auth is only the current emergency fallback. The repo has Clerk-backed product auth code, durable users, memberships, invitations, and first server-side permission checks, but owner sign-in/OAuth and owner-mapping smoke tests are still required before removing the fallback.
+- Basic Auth is only the current emergency fallback. The repo has Clerk-backed product auth code, production Google OAuth, durable users, memberships, invitations, and first server-side permission checks, but owner sign-in and owner-mapping smoke tests are still required before removing the fallback.
 - Convex now separates graph/file metadata from file bytes and supports object-backed blobs through the agent sync path with per-file revision-guarded mutations. Client-encrypted routed-secret blobs and dry-run-by-default object GC are implemented in the agent. Durable history reconstruction, production retention policy, and full product write-path coverage are still incomplete.
 - The full privacy/key-grant model is documented in [HopIt Privacy And
   Encryption Plan](privacy-encryption-plan.md). The first device keyring,

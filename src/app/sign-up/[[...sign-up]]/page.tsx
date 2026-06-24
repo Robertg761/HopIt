@@ -1,9 +1,9 @@
 import { SignUp } from '@clerk/nextjs'
 import { AuthSetupMissing } from '@/components/hopit/auth-setup-missing'
-import { isClerkPublicConfigured, signInPath, signUpPath } from '@/lib/auth-config'
+import { shouldEnableClerkUi, signInPath, signUpPath } from '@/lib/auth-config'
 
 export default function SignUpPage() {
-  if (!isClerkPublicConfigured()) return <AuthSetupMissing title="Sign-up setup required" />
+  if (!shouldEnableClerkUi()) return <AuthSetupMissing title="Sign-up setup required" />
 
   return (
     <main className="grid min-h-screen place-items-center bg-background px-4 py-10">

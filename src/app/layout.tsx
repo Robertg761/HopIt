@@ -3,7 +3,7 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "@/components/hopit/theme-provider";
 import { ClerkAuthProvider } from "@/components/hopit/clerk-auth-provider";
-import { isClerkPublicConfigured } from "@/lib/auth-config";
+import { shouldEnableClerkUi } from "@/lib/auth-config";
 
 export const metadata: Metadata = {
   title: "HopIt — Code & files. Together.",
@@ -27,7 +27,7 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
-  const clerkEnabled = isClerkPublicConfigured();
+  const clerkEnabled = shouldEnableClerkUi();
 
   return (
     <html lang="en" suppressHydrationWarning>

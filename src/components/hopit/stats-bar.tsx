@@ -73,8 +73,10 @@ export function StatsBar({ status, loading }: StatsBarProps) {
               <div className={`flex size-9 shrink-0 items-center justify-center rounded-lg ${s.bg}`}>
                 <Icon className={`size-4.5 ${s.accent}`} />
               </div>
-              <div className="min-w-0">
-                <p className="text-2xl font-semibold tracking-tight">{s.value}</p>
+              <div className="min-w-0 flex-1">
+                <p className="break-words text-lg font-semibold leading-tight sm:text-xl md:text-2xl [overflow-wrap:anywhere]">
+                  {s.value}
+                </p>
                 <p className="truncate text-xs text-muted-foreground">{s.label}</p>
               </div>
             </div>

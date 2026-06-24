@@ -1,6 +1,6 @@
 # GitHub-Lite Collaboration Plan
 
-Last updated: 2026-06-23
+Last updated: 2026-06-24
 
 This is the collaboration sub-plan under the solid v1 dogfood track. HopIt is moving toward a production-shaped Workspace Root first, while also turning the deployed personal dogfood system into a private GitHub-lite collaboration surface. The current foundation is a Vercel-hosted dashboard, a Convex production graph, a production-profile local agent, a seeded `hopit` codebase, and a managed workspace hydrated outside the source checkout.
 
@@ -24,7 +24,7 @@ devices can decrypt private repo content, `.private/`, and secrets.
 - Current workspace: `/Users/robert/HopIt Workspaces/hopit`
 - Current local service: LaunchAgent `com.hopit.agent.hopit` running the packaged `hop-darwin-arm64` runtime
 - Current config locations: `.env.local` for this checkout and `/Users/robert/.config/hopit/production.env` for the installed local agent
-- Hosted dashboard: Clerk production auth is active for `hopit.dev`; Basic Auth fallback remains enabled until the sign-in/OAuth smoke test and owner mapping are complete; read-only for workspace commands
+- Hosted dashboard: Clerk production auth and Google OAuth are active for `hopit.dev`; Basic Auth fallback remains enabled until owner sign-in and owner mapping are complete; read-only for workspace commands
 - Local agent: can import, hydrate, sync, refresh, recover, open review, merge, export, publish, validate, and report status
 - Git compatibility: export/publish exists as a local escape hatch; history import, ancestry preservation, and remote publish are still future work
 
@@ -46,7 +46,7 @@ The first collaboration slice is now started in the repo:
   but full private-repo encryption, invite-time key grants, independent secret
   sharing, path encryption, and revocation/rekey flows are still pending.
 
-This is still a foundation layer, but it is no longer only backend scaffolding. The repo has Clerk-backed sign-in routes, auth middleware, Convex auth config, member/invite UI, work-item UI, owner email config, scoped agent-session token groundwork, and a Convex JWT template. Clerk production DNS, SSL, live Vercel env, Convex issuer, and `HOPIT_AUTH_PROVIDER=clerk` are active for `hopit.dev`; retiring Basic Auth fallback is intentionally deferred until production sign-in/OAuth and owner mapping are verified. Real diffs, inline review comments, routeable history, project-board UI, immutable release publishing, and complete permission coverage remain pending.
+This is still a foundation layer, but it is no longer only backend scaffolding. The repo has Clerk-backed sign-in routes, auth middleware, Convex auth config, member/invite UI, work-item UI, owner email config, scoped agent-session token groundwork, and a Convex JWT template. Clerk production DNS, SSL, live Vercel env, Convex issuer, `HOPIT_AUTH_PROVIDER=clerk`, and production Google OAuth are active for `hopit.dev`; retiring Basic Auth fallback is intentionally deferred until owner sign-in and owner mapping are verified. Real diffs, inline review comments, routeable history, project-board UI, immutable release publishing, and complete permission coverage remain pending.
 
 ## Phase Principle
 
@@ -64,7 +64,7 @@ Until the owner handoff is proven, keep Basic Auth fallback available and contin
 
 Users sign in as real HopIt users. The hosted dashboard no longer depends on shared Basic Auth as the product identity layer. Every server read/write can resolve the requester to a durable user id.
 
-Current status: code support and production Clerk infrastructure are active, but Basic Auth fallback remains enabled until the production sign-in/OAuth path and owner mapping are smoke-tested.
+Current status: code support, production Clerk infrastructure, and production Google OAuth are active, but Basic Auth fallback remains enabled until owner sign-in and owner mapping are smoke-tested.
 
 ### Implementation Plan
 

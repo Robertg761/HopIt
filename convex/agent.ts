@@ -110,6 +110,23 @@ export const getGraph = query({
   },
 });
 
+export const getGraphHead = query({
+  args: {
+    codebaseId: v.string(),
+    token: v.optional(v.string()),
+    sessionToken: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const access = await requireAgentAccess(ctx, args.codebaseId, {
+      token: args.token,
+      sessionToken: args.sessionToken,
+    }, "read");
+    const codebase = await readCodebaseById(ctx, args.codebaseId);
+    if (!codebase) return null;
+    return summarizeCodebaseHead(codebase, access.kind === "service" ? null : access.access);
+  },
+});
+
 export const dashboard = query({
   args: {
     codebaseId: v.string(),
@@ -2093,6 +2110,54 @@ async function readGraph(ctx: { db: DatabaseReader }, codebaseId: string) {
   };
   validateGraph(graph);
   return graph;
+}
+
+function summarizeCodebaseHead(codebase: any, access: AccessContext | null = null) {
+  const main = codebase.main && typeof codebase.main === "object" ? codebase.main : {};
+  const selectedState = codebase.selectedState && typeof codebase.selectedState === "object"
+    ? codebase.selectedState
+    : null;
+  const ownerId = stringOrNull(codebase.ownerId) ?? stringOrNull(codebase.owner?.id);
+
+  return {
+    exists: true,
+    schemaVersion: Number.isInteger(codebase.schemaVersion) ? codebase.schemaVersion : null,
+    codebase: {
+      id: codebase.codebaseId,
+      name: stringOrNull(codebase.name) ?? codebase.codebaseId,
+      ownerId,
+    },
+    main: {
+      id: stringOrNull(main.id) ?? null,
+      revision: Number.isInteger(main.revision) ? main.revision : null,
+    },
+    selectedState: selectedState
+      ? {
+          type: stringOrNull(selectedState.type) ?? null,
+          id: stringOrNull(selectedState.id) ?? null,
+          ownerId: stringOrNull(selectedState.ownerId) ?? null,
+          baseMainId: stringOrNull(selectedState.baseMainId) ?? null,
+          baseRevision: Number.isInteger(selectedState.baseRevision) ? selectedState.baseRevision : null,
+          revision: Number.isInteger(selectedState.revision) ? selectedState.revision : null,
+          visibility: stringOrNull(selectedState.visibility) ?? null,
+          effectiveVisibility: stringOrNull(selectedState.effectiveVisibility) ?? null,
+          reviewState: stringOrNull(selectedState.reviewState) ?? null,
+          mergeState: stringOrNull(selectedState.mergeState) ?? null,
+          conflictState: stringOrNull(selectedState.conflictState) ?? null,
+        }
+      : null,
+    owner: ownerId ? { id: ownerId } : null,
+    session: codebase.session
+      ? {
+          id: stringOrNull(codebase.session.id) ?? null,
+          deviceName: stringOrNull(codebase.session.deviceName) ?? null,
+        }
+      : null,
+    visibility: codebase.visibility ?? null,
+    access: access ? summarizeAccessContext(access) : null,
+    revision: Number.isInteger(codebase.revision) ? codebase.revision : null,
+    updatedAt: stringOrNull(codebase.updatedAt) ?? null,
+  };
 }
 
 async function readFileByPath(ctx: any, codebaseId: string, filePath: string) {

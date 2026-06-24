@@ -69,7 +69,7 @@ export function HopItLogo({
       </svg>
       {showWordmark && (
         <span
-          className={`font-semibold tracking-tight text-[1.05rem] leading-none ${
+          className={`font-semibold text-[1.05rem] leading-none ${
             isMono ? 'text-white' : ''
           }`}
         >

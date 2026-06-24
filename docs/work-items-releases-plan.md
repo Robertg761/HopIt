@@ -1,6 +1,6 @@
 # HopIt Work Items, Projects, Discussions, And Releases Plan
 
-Last updated: 2026-06-23
+Last updated: 2026-06-24
 
 ## Purpose
 
@@ -17,7 +17,7 @@ The goal is not to turn HopIt into a social Git host. HopIt should keep its curr
 
 The collaboration layer should add the missing project-management objects developers expect around that core: issues, project boards, discussions, and releases.
 
-Current live setup note: first issue, discussion, release, and member/invite slices exist behind the Clerk-protected Vercel deployment at `https://hopit.dev`. Basic Auth fallback remains enabled until sign-in/OAuth and owner-mapping smoke tests are complete. Project boards, richer release artifacts, durable review linkage, notifications, and complete permission coverage remain future work. Operational setup details, active accounts, and config locations are centralized in [Personal Production Runbook](personal-production.md).
+Current live setup note: first issue, discussion, release, and member/invite slices exist behind the Clerk-protected Vercel deployment at `https://hopit.dev`, with production Google OAuth configured for the owner test user. Basic Auth fallback remains enabled until owner sign-in and owner-mapping smoke tests are complete. Project boards, richer release artifacts, durable review linkage, notifications, and complete permission coverage remain future work. Operational setup details, active accounts, and config locations are centralized in [Personal Production Runbook](personal-production.md).
 
 ## Product Principles
 
@@ -285,7 +285,7 @@ smaller than a full GitHub replacement:
 
 ## Risks And Open Decisions
 
-- Production Clerk infrastructure is active, but Basic Auth fallback remains enabled until sign-in/OAuth and owner mapping are smoke-tested.
+- Production Clerk infrastructure and Google OAuth are active, but Basic Auth fallback remains enabled until owner sign-in and owner mapping are smoke-tested.
 - Per-codebase counters need to remain mutation-owned to avoid duplicate public numbers.
 - Project item ordering needs a real reorder strategy before a UI board depends on it.
 - Release targets need durable snapshot and merge-record ids before releases become authoritative.

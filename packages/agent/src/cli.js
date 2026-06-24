@@ -1907,7 +1907,8 @@ async function remoteRefreshDecision(options, context) {
   }
 
   const cloudService = createCloudGraphService(options)
-  if (!(await cloudService.exists())) {
+  const cloudHead = await cloudService.readGraphHead()
+  if (!cloudHead?.exists) {
     return {
       state: 'skip',
       emit: true,
@@ -1921,7 +1922,20 @@ async function remoteRefreshDecision(options, context) {
     }
   }
 
-  const cloud = await cloudService.readVisibleGraph(visibilityRequestFromOptions(options))
+  if (!Number.isInteger(cloudHead.revision)) {
+    return {
+      state: 'skip',
+      emit: true,
+      detail: {
+        state: 'skipped',
+        trigger: context.trigger,
+        workspace: options.workspace,
+        reason: 'cloud_revision_missing',
+        service: cloudService.type,
+      },
+    }
+  }
+
   const eventEntries = await readNdjson(options.events)
   const lastVisibleWorkspaceEvent = findLastEventOf(eventEntries, [
     'workspace.ready',
@@ -1929,7 +1943,7 @@ async function remoteRefreshDecision(options, context) {
     'remote-update',
   ])
   const workspaceIndex = await readWorkspaceIndex(options)
-  const indexedCodebase = findIndexedCodebase(workspaceIndex, cloud.codebase?.id ?? options['codebase-id'], options.workspace)
+  const indexedCodebase = findIndexedCodebase(workspaceIndex, cloudHead.codebase?.id ?? options['codebase-id'], options.workspace)
   if (indexedCodebase?.hydration?.state && indexedCodebase.hydration.state !== 'materialized') {
     return {
       state: 'skip',
@@ -1941,6 +1955,17 @@ async function remoteRefreshDecision(options, context) {
         reason: 'workspace_not_fully_materialized',
         hydration: indexedCodebase.hydration,
       },
+    }
+  }
+
+  const indexedRevision = indexedCodebase?.hydration?.lastMaterializedRevision
+  const visibleRevision = Number.isInteger(indexedRevision)
+    ? indexedRevision
+    : visibleRevisionFromEvent(lastVisibleWorkspaceEvent)
+  if (visibleRevision === cloudHead.revision) {
+    return {
+      state: 'skip',
+      emit: false,
     }
   }
 
@@ -1959,21 +1984,10 @@ async function remoteRefreshDecision(options, context) {
     }
   }
 
-  const indexedRevision = indexedCodebase?.hydration?.lastMaterializedRevision
-  const visibleRevision = Number.isInteger(indexedRevision)
-    ? indexedRevision
-    : visibleRevisionFromEvent(lastVisibleWorkspaceEvent)
-  if (visibleRevision === cloud.revision) {
-    return {
-      state: 'skip',
-      emit: false,
-    }
-  }
-
   return {
     state: 'refresh',
     fromRevision: visibleRevision,
-    toRevision: cloud.revision,
+    toRevision: cloudHead.revision,
   }
 }
 
@@ -6637,6 +6651,11 @@ class FixtureJsonCloudGraphService {
     return existsSync(this.path)
   }
 
+  async readGraphHead() {
+    if (!(await this.exists())) return null
+    return graphHeadFromGraph(await this.readGraph())
+  }
+
   async initialize(fixture) {
     const cloud = withComputedMetadata(fixture)
     await prepareGraphForBlobStorage(this, cloud)
@@ -6705,7 +6724,7 @@ class ConvexCloudGraphService {
   }
 
   async exists() {
-    return Boolean(await this.readOptionalGraph())
+    return Boolean(await this.readGraphHead())
   }
 
   async initialize(fixture) {
@@ -6727,6 +6746,16 @@ class ConvexCloudGraphService {
 
   async readVisibleGraph(request = {}) {
     return filterVisibleGraphForRequester(await this.readGraph(), request)
+  }
+
+  async readGraphHead() {
+    if (!this.codebaseId) return null
+
+    const args = { codebaseId: this.codebaseId }
+    Object.assign(args, this.credentialArgs())
+
+    const head = await this.client.query(anyApi.agent.getGraphHead, args)
+    return normalizeCloudGraphHead(head)
   }
 
   async readOptionalGraph() {
@@ -6957,6 +6986,74 @@ function normalizeValidatedCloudGraph(cloud) {
   return normalized
 }
 
+function graphHeadFromGraph(cloud) {
+  const graph = normalizeCloudGraph(structuredClone(cloud))
+  return normalizeCloudGraphHead({
+    exists: true,
+    schemaVersion: graph.schemaVersion,
+    codebase: graph.codebase,
+    main: graph.main,
+    selectedState: graph.selectedState,
+    owner: graph.owner,
+    session: graph.session,
+    visibility: graph.visibility,
+    revision: graph.revision,
+  })
+}
+
+function normalizeCloudGraphHead(head) {
+  if (!head || typeof head !== 'object') return null
+
+  const codebase = objectOrNull(head.codebase)
+  const main = objectOrNull(head.main)
+  const selectedState = objectOrNull(head.selectedState)
+  const owner = objectOrNull(head.owner)
+  const session = objectOrNull(head.session)
+
+  return {
+    exists: head.exists !== false,
+    schemaVersion: integerOrNull(head.schemaVersion),
+    codebase: codebase
+      ? {
+          id: textOrNull(codebase.id),
+          name: textOrNull(codebase.name) ?? textOrNull(codebase.id),
+          ownerId: textOrNull(codebase.ownerId),
+        }
+      : null,
+    main: main
+      ? {
+          id: textOrNull(main.id),
+          revision: integerOrNull(main.revision),
+        }
+      : null,
+    selectedState: selectedState
+      ? {
+          type: textOrNull(selectedState.type),
+          id: textOrNull(selectedState.id),
+          ownerId: textOrNull(selectedState.ownerId),
+          baseMainId: textOrNull(selectedState.baseMainId),
+          baseRevision: integerOrNull(selectedState.baseRevision),
+          revision: integerOrNull(selectedState.revision),
+          visibility: textOrNull(selectedState.visibility),
+          effectiveVisibility: textOrNull(selectedState.effectiveVisibility),
+          reviewState: textOrNull(selectedState.reviewState),
+          mergeState: textOrNull(selectedState.mergeState),
+          conflictState: textOrNull(selectedState.conflictState),
+        }
+      : null,
+    owner: owner ? { id: textOrNull(owner.id) } : null,
+    session: session
+      ? {
+          id: textOrNull(session.id),
+          deviceName: textOrNull(session.deviceName),
+        }
+      : null,
+    visibility: objectOrNull(head.visibility),
+    revision: integerOrNull(head.revision),
+    updatedAt: textOrNull(head.updatedAt),
+  }
+}
+
 function normalizeCloudGraph(cloud) {
   if (!cloud || typeof cloud !== 'object') {
     throw new Error('Cloud graph must be an object.')
@@ -7114,6 +7211,18 @@ function validateCloudGraphContract(cloud) {
 
 function isNonEmptyString(value) {
   return typeof value === 'string' && value.length > 0
+}
+
+function textOrNull(value) {
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
+function integerOrNull(value) {
+  return Number.isInteger(value) ? value : null
+}
+
+function objectOrNull(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : null
 }
 
 function visibilityRequestFromOptions(options) {

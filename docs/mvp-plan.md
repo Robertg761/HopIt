@@ -1,6 +1,6 @@
 # HopIt MVP Plan
 
-Last updated: 2026-06-23
+Last updated: 2026-06-24
 
 ## Goal
 
@@ -27,7 +27,7 @@ implementation plan is [HopIt Privacy And Encryption Plan](privacy-encryption-pl
 The current real-use setup is a private dogfood baseline, not the final public product:
 
 - Hosted dashboard: Vercel project `robertg761s-projects/hopit`, project id `prj_hO8U1QmyliQjGODz4R339UkgE86S`, at `https://hopit.dev`.
-- Domain and product auth: Porkbun-owned `hopit.dev` points at Vercel; Clerk production DNS, SSL, live Vercel env, Convex issuer, and `HOPIT_AUTH_PROVIDER=clerk` are active, while Basic Auth fallback remains temporarily enabled for recovery.
+- Domain and product auth: Porkbun-owned `hopit.dev` points at Vercel; Clerk production DNS, SSL, live Vercel env, Convex issuer, `HOPIT_AUTH_PROVIDER=clerk`, and production Google OAuth are active, while Basic Auth fallback remains temporarily enabled for recovery.
 - Cloud graph: Convex project `robertgordon761/hopit`, production URL `https://sincere-jaguar-17.convex.cloud`.
 - Object storage: Cloudflare R2 bucket `hopit-blobs`, private public-access-disabled bucket, free-only app budget enabled, 1-day lifecycle rule for current no-charge dogfooding.
 - Local device: packaged `hop-darwin-arm64` runtime installed under `/Users/robert/Library/Application Support/HopIt/Runtime`, supervised by LaunchAgent `com.hopit.agent.hopit`.
@@ -36,7 +36,7 @@ The current real-use setup is a private dogfood baseline, not the final public p
 
 Temporary choices:
 
-- Clerk guards the hosted deployment; Basic Auth fallback remains until production Clerk sign-in/OAuth and owner mapping are smoke-tested safely.
+- Clerk guards the hosted deployment; Basic Auth fallback remains until production owner sign-in and owner mapping are smoke-tested safely.
 - R2 is the first low-cost object storage provider and keeps the storage contract S3-compatible for a later Backblaze B2 or larger production-storage migration.
 - `.private/env/` remains local-only unless object storage and a local decrypt-capable key source are configured; when configured through either `HOPIT_CLIENT_ENCRYPTION_KEY` or `hop keys` user-vault bridging, routed secrets sync only as client-encrypted object blobs.
 - The current full-repo literal mirror path can copy `.git/`, binary files, symlinks, empty directories, and generated files, but a full cloud upload of the current repository should not be treated as complete or safe by default.

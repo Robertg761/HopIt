@@ -147,7 +147,7 @@ function AgentStatusPanel({
 
       <div className="space-y-4 p-4">
         <div className="rounded-xl border border-border/60 bg-muted/25 p-3">
-          <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+          <p className="flex items-center gap-1.5 text-[11px] font-medium uppercase text-muted-foreground">
             <FolderOpen className="size-3.5" />
             Workspace root preview
           </p>

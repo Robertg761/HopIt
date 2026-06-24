@@ -220,7 +220,7 @@ Refresh expectations:
 
 ### Automatic Remote-Update Delivery
 
-Explicit `hop refresh` is the current safe primitive. The current worktree also has an opt-in `--remote-pull` polling loop for `watch` and `service start`; it calls the same safe refresh path only when local state is fully materialized, clean against the hash-only materialization manifest, and the per-workspace index cursor is behind the cloud revision. Solid v1 should keep that safety contract but make remote-update delivery production-grade, observable, and suitable for normal same-owner device handoff.
+Explicit `hop refresh` is the current safe primitive. The current worktree also has an opt-in `--remote-pull` polling loop for `watch` and `service start`; it calls the same safe refresh path only when local state is fully materialized, clean against the hash-only materialization manifest, and the per-workspace index cursor is behind the cloud revision. Convex-backed polling uses `agent.getGraphHead` to read only codebase-level revision metadata before any full graph read, so unchanged polls avoid scanning the file table and should not dominate database bandwidth. Solid v1 should keep that safety contract but make remote-update delivery production-grade, observable, and suitable for normal same-owner device handoff.
 
 Remote-update delivery expectations:
 

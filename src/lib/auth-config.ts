@@ -9,6 +9,10 @@ export function isClerkServerConfigured() {
   return Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY && process.env.CLERK_SECRET_KEY)
 }
 
+export function shouldEnableClerkUi() {
+  return shouldUseClerkAuth() && isClerkPublicConfigured()
+}
+
 export function isHostedRuntime() {
   return process.env.VERCEL === '1' || process.env.HOPIT_REQUIRE_CONVEX === '1'
 }

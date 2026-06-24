@@ -8,6 +8,7 @@ import {
 } from '@clerk/nextjs'
 import { LogIn, LogOut, ShieldAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { useClerkAuthEnabled } from '@/components/hopit/clerk-auth-provider'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -16,15 +17,16 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { isClerkPublicConfigured } from '@/lib/auth-config'
 
 export function AuthMenu() {
-  if (!isClerkPublicConfigured()) {
+  const clerkEnabled = useClerkAuthEnabled()
+
+  if (!clerkEnabled) {
     return (
       <button
         className="ml-1 grid size-9 place-items-center rounded-full text-muted-foreground ring-1 ring-border"
-        aria-label="Authentication not configured"
-        title="Authentication not configured"
+        aria-label="Authentication disabled for this runtime"
+        title="Authentication disabled for this runtime"
       >
         <ShieldAlert className="size-4" />
       </button>

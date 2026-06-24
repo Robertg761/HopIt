@@ -338,7 +338,7 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
               <GitPullRequest className="size-4" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-base font-semibold tracking-tight">Collaboration</h2>
+              <h2 className="text-base font-semibold">Collaboration</h2>
               <p className="truncate text-xs text-muted-foreground">
                 {codebaseId ?? 'No codebase'} - issues, discussions, releases
               </p>

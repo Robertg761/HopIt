@@ -1,6 +1,6 @@
 # Code Browsing, Review, Comments, And History Plan
 
-Last updated: 2026-06-23
+Last updated: 2026-06-24
 
 ## Purpose
 
@@ -34,7 +34,7 @@ Already available in this repo:
 - The dashboard has a read-only `CodeReviewSection` that lists visible files, supports path search and scope/status filters, renders capped content previews with line anchors, and groups review readiness/history signals.
 - Convex can persist the current graph, files, and agent events.
 
-Current live setup note: this browser/review work runs inside the Clerk-protected Vercel deployment at `https://hopit.dev` against Convex `https://sincere-jaguar-17.convex.cloud`. Basic Auth fallback remains enabled until owner sign-in/OAuth and owner mapping are verified. Routeable tree APIs, durable diffs, and review comments are still future work. Operational setup details are centralized in [Personal Production Runbook](personal-production.md).
+Current live setup note: this browser/review work runs inside the Clerk-protected Vercel deployment at `https://hopit.dev` against Convex `https://sincere-jaguar-17.convex.cloud`. Production Google OAuth is configured for the owner test user, and Basic Auth fallback remains enabled until owner sign-in and owner mapping are verified. Routeable tree APIs, durable diffs, and review comments are still future work. Operational setup details are centralized in [Personal Production Runbook](personal-production.md).
 
 Not yet available:
 

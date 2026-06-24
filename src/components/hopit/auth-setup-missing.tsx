@@ -11,7 +11,7 @@ export function AuthSetupMissing({ title = 'Authentication setup required' }: Au
         <div className="flex items-center gap-3">
           <HopItLogo size={32} />
           <div>
-            <h1 className="text-lg font-semibold tracking-tight">{title}</h1>
+            <h1 className="text-lg font-semibold">{title}</h1>
             <p className="mt-1 text-sm text-muted-foreground">Clerk is selected as HopIt&apos;s product auth provider.</p>
           </div>
         </div>

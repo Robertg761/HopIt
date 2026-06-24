@@ -371,15 +371,19 @@ npm run hop -- service start \
 ```
 
 The remote-pull loop checks for a clean local journal, an idle local sync
-scheduler, a fully materialized workspace, a clean hash manifest, and the
-workspace index cursor before calling the same safe `hop refresh` path. `hop
-remote-pull` runs that decision once, which makes same-Mac and cross-device
-handoff verification deterministic without starting a service. If pending or
-failed journal entries exist, the workspace is partial/metadata-only, or disk
-content differs from the last materialized manifest, HopIt emits
-`remote-pull.skipped` and leaves the workspace alone. Tune the polling interval
-with `--remote-refresh-interval-ms <ms>` or
-`HOPIT_REMOTE_REFRESH_INTERVAL_MS`; the default is `5000`.
+scheduler, a fully materialized workspace, and the workspace index cursor before
+calling the same safe `hop refresh` path. For Convex-backed workspaces, the
+polling path first reads `agent.getGraphHead`, which is backed only by the
+`codebases` row. It performs the heavier local hash-manifest scan and full graph
+refresh only after that cursor shows the cloud revision moved, avoiding
+unchanged polls that repeatedly read every file row. `hop remote-pull` runs that
+decision once, which makes same-Mac and cross-device handoff verification
+deterministic without starting a service. If pending or failed journal entries
+exist, the workspace is partial/metadata-only, or disk content differs from the
+last materialized manifest after a remote move, HopIt emits `remote-pull.skipped`
+and leaves the workspace alone. Tune the polling interval with
+`--remote-refresh-interval-ms <ms>` or `HOPIT_REMOTE_REFRESH_INTERVAL_MS`; the
+default is `5000`.
 
 Serve local agent status JSON:
 

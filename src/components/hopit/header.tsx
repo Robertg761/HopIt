@@ -5,6 +5,7 @@ import {
   Bell,
   ChevronDown,
   Code2,
+  Command,
   Menu,
   Moon,
   Plus,
@@ -23,6 +24,10 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useTheme } from 'next-themes'
 import { AuthMenu } from '@/components/hopit/auth-menu'
+import {
+  dashboardSections,
+  navigateToSection,
+} from '@/components/hopit/navigation'
 
 type HeaderProps = {
   onOpenSidebar: () => void
@@ -31,10 +36,13 @@ type HeaderProps = {
 export function Header({ onOpenSidebar }: HeaderProps) {
   const { theme, setTheme } = useTheme()
   const activeTheme = theme ?? 'light'
+  const jumpTo = React.useCallback((id: string) => {
+    navigateToSection(id)
+  }, [])
 
   return (
     <header className="sticky top-0 z-30 border-b border-border/60 bg-background/80 backdrop-blur-xl">
-      <div className="flex h-16 items-center gap-3 px-4 md:px-6">
+      <div className="flex h-16 min-w-0 items-center gap-3 px-4 md:px-6">
         {/* Mobile menu */}
         <button
           onClick={onOpenSidebar}
@@ -57,30 +65,23 @@ export function Header({ onOpenSidebar }: HeaderProps) {
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start" className="w-56">
-              <DropdownMenuLabel>Switch workspace</DropdownMenuLabel>
+              <DropdownMenuLabel>Workspace</DropdownMenuLabel>
               <DropdownMenuSeparator />
-              <DropdownMenuItem>HopIt Labs</DropdownMenuItem>
-              <DropdownMenuItem>Personal</DropdownMenuItem>
-              <DropdownMenuItem className="text-muted-foreground">
-                + Create workspace
+              <DropdownMenuItem onSelect={() => jumpTo('overview')}>
+                Overview
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => jumpTo('codebases')}>
+                Codebases
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => jumpTo('team')}>
+                Members
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
 
         {/* Global search */}
-        <div className="mx-auto flex w-full max-w-xl items-center gap-2 rounded-xl bg-muted/70 px-3 py-2 text-sm ring-1 ring-inset ring-border/60 transition focus-within:ring-2 focus-within:ring-hop/40">
-          <Search className="size-4 shrink-0 text-muted-foreground" />
-          <input
-            type="search"
-            placeholder="Search codebases, files, snapshots, people…"
-            className="w-full bg-transparent placeholder:text-muted-foreground focus:outline-none"
-            aria-label="Global search"
-          />
-          <kbd className="hidden shrink-0 rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:inline">
-            /
-          </kbd>
-        </div>
+        <GlobalSearch onNavigate={jumpTo} />
 
         {/* Actions */}
         <div className="flex items-center gap-1.5">
@@ -96,13 +97,21 @@ export function Header({ onOpenSidebar }: HeaderProps) {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-52">
-              <DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => jumpTo('codebases')}>
                 <Code2 className="mr-2 size-4 text-hop" />
                 New codebase
               </DropdownMenuItem>
-              <DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => jumpTo('team')}>
+                <Plus className="mr-2 size-4 text-hop" />
+                Invite member
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => jumpTo('work-items')}>
+                <Command className="mr-2 size-4 text-grape" />
+                Create work item
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => jumpTo('files')}>
                 <Upload className="mr-2 size-4 text-grape" />
-                Upload files
+                Import files
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -111,6 +120,7 @@ export function Header({ onOpenSidebar }: HeaderProps) {
             size="sm"
             variant="outline"
             className="hidden gap-1.5 rounded-lg md:flex"
+            onClick={() => jumpTo('files')}
           >
             <Upload className="size-4 text-grape" />
             Upload
@@ -133,6 +143,7 @@ export function Header({ onOpenSidebar }: HeaderProps) {
           <button
             className="relative rounded-md p-2 hover:bg-muted"
             aria-label="Notifications"
+            onClick={() => jumpTo('activity')}
           >
             <Bell className="size-4" />
             <span className="absolute right-1.5 top-1.5 size-1.5 rounded-full bg-hop" />
@@ -142,5 +153,134 @@ export function Header({ onOpenSidebar }: HeaderProps) {
         </div>
       </div>
     </header>
+  )
+}
+
+function GlobalSearch({ onNavigate }: { onNavigate: (id: string) => void }) {
+  const [query, setQuery] = React.useState('')
+  const [open, setOpen] = React.useState(false)
+  const inputRef = React.useRef<HTMLInputElement | null>(null)
+  const rootRef = React.useRef<HTMLDivElement | null>(null)
+  const resultsId = React.useId()
+  const normalizedQuery = query.trim().toLowerCase()
+  const results = React.useMemo(() => {
+    if (!normalizedQuery) return dashboardSections
+
+    return dashboardSections.filter((section) =>
+      [section.label, section.description, ...section.keywords]
+        .join(' ')
+        .toLowerCase()
+        .includes(normalizedQuery),
+    )
+  }, [normalizedQuery])
+
+  React.useEffect(() => {
+    function onPointerDown(event: MouseEvent) {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false)
+    }
+
+    function onKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null
+      const isTyping =
+        target?.tagName === 'INPUT' ||
+        target?.tagName === 'TEXTAREA' ||
+        target?.isContentEditable
+
+      if (event.key === '/' && !isTyping) {
+        event.preventDefault()
+        inputRef.current?.focus()
+        setOpen(true)
+      }
+    }
+
+    window.addEventListener('mousedown', onPointerDown)
+    window.addEventListener('keydown', onKeyDown)
+    return () => {
+      window.removeEventListener('mousedown', onPointerDown)
+      window.removeEventListener('keydown', onKeyDown)
+    }
+  }, [])
+
+  function navigate(id: string) {
+    onNavigate(id)
+    setOpen(false)
+    setQuery('')
+    inputRef.current?.blur()
+  }
+
+  function onSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'Escape') {
+      setOpen(false)
+      inputRef.current?.blur()
+    }
+    if (event.key === 'Enter' && results[0]) {
+      event.preventDefault()
+      navigate(results[0].id)
+    }
+  }
+
+  return (
+    <div ref={rootRef} className="relative mx-auto hidden min-w-0 flex-1 sm:block sm:max-w-xl">
+      <div className="flex items-center gap-2 rounded-xl bg-muted/70 px-3 py-2 text-sm ring-1 ring-inset ring-border/60 transition focus-within:ring-2 focus-within:ring-hop/40">
+        <Search className="size-4 shrink-0 text-muted-foreground" />
+        <input
+          ref={inputRef}
+          value={query}
+          onChange={(event) => {
+            setQuery(event.target.value)
+            setOpen(true)
+          }}
+          onFocus={() => setOpen(true)}
+          onKeyDown={onSearchKeyDown}
+          type="search"
+          placeholder="Search sections, files, people"
+          className="min-w-0 flex-1 bg-transparent placeholder:text-muted-foreground focus:outline-none"
+          aria-label="Global search"
+          aria-autocomplete="list"
+          aria-controls={resultsId}
+          aria-expanded={open}
+          role="combobox"
+        />
+        <kbd className="hidden shrink-0 rounded border border-border bg-background px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground md:inline">
+          /
+        </kbd>
+      </div>
+
+      {open ? (
+        <div className="absolute left-0 right-0 top-[calc(100%+0.5rem)] z-50 overflow-hidden rounded-xl border border-border/70 bg-popover text-popover-foreground shadow-xl">
+          <div id={resultsId} role="listbox" className="max-h-[320px] overflow-auto p-1.5 scroll-thin">
+            {results.length > 0 ? (
+              results.map((section) => {
+                const Icon = section.icon
+                return (
+                  <button
+                    key={section.id}
+                    type="button"
+                    role="option"
+                    aria-selected="false"
+                    onClick={() => navigate(section.id)}
+                    className="flex w-full items-start gap-3 rounded-lg px-3 py-2.5 text-left transition hover:bg-accent focus:bg-accent focus:outline-none"
+                  >
+                    <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-hop/10 text-hop">
+                      <Icon className="size-4" />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-sm font-medium">{section.label}</span>
+                      <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                        {section.description}
+                      </span>
+                    </span>
+                  </button>
+                )
+              })
+            ) : (
+              <div className="px-3 py-6 text-center text-sm text-muted-foreground">
+                No matching section
+              </div>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
   )
 }

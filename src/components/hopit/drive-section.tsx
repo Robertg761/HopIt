@@ -66,7 +66,7 @@ export function DriveSection({ status }: DriveSectionProps) {
       <div className="flex flex-col gap-3 border-b border-border/60 p-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-2">
-            <h2 className="text-base font-semibold tracking-tight">Files</h2>
+            <h2 className="text-base font-semibold">Files</h2>
             <span className="rounded-full bg-grape/10 px-1.5 py-0.5 text-[10px] font-medium text-grape">
               {fileCountLabel}
             </span>
@@ -153,7 +153,7 @@ export function DriveSection({ status }: DriveSectionProps) {
       {liveFolders.length > 0 ? (
         <div className="px-4 pt-4">
           <div className="mb-2 flex items-center justify-between gap-2">
-            <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+            <p className="text-[11px] font-medium uppercase text-muted-foreground">
               Folders
             </p>
             <button
@@ -207,7 +207,7 @@ export function DriveSection({ status }: DriveSectionProps) {
       {/* Files */}
       <div className="p-4">
         <div className="mb-2 flex items-center justify-between">
-          <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+          <p className="text-[11px] font-medium uppercase text-muted-foreground">
             Files
           </p>
           <span className="text-[11px] text-muted-foreground">{liveFiles.length} visible</span>
@@ -381,7 +381,9 @@ function FileGrid({ files }: { files: DriveBrowserFile[] }) {
                 <ScopePill scope={f.scope} />
               </div>
               <button
-                className="rounded-md p-1 text-muted-foreground/60 opacity-0 transition hover:bg-muted group-hover:opacity-100"
+                disabled
+                title="File actions are not available in this view yet."
+                className="rounded-md p-1 text-muted-foreground/60 opacity-0 transition disabled:cursor-not-allowed group-hover:opacity-100"
                 aria-label="File actions"
               >
                 <MoreHorizontal className="size-3.5" />
@@ -397,7 +399,7 @@ function FileGrid({ files }: { files: DriveBrowserFile[] }) {
 function FileList({ files }: { files: DriveBrowserFile[] }) {
   return (
     <ul className="divide-y divide-border/50 overflow-hidden rounded-lg border border-border/60">
-      <li className="grid grid-cols-12 gap-2 bg-muted/40 px-3 py-2 text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+      <li className="grid grid-cols-12 gap-2 bg-muted/40 px-3 py-2 text-[10px] font-medium uppercase text-muted-foreground">
         <span className="col-span-5">Name</span>
         <span className="col-span-3 hidden md:block">Directory</span>
         <span className="col-span-2 hidden sm:block">Size</span>
@@ -409,7 +411,7 @@ function FileList({ files }: { files: DriveBrowserFile[] }) {
         return (
           <li
             key={f.id}
-            className="group grid cursor-pointer grid-cols-12 items-center gap-2 px-3 py-2 text-xs transition hover:bg-muted/40"
+            className="group grid grid-cols-12 items-center gap-2 px-3 py-2 text-xs transition hover:bg-muted/40"
           >
             <span className="col-span-5 flex min-w-0 items-center gap-2">
               <Icon className="size-3.5 shrink-0" style={{ color }} />

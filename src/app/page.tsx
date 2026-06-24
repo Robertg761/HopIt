@@ -21,6 +21,12 @@ export default function Home() {
 
   return (
     <div className="flex min-h-screen bg-background text-foreground">
+      <a
+        href="#overview"
+        className="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[80] focus:rounded-lg focus:bg-card focus:px-3 focus:py-2 focus:text-sm focus:shadow-lg focus:ring-2 focus:ring-hop/40"
+      >
+        Skip to dashboard
+      </a>
       <Sidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -29,34 +35,48 @@ export default function Home() {
         <main className="flex-1">
           <div className="mx-auto max-w-[1600px] px-4 py-6 md:px-6 md:py-8">
             <div className="space-y-6">
-              <StatsBar status={agentStatus.status} loading={agentStatus.loading} />
+              <div id="overview" className="scroll-mt-24">
+                <StatsBar status={agentStatus.status} loading={agentStatus.loading} />
+              </div>
 
               {/* Main split: codebases + files */}
               <div className="grid gap-6 xl:grid-cols-2">
-                <ReposSection status={agentStatus.status} />
-                <DriveSection status={agentStatus.status} />
+                <div id="codebases" className="scroll-mt-24">
+                  <ReposSection status={agentStatus.status} />
+                </div>
+                <div id="files" className="scroll-mt-24">
+                  <DriveSection status={agentStatus.status} />
+                </div>
               </div>
 
-              <CodeReviewSection status={agentStatus.status} />
-              <MembersInvitationsPanel
-                status={agentStatus.status}
-                loading={agentStatus.loading}
-                onRefreshStatus={agentStatus.refresh}
-              />
-              <CollaborationSection status={agentStatus.status} />
+              <div id="review" className="scroll-mt-24">
+                <CodeReviewSection status={agentStatus.status} />
+              </div>
+              <div id="team" className="scroll-mt-24">
+                <MembersInvitationsPanel
+                  status={agentStatus.status}
+                  loading={agentStatus.loading}
+                  onRefreshStatus={agentStatus.refresh}
+                />
+              </div>
+              <div id="work-items" className="scroll-mt-24">
+                <CollaborationSection status={agentStatus.status} />
+              </div>
 
               {/* Activity + right rail */}
               <div className="grid gap-6 lg:grid-cols-3">
-                <div className="lg:col-span-2">
+                <div id="activity" className="scroll-mt-24 lg:col-span-2">
                   <ActivityFeed status={agentStatus.status} />
                 </div>
-                <RightRail
-                  status={agentStatus.status}
-                  loading={agentStatus.loading}
-                  runCommand={agentStatus.runCommand}
-                  runningCommand={agentStatus.runningCommand}
-                  commandResult={agentStatus.commandResult}
-                />
+                <div id="status" className="scroll-mt-24">
+                  <RightRail
+                    status={agentStatus.status}
+                    loading={agentStatus.loading}
+                    runCommand={agentStatus.runCommand}
+                    runningCommand={agentStatus.runningCommand}
+                    commandResult={agentStatus.commandResult}
+                  />
+                </div>
               </div>
             </div>
           </div>

@@ -274,7 +274,7 @@ export function MembersInvitationsPanel({ status, loading, onRefreshStatus }: Me
               <Users className="size-4" />
             </div>
             <div className="min-w-0">
-              <h2 className="text-base font-semibold tracking-tight">Members</h2>
+              <h2 className="text-base font-semibold">Members</h2>
               <p className="truncate text-xs text-muted-foreground">
                 {status.codebaseId ?? 'No codebase'} - {status.requester.role}
               </p>

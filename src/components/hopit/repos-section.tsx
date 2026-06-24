@@ -80,7 +80,7 @@ function SectionHeader({
     <div className="flex flex-col gap-3 border-b border-border/60 p-4 sm:flex-row sm:items-center sm:justify-between">
       <div>
         <div className="flex items-center gap-2">
-          <h2 className="text-base font-semibold tracking-tight">{title}</h2>
+          <h2 className="text-base font-semibold">{title}</h2>
           <Badge variant="secondary" className="rounded-full bg-hop/10 text-hop">
             {count}
           </Badge>
@@ -108,6 +108,8 @@ function SectionHeader({
         <Button
           size="sm"
           variant="outline"
+          disabled
+          title="Codebase creation will land after account-wide discovery."
           className="gap-1.5 rounded-lg border-dashed"
         >
           <Plus className="size-3.5 text-hop" />
@@ -204,10 +206,10 @@ function CodebaseCard({ codebase, index }: { codebase: Codebase; index: number }
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className="w-44">
-            <DropdownMenuItem>Sync now</DropdownMenuItem>
-            <DropdownMenuItem>Open snapshot</DropdownMenuItem>
-            <DropdownMenuItem>Share</DropdownMenuItem>
-            <DropdownMenuItem>Settings</DropdownMenuItem>
+            <DropdownMenuItem disabled>Sync now</DropdownMenuItem>
+            <DropdownMenuItem disabled>Open snapshot</DropdownMenuItem>
+            <DropdownMenuItem disabled>Share</DropdownMenuItem>
+            <DropdownMenuItem disabled>Settings</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>

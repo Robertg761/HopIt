@@ -1413,6 +1413,12 @@ test('production-profile same-Mac dogfood simulation covers lazy hydration remot
   assert.equal(deviceBStatus.workspace.localChanges.modifiedCount, 1)
   assert.deepEqual(deviceBStatus.workspace.localChanges.samplePaths, ['README.md'])
 
+  const unchangedRemotePull = parseLastJsonObject((await runCli('remote-pull', deviceBArgs)).stdout)
+  assert.equal(unchangedRemotePull.ok, true)
+  assert.equal(unchangedRemotePull.state, 'up-to-date')
+  assert.equal(unchangedRemotePull.reason, null)
+  assert.equal(await fs.readFile(path.join(deviceB.workspace, 'README.md'), 'utf8'), unsafeDeviceBContent)
+
   const thirdHandoff = '# hopit-core\n\nRemote update that must not overwrite dirty device B.\n'
   await fs.writeFile(path.join(deviceA.workspace, 'README.md'), thirdHandoff, 'utf8')
   await runCli('sync-once', deviceAArgs)
