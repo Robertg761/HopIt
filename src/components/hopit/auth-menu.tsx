@@ -2,21 +2,12 @@
 
 import {
   SignInButton,
-  SignOutButton,
   UserButton,
   useUser,
 } from '@clerk/nextjs'
-import { LogIn, LogOut, ShieldAlert } from 'lucide-react'
+import { LogIn, ShieldAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useClerkAuthEnabled } from '@/components/hopit/clerk-auth-provider'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
 
 export function AuthMenu() {
   const clerkEnabled = useClerkAuthEnabled()
@@ -68,40 +59,15 @@ function SignedInMenu() {
         <p className="truncate text-xs font-medium">{displayName}</p>
         <p className="truncate text-[10.5px] text-muted-foreground">{email}</p>
       </div>
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button
-            className="flex items-center gap-2 rounded-full p-0.5 ring-1 ring-border hover:ring-hop/40"
-            aria-label="User menu"
-          >
-            <UserButton
-              appearance={{
-                elements: {
-                  userButtonAvatarBox: 'size-8',
-                },
-              }}
-            />
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-60">
-          <DropdownMenuLabel>
-            <div>
-              <p className="truncate text-sm font-medium">{displayName}</p>
-              <p className="truncate text-xs font-normal text-muted-foreground">{email}</p>
-            </div>
-          </DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem disabled>Profile</DropdownMenuItem>
-          <DropdownMenuItem disabled>Settings</DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <SignOutButton>
-            <DropdownMenuItem className="text-destructive">
-              <LogOut className="mr-2 size-4" />
-              Sign out
-            </DropdownMenuItem>
-          </SignOutButton>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <div className="rounded-full p-0.5 ring-1 ring-border hover:ring-hop/40">
+        <UserButton
+          appearance={{
+            elements: {
+              userButtonAvatarBox: 'size-8',
+            },
+          }}
+        />
+      </div>
     </div>
   )
 }
