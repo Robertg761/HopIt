@@ -58,12 +58,12 @@
   --font-geist-sans: "Outfit", "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-geist-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", monospace;
 
-  --background: #f8fafc;
-  --foreground: #0f172a;
+  --background: #f5f7fb;
+  --foreground: #0b1220;
   --card: #ffffff;
-  --card-foreground: #0f172a;
+  --card-foreground: #0b1220;
   --popover: #ffffff;
-  --popover-foreground: #0f172a;
+  --popover-foreground: #0b1220;
 
   --primary: #4f46e5;
   --primary-foreground: #ffffff;
@@ -73,21 +73,21 @@
   --hop-logo-start: #4f46e5;
   --hop-logo-end: #0ea5e9;
 
-  --secondary: #f1f5f9;
-  --secondary-foreground: #0f172a;
+  --secondary: #e9eef6;
+  --secondary-foreground: #0b1220;
   --grape: #0ea5e9;
   --grape-foreground: #ffffff;
   --grape-soft: #e0f2fe;
 
-  --muted: #f1f5f9;
-  --muted-foreground: #64748b;
-  --accent: #f5f3ff;
-  --accent-foreground: #4f46e5;
+  --muted: #e9eef6;
+  --muted-foreground: #334155;
+  --accent: #eef2ff;
+  --accent-foreground: #3730a3;
   --destructive: #ef4444;
-  --border: #e2e8f0;
-  --input: #cbd5e1;
-  --ring: #6366f1;
-  --hop-amber: #f59e0b;
+  --border: #cbd5e1;
+  --input: #94a3b8;
+  --ring: #4f46e5;
+  --hop-amber: #b45309;
 
   --sidebar: #0f172a;
   --sidebar-foreground: #f8fafc;
@@ -108,36 +108,36 @@
 }
 
 .dark {
-  --background: #07080e;
+  --background: #050713;
   --foreground: #f8fafc;
-  --card: #0f111a;
+  --card: #0b1020;
   --card-foreground: #f8fafc;
-  --popover: #0f111a;
+  --popover: #0b1020;
   --popover-foreground: #f8fafc;
 
-  --primary: #818cf8;
+  --primary: #a5b4fc;
   --primary-foreground: #07080e;
-  --hop: #818cf8;
+  --hop: #a5b4fc;
   --hop-foreground: #07080e;
-  --hop-soft: #1e2238;
-  --hop-logo-start: #818cf8;
-  --hop-logo-end: #22d3ee;
+  --hop-soft: #242b4a;
+  --hop-logo-start: #a5b4fc;
+  --hop-logo-end: #67e8f9;
 
-  --secondary: #161925;
+  --secondary: #111827;
   --secondary-foreground: #f8fafc;
-  --grape: #22d3ee;
+  --grape: #67e8f9;
   --grape-foreground: #07080e;
-  --grape-soft: #162e37;
+  --grape-soft: #123946;
 
-  --muted: #161824;
-  --muted-foreground: #94a3b8;
-  --accent: #231f3b;
-  --accent-foreground: #e0e7ff;
+  --muted: #141b2d;
+  --muted-foreground: #cbd5e1;
+  --accent: #242348;
+  --accent-foreground: #f1f5ff;
   --destructive: #f87171;
-  --border: #1e2235;
-  --input: #2d3250;
-  --ring: #818cf8;
-  --hop-amber: #fbbf24;
+  --border: #334155;
+  --input: #475569;
+  --ring: #a5b4fc;
+  --hop-amber: #facc15;
 
   --sidebar: #090a0f;
   --sidebar-foreground: #f8fafc;
@@ -202,16 +202,16 @@
     color: transparent;
   }
   .glass-card {
-    background: color-mix(in oklch, var(--card) 75%, transparent);
+    background: color-mix(in oklch, var(--card) 92%, transparent);
     backdrop-filter: blur(16px);
-    border: 1px solid color-mix(in oklch, var(--foreground) 7%, transparent);
-    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.03);
+    border: 1px solid color-mix(in oklch, var(--foreground) 14%, transparent);
+    box-shadow: 0 10px 26px rgba(15, 23, 42, 0.08);
   }
   .dark .glass-card {
-    background: color-mix(in oklch, var(--card) 45%, transparent);
+    background: color-mix(in oklch, var(--card) 88%, transparent);
     backdrop-filter: blur(16px);
-    border: 1px solid color-mix(in oklch, var(--border) 60%, transparent);
-    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.2);
+    border: 1px solid color-mix(in oklch, var(--border) 90%, transparent);
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.32);
   }
   .scroll-thin::-webkit-scrollbar {
     width: 6px;
@@ -251,7 +251,7 @@
   }
   .workspace-canvas {
     background:
-      linear-gradient(180deg, color-mix(in oklch, var(--background) 95%, #ffffff 5%) 0%, var(--background) 45%, color-mix(in oklch, var(--grape-soft) 25%, var(--background)) 100%);
+      linear-gradient(180deg, color-mix(in oklch, var(--background) 98%, #ffffff 2%) 0%, var(--background) 48%, color-mix(in oklch, var(--grape-soft) 14%, var(--background)) 100%);
   }
   .workspace-grid {
     background-image:
@@ -261,22 +261,22 @@
   }
   .panel-surface {
     background:
-      linear-gradient(180deg, color-mix(in oklch, var(--card) 98%, var(--accent) 2%) 0%, var(--card) 100%);
+      linear-gradient(180deg, color-mix(in oklch, var(--card) 99%, var(--accent) 1%) 0%, var(--card) 100%);
     border: 1px solid var(--border);
-    box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+    box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
   }
   .dark .panel-surface {
     background:
-      linear-gradient(180deg, color-mix(in oklch, var(--card) 98%, var(--muted) 2%) 0%, var(--card) 100%);
+      linear-gradient(180deg, color-mix(in oklch, var(--card) 94%, var(--muted) 6%) 0%, var(--card) 100%);
     border: 1px solid var(--border);
-    box-shadow: 0 1px 8px rgba(0,0,0,0.15);
+    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.36);
   }
   .command-deck-canvas {
     background:
-      linear-gradient(90deg, color-mix(in oklch, var(--foreground) 2.5%, transparent) 1px, transparent 1px),
-      linear-gradient(180deg, color-mix(in oklch, var(--foreground) 2.5%, transparent) 1px, transparent 1px),
-      radial-gradient(circle at 50% 0%, color-mix(in oklch, var(--primary) 6.5%, transparent) 0%, transparent 60%),
-      radial-gradient(circle at 100% 100%, color-mix(in oklch, var(--grape) 3.5%, transparent) 0%, transparent 40%),
+      linear-gradient(90deg, color-mix(in oklch, var(--foreground) 3.5%, transparent) 1px, transparent 1px),
+      linear-gradient(180deg, color-mix(in oklch, var(--foreground) 3%, transparent) 1px, transparent 1px),
+      radial-gradient(circle at 50% 0%, color-mix(in oklch, var(--primary) 4.5%, transparent) 0%, transparent 58%),
+      radial-gradient(circle at 100% 100%, color-mix(in oklch, var(--grape) 3%, transparent) 0%, transparent 38%),
       var(--background);
     background-size: 64px 64px, 64px 64px, auto, auto, auto;
   }

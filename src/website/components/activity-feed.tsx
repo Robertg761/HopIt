@@ -147,7 +147,7 @@ export function ActivityFeed({ status }: ActivityFeedProps) {
                 <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
                   {item.detail}
                 </p>
-                <p className="mt-1 text-[10.5px] text-muted-foreground/70">
+                <p className="mt-1 text-[10.5px] text-muted-foreground">
                   <span className="font-mono">@{item.who.handle}</span> · {item.when}
                 </p>
               </div>
@@ -166,7 +166,7 @@ export function ActivityFeed({ status }: ActivityFeedProps) {
       <div className="border-t border-border/60 p-3 text-center">
         <button
           disabled
-          className="text-xs text-muted-foreground/70 disabled:cursor-not-allowed"
+          className="text-xs text-muted-foreground disabled:cursor-not-allowed"
         >
           No older activity loaded
         </button>

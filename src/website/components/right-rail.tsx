@@ -358,8 +358,8 @@ type StatusMetricProps = {
 function StatusMetric({ icon: Icon, label, value, highlight = false }: StatusMetricProps) {
   return (
     <div className="min-w-0 rounded-lg bg-card px-3 py-2.5 border border-border/50 shadow-sm hover:border-primary/20 transition duration-200">
-      <p className="flex items-center gap-1.5 text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground/80">
-        <Icon className="size-3.5 shrink-0 text-primary/70" />
+      <p className="flex items-center gap-1.5 text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground">
+        <Icon className="size-3.5 shrink-0 text-primary" />
         <span className="truncate">{label}</span>
       </p>
       <p
@@ -383,7 +383,7 @@ type SyncStampProps = {
 function SyncStamp({ icon: Icon, label, value }: SyncStampProps) {
   return (
     <div className="rounded-lg border border-border/60 bg-muted/30 px-3 py-2.5 shadow-sm">
-      <p className="flex items-center gap-1.5 text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground/80">
+      <p className="flex items-center gap-1.5 text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground">
         <Icon className="size-3.5 text-primary" />
         {label}
       </p>

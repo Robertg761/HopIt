@@ -189,10 +189,10 @@ function CodebaseCard({ codebase, index }: { codebase: Codebase; index: number }
                   {codebase.name}
                 </h3>
                 {codebase.visibility === 'private' && (
-                  <Lock className="size-3 text-muted-foreground/60" />
+                  <Lock className="size-3 text-muted-foreground" />
                 )}
               </div>
-              <p className="mt-1 line-clamp-2 text-xs text-muted-foreground/90 leading-relaxed">
+              <p className="mt-1 line-clamp-2 text-xs text-muted-foreground leading-relaxed">
                 {codebase.description}
               </p>
             </div>
@@ -220,7 +220,7 @@ function CodebaseCard({ codebase, index }: { codebase: Codebase; index: number }
           {codebase.tags.map((t) => (
             <span
               key={t}
-              className="rounded-md bg-secondary/80 px-2 py-0.5 text-[9px] font-bold text-muted-foreground/90 uppercase tracking-wide border border-border/40"
+              className="rounded-md bg-secondary/80 px-2 py-0.5 text-[9px] font-bold text-muted-foreground uppercase tracking-wide border border-border/40"
             >
               #{t}
             </span>
@@ -228,17 +228,17 @@ function CodebaseCard({ codebase, index }: { codebase: Codebase; index: number }
         </div>
 
         {/* metrics row */}
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mt-1 text-[11px] text-muted-foreground/80 font-medium">
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 mt-1 text-[11px] text-muted-foreground font-medium">
           <span className="flex items-center gap-1.5">
-            <History className="size-3 text-primary/70" />
+            <History className="size-3 text-primary" />
             {formatNum(codebase.snapshots)} snapshots
           </span>
           <span className="flex items-center gap-1.5">
-            <FileStack className="size-3 text-primary/70" />
+            <FileStack className="size-3 text-primary" />
             {codebase.syncedFiles} files
           </span>
           <span className="flex items-center gap-1.5">
-            <RotateCcw className="size-3 text-primary/70" />
+            <RotateCcw className="size-3 text-primary" />
             {codebase.pendingSyncs} syncs
           </span>
         </div>
@@ -253,11 +253,11 @@ function CodebaseCard({ codebase, index }: { codebase: Codebase; index: number }
               .join('')}
         </div>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-xs font-bold text-foreground/90">
+          <p className="truncate text-xs font-bold text-foreground">
             {codebase.latestSnapshot.message}
           </p>
           <p className="truncate text-[10px] text-muted-foreground mt-0.5">
-            <span className="font-mono font-semibold text-primary/80">{codebase.latestSnapshot.id}</span> ·{' '}
+            <span className="font-mono font-semibold text-primary">{codebase.latestSnapshot.id}</span> ·{' '}
             {codebase.latestSnapshot.author}
           </p>
         </div>

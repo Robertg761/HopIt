@@ -114,14 +114,14 @@ export function Sidebar({ open, onClose }: SidebarProps) {
             <HopItLogo size={34} />
             <div className="mt-3 flex items-center gap-2">
               <span className="size-1.5 rounded-full bg-hop live-pulse" />
-              <span className="mono-label text-[10px] text-ink-foreground/50">
+              <span className="mono-label text-[10px] text-ink-foreground">
                 Private workspace
               </span>
             </div>
           </div>
           <button
             onClick={onClose}
-            className="rounded-md p-1.5 text-ink-foreground/60 hover:bg-white/10 hover:text-ink-foreground"
+            className="rounded-md p-1.5 text-ink-foreground hover:bg-white/10 hover:text-ink-foreground"
             aria-label="Close sidebar"
           >
             <X className="size-4" />
@@ -131,25 +131,25 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         {/* Tagline */}
         <div className="mx-5 mb-4 grid grid-cols-2 overflow-hidden rounded-md border border-white/10 bg-white/[0.04]">
           <div className="border-r border-white/10 px-3 py-2">
-            <p className="mono-label text-[9px] text-ink-foreground/40">Scope</p>
+            <p className="mono-label text-[9px] text-ink-foreground">Scope</p>
             <p className="mt-1 truncate text-xs font-medium">Owner safe</p>
           </div>
           <div className="px-3 py-2">
-            <p className="mono-label text-[9px] text-ink-foreground/40">Mode</p>
+            <p className="mono-label text-[9px] text-ink-foreground">Mode</p>
             <p className="mt-1 truncate text-xs font-medium">Live sync</p>
           </div>
         </div>
 
         {/* Compact search */}
         <div className="px-3 pb-4">
-          <div className="flex items-center gap-2 rounded-md bg-white/5 px-3 py-2 text-sm text-ink-foreground/60 ring-1 ring-inset ring-white/10 transition focus-within:ring-hop/40">
+          <div className="flex items-center gap-2 rounded-md bg-white/5 px-3 py-2 text-sm text-ink-foreground ring-1 ring-inset ring-white/10 transition focus-within:ring-hop/40">
             <Search className="size-4 shrink-0" />
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               type="search"
               placeholder="Filter sections"
-              className="w-full bg-transparent text-ink-foreground placeholder:text-ink-foreground/40 focus:outline-none"
+              className="w-full bg-transparent text-ink-foreground placeholder:text-ink-foreground focus:outline-none"
               aria-label="Filter navigation sections"
             />
           </div>
@@ -170,14 +170,14 @@ export function Sidebar({ open, onClose }: SidebarProps) {
         {/* Collaborators */}
         <div className="mt-auto px-5 py-4">
           <div className="mb-2 flex items-center justify-between">
-            <p className="mono-label text-[10px] text-ink-foreground/40">
+            <p className="mono-label text-[10px] text-ink-foreground">
               Presence
             </p>
-            <Users className="size-3.5 text-ink-foreground/40" />
+            <Users className="size-3.5 text-ink-foreground" />
           </div>
           <div className="rounded-md border border-white/10 bg-white/5 px-3 py-3">
-            <p className="text-xs text-ink-foreground/70">No live teammates connected</p>
-            <p className="mt-1 text-[10.5px] text-ink-foreground/40">
+            <p className="text-xs text-ink-foreground">No live teammates connected</p>
+            <p className="mt-1 text-[10.5px] text-ink-foreground">
               Presence will appear here after a real workspace session connects.
             </p>
           </div>
@@ -191,7 +191,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
               event.preventDefault()
               handleNavigate('activity')
             }}
-            className="flex min-w-0 items-center gap-2 text-xs text-ink-foreground/50 hover:text-ink-foreground/80"
+            className="flex min-w-0 items-center gap-2 text-xs text-ink-foreground hover:text-ink-foreground"
             aria-label="Notifications"
           >
             <Bell className="size-3.5" />
@@ -204,7 +204,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                 event.preventDefault()
                 handleNavigate('status')
               }}
-              className="rounded-md p-1.5 text-ink-foreground/50 hover:bg-white/10 hover:text-ink-foreground/80"
+              className="rounded-md p-1.5 text-ink-foreground hover:bg-white/10 hover:text-ink-foreground"
               aria-label="Agent status"
             >
               <HardDrive className="size-3.5" />
@@ -215,7 +215,7 @@ export function Sidebar({ open, onClose }: SidebarProps) {
                 event.preventDefault()
                 handleNavigate('status')
               }}
-              className="rounded-md p-1.5 text-ink-foreground/50 hover:bg-white/10 hover:text-ink-foreground/80"
+              className="rounded-md p-1.5 text-ink-foreground hover:bg-white/10 hover:text-ink-foreground"
               aria-label="Settings"
             >
               <Settings className="size-3.5" />
@@ -251,7 +251,7 @@ function NavButton({
         'group relative flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
         active
           ? 'bg-white/[0.08] text-ink-foreground ring-1 ring-inset ring-hop/30'
-          : 'text-ink-foreground/70 hover:bg-white/5 hover:text-ink-foreground',
+          : 'text-ink-foreground hover:bg-white/5 hover:text-ink-foreground',
       )}
     >
       <span
@@ -260,7 +260,7 @@ function NavButton({
           active ? 'opacity-100' : 'opacity-0',
         )}
       />
-      <Icon className={cn('size-4 shrink-0', active ? 'text-hop' : 'text-ink-foreground/60')} />
+      <Icon className={cn('size-4 shrink-0', active ? 'text-hop' : 'text-ink-foreground')} />
       <span className="flex-1 text-left">{item.label}</span>
       {active ? <ShieldCheck className="size-3 text-hop" /> : null}
     </motion.a>

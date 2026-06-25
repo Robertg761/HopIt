@@ -403,8 +403,8 @@ function ReviewMetric({ icon: Icon, label, value, tone }: ReviewMetricProps) {
           : 'bg-muted/40 text-muted-foreground border-border/60',
       )}
     >
-      <p className="flex items-center gap-1.5 text-[9.5px] font-bold tracking-wide uppercase text-muted-foreground/80">
-        <Icon className="size-3 shrink-0 text-primary/80" />
+      <p className="flex items-center gap-1.5 text-[9.5px] font-bold tracking-wide uppercase text-muted-foreground">
+        <Icon className="size-3 shrink-0 text-primary" />
         <span className="truncate">{label}</span>
       </p>
       <p className="mt-1 truncate text-xs font-bold text-foreground">{value}</p>
@@ -461,12 +461,12 @@ function CodePreview({
                 'grid w-full grid-cols-[2.5rem_minmax(0,1fr)] gap-3.5 rounded px-2.5 py-0.5 text-left transition duration-150 cursor-pointer',
                 isActive
                   ? 'bg-primary/20 text-white border-l-2 border-primary font-medium'
-                  : 'hover:bg-white/5 text-slate-300',
+                  : 'hover:bg-white/8 text-slate-100',
               )}
             >
               <span className={cn(
                 'select-none text-right font-semibold',
-                isActive ? 'text-primary' : 'text-slate-600'
+                isActive ? 'text-primary' : 'text-slate-400'
               )}>{lineNumber}</span>
               <code className="min-w-0 whitespace-pre-wrap break-words">{line || ' '}</code>
             </button>
@@ -474,7 +474,7 @@ function CodePreview({
         })}
         {file.contentPreviewTruncated ? (
           <div className="grid grid-cols-[2.5rem_minmax(0,1fr)] gap-3.5 px-2.5 py-1 text-hop-amber">
-            <span className="select-none text-right text-slate-600">...</span>
+            <span className="select-none text-right text-slate-400">...</span>
             <span className="font-semibold text-[10px] uppercase tracking-wider">Preview truncated</span>
           </div>
         ) : null}

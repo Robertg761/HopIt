@@ -388,7 +388,7 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder={`Search ${tab}`}
-              className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60"
+              className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
             />
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between lg:flex-1">
@@ -1133,7 +1133,7 @@ function MetricChip({ label, value, active }: { label: string; value: string; ac
         active ? 'bg-primary/8 text-primary border-primary/20 shadow-sm' : 'bg-muted/40 text-muted-foreground border-border/60',
       )}
     >
-      <p className="truncate text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground/80">{label}</p>
+      <p className="truncate text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground">{label}</p>
       <p className="mt-0.5 truncate text-xs font-bold text-foreground">{value}</p>
     </div>
   )

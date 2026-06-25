@@ -123,7 +123,7 @@ export function DriveSection({ status }: DriveSectionProps) {
               value={fileQuery}
               onChange={(event) => setFileQuery(event.target.value)}
               placeholder="Search files"
-              className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60"
+              className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
             />
           </div>
           <div className="flex flex-wrap items-center gap-1.5">
@@ -194,7 +194,7 @@ export function DriveSection({ status }: DriveSectionProps) {
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-xs font-semibold text-foreground group-hover:text-primary">{f.name}</p>
                   <p className="text-[10px] text-muted-foreground mt-0.5">
-                    <Users className="mr-1 inline size-2.5 text-primary/70" />
+                    <Users className="mr-1 inline size-2.5 text-primary" />
                     {f.sharedWith} files
                   </p>
                 </div>
@@ -369,10 +369,10 @@ function FileGrid({ files }: { files: DriveBrowserFile[] }) {
               <p className="truncate text-xs font-semibold text-foreground" title={f.path}>
                 {f.name}
               </p>
-              <p className="mt-0.5 text-[10px] font-medium text-muted-foreground/80">
+              <p className="mt-0.5 text-[10px] font-medium text-muted-foreground">
                 {f.size} · {f.modified}
               </p>
-              <p className="mt-1 truncate font-mono text-[9px] text-muted-foreground/60">
+              <p className="mt-1 truncate font-mono text-[9px] text-muted-foreground">
                 {f.directory}
               </p>
             </div>
@@ -383,7 +383,7 @@ function FileGrid({ files }: { files: DriveBrowserFile[] }) {
               <button
                 disabled
                 title="File actions are not available in this view yet."
-                className="rounded-lg p-1 text-muted-foreground/60 opacity-0 transition disabled:cursor-not-allowed group-hover:opacity-100"
+                className="rounded-lg p-1 text-muted-foreground opacity-0 transition disabled:cursor-not-allowed group-hover:opacity-100"
                 aria-label="File actions"
               >
                 <MoreHorizontal className="size-3.5" />
@@ -418,7 +418,7 @@ function FileList({ files }: { files: DriveBrowserFile[] }) {
               <span className="truncate font-medium text-foreground group-hover:text-primary" title={f.path}>{f.name}</span>
             </span>
             <span className="col-span-3 hidden truncate font-mono text-[10.5px] text-muted-foreground md:block">{f.directory}</span>
-            <span className="col-span-2 hidden text-muted-foreground/80 sm:block">{f.size}</span>
+            <span className="col-span-2 hidden text-muted-foreground sm:block">{f.size}</span>
             <span className="col-span-7 flex justify-end sm:col-span-5 md:col-span-2">
               <ScopePill scope={f.scope} />
             </span>

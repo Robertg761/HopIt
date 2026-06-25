@@ -354,7 +354,7 @@ function SummaryChip({ label, value, active }: { label: string; value: string; a
         active ? 'bg-primary/8 text-primary border-primary/20 shadow-sm' : 'bg-muted/40 text-muted-foreground border-border/60',
       )}
     >
-      <p className="truncate text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground/80">{label}</p>
+      <p className="truncate text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground">{label}</p>
       <p className="mt-0.5 truncate text-xs font-bold text-foreground">{value}</p>
     </div>
   )

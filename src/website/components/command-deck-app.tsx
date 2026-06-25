@@ -316,7 +316,7 @@ function PageIntro({
             <Icon className="size-5.5" />
           </span>
           <div className="min-w-0">
-            <span className="mono-label text-[9.5px] font-bold tracking-wider text-primary/80 bg-primary/5 px-2 py-0.5 rounded">
+            <span className="mono-label text-[9.5px] font-bold tracking-wider text-primary bg-primary/5 px-2 py-0.5 rounded">
               {eyebrow}
             </span>
             <h1 className="mt-2 text-2xl font-bold leading-tight tracking-tight sm:text-3xl text-foreground">
@@ -374,7 +374,7 @@ function TopDock({
             className="flex min-w-0 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition hover:bg-secondary/60"
           >
             <HopItLogo size={30} />
-            <span className="hidden text-[10px] font-bold uppercase tracking-wider text-muted-foreground/80 md:inline">
+            <span className="hidden text-[10px] font-bold uppercase tracking-wider text-muted-foreground md:inline">
               Source Cloud
             </span>
           </button>
@@ -535,7 +535,7 @@ function CommandSearch() {
           onChange={(event) => setQuery(event.target.value)}
           onFocus={() => setOpen(true)}
           placeholder="Search workspaces, files, people"
-          className="h-9 w-full rounded-md border border-border/75 bg-card px-9 pr-11 text-sm outline-none transition placeholder:text-muted-foreground/70 focus:border-hop/60 focus:ring-2 focus:ring-hop/18"
+          className="h-9 w-full rounded-md border border-border/75 bg-card px-9 pr-11 text-sm outline-none transition placeholder:text-muted-foreground focus:border-hop/60 focus:ring-2 focus:ring-hop/18"
         />
         <span className="pointer-events-none absolute right-2 top-1/2 hidden -translate-y-1/2 rounded border border-border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:block">
           K
@@ -622,19 +622,19 @@ function CommandDeck({
       initial={{ opacity: 0, y: 15 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.5, delay: 0.1 }}
-      className="panel-surface overflow-hidden rounded-xl border border-border/80 bg-card shadow-lg"
+      className="panel-surface max-w-full overflow-hidden rounded-xl border border-border/80 bg-card shadow-lg"
     >
-      <div className="grid min-h-[460px] lg:grid-cols-[minmax(0,1fr)_minmax(340px,0.38fr)]">
-        <div className="relative overflow-hidden bg-slate-950 text-white">
+      <div className="grid min-h-[460px] min-w-0 lg:grid-cols-[minmax(0,1fr)_minmax(340px,0.38fr)]">
+        <div className="relative min-w-0 overflow-hidden bg-slate-950 text-white">
           <div className="deck-grid absolute inset-0 opacity-40" />
           <div className="status-scanline absolute inset-x-0 top-0 h-24 opacity-30" />
           <div className="absolute top-0 right-0 -mr-16 -mt-16 size-64 rounded-full bg-primary/10 blur-3xl" />
           <div className="absolute bottom-0 left-0 -ml-16 -mb-16 size-64 rounded-full bg-grape/10 blur-3xl" />
 
-          <div className="relative flex min-h-full flex-col justify-between gap-8 p-6 sm:p-8 lg:p-10">
+          <div className="relative flex min-h-full min-w-0 flex-col justify-between gap-8 p-4 sm:p-8 lg:p-10">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="mono-label rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-[9px] font-bold tracking-wider text-white/60">
+                <span className="mono-label rounded-md border border-white/15 bg-white/8 px-2.5 py-1 text-[9px] font-bold tracking-wider text-white/80">
                   Command Deck
                 </span>
                 <span
@@ -644,7 +644,7 @@ function CommandDeck({
                       ? 'border-destructive/30 bg-destructive/10 text-destructive'
                       : online
                         ? 'border-primary/40 bg-primary/15 text-primary-foreground'
-                        : 'border-white/10 bg-white/5 text-white/50',
+                        : 'border-white/15 bg-white/8 text-white/75',
                   )}
                 >
                   <span
@@ -657,51 +657,51 @@ function CommandDeck({
                 </span>
               </div>
 
-              <div className="min-w-44 rounded-xl border border-white/10 bg-white/5 p-3.5 backdrop-blur-md">
-                <p className="mono-label text-[9px] font-semibold text-white/50">Active change set</p>
-                <p className="mt-1 truncate font-mono text-xs font-bold text-white/90">
+              <div className="w-full min-w-0 max-w-[calc(100vw-4rem)] rounded-xl border border-white/15 bg-white/8 p-3.5 backdrop-blur-md sm:w-auto sm:min-w-44 sm:max-w-none">
+                <p className="mono-label text-[9px] font-semibold text-white/75">Active change set</p>
+                <p className="mt-1 break-words font-mono text-xs font-bold text-white">
                   {status.activeChangeSetId}
                 </p>
-                <p className="mt-1.5 truncate text-[10px] text-white/40">
+                <p className="mt-1.5 break-words text-[10px] text-white/70">
                   main {status.mainRevision}
                 </p>
               </div>
             </div>
 
-            <div className="max-w-3xl">
+            <div className="min-w-0 max-w-[calc(100vw-4rem)] sm:max-w-3xl">
               <p className="mono-label text-[10px] font-bold tracking-widest text-grape">
                 HopIt Developer Portal
               </p>
-              <h2 className="mt-3 text-3xl font-extrabold leading-[1.05] tracking-tight sm:text-4xl lg:text-5xl text-white">
+              <h2 className="mt-3 max-w-full break-words text-xl font-extrabold leading-tight tracking-tight text-white sm:text-4xl lg:text-5xl">
                 Code, files, review, and sync in one live workspace.
               </h2>
-              <p className="mt-4 text-sm leading-relaxed text-white/70 sm:text-base">
+              <p className="mt-4 text-sm leading-relaxed text-white/85 sm:text-base">
                 {status.codebaseName === 'No codebase'
                   ? 'No managed workspace is connected on this device yet.'
                   : `${status.codebaseName} is mounted as a cloud-backed workspace with local agent state.`}
               </p>
             </div>
 
-            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
-              <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid max-w-[calc(100vw-4rem)] gap-4 sm:max-w-none md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+              <div className="grid min-w-0 gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
                 {metrics.map((metric) => {
                   const Icon = metric.icon
                   return (
                     <div
                       key={metric.label}
-                      className="rounded-lg border border-white/5 bg-white/[0.03] p-3 hover:bg-white/[0.05] transition duration-200"
+                      className="min-w-0 rounded-lg border border-white/10 bg-white/[0.06] p-3 hover:bg-white/[0.08] transition duration-200"
                     >
-                      <div className="flex items-center gap-1.5 text-white/50">
+                      <div className="flex items-center gap-1.5 text-white/75">
                         <Icon className="size-3.5" />
                         <span className="mono-label text-[9px] font-medium tracking-wide">{metric.label}</span>
                       </div>
-                      <p className="mt-1 text-xl font-bold text-white/90">{metric.value}</p>
+                      <p className="mt-1 text-xl font-bold text-white">{metric.value}</p>
                     </div>
                   )
                 })}
               </div>
 
-              <div className="grid grid-cols-2 gap-2 sm:flex">
+              <div className="grid min-w-0 grid-cols-1 gap-2 sm:flex">
                 {commandActions.map((action) => {
                   const Icon = action.icon
                   const running = runningCommand === action.command
@@ -711,7 +711,7 @@ function CommandDeck({
                       type="button"
                       disabled={!status.commandsAvailable || Boolean(runningCommand)}
                       onClick={() => void runCommand(action.command)}
-                      className="inline-flex h-9.5 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/8 px-4 text-xs font-bold text-white transition hover:border-primary/50 hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer shadow-sm"
+                      className="inline-flex h-9.5 min-w-0 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/8 px-2 text-xs font-bold text-white transition hover:border-primary/50 hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer shadow-sm sm:px-4"
                     >
                       <Icon className={cn('size-3.5', running && 'animate-spin')} />
                       {action.label}
@@ -784,7 +784,7 @@ function DeckSignal({
       <span className="min-w-0">
         <span className="mono-label text-[9px] font-bold tracking-wider text-muted-foreground">{label}</span>
         <span className="mt-0.5 block truncate text-base font-bold capitalize text-foreground">{value}</span>
-        <span className="mt-0.5 block truncate text-xs text-muted-foreground/80">{detail}</span>
+        <span className="mt-0.5 block truncate text-xs text-muted-foreground">{detail}</span>
       </span>
     </div>
   )
@@ -961,7 +961,7 @@ function FileCloudPanel({ status }: { status: AgentStatusSnapshot }) {
             ) : (
               <div className="grid min-h-[214px] place-items-center px-4 py-8 text-center">
                 <div>
-                  <Cloud className="mx-auto size-8 text-muted-foreground/55" />
+                  <Cloud className="mx-auto size-8 text-muted-foreground" />
                   <p className="mt-3 text-sm font-semibold">No file graph mounted</p>
                   <p className="mt-1 max-w-xs text-xs leading-5 text-muted-foreground">
                     Start the local agent to populate cloud entries, private scope, and sync state.
