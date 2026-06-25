@@ -12,6 +12,7 @@ import {
 
 export type DashboardSection = {
   id: string
+  path: string
   label: string
   description: string
   icon: LucideIcon
@@ -21,6 +22,7 @@ export type DashboardSection = {
 export const dashboardSections: DashboardSection[] = [
   {
     id: 'overview',
+    path: '/overview',
     label: 'Overview',
     description: 'Workspace health, file counts, pending writes, and review state.',
     icon: Home,
@@ -28,6 +30,7 @@ export const dashboardSections: DashboardSection[] = [
   },
   {
     id: 'codebases',
+    path: '/codebases',
     label: 'Codebases',
     description: 'Connected repositories, visibility, snapshots, and sync status.',
     icon: Code2,
@@ -35,6 +38,7 @@ export const dashboardSections: DashboardSection[] = [
   },
   {
     id: 'files',
+    path: '/files',
     label: 'Files',
     description: 'Workspace files, folders, scopes, search, and import entry points.',
     icon: Folder,
@@ -42,13 +46,15 @@ export const dashboardSections: DashboardSection[] = [
   },
   {
     id: 'review',
+    path: '/review',
     label: 'Review',
     description: 'Code browser, changed files, review follow-ups, and merge state.',
     icon: GitPullRequest,
     keywords: ['diff', 'code', 'history', 'merge', 'comments'],
   },
   {
-    id: 'team',
+    id: 'members',
+    path: '/members',
     label: 'Members',
     description: 'Owner claim, members, invitations, and access controls.',
     icon: Users,
@@ -56,6 +62,7 @@ export const dashboardSections: DashboardSection[] = [
   },
   {
     id: 'work-items',
+    path: '/work-items',
     label: 'Work items',
     description: 'Issues, discussions, releases, and project planning.',
     icon: PackageCheck,
@@ -63,6 +70,7 @@ export const dashboardSections: DashboardSection[] = [
   },
   {
     id: 'activity',
+    path: '/activity',
     label: 'Activity',
     description: 'Live agent events, recent syncs, reviews, and changes.',
     icon: Activity,
@@ -70,6 +78,7 @@ export const dashboardSections: DashboardSection[] = [
   },
   {
     id: 'status',
+    path: '/status',
     label: 'Agent status',
     description: 'Workspace agent health, remote pull, hydration, and commands.',
     icon: HardDrive,
@@ -78,15 +87,18 @@ export const dashboardSections: DashboardSection[] = [
 ]
 
 export function sectionHref(id: string) {
-  return `#${id}`
+  return dashboardSections.find((section) => section.id === id)?.path ?? `/${id}`
 }
 
 export function navigateToSection(id: string) {
   if (typeof window === 'undefined') return
 
-  const target = document.getElementById(id)
-  if (!target) return
+  const href = sectionHref(id)
 
-  target.scrollIntoView({ behavior: 'smooth', block: 'start' })
-  window.history.replaceState(null, '', sectionHref(id))
+  if (window.location.pathname === href) {
+    document.getElementById('page-main')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    return
+  }
+
+  window.location.assign(href)
 }

@@ -77,7 +77,7 @@ export function Header({ onOpenSidebar }: HeaderProps) {
               <DropdownMenuItem onSelect={() => jumpTo('codebases')}>
                 Codebases
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => jumpTo('team')}>
+              <DropdownMenuItem onSelect={() => jumpTo('members')}>
                 Members
               </DropdownMenuItem>
             </DropdownMenuContent>
@@ -119,7 +119,7 @@ export function Header({ onOpenSidebar }: HeaderProps) {
                 <Code2 className="mr-2 size-4 text-hop" />
                 New codebase
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => jumpTo('team')}>
+              <DropdownMenuItem onSelect={() => jumpTo('members')}>
                 <Plus className="mr-2 size-4 text-hop" />
                 Invite member
               </DropdownMenuItem>
