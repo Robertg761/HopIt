@@ -34,8 +34,8 @@ export function HopItLogo({
         <defs>
           {!isMono && (
             <linearGradient id={gradientId} x1="6" y1="6" x2="42" y2="42" gradientUnits="userSpaceOnUse">
-              <stop stopColor="#10b981" />
-              <stop offset="1" stopColor="#8b5cf6" />
+              <stop stopColor="#d95732" />
+              <stop offset="1" stopColor="#24777a" />
             </linearGradient>
           )}
         </defs>
@@ -51,7 +51,7 @@ export function HopItLogo({
         {/* rabbit-ear + motion mark, cut out of the tile */}
         <path
           d="M16 34V18.5c0-1.5 1.8-2.3 2.9-1.2l4.6 4.6c.5.5 1.3.5 1.8 0l5.6-5.6c1.1-1.1 2.9-.3 2.9 1.2V34"
-          stroke={isMono ? '#0f172a' : '#ffffff'}
+          stroke={isMono ? '#181a17' : '#ffffff'}
           strokeWidth="3.4"
           strokeLinecap="round"
           strokeLinejoin="round"
@@ -60,7 +60,7 @@ export function HopItLogo({
         {/* forward hop arc */}
         <path
           d="M14 38c4-2.5 9-2.5 13 0s9 2.5 13 0"
-          stroke={isMono ? '#0f172a' : '#ffffff'}
+          stroke={isMono ? '#181a17' : '#ffffff'}
           strokeWidth="2.6"
           strokeLinecap="round"
           fill="none"

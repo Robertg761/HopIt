@@ -56,94 +56,94 @@
   --radius: 0.5rem;
   --font-geist-sans: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-geist-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", monospace;
-  --background: #f8fafc;
-  --foreground: #0f172a;
-  --card: #ffffff;
-  --card-foreground: #0f172a;
-  --popover: #ffffff;
-  --popover-foreground: #0f172a;
+  --background: #f5f7f4;
+  --foreground: #181a17;
+  --card: #fcfdfa;
+  --card-foreground: #181a17;
+  --popover: #fcfdfa;
+  --popover-foreground: #181a17;
 
-  --primary: #10b981;
+  --primary: #d95732;
   --primary-foreground: #ffffff;
-  --hop: #10b981;
+  --hop: #d95732;
   --hop-foreground: #ffffff;
-  --hop-soft: #dcfce7;
+  --hop-soft: #fde7dd;
 
-  --secondary: #eef2ff;
-  --secondary-foreground: #312e81;
-  --grape: #6366f1;
+  --secondary: #e4eee9;
+  --secondary-foreground: #173635;
+  --grape: #24777a;
   --grape-foreground: #ffffff;
-  --grape-soft: #e0e7ff;
+  --grape-soft: #ddf3f1;
 
-  --muted: #f1f5f9;
-  --muted-foreground: #64748b;
-  --accent: #ecfdf5;
-  --accent-foreground: #065f46;
+  --muted: #ecefe8;
+  --muted-foreground: #6d7468;
+  --accent: #fff0e8;
+  --accent-foreground: #8c321f;
   --destructive: #dc2626;
-  --border: #e2e8f0;
-  --input: #cbd5e1;
-  --ring: #10b981;
-  --hop-amber: #d97706;
+  --border: #d9ddd3;
+  --input: #c5cec1;
+  --ring: #d95732;
+  --hop-amber: #9aa90f;
 
-  --sidebar: #0f172a;
-  --sidebar-foreground: #f8fafc;
-  --sidebar-primary: #10b981;
+  --sidebar: #181a17;
+  --sidebar-foreground: #f5f7f4;
+  --sidebar-primary: #d95732;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #1e293b;
-  --sidebar-accent-foreground: #f8fafc;
-  --sidebar-border: #263449;
-  --sidebar-ring: #10b981;
-  --ink: #0f172a;
-  --ink-foreground: #f8fafc;
+  --sidebar-accent: #272a24;
+  --sidebar-accent-foreground: #f5f7f4;
+  --sidebar-border: #393d34;
+  --sidebar-ring: #d95732;
+  --ink: #171916;
+  --ink-foreground: #f5f7f4;
 
-  --chart-1: #10b981;
-  --chart-2: #6366f1;
-  --chart-3: #d97706;
-  --chart-4: #0284c7;
-  --chart-5: #14b8a6;
+  --chart-1: #d95732;
+  --chart-2: #24777a;
+  --chart-3: #9aa90f;
+  --chart-4: #8f5a36;
+  --chart-5: #44664a;
 }
 
 .dark {
-  --background: oklch(0.16 0.015 250);
-  --foreground: oklch(0.96 0.005 140);
-  --card: oklch(0.21 0.02 250);
-  --card-foreground: oklch(0.96 0.005 140);
-  --popover: oklch(0.21 0.02 250);
-  --popover-foreground: oklch(0.96 0.005 140);
-  --primary: oklch(0.74 0.17 162);
-  --primary-foreground: oklch(0.15 0.02 250);
-  --hop: oklch(0.74 0.17 162);
-  --hop-foreground: oklch(0.15 0.02 250);
-  --hop-soft: oklch(0.28 0.06 162);
-  --secondary: oklch(0.28 0.03 280);
-  --secondary-foreground: oklch(0.96 0.005 140);
-  --grape: oklch(0.68 0.22 295);
-  --grape-foreground: oklch(0.15 0.02 250);
-  --grape-soft: oklch(0.28 0.05 295);
-  --muted: oklch(0.25 0.015 250);
-  --muted-foreground: oklch(0.7 0.015 140);
-  --accent: oklch(0.28 0.06 162);
-  --accent-foreground: oklch(0.96 0.005 140);
-  --destructive: oklch(0.7 0.19 22);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 12%);
-  --ring: oklch(0.74 0.17 162);
-  --hop-amber: oklch(0.82 0.17 75);
-  --sidebar: oklch(0.13 0.02 250);
-  --sidebar-foreground: oklch(0.96 0.005 140);
-  --sidebar-primary: oklch(0.74 0.17 162);
-  --sidebar-primary-foreground: oklch(0.15 0.02 250);
-  --sidebar-accent: oklch(0.21 0.02 250);
-  --sidebar-accent-foreground: oklch(0.96 0.005 140);
-  --sidebar-border: oklch(1 0 0 / 8%);
-  --sidebar-ring: oklch(0.74 0.17 162);
-  --ink: oklch(0.13 0.02 250);
-  --ink-foreground: oklch(0.96 0.005 140);
-  --chart-1: oklch(0.74 0.17 162);
-  --chart-2: oklch(0.68 0.22 295);
-  --chart-3: oklch(0.82 0.17 75);
-  --chart-4: oklch(0.75 0.18 50);
-  --chart-5: oklch(0.7 0.2 200);
+  --background: #151713;
+  --foreground: #f3f5ee;
+  --card: #1f211c;
+  --card-foreground: #f3f5ee;
+  --popover: #1f211c;
+  --popover-foreground: #f3f5ee;
+  --primary: #f06a43;
+  --primary-foreground: #161713;
+  --hop: #f06a43;
+  --hop-foreground: #161713;
+  --hop-soft: #4a2b21;
+  --secondary: #243531;
+  --secondary-foreground: #eef6f2;
+  --grape: #59bab7;
+  --grape-foreground: #141615;
+  --grape-soft: #1f4542;
+  --muted: #292d25;
+  --muted-foreground: #aeb6a8;
+  --accent: #40281f;
+  --accent-foreground: #fff0e8;
+  --destructive: #f87171;
+  --border: #34382f;
+  --input: #3e4438;
+  --ring: #f06a43;
+  --hop-amber: #d1df45;
+  --sidebar: #11130f;
+  --sidebar-foreground: #f3f5ee;
+  --sidebar-primary: #f06a43;
+  --sidebar-primary-foreground: #161713;
+  --sidebar-accent: #24271f;
+  --sidebar-accent-foreground: #f3f5ee;
+  --sidebar-border: #34382f;
+  --sidebar-ring: #f06a43;
+  --ink: #11130f;
+  --ink-foreground: #f3f5ee;
+  --chart-1: #f06a43;
+  --chart-2: #59bab7;
+  --chart-3: #d1df45;
+  --chart-4: #d38a5f;
+  --chart-5: #85a66f;
 }
 
 @layer base {
@@ -168,23 +168,23 @@
 /* HopIt utility helpers */
 @layer utilities {
   .bg-hop-gradient {
-    background-image: linear-gradient(135deg, #10b981 0%, #6366f1 100%);
+    background-image: linear-gradient(135deg, #d95732 0%, #24777a 100%);
   }
   .bg-hop-gradient-soft {
-    background-image: linear-gradient(135deg, #ecfdf5 0%, #eef2ff 100%);
+    background-image: linear-gradient(135deg, #fff0e8 0%, #ddf3f1 100%);
   }
   .dark .bg-hop-gradient-soft {
-    background-image: linear-gradient(135deg, oklch(0.28 0.06 162) 0%, oklch(0.28 0.05 295) 100%);
+    background-image: linear-gradient(135deg, #40281f 0%, #1f4542 100%);
   }
   .text-hop-gradient {
-    background-image: linear-gradient(135deg, #059669 0%, #4f46e5 100%);
+    background-image: linear-gradient(135deg, #d95732 0%, #24777a 100%);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
     color: transparent;
   }
   .dark .text-hop-gradient {
-    background-image: linear-gradient(135deg, oklch(0.74 0.17 162) 0%, oklch(0.68 0.22 295) 100%);
+    background-image: linear-gradient(135deg, #f06a43 0%, #59bab7 100%);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
@@ -216,13 +216,13 @@
     position: absolute;
     inset: 0;
     border-radius: inherit;
-    box-shadow: 0 0 0 0 oklch(0.69 0.17 162 / 0.6);
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--hop) 60%, transparent);
     animation: hopit-pulse 2s infinite;
   }
   @keyframes hopit-pulse {
-    0% { box-shadow: 0 0 0 0 oklch(0.69 0.17 162 / 0.6); }
-    70% { box-shadow: 0 0 0 8px oklch(0.69 0.17 162 / 0); }
-    100% { box-shadow: 0 0 0 0 oklch(0.69 0.17 162 / 0); }
+    0% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--hop) 60%, transparent); }
+    70% { box-shadow: 0 0 0 8px color-mix(in oklch, var(--hop) 0%, transparent); }
+    100% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--hop) 0%, transparent); }
   }
   .grid-pattern {
     background-image:
@@ -232,7 +232,7 @@
   }
   .workspace-canvas {
     background:
-      linear-gradient(180deg, color-mix(in oklch, var(--background) 94%, #ffffff 6%) 0%, var(--background) 45%, #eef6f3 100%);
+      linear-gradient(180deg, color-mix(in oklch, var(--background) 94%, #ffffff 6%) 0%, var(--background) 45%, color-mix(in oklch, var(--grape-soft) 42%, var(--background)) 100%);
   }
   .workspace-grid {
     background-image:
@@ -242,7 +242,46 @@
   }
   .panel-surface {
     background:
-      linear-gradient(180deg, color-mix(in oklch, var(--card) 96%, #ecfdf5 4%) 0%, var(--card) 100%);
+      linear-gradient(180deg, color-mix(in oklch, var(--card) 96%, var(--accent) 4%) 0%, var(--card) 100%);
+  }
+  .command-deck-canvas {
+    background:
+      linear-gradient(90deg, color-mix(in oklch, var(--foreground) 4%, transparent) 1px, transparent 1px),
+      linear-gradient(180deg, color-mix(in oklch, var(--foreground) 3%, transparent) 1px, transparent 1px),
+      linear-gradient(135deg, var(--background) 0%, color-mix(in oklch, var(--grape-soft) 35%, var(--background)) 56%, color-mix(in oklch, var(--accent) 42%, var(--background)) 100%);
+    background-size: 72px 72px, 72px 72px, auto;
+  }
+  .deck-surface {
+    background:
+      linear-gradient(180deg, color-mix(in oklch, var(--card) 98%, var(--accent) 2%) 0%, var(--card) 100%);
+  }
+  .deck-grid {
+    background-image:
+      linear-gradient(to right, color-mix(in oklch, var(--ink-foreground) 7%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklch, var(--ink-foreground) 6%, transparent) 1px, transparent 1px),
+      linear-gradient(120deg, transparent 0%, color-mix(in oklch, var(--hop) 14%, transparent) 48%, transparent 49%, transparent 100%);
+    background-size: 44px 44px, 44px 44px, 220px 220px;
+  }
+  .status-scanline {
+    background:
+      repeating-linear-gradient(
+        180deg,
+        color-mix(in oklch, var(--ink-foreground) 10%, transparent) 0,
+        color-mix(in oklch, var(--ink-foreground) 10%, transparent) 1px,
+        transparent 1px,
+        transparent 8px
+      );
+  }
+  .topology-field {
+    background:
+      linear-gradient(135deg, color-mix(in oklch, var(--grape-soft) 18%, transparent) 0%, transparent 42%),
+      linear-gradient(180deg, color-mix(in oklch, var(--background) 65%, var(--card)) 0%, var(--card) 100%);
+  }
+  .topology-grid {
+    background-image:
+      linear-gradient(to right, color-mix(in oklch, var(--foreground) 6%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklch, var(--foreground) 5%, transparent) 1px, transparent 1px);
+    background-size: 34px 34px;
   }
   .mono-label {
     font-family: var(--font-geist-mono);
