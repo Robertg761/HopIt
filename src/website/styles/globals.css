@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=Inter:wght@300;400;500;600;700&display=swap');
 @import "tailwindcss";
 @import "tw-animate-css";
 
@@ -53,97 +54,107 @@
 }
 
 :root {
-  --radius: 0.5rem;
-  --font-geist-sans: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --radius: 0.55rem;
+  --font-geist-sans: "Outfit", "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --font-geist-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Consolas, "Liberation Mono", monospace;
-  --background: #f5f7f4;
-  --foreground: #181a17;
-  --card: #fcfdfa;
-  --card-foreground: #181a17;
-  --popover: #fcfdfa;
-  --popover-foreground: #181a17;
 
-  --primary: #d95732;
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --card: #ffffff;
+  --card-foreground: #0f172a;
+  --popover: #ffffff;
+  --popover-foreground: #0f172a;
+
+  --primary: #4f46e5;
   --primary-foreground: #ffffff;
-  --hop: #d95732;
+  --hop: #4f46e5;
   --hop-foreground: #ffffff;
-  --hop-soft: #fde7dd;
+  --hop-soft: #e0e7ff;
+  --hop-logo-start: #4f46e5;
+  --hop-logo-end: #0ea5e9;
 
-  --secondary: #e4eee9;
-  --secondary-foreground: #173635;
-  --grape: #24777a;
+  --secondary: #f1f5f9;
+  --secondary-foreground: #0f172a;
+  --grape: #0ea5e9;
   --grape-foreground: #ffffff;
-  --grape-soft: #ddf3f1;
+  --grape-soft: #e0f2fe;
 
-  --muted: #ecefe8;
-  --muted-foreground: #6d7468;
-  --accent: #fff0e8;
-  --accent-foreground: #8c321f;
-  --destructive: #dc2626;
-  --border: #d9ddd3;
-  --input: #c5cec1;
-  --ring: #d95732;
-  --hop-amber: #9aa90f;
+  --muted: #f1f5f9;
+  --muted-foreground: #64748b;
+  --accent: #f5f3ff;
+  --accent-foreground: #4f46e5;
+  --destructive: #ef4444;
+  --border: #e2e8f0;
+  --input: #cbd5e1;
+  --ring: #6366f1;
+  --hop-amber: #f59e0b;
 
-  --sidebar: #181a17;
-  --sidebar-foreground: #f5f7f4;
-  --sidebar-primary: #d95732;
+  --sidebar: #0f172a;
+  --sidebar-foreground: #f8fafc;
+  --sidebar-primary: #6366f1;
   --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #272a24;
-  --sidebar-accent-foreground: #f5f7f4;
-  --sidebar-border: #393d34;
-  --sidebar-ring: #d95732;
-  --ink: #171916;
-  --ink-foreground: #f5f7f4;
+  --sidebar-accent: #1e293b;
+  --sidebar-accent-foreground: #f8fafc;
+  --sidebar-border: #334155;
+  --sidebar-ring: #6366f1;
+  --ink: #0f172a;
+  --ink-foreground: #f8fafc;
 
-  --chart-1: #d95732;
-  --chart-2: #24777a;
-  --chart-3: #9aa90f;
-  --chart-4: #8f5a36;
-  --chart-5: #44664a;
+  --chart-1: #6366f1;
+  --chart-2: #14b8a6;
+  --chart-3: #f59e0b;
+  --chart-4: #d946ef;
+  --chart-5: #10b981;
 }
 
 .dark {
-  --background: #151713;
-  --foreground: #f3f5ee;
-  --card: #1f211c;
-  --card-foreground: #f3f5ee;
-  --popover: #1f211c;
-  --popover-foreground: #f3f5ee;
-  --primary: #f06a43;
-  --primary-foreground: #161713;
-  --hop: #f06a43;
-  --hop-foreground: #161713;
-  --hop-soft: #4a2b21;
-  --secondary: #243531;
-  --secondary-foreground: #eef6f2;
-  --grape: #59bab7;
-  --grape-foreground: #141615;
-  --grape-soft: #1f4542;
-  --muted: #292d25;
-  --muted-foreground: #aeb6a8;
-  --accent: #40281f;
-  --accent-foreground: #fff0e8;
+  --background: #07080e;
+  --foreground: #f8fafc;
+  --card: #0f111a;
+  --card-foreground: #f8fafc;
+  --popover: #0f111a;
+  --popover-foreground: #f8fafc;
+
+  --primary: #818cf8;
+  --primary-foreground: #07080e;
+  --hop: #818cf8;
+  --hop-foreground: #07080e;
+  --hop-soft: #1e2238;
+  --hop-logo-start: #818cf8;
+  --hop-logo-end: #22d3ee;
+
+  --secondary: #161925;
+  --secondary-foreground: #f8fafc;
+  --grape: #22d3ee;
+  --grape-foreground: #07080e;
+  --grape-soft: #162e37;
+
+  --muted: #161824;
+  --muted-foreground: #94a3b8;
+  --accent: #231f3b;
+  --accent-foreground: #e0e7ff;
   --destructive: #f87171;
-  --border: #34382f;
-  --input: #3e4438;
-  --ring: #f06a43;
-  --hop-amber: #d1df45;
-  --sidebar: #11130f;
-  --sidebar-foreground: #f3f5ee;
-  --sidebar-primary: #f06a43;
-  --sidebar-primary-foreground: #161713;
-  --sidebar-accent: #24271f;
-  --sidebar-accent-foreground: #f3f5ee;
-  --sidebar-border: #34382f;
-  --sidebar-ring: #f06a43;
-  --ink: #11130f;
-  --ink-foreground: #f3f5ee;
-  --chart-1: #f06a43;
-  --chart-2: #59bab7;
-  --chart-3: #d1df45;
-  --chart-4: #d38a5f;
-  --chart-5: #85a66f;
+  --border: #1e2235;
+  --input: #2d3250;
+  --ring: #818cf8;
+  --hop-amber: #fbbf24;
+
+  --sidebar: #090a0f;
+  --sidebar-foreground: #f8fafc;
+  --sidebar-primary: #818cf8;
+  --sidebar-primary-foreground: #07080e;
+  --sidebar-accent: #161824;
+  --sidebar-accent-foreground: #f8fafc;
+  --sidebar-border: #1e2235;
+  --sidebar-ring: #818cf8;
+  --ink: #090a0f;
+  --ink-foreground: #f8fafc;
+
+  --chart-1: #818cf8;
+  --chart-2: #22d3ee;
+  --chart-3: #fbbf24;
+  --chart-4: #e879f9;
+  --chart-5: #34d399;
 }
 
 @layer base {
@@ -151,7 +162,7 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-sans;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
     text-rendering: geometricPrecision;
   }
@@ -168,31 +179,39 @@
 /* HopIt utility helpers */
 @layer utilities {
   .bg-hop-gradient {
-    background-image: linear-gradient(135deg, #d95732 0%, #24777a 100%);
+    background-image: linear-gradient(135deg, var(--hop-logo-start) 0%, var(--hop-logo-end) 100%);
   }
   .bg-hop-gradient-soft {
-    background-image: linear-gradient(135deg, #fff0e8 0%, #ddf3f1 100%);
+    background-image: linear-gradient(135deg, var(--hop-soft) 0%, var(--grape-soft) 100%);
   }
   .dark .bg-hop-gradient-soft {
-    background-image: linear-gradient(135deg, #40281f 0%, #1f4542 100%);
+    background-image: linear-gradient(135deg, var(--hop-soft) 0%, var(--grape-soft) 100%);
   }
   .text-hop-gradient {
-    background-image: linear-gradient(135deg, #d95732 0%, #24777a 100%);
+    background-image: linear-gradient(135deg, var(--hop-logo-start) 0%, var(--hop-logo-end) 100%);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
     color: transparent;
   }
   .dark .text-hop-gradient {
-    background-image: linear-gradient(135deg, #f06a43 0%, #59bab7 100%);
+    background-image: linear-gradient(135deg, var(--hop-logo-start) 0%, var(--hop-logo-end) 100%);
     -webkit-background-clip: text;
     background-clip: text;
     -webkit-text-fill-color: transparent;
     color: transparent;
   }
   .glass-card {
-    background: color-mix(in oklch, var(--card) 88%, transparent);
-    backdrop-filter: blur(12px);
+    background: color-mix(in oklch, var(--card) 75%, transparent);
+    backdrop-filter: blur(16px);
+    border: 1px solid color-mix(in oklch, var(--foreground) 7%, transparent);
+    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.03);
+  }
+  .dark .glass-card {
+    background: color-mix(in oklch, var(--card) 45%, transparent);
+    backdrop-filter: blur(16px);
+    border: 1px solid color-mix(in oklch, var(--border) 60%, transparent);
+    box-shadow: 0 4px 30px rgba(0, 0, 0, 0.2);
   }
   .scroll-thin::-webkit-scrollbar {
     width: 6px;
@@ -202,11 +221,11 @@
     background: transparent;
   }
   .scroll-thin::-webkit-scrollbar-thumb {
-    background: color-mix(in oklch, var(--muted-foreground) 30%, transparent);
+    background: color-mix(in oklch, var(--muted-foreground) 25%, transparent);
     border-radius: 999px;
   }
   .scroll-thin::-webkit-scrollbar-thumb:hover {
-    background: color-mix(in oklch, var(--muted-foreground) 50%, transparent);
+    background: color-mix(in oklch, var(--muted-foreground) 45%, transparent);
   }
   .live-pulse {
     position: relative;
@@ -216,76 +235,86 @@
     position: absolute;
     inset: 0;
     border-radius: inherit;
-    box-shadow: 0 0 0 0 color-mix(in oklch, var(--hop) 60%, transparent);
+    box-shadow: 0 0 0 0 color-mix(in oklch, var(--hop) 50%, transparent);
     animation: hopit-pulse 2s infinite;
   }
   @keyframes hopit-pulse {
-    0% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--hop) 60%, transparent); }
-    70% { box-shadow: 0 0 0 8px color-mix(in oklch, var(--hop) 0%, transparent); }
+    0% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--hop) 55%, transparent); }
+    70% { box-shadow: 0 0 0 6px color-mix(in oklch, var(--hop) 0%, transparent); }
     100% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--hop) 0%, transparent); }
   }
   .grid-pattern {
     background-image:
-      linear-gradient(to right, color-mix(in oklch, var(--foreground) 4%, transparent) 1px, transparent 1px),
-      linear-gradient(to bottom, color-mix(in oklch, var(--foreground) 4%, transparent) 1px, transparent 1px);
-    background-size: 28px 28px;
+      linear-gradient(to right, color-mix(in oklch, var(--foreground) 3.5%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklch, var(--foreground) 3.5%, transparent) 1px, transparent 1px);
+    background-size: 24px 24px;
   }
   .workspace-canvas {
     background:
-      linear-gradient(180deg, color-mix(in oklch, var(--background) 94%, #ffffff 6%) 0%, var(--background) 45%, color-mix(in oklch, var(--grape-soft) 42%, var(--background)) 100%);
+      linear-gradient(180deg, color-mix(in oklch, var(--background) 95%, #ffffff 5%) 0%, var(--background) 45%, color-mix(in oklch, var(--grape-soft) 25%, var(--background)) 100%);
   }
   .workspace-grid {
     background-image:
-      linear-gradient(to right, color-mix(in oklch, var(--foreground) 5%, transparent) 1px, transparent 1px),
-      linear-gradient(to bottom, color-mix(in oklch, var(--foreground) 4%, transparent) 1px, transparent 1px);
-    background-size: 36px 36px;
+      linear-gradient(to right, color-mix(in oklch, var(--foreground) 4.5%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklch, var(--foreground) 3.5%, transparent) 1px, transparent 1px);
+    background-size: 32px 32px;
   }
   .panel-surface {
     background:
-      linear-gradient(180deg, color-mix(in oklch, var(--card) 96%, var(--accent) 4%) 0%, var(--card) 100%);
+      linear-gradient(180deg, color-mix(in oklch, var(--card) 98%, var(--accent) 2%) 0%, var(--card) 100%);
+    border: 1px solid var(--border);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.02);
+  }
+  .dark .panel-surface {
+    background:
+      linear-gradient(180deg, color-mix(in oklch, var(--card) 98%, var(--muted) 2%) 0%, var(--card) 100%);
+    border: 1px solid var(--border);
+    box-shadow: 0 1px 8px rgba(0,0,0,0.15);
   }
   .command-deck-canvas {
     background:
-      linear-gradient(90deg, color-mix(in oklch, var(--foreground) 4%, transparent) 1px, transparent 1px),
-      linear-gradient(180deg, color-mix(in oklch, var(--foreground) 3%, transparent) 1px, transparent 1px),
-      linear-gradient(135deg, var(--background) 0%, color-mix(in oklch, var(--grape-soft) 35%, var(--background)) 56%, color-mix(in oklch, var(--accent) 42%, var(--background)) 100%);
-    background-size: 72px 72px, 72px 72px, auto;
+      linear-gradient(90deg, color-mix(in oklch, var(--foreground) 2.5%, transparent) 1px, transparent 1px),
+      linear-gradient(180deg, color-mix(in oklch, var(--foreground) 2.5%, transparent) 1px, transparent 1px),
+      radial-gradient(circle at 50% 0%, color-mix(in oklch, var(--primary) 6.5%, transparent) 0%, transparent 60%),
+      radial-gradient(circle at 100% 100%, color-mix(in oklch, var(--grape) 3.5%, transparent) 0%, transparent 40%),
+      var(--background);
+    background-size: 64px 64px, 64px 64px, auto, auto, auto;
   }
   .deck-surface {
     background:
-      linear-gradient(180deg, color-mix(in oklch, var(--card) 98%, var(--accent) 2%) 0%, var(--card) 100%);
+      linear-gradient(180deg, color-mix(in oklch, var(--card) 99%, var(--accent) 1%) 0%, var(--card) 100%);
   }
   .deck-grid {
     background-image:
-      linear-gradient(to right, color-mix(in oklch, var(--ink-foreground) 7%, transparent) 1px, transparent 1px),
-      linear-gradient(to bottom, color-mix(in oklch, var(--ink-foreground) 6%, transparent) 1px, transparent 1px),
-      linear-gradient(120deg, transparent 0%, color-mix(in oklch, var(--hop) 14%, transparent) 48%, transparent 49%, transparent 100%);
-    background-size: 44px 44px, 44px 44px, 220px 220px;
+      linear-gradient(to right, color-mix(in oklch, var(--ink-foreground) 6%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklch, var(--ink-foreground) 5%, transparent) 1px, transparent 1px),
+      linear-gradient(120deg, transparent 0%, color-mix(in oklch, var(--hop) 10%, transparent) 48%, transparent 49%, transparent 100%);
+    background-size: 40px 40px, 40px 40px, 200px 200px;
   }
   .status-scanline {
     background:
       repeating-linear-gradient(
         180deg,
-        color-mix(in oklch, var(--ink-foreground) 10%, transparent) 0,
-        color-mix(in oklch, var(--ink-foreground) 10%, transparent) 1px,
+        color-mix(in oklch, var(--ink-foreground) 8%, transparent) 0,
+        color-mix(in oklch, var(--ink-foreground) 8%, transparent) 1px,
         transparent 1px,
         transparent 8px
       );
   }
   .topology-field {
     background:
-      linear-gradient(135deg, color-mix(in oklch, var(--grape-soft) 18%, transparent) 0%, transparent 42%),
-      linear-gradient(180deg, color-mix(in oklch, var(--background) 65%, var(--card)) 0%, var(--card) 100%);
+      linear-gradient(135deg, color-mix(in oklch, var(--grape-soft) 12%, transparent) 0%, transparent 45%),
+      linear-gradient(180deg, color-mix(in oklch, var(--background) 60%, var(--card)) 0%, var(--card) 100%);
   }
   .topology-grid {
     background-image:
-      linear-gradient(to right, color-mix(in oklch, var(--foreground) 6%, transparent) 1px, transparent 1px),
-      linear-gradient(to bottom, color-mix(in oklch, var(--foreground) 5%, transparent) 1px, transparent 1px);
-    background-size: 34px 34px;
+      linear-gradient(to right, color-mix(in oklch, var(--foreground) 5%, transparent) 1px, transparent 1px),
+      linear-gradient(to bottom, color-mix(in oklch, var(--foreground) 4%, transparent) 1px, transparent 1px);
+    background-size: 30px 30px;
   }
   .mono-label {
     font-family: var(--font-geist-mono);
-    letter-spacing: 0;
+    letter-spacing: 0.05em;
     text-transform: uppercase;
   }
 }

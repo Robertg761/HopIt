@@ -1,6 +1,7 @@
 'use client'
 
 import * as React from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import {
   Activity,
   Bell,
@@ -180,14 +181,7 @@ function PageContent({
         />
         <section className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(420px,0.9fr)]">
           <RepoTopologyPanel status={status} />
-          <ModuleFrame
-            eyebrow="Codebase registry"
-            title="Connected repositories"
-            icon={FolderOpen}
-            aside={status.codebaseId ? 'connected' : 'empty'}
-          >
-            <ReposSection status={status} />
-          </ModuleFrame>
+          <ReposSection status={status} />
         </section>
       </>
     )
@@ -205,14 +199,7 @@ function PageContent({
         />
         <section className="grid gap-5 xl:grid-cols-[minmax(380px,0.55fr)_minmax(0,1fr)]">
           <FileCloudPanel status={status} />
-          <ModuleFrame
-            eyebrow="File browser"
-            title="Workspace file explorer"
-            icon={FolderOpen}
-            aside={`${formatCount(status.fileCount)} files`}
-          >
-            <DriveSection status={status} />
-          </ModuleFrame>
+          <DriveSection status={status} />
         </section>
       </>
     )
@@ -229,14 +216,7 @@ function PageContent({
           status={status}
         />
         <ReviewLane status={status} />
-        <ModuleFrame
-          eyebrow="Review workspace"
-          title="Changed files and review metadata"
-          icon={GitPullRequest}
-          aside={status.reviewState}
-        >
-          <CodeReviewSection status={status} />
-        </ModuleFrame>
+        <CodeReviewSection status={status} />
       </>
     )
   }
@@ -251,18 +231,11 @@ function PageContent({
           icon={ShieldCheck}
           status={status}
         />
-        <ModuleFrame
-          eyebrow="Access plane"
-          title="Members, invitations, and encrypted scope"
-          icon={ShieldCheck}
-          aside={`${status.requester.role} role`}
-        >
-          <MembersInvitationsPanel
-            status={status}
-            loading={loading}
-            onRefreshStatus={refreshStatus}
-          />
-        </ModuleFrame>
+        <MembersInvitationsPanel
+          status={status}
+          loading={loading}
+          onRefreshStatus={refreshStatus}
+        />
       </>
     )
   }
@@ -277,14 +250,7 @@ function PageContent({
           icon={MessageSquareText}
           status={status}
         />
-        <ModuleFrame
-          eyebrow="Collaboration graph"
-          title="Issues, discussions, releases, and project flow"
-          icon={MessageSquareText}
-          aside={status.codebaseName}
-        >
-          <CollaborationSection status={status} />
-        </ModuleFrame>
+        <CollaborationSection status={status} />
       </>
     )
   }
@@ -299,14 +265,7 @@ function PageContent({
           icon={Activity}
           status={status}
         />
-        <ModuleFrame
-          eyebrow="Event stream"
-          title="Live workspace activity"
-          icon={Activity}
-          aside={`${status.events.length} signals`}
-        >
-          <ActivityFeed status={status} />
-        </ModuleFrame>
+        <ActivityFeed status={status} />
       </>
     )
   }
@@ -320,20 +279,13 @@ function PageContent({
         icon={TerminalSquare}
         status={status}
       />
-      <ModuleFrame
-        eyebrow="Agent console"
-        title="Device sync and workspace commands"
-        icon={TerminalSquare}
-        aside={status.commandsAvailable ? 'commands live' : 'read only'}
-      >
-        <RightRail
-          status={status}
-          loading={loading}
-          runCommand={runCommand}
-          runningCommand={runningCommand}
-          commandResult={commandResult}
-        />
-      </ModuleFrame>
+      <RightRail
+        status={status}
+        loading={loading}
+        runCommand={runCommand}
+        runningCommand={runningCommand}
+        commandResult={commandResult}
+      />
     </>
   )
 }
@@ -352,21 +304,30 @@ function PageIntro({
   status: AgentStatusSnapshot
 }) {
   return (
-    <section className="deck-surface overflow-hidden rounded-lg border border-border/75 bg-card">
-      <div className="grid gap-4 p-4 sm:p-5 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-end">
-        <div className="flex min-w-0 gap-3">
-          <span className="grid size-11 shrink-0 place-items-center rounded-md border border-border bg-background text-hop">
-            <Icon className="size-5" />
+    <motion.section
+      initial={{ opacity: 0, y: -10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4, ease: 'easeOut' }}
+      className="panel-surface overflow-hidden rounded-xl border border-border bg-card shadow-sm"
+    >
+      <div className="grid gap-5 p-5 sm:p-6 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-center">
+        <div className="flex min-w-0 items-start gap-4">
+          <span className="grid size-12 shrink-0 place-items-center rounded-xl bg-gradient-to-tr from-primary/10 to-grape/10 border border-primary/20 text-primary">
+            <Icon className="size-5.5" />
           </span>
           <div className="min-w-0">
-            <p className="mono-label text-[10px] text-muted-foreground">{eyebrow}</p>
-            <h1 className="mt-1 text-2xl font-semibold leading-tight sm:text-3xl">{title}</h1>
-            <p className="mt-2 max-w-3xl text-sm leading-6 text-muted-foreground">
+            <span className="mono-label text-[9.5px] font-bold tracking-wider text-primary/80 bg-primary/5 px-2 py-0.5 rounded">
+              {eyebrow}
+            </span>
+            <h1 className="mt-2 text-2xl font-bold leading-tight tracking-tight sm:text-3xl text-foreground">
+              {title}
+            </h1>
+            <p className="mt-2 max-w-3xl text-sm leading-relaxed text-muted-foreground">
               {description}
             </p>
           </div>
         </div>
-        <div className="grid grid-cols-2 gap-2 sm:flex">
+        <div className="flex flex-wrap gap-2.5">
           <StatusPill
             icon={status.state === 'online' || status.state === 'syncing' ? Wifi : WifiOff}
             label={status.healthLabel}
@@ -385,7 +346,7 @@ function PageIntro({
           />
         </div>
       </div>
-    </section>
+    </motion.section>
   )
 }
 
@@ -404,59 +365,64 @@ function TopDock({
   const blocked = status.state === 'blocked'
 
   return (
-    <header className="sticky top-0 z-40 border-b border-border/70 bg-background/88 backdrop-blur-xl">
-      <div className="mx-auto flex h-auto max-w-[1680px] flex-col gap-2 px-3 py-2 sm:px-4 lg:px-6">
-        <div className="flex min-w-0 items-center gap-3">
+    <header className="sticky top-0 z-40 border-b border-border/40 bg-background/60 backdrop-blur-md">
+      <div className="mx-auto flex h-auto max-w-[1680px] flex-col gap-2.5 px-4 py-3 sm:px-6 lg:px-8">
+        <div className="flex min-w-0 items-center justify-between gap-4">
           <button
             type="button"
             onClick={() => navigateToSection('overview')}
-            className="flex min-w-0 items-center gap-2 rounded-md px-1 py-1 text-left transition hover:bg-muted/70"
+            className="flex min-w-0 items-center gap-2.5 rounded-lg px-2 py-1.5 text-left transition hover:bg-secondary/60"
           >
-            <HopItLogo size={28} />
-            <span className="hidden text-[11px] font-semibold uppercase text-muted-foreground md:inline">
-              Source cloud
+            <HopItLogo size={30} />
+            <span className="hidden text-[10px] font-bold uppercase tracking-wider text-muted-foreground/80 md:inline">
+              Source Cloud
             </span>
           </button>
 
-          <CommandSearch />
-
-          <div className="hidden items-center gap-2 xl:flex">
-            <StatusPill
-              icon={online ? Wifi : WifiOff}
-              label={loading ? 'connecting' : status.healthLabel}
-              tone={blocked ? 'danger' : online ? 'ready' : 'muted'}
-            />
-            <StatusPill
-              icon={ShieldCheck}
-              label={status.privateScope === 'scoped' ? 'private scoped' : 'unscoped'}
-              tone={status.privateScope === 'scoped' ? 'ready' : 'muted'}
-            />
+          <div className="flex min-w-0 max-w-md flex-1 justify-center">
+            <CommandSearch />
           </div>
 
-          <button
-            type="button"
-            onClick={() => navigateToSection('activity')}
-            className="relative hidden size-9 shrink-0 place-items-center rounded-md border border-border/70 bg-card text-muted-foreground transition hover:border-hop/50 hover:text-foreground sm:grid"
-            aria-label="Notifications"
-          >
-            <Bell className="size-4" />
-            <span className="absolute right-2 top-2 size-1.5 rounded-full bg-hop" />
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="hidden items-center gap-2 md:flex">
+              <StatusPill
+                icon={online ? Wifi : WifiOff}
+                label={loading ? 'connecting' : status.healthLabel}
+                tone={blocked ? 'danger' : online ? 'ready' : 'muted'}
+              />
+              <StatusPill
+                icon={ShieldCheck}
+                label={status.privateScope === 'scoped' ? 'private scoped' : 'unscoped'}
+                tone={status.privateScope === 'scoped' ? 'ready' : 'muted'}
+              />
+            </div>
 
-          <button
-            type="button"
-            onClick={() => setTheme(activeTheme === 'dark' ? 'light' : 'dark')}
-            className="grid size-9 shrink-0 place-items-center rounded-md border border-border/70 bg-card text-muted-foreground transition hover:border-hop/50 hover:text-foreground"
-            aria-label="Toggle theme"
-          >
-            {activeTheme === 'dark' ? (
-              <Sun className="size-4 text-hop-amber" />
-            ) : (
-              <Moon className="size-4" />
-            )}
-          </button>
+            <button
+              type="button"
+              onClick={() => navigateToSection('activity')}
+              className="relative grid size-9 shrink-0 place-items-center rounded-lg border border-border/60 bg-card text-muted-foreground transition hover:border-primary/50 hover:text-foreground shadow-sm cursor-pointer"
+              aria-label="Notifications"
+            >
+              <Bell className="size-4" />
+              <span className="absolute right-2.5 top-2.5 size-2 rounded-full bg-primary live-pulse" />
+            </button>
 
-          <AuthMenu />
+            <button
+              type="button"
+              onClick={() => setTheme(activeTheme === 'dark' ? 'light' : 'dark')}
+              className="grid size-9 shrink-0 place-items-center rounded-lg border border-border/60 bg-card text-muted-foreground transition hover:border-primary/50 hover:text-foreground shadow-sm cursor-pointer"
+              aria-label="Toggle theme"
+            >
+              {activeTheme === 'dark' ? (
+                <Sun className="size-4 text-hop-amber animate-pulse" />
+              ) : (
+                <Moon className="size-4 text-primary" />
+              )}
+            </button>
+
+            <div className="h-6 w-px bg-border/80" />
+            <AuthMenu />
+          </div>
         </div>
 
         <nav
@@ -471,14 +437,21 @@ function TopDock({
                 key={item.id}
                 href={sectionHref(item.id)}
                 className={cn(
-                  'inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border px-2.5 text-xs font-medium transition hover:border-border hover:bg-card hover:text-foreground',
-                  active
-                    ? 'border-hop/35 bg-hop/10 text-hop'
-                    : 'border-transparent text-muted-foreground',
+                  'relative inline-flex h-8.5 shrink-0 items-center gap-1.5 rounded-lg px-3.5 text-xs font-semibold transition duration-200',
+                  active ? 'text-primary' : 'text-muted-foreground hover:text-foreground',
                 )}
               >
-                <Icon className="size-3.5" />
-                {item.label}
+                {active && (
+                  <motion.span
+                    layoutId="activeDockTab"
+                    className="absolute inset-0 rounded-lg bg-primary/10 border border-primary/20 shadow-sm"
+                    transition={{ type: 'spring', stiffness: 380, damping: 30 }}
+                  />
+                )}
+                <span className="relative z-10 flex items-center gap-1.5">
+                  <Icon className="size-3.5" />
+                  {item.label}
+                </span>
               </a>
             )
           })}
@@ -620,103 +593,109 @@ function CommandDeck({
       label: 'Visible files',
       value: formatCount(status.fileCount),
       icon: FileStack,
+      color: 'text-primary bg-primary/10 border-primary/20',
     },
     {
       label: 'Pending writes',
       value: status.pendingWrites.toString(),
       icon: UploadCloud,
       active: status.pendingWrites > 0,
+      color: status.pendingWrites > 0 ? 'text-hop-amber bg-hop-amber/10 border-hop-amber/20' : 'text-muted-foreground bg-muted/40 border-border/40',
     },
     {
       label: 'Private entries',
       value: formatCount(status.hiddenFileCount),
       icon: EyeOff,
       active: status.hiddenFileCount > 0,
+      color: status.hiddenFileCount > 0 ? 'text-grape bg-grape/10 border-grape/20' : 'text-muted-foreground bg-muted/40 border-border/40',
     },
     {
       label: 'Members',
       value: formatCount(status.members.length),
       icon: Users,
+      color: 'text-primary bg-primary/10 border-primary/20',
     },
   ]
 
   return (
-    <div className="deck-surface overflow-hidden rounded-lg border border-border/75 shadow-[0_22px_60px_rgba(24,26,23,0.08)]">
-      <div className="grid min-h-[460px] lg:grid-cols-[minmax(0,1fr)_minmax(360px,0.42fr)]">
-        <div className="relative overflow-hidden bg-ink text-ink-foreground">
-          <div className="deck-grid absolute inset-0 opacity-55" />
-          <div className="status-scanline absolute inset-x-0 top-0 h-24 opacity-60" />
+    <motion.div
+      initial={{ opacity: 0, y: 15 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.5, delay: 0.1 }}
+      className="panel-surface overflow-hidden rounded-xl border border-border/80 bg-card shadow-lg"
+    >
+      <div className="grid min-h-[460px] lg:grid-cols-[minmax(0,1fr)_minmax(340px,0.38fr)]">
+        <div className="relative overflow-hidden bg-slate-950 text-white">
+          <div className="deck-grid absolute inset-0 opacity-40" />
+          <div className="status-scanline absolute inset-x-0 top-0 h-24 opacity-30" />
+          <div className="absolute top-0 right-0 -mr-16 -mt-16 size-64 rounded-full bg-primary/10 blur-3xl" />
+          <div className="absolute bottom-0 left-0 -ml-16 -mb-16 size-64 rounded-full bg-grape/10 blur-3xl" />
 
-          <div className="relative flex min-h-full flex-col justify-between gap-8 p-4 sm:p-6 lg:p-8">
-            <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="relative flex min-h-full flex-col justify-between gap-8 p-6 sm:p-8 lg:p-10">
+            <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="flex flex-wrap items-center gap-2">
-                <span className="mono-label rounded border border-white/12 bg-white/8 px-2 py-1 text-[10px] text-white/62">
-                  Command deck
+                <span className="mono-label rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-[9px] font-bold tracking-wider text-white/60">
+                  Command Deck
                 </span>
                 <span
                   className={cn(
-                    'inline-flex items-center gap-1.5 rounded border px-2 py-1 text-[10px] font-semibold',
+                    'inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[9.5px] font-bold uppercase tracking-wider',
                     blocked
-                      ? 'border-destructive/40 bg-destructive/15 text-destructive'
+                      ? 'border-destructive/30 bg-destructive/10 text-destructive'
                       : online
-                        ? 'border-hop/40 bg-hop/16 text-hop'
-                        : 'border-white/12 bg-white/8 text-white/64',
+                        ? 'border-primary/40 bg-primary/15 text-primary-foreground'
+                        : 'border-white/10 bg-white/5 text-white/50',
                   )}
                 >
                   <span
                     className={cn(
                       'size-1.5 rounded-full',
-                      blocked ? 'bg-destructive' : online ? 'bg-hop live-pulse' : 'bg-white/40',
+                      blocked ? 'bg-destructive' : online ? 'bg-primary live-pulse' : 'bg-white/30',
                     )}
                   />
                   {healthLabel}
                 </span>
               </div>
 
-              <div className="min-w-44 rounded-md border border-white/12 bg-white/8 p-3 backdrop-blur">
-                <p className="mono-label text-[10px] text-white/52">Active change set</p>
-                <p className="mt-1 truncate font-mono text-sm font-semibold">
+              <div className="min-w-44 rounded-xl border border-white/10 bg-white/5 p-3.5 backdrop-blur-md">
+                <p className="mono-label text-[9px] font-semibold text-white/50">Active change set</p>
+                <p className="mt-1 truncate font-mono text-xs font-bold text-white/90">
                   {status.activeChangeSetId}
                 </p>
-                <p className="mt-1 truncate text-[11px] text-white/54">
+                <p className="mt-1.5 truncate text-[10px] text-white/40">
                   main {status.mainRevision}
                 </p>
               </div>
             </div>
 
-            <div className="max-w-4xl">
-              <p className="mono-label text-[11px] text-hop-amber">
-                HopIt private source cloud
+            <div className="max-w-3xl">
+              <p className="mono-label text-[10px] font-bold tracking-widest text-grape">
+                HopIt Developer Portal
               </p>
-              <h1 className="mt-3 max-w-3xl text-4xl font-semibold leading-[1.02] tracking-normal sm:text-5xl lg:text-6xl">
+              <h2 className="mt-3 text-3xl font-extrabold leading-[1.05] tracking-tight sm:text-4xl lg:text-5xl text-white">
                 Code, files, review, and sync in one live workspace.
-              </h1>
-              <p className="mt-5 max-w-2xl text-sm leading-6 text-white/68 sm:text-base">
+              </h2>
+              <p className="mt-4 text-sm leading-relaxed text-white/70 sm:text-base">
                 {status.codebaseName === 'No codebase'
                   ? 'No managed workspace is connected on this device yet.'
                   : `${status.codebaseName} is mounted as a cloud-backed workspace with local agent state.`}
               </p>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
-              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+              <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
                 {metrics.map((metric) => {
                   const Icon = metric.icon
                   return (
                     <div
                       key={metric.label}
-                      className="rounded-md border border-white/10 bg-white/[0.07] p-3"
+                      className="rounded-lg border border-white/5 bg-white/[0.03] p-3 hover:bg-white/[0.05] transition duration-200"
                     >
-                      <div className="flex items-center gap-2 text-white/54">
-                        <Icon
-                          className={cn(
-                            'size-3.5',
-                            metric.active ? 'text-hop-amber' : 'text-white/48',
-                          )}
-                        />
-                        <span className="mono-label text-[10px]">{metric.label}</span>
+                      <div className="flex items-center gap-1.5 text-white/50">
+                        <Icon className="size-3.5" />
+                        <span className="mono-label text-[9px] font-medium tracking-wide">{metric.label}</span>
                       </div>
-                      <p className="mt-2 text-2xl font-semibold">{metric.value}</p>
+                      <p className="mt-1 text-xl font-bold text-white/90">{metric.value}</p>
                     </div>
                   )
                 })}
@@ -732,9 +711,9 @@ function CommandDeck({
                       type="button"
                       disabled={!status.commandsAvailable || Boolean(runningCommand)}
                       onClick={() => void runCommand(action.command)}
-                      className="inline-flex h-10 items-center justify-center gap-2 rounded-md border border-white/12 bg-white/9 px-3 text-sm font-semibold text-white transition hover:border-hop/50 hover:bg-hop/15 disabled:cursor-not-allowed disabled:opacity-45"
+                      className="inline-flex h-9.5 items-center justify-center gap-2 rounded-lg border border-white/10 bg-white/8 px-4 text-xs font-bold text-white transition hover:border-primary/50 hover:bg-primary/20 disabled:cursor-not-allowed disabled:opacity-40 cursor-pointer shadow-sm"
                     >
-                      <Icon className={cn('size-4', running && 'animate-spin')} />
+                      <Icon className={cn('size-3.5', running && 'animate-spin')} />
                       {action.label}
                     </button>
                   )
@@ -744,7 +723,7 @@ function CommandDeck({
           </div>
         </div>
 
-        <aside className="grid border-t border-border/70 bg-card lg:border-l lg:border-t-0">
+        <aside className="grid border-t border-border/40 bg-card/60 lg:border-l lg:border-t-0 divide-y divide-border/40">
           <DeckSignal
             icon={Cloud}
             label="Graph backend"
@@ -773,7 +752,7 @@ function CommandDeck({
           />
         </aside>
       </div>
-    </div>
+    </motion.div>
   )
 }
 
@@ -791,21 +770,21 @@ function DeckSignal({
   active?: boolean
 }) {
   return (
-    <div className="grid min-h-[112px] grid-cols-[auto_minmax(0,1fr)] gap-3 border-b border-border/70 p-4 last:border-b-0">
+    <div className="grid min-h-[112px] grid-cols-[auto_minmax(0,1fr)] gap-3 border-b border-border/40 p-4 last:border-b-0">
       <span
         className={cn(
-          'grid size-9 place-items-center rounded-md border',
+          'grid size-9 place-items-center rounded-lg border transition duration-200',
           active
-            ? 'border-hop/35 bg-hop/10 text-hop'
-            : 'border-border bg-muted/45 text-muted-foreground',
+            ? 'border-primary/30 bg-primary/8 text-primary shadow-sm shadow-primary/5'
+            : 'border-border/60 bg-muted/40 text-muted-foreground',
         )}
       >
         <Icon className="size-4" />
       </span>
       <span className="min-w-0">
-        <span className="mono-label text-[10px] text-muted-foreground">{label}</span>
-        <span className="mt-1 block truncate text-lg font-semibold capitalize">{value}</span>
-        <span className="mt-1 block truncate text-xs text-muted-foreground">{detail}</span>
+        <span className="mono-label text-[9px] font-bold tracking-wider text-muted-foreground">{label}</span>
+        <span className="mt-0.5 block truncate text-base font-bold capitalize text-foreground">{value}</span>
+        <span className="mt-0.5 block truncate text-xs text-muted-foreground/80">{detail}</span>
       </span>
     </div>
   )
@@ -849,9 +828,12 @@ function RepoTopologyPanel({ status }: { status: AgentStatusSnapshot }) {
   ]
 
   return (
-    <section
+    <motion.section
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.45, delay: 0.15 }}
       id="codebases"
-      className="deck-surface scroll-mt-24 overflow-hidden rounded-lg border border-border/75 bg-card"
+      className="panel-surface scroll-mt-24 overflow-hidden rounded-xl border border-border bg-card shadow-sm"
     >
       <ModuleHeader
         eyebrow="Repo topology"
@@ -861,48 +843,51 @@ function RepoTopologyPanel({ status }: { status: AgentStatusSnapshot }) {
       />
 
       <div className="grid gap-4 p-4 lg:grid-cols-[minmax(0,1fr)_280px] lg:p-5">
-        <div className="topology-field relative min-h-[360px] overflow-hidden rounded-md border border-border/70 bg-muted/20">
+        <div className="topology-field relative min-h-[360px] overflow-hidden rounded-lg border border-border bg-muted/20">
           <div className="topology-grid absolute inset-0" />
-          <div className="absolute left-[15%] top-[34%] h-px w-[60%] rotate-[9deg] bg-border" />
-          <div className="absolute left-[31%] top-[54%] h-px w-[44%] -rotate-[22deg] bg-border" />
-          <div className="absolute left-[22%] top-[62%] h-px w-[28%] rotate-[-8deg] bg-border" />
+          <div className="absolute left-[15%] top-[34%] h-px w-[60%] rotate-[9deg] bg-border/80" />
+          <div className="absolute left-[31%] top-[54%] h-px w-[44%] -rotate-[22deg] bg-border/80" />
+          <div className="absolute left-[22%] top-[62%] h-px w-[28%] rotate-[-8deg] bg-border/80" />
 
-          {nodes.map((node) => {
+          {nodes.map((node, index) => {
             const Icon = node.icon
             return (
-              <div
+              <motion.div
+                initial={{ opacity: 0, scale: 0.95 }}
+                animate={{ opacity: 1, scale: 1 }}
+                transition={{ type: 'spring', stiffness: 260, damping: 20, delay: 0.1 + index * 0.05 }}
                 key={node.label}
                 className={cn(
-                  'absolute w-[180px] max-w-[42%] rounded-md border bg-card/94 p-3 shadow-lg backdrop-blur',
+                  'absolute w-[180px] max-w-[42%] rounded-lg border bg-card/94 p-3 shadow-md backdrop-blur-md transition duration-200 hover:shadow-lg',
                   node.primary
-                    ? 'border-hop/55 shadow-hop/10'
+                    ? 'border-primary/50 shadow-primary/8 hover:border-primary'
                     : node.privateNode
-                      ? 'border-hop-amber/45'
-                      : 'border-border/80',
+                      ? 'border-hop-amber/40 shadow-hop-amber/5 hover:border-hop-amber'
+                      : 'border-border/60 hover:border-border',
                   node.className,
                 )}
               >
                 <div className="flex items-center gap-2">
                   <span
                     className={cn(
-                      'grid size-8 shrink-0 place-items-center rounded-md',
+                      'grid size-8 shrink-0 place-items-center rounded-lg',
                       node.primary
-                        ? 'bg-hop/12 text-hop'
+                        ? 'bg-primary/10 text-primary'
                         : node.privateNode
-                          ? 'bg-hop-amber/12 text-hop-amber'
+                          ? 'bg-hop-amber/10 text-hop-amber'
                           : 'bg-secondary text-secondary-foreground',
                     )}
                   >
                     <Icon className="size-4" />
                   </span>
                   <span className="min-w-0">
-                    <span className="mono-label block truncate text-[10px] text-muted-foreground">
+                    <span className="mono-label block truncate text-[9px] font-bold text-muted-foreground">
                       {node.label}
                     </span>
-                    <span className="block truncate text-sm font-semibold">{node.value}</span>
+                    <span className="block truncate text-xs font-bold text-foreground">{node.value}</span>
                   </span>
                 </div>
-              </div>
+              </motion.div>
             )
           })}
         </div>
@@ -914,7 +899,7 @@ function RepoTopologyPanel({ status }: { status: AgentStatusSnapshot }) {
           <TopologyStat label="Conflict" value={status.conflictState} icon={CheckCircle2} />
         </div>
       </div>
-    </section>
+    </motion.section>
   )
 }
 
@@ -946,7 +931,7 @@ function FileCloudPanel({ status }: { status: AgentStatusSnapshot }) {
   return (
     <section
       id="files"
-      className="deck-surface scroll-mt-24 overflow-hidden rounded-lg border border-border/75 bg-card"
+      className="panel-surface scroll-mt-24 overflow-hidden rounded-xl border border-border bg-card shadow-sm"
     >
       <ModuleHeader
         eyebrow="Cloud files"
@@ -1072,7 +1057,7 @@ function ReviewLane({ status }: { status: AgentStatusSnapshot }) {
   return (
     <section
       id="review"
-      className="deck-surface scroll-mt-24 overflow-hidden rounded-lg border border-border/75 bg-card"
+      className="panel-surface scroll-mt-24 overflow-hidden rounded-xl border border-border bg-card shadow-sm"
     >
       <ModuleHeader
         eyebrow="Change lane"

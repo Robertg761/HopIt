@@ -98,7 +98,7 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
   }
 
   return (
-    <section className="panel-surface overflow-hidden rounded-lg border border-border/70 shadow-sm">
+    <section className="panel-surface overflow-hidden rounded-xl border border-border shadow-sm">
       <div className="flex flex-col gap-3 border-b border-border/60 p-4 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <div className="flex items-center gap-2">
@@ -397,17 +397,17 @@ function ReviewMetric({ icon: Icon, label, value, tone }: ReviewMetricProps) {
   return (
     <div
       className={cn(
-        'min-w-0 rounded-lg px-2.5 py-2 ring-1 ring-inset',
+        'min-w-0 rounded-lg px-3 py-2 border transition duration-200',
         tone === 'active'
-          ? 'bg-hop/10 text-hop ring-hop/20'
-          : 'bg-muted/35 text-muted-foreground ring-border/60',
+          ? 'bg-primary/8 text-primary border-primary/20 shadow-sm'
+          : 'bg-muted/40 text-muted-foreground border-border/60',
       )}
     >
-      <p className="flex items-center gap-1.5 text-[10.5px]">
-        <Icon className="size-3 shrink-0" />
+      <p className="flex items-center gap-1.5 text-[9.5px] font-bold tracking-wide uppercase text-muted-foreground/80">
+        <Icon className="size-3 shrink-0 text-primary/80" />
         <span className="truncate">{label}</span>
       </p>
-      <p className="mt-1 truncate text-xs font-semibold text-foreground">{value}</p>
+      <p className="mt-1 truncate text-xs font-bold text-foreground">{value}</p>
     </div>
   )
 }
@@ -434,7 +434,7 @@ function CodePreview({
       <div className="flex min-h-[330px] items-center justify-center p-6 text-center">
         <div>
           <Lock className="mx-auto size-5 text-muted-foreground" />
-          <p className="mt-2 text-sm font-medium">Metadata only</p>
+          <p className="mt-2 text-sm font-bold text-foreground">Metadata only</p>
           <p className="mt-1 text-xs text-muted-foreground">
             This path is not rendered in the review preview.
           </p>
@@ -446,10 +446,11 @@ function CodePreview({
   const lines = file.contentPreview.split('\n').slice(0, 80)
 
   return (
-    <div className="max-h-[420px] overflow-auto bg-ink text-ink-foreground scroll-thin">
-      <div className="min-w-full p-3 font-mono text-[11px] leading-relaxed">
+    <div className="max-h-[420px] overflow-auto bg-slate-950 text-slate-100 rounded-lg border border-border/40 scroll-thin shadow-inner">
+      <div className="min-w-full p-4 font-mono text-[11px] leading-relaxed">
         {lines.map((line, index) => {
           const lineNumber = index + 1
+          const isActive = selectedLine === lineNumber
 
           return (
             <button
@@ -457,19 +458,24 @@ function CodePreview({
               type="button"
               onClick={() => onSelectLine(lineNumber)}
               className={cn(
-                'grid w-full grid-cols-[2.25rem_minmax(0,1fr)] gap-3 rounded px-1 text-left transition',
-                selectedLine === lineNumber && 'bg-hop/15 text-white',
+                'grid w-full grid-cols-[2.5rem_minmax(0,1fr)] gap-3.5 rounded px-2.5 py-0.5 text-left transition duration-150 cursor-pointer',
+                isActive
+                  ? 'bg-primary/20 text-white border-l-2 border-primary font-medium'
+                  : 'hover:bg-white/5 text-slate-300',
               )}
             >
-              <span className="select-none text-right text-ink-foreground/35">{lineNumber}</span>
+              <span className={cn(
+                'select-none text-right font-semibold',
+                isActive ? 'text-primary' : 'text-slate-600'
+              )}>{lineNumber}</span>
               <code className="min-w-0 whitespace-pre-wrap break-words">{line || ' '}</code>
             </button>
           )
         })}
         {file.contentPreviewTruncated ? (
-          <div className="grid grid-cols-[2.25rem_minmax(0,1fr)] gap-3 px-1 text-hop-amber">
-            <span className="select-none text-right text-ink-foreground/35">...</span>
-            <span>Preview truncated</span>
+          <div className="grid grid-cols-[2.5rem_minmax(0,1fr)] gap-3.5 px-2.5 py-1 text-hop-amber">
+            <span className="select-none text-right text-slate-600">...</span>
+            <span className="font-semibold text-[10px] uppercase tracking-wider">Preview truncated</span>
           </div>
         ) : null}
       </div>

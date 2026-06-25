@@ -330,7 +330,7 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
         : releases.length
 
   return (
-    <section className="panel-surface overflow-hidden rounded-lg border border-border/70 shadow-sm">
+    <section className="panel-surface overflow-hidden rounded-xl border border-border shadow-sm">
       <div className="flex flex-col gap-3 border-b border-border/60 p-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -382,13 +382,13 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
           </div>
         </div>
         <div className="mt-3 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-card px-2.5 py-2 lg:max-w-sm lg:flex-1">
+          <div className="flex min-w-0 items-center gap-2 rounded-lg border border-border/60 bg-card px-3 py-1.5 focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/10 lg:max-w-sm lg:flex-1">
             <Search className="size-3.5 shrink-0 text-muted-foreground" />
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
               placeholder={`Search ${tab}`}
-              className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground"
+              className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60"
             />
           </div>
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between lg:flex-1">
@@ -496,7 +496,7 @@ function TabList({
   ]
 
   return (
-    <div className="flex items-center gap-1 overflow-x-auto rounded-lg border border-border/60 bg-muted/50 p-0.5 scroll-thin">
+    <div className="flex items-center gap-1 overflow-x-auto rounded-lg border border-border/60 bg-muted/40 p-0.5 scroll-thin">
       {tabs.map((item) => {
         const Icon = item.icon
         return (
@@ -505,15 +505,15 @@ function TabList({
             type="button"
             onClick={() => setTab(item.id)}
             className={cn(
-              'flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-medium transition',
+              'flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-semibold transition cursor-pointer border border-transparent',
               tab === item.id
-                ? 'bg-card text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground',
+                ? 'bg-card text-primary shadow-sm border-border/40'
+                : 'text-muted-foreground hover:bg-muted hover:text-foreground',
             )}
           >
             <Icon className="size-3.5" />
             {item.label}
-            <span className="rounded bg-muted px-1 text-[10px]">{counts[item.id]}</span>
+            <span className="rounded bg-muted px-1.5 py-0.5 text-[9.5px] font-mono font-bold leading-none">{counts[item.id]}</span>
           </button>
         )
       })}
@@ -1129,12 +1129,12 @@ function MetricChip({ label, value, active }: { label: string; value: string; ac
   return (
     <div
       className={cn(
-        'min-w-0 rounded-lg px-2.5 py-2 ring-1 ring-inset',
-        active ? 'bg-grape/10 text-grape ring-grape/20' : 'bg-muted/35 text-muted-foreground ring-border/60',
+        'min-w-0 rounded-lg px-3 py-2 border transition duration-200',
+        active ? 'bg-primary/8 text-primary border-primary/20 shadow-sm' : 'bg-muted/40 text-muted-foreground border-border/60',
       )}
     >
-      <p className="truncate text-[10.5px]">{label}</p>
-      <p className="mt-1 truncate text-xs font-semibold text-foreground">{value}</p>
+      <p className="truncate text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground/80">{label}</p>
+      <p className="mt-0.5 truncate text-xs font-bold text-foreground">{value}</p>
     </div>
   )
 }

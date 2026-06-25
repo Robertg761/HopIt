@@ -34,8 +34,8 @@ export function HopItLogo({
         <defs>
           {!isMono && (
             <linearGradient id={gradientId} x1="6" y1="6" x2="42" y2="42" gradientUnits="userSpaceOnUse">
-              <stop stopColor="#d95732" />
-              <stop offset="1" stopColor="#24777a" />
+              <stop stopColor="var(--hop-logo-start, #4f46e5)" />
+              <stop offset="1" stopColor="var(--hop-logo-end, #0ea5e9)" />
             </linearGradient>
           )}
         </defs>

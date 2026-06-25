@@ -34,11 +34,11 @@ const privateScopeLabels: Record<AgentStatusSnapshot['privateScope'], string> = 
 }
 
 const eventToneClasses: Record<AgentEvent['tone'], string> = {
-  ready: 'bg-hop/10 text-hop ring-hop/20',
-  syncing: 'bg-sky-500/10 text-sky-500 ring-sky-500/20',
-  queued: 'bg-hop-amber/10 text-hop-amber ring-hop-amber/20',
-  observed: 'bg-grape/10 text-grape ring-grape/20',
-  blocked: 'bg-destructive/10 text-destructive ring-destructive/20',
+  ready: 'bg-primary/10 text-primary border border-primary/20',
+  syncing: 'bg-sky-500/10 text-sky-500 border border-sky-500/20',
+  queued: 'bg-hop-amber/10 text-hop-amber border border-hop-amber/20',
+  observed: 'bg-grape/10 text-grape border border-grape/20',
+  blocked: 'bg-destructive/10 text-destructive border border-destructive/20',
 }
 
 type AgentEvent = AgentStatusSnapshot['events'][number]
@@ -101,7 +101,7 @@ function AgentStatusPanel({
   const StatusIcon = status.state === 'offline' ? WifiOff : HardDrive
 
   return (
-    <section className="panel-surface overflow-hidden rounded-lg border border-border/70 shadow-sm">
+    <section className="panel-surface overflow-hidden rounded-xl border border-border shadow-sm">
       <div className="border-b border-border/60 px-4 py-3">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
@@ -287,10 +287,10 @@ function AgentStatusPanel({
           {commandResult ? (
             <div
               className={cn(
-                'mt-2 rounded-lg px-2.5 py-2 text-[11px] ring-1 ring-inset',
+                'mt-2.5 rounded-lg p-3 text-[11px] border transition duration-200',
                 commandResult.ok
-                  ? 'bg-hop/10 text-hop ring-hop/20'
-                  : 'bg-destructive/10 text-destructive ring-destructive/20',
+                  ? 'bg-primary/8 text-primary border-primary/20 shadow-sm'
+                  : 'bg-destructive/8 text-destructive border-destructive/20 shadow-sm',
               )}
             >
               <p className="font-medium">
@@ -357,15 +357,15 @@ type StatusMetricProps = {
 
 function StatusMetric({ icon: Icon, label, value, highlight = false }: StatusMetricProps) {
   return (
-    <div className="min-w-0 rounded-lg bg-card px-2.5 py-2 ring-1 ring-border/50">
-      <p className="flex items-center gap-1.5 text-[10.5px] text-muted-foreground">
-        <Icon className="size-3 shrink-0" />
+    <div className="min-w-0 rounded-lg bg-card px-3 py-2.5 border border-border/50 shadow-sm hover:border-primary/20 transition duration-200">
+      <p className="flex items-center gap-1.5 text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground/80">
+        <Icon className="size-3.5 shrink-0 text-primary/70" />
         <span className="truncate">{label}</span>
       </p>
       <p
         className={cn(
-          'mt-1 truncate text-[13px] font-semibold',
-          highlight && 'text-hop-amber',
+          'mt-1.5 truncate text-xs font-bold text-foreground',
+          highlight && 'text-hop-amber font-extrabold',
         )}
       >
         {value}
@@ -382,12 +382,12 @@ type SyncStampProps = {
 
 function SyncStamp({ icon: Icon, label, value }: SyncStampProps) {
   return (
-    <div className="rounded-lg border border-border/60 px-3 py-2">
-      <p className="flex items-center gap-1.5 text-[10.5px] text-muted-foreground">
-        <Icon className="size-3.5 text-hop" />
+    <div className="rounded-lg border border-border/60 bg-muted/30 px-3 py-2.5 shadow-sm">
+      <p className="flex items-center gap-1.5 text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground/80">
+        <Icon className="size-3.5 text-primary" />
         {label}
       </p>
-      <p className="mt-1 text-xs font-semibold">{value}</p>
+      <p className="mt-1 text-xs font-bold text-foreground">{value}</p>
     </div>
   )
 }

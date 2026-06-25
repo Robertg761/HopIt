@@ -266,7 +266,7 @@ export function MembersInvitationsPanel({ status, loading, onRefreshStatus }: Me
   }
 
   return (
-    <section className="panel-surface overflow-hidden rounded-lg border border-border/70 shadow-sm">
+    <section className="panel-surface overflow-hidden rounded-xl border border-border shadow-sm">
       <div className="flex flex-col gap-3 border-b border-border/60 p-4 lg:flex-row lg:items-center lg:justify-between">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
@@ -350,12 +350,12 @@ function SummaryChip({ label, value, active }: { label: string; value: string; a
   return (
     <div
       className={cn(
-        'min-w-0 rounded-lg px-2.5 py-2 ring-1 ring-inset',
-        active ? 'bg-hop/10 text-hop ring-hop/20' : 'bg-muted/35 text-muted-foreground ring-border/60',
+        'min-w-0 rounded-lg px-3 py-2 border transition duration-200',
+        active ? 'bg-primary/8 text-primary border-primary/20 shadow-sm' : 'bg-muted/40 text-muted-foreground border-border/60',
       )}
     >
-      <p className="truncate text-[10.5px]">{label}</p>
-      <p className="mt-1 truncate text-xs font-semibold text-foreground">{value}</p>
+      <p className="truncate text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground/80">{label}</p>
+      <p className="mt-0.5 truncate text-xs font-bold text-foreground">{value}</p>
     </div>
   )
 }
@@ -374,16 +374,16 @@ function ViewerCard({
   onClaimOwner: () => void
 }) {
   return (
-    <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
-      <p className="flex items-center gap-1.5 text-xs font-semibold">
-        <ShieldCheck className="size-3.5 text-hop" />
+    <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
+      <p className="flex items-center gap-1.5 text-xs font-bold text-foreground">
+        <ShieldCheck className="size-4 text-primary" />
         Current viewer
       </p>
-      <div className="mt-3 rounded-lg bg-card p-3 ring-1 ring-border/50">
-        <div className="flex items-start gap-3">
+      <div className="mt-3 rounded-xl bg-card p-3.5 border border-border/50 shadow-sm">
+        <div className="flex items-center gap-3">
           <Avatar label={status.requester.id ?? 'guest'} />
           <div className="min-w-0">
-            <p className="truncate text-sm font-semibold">
+            <p className="truncate text-sm font-bold text-foreground">
               {loading ? 'Loading viewer' : (status.requester.id ?? 'Guest')}
             </p>
             <p className="mt-0.5 text-xs text-muted-foreground">
@@ -391,43 +391,43 @@ function ViewerCard({
             </p>
           </div>
         </div>
-        <dl className="mt-3 space-y-2 text-[11px]">
+        <dl className="mt-3.5 space-y-2 text-[11px]">
           <ViewerDatum label="Role" value={status.requester.role} />
           <ViewerDatum label="Session" value={status.requester.sessionId ?? 'Unavailable'} />
           <ViewerDatum label="Visible files" value={status.requester.visibleFileCount?.toString() ?? status.fileCount.toString()} />
           <ViewerDatum label="Hidden files" value={status.requester.hiddenFileCount?.toString() ?? status.hiddenFileCount.toString()} />
         </dl>
       </div>
-      <div className="mt-3 flex flex-wrap gap-1.5">
+      <div className="mt-3.5 flex flex-wrap gap-1.5">
         {status.requester.permissions.length > 0 ? (
           status.requester.permissions.map((permission) => (
             <span
               key={permission}
-              className="rounded-md bg-card px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground ring-1 ring-border/60"
+              className="rounded-md bg-card px-2 py-0.5 text-[9px] font-bold text-muted-foreground uppercase border border-border/60 shadow-sm"
             >
               {permission}
             </span>
           ))
         ) : (
-          <span className="rounded-md bg-card px-1.5 py-0.5 text-[10px] text-muted-foreground ring-1 ring-border/60">
+          <span className="rounded-md bg-card px-2 py-0.5 text-[9px] font-bold text-muted-foreground uppercase border border-border/60 shadow-sm">
             no permissions
           </span>
         )}
       </div>
       {!status.requester.isOwner ? (
-        <div className="mt-3 rounded-lg bg-card p-2.5 ring-1 ring-border/50">
+        <div className="mt-3.5 rounded-xl bg-card p-3 border border-border/50 shadow-sm">
           <Button
             type="button"
             size="sm"
             variant="outline"
             disabled={Boolean(disabledReason) || submitting}
-            className="w-full justify-start rounded-lg"
+            className="w-full justify-start rounded-lg text-xs font-bold cursor-pointer"
             onClick={onClaimOwner}
           >
-            <ShieldCheck className="size-3.5" />
+            <ShieldCheck className="size-3.5 text-primary" />
             {submitting ? 'Claiming owner' : 'Claim owner'}
           </Button>
-          {disabledReason ? <p className="mt-2 text-[11px] text-muted-foreground">{disabledReason}</p> : null}
+          {disabledReason ? <p className="mt-2 text-[10px] text-muted-foreground leading-relaxed">{disabledReason}</p> : null}
         </div>
       ) : null}
     </div>

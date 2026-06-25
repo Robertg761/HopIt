@@ -34,10 +34,10 @@ const iconMap = {
 } as const
 
 const accentMap: Record<PrototypeActivityType, string> = {
-  snapshot: 'text-hop bg-hop/10',
-  sync: 'text-grape bg-grape/10',
-  upload: 'text-sky-500 bg-sky-500/10',
-  comment: 'text-hop-amber bg-hop-amber/10',
+  snapshot: 'text-primary bg-primary/10 border border-primary/20 shadow-sm',
+  sync: 'text-grape bg-grape/10 border border-grape/20 shadow-sm',
+  upload: 'text-sky-500 bg-sky-500/10 border border-sky-500/20 shadow-sm',
+  comment: 'text-hop-amber bg-hop-amber/10 border border-hop-amber/20 shadow-sm',
 }
 
 const verbMap: Record<PrototypeActivityType, string> = {
@@ -69,30 +69,30 @@ export function ActivityFeed({ status }: ActivityFeedProps) {
   const items = liveItems.filter((a) => filter === 'all' || a.what === filter)
 
   return (
-    <section className="panel-surface flex flex-col rounded-lg border border-border/70 shadow-sm">
+    <section className="panel-surface flex flex-col rounded-xl border border-border shadow-sm">
       <div className="flex flex-col gap-3 border-b border-border/60 p-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <div className="flex items-center gap-2">
-            <h2 className="text-base font-semibold">Activity</h2>
-            <span className="flex items-center gap-1 rounded-full bg-hop/10 px-1.5 py-0.5 text-[10px] font-medium text-hop">
-              <span className="size-1.5 rounded-full bg-hop live-pulse" />
+            <h2 className="text-base font-bold text-foreground">Activity</h2>
+            <span className="flex items-center gap-1.5 rounded-full bg-primary/10 px-2 py-0.5 text-[9.5px] font-bold text-primary">
+              <span className="size-1.5 rounded-full bg-primary live-pulse" />
               Live
             </span>
           </div>
-          <p className="text-xs text-muted-foreground">
+          <p className="text-xs text-muted-foreground mt-0.5">
             Live agent events and workspace activity
           </p>
         </div>
-        <div className="flex items-center gap-1 overflow-x-auto scroll-thin">
+        <div className="flex items-center gap-1.5 overflow-x-auto scroll-thin pb-1 sm:pb-0">
           {filterTabs.map((t) => (
             <button
               key={t.id}
               onClick={() => setFilter(t.id)}
               className={cn(
-                'whitespace-nowrap rounded-md px-2.5 py-1 text-xs font-medium transition',
+                'whitespace-nowrap rounded-lg px-3 py-1.5 text-xs font-semibold border transition cursor-pointer',
                 filter === t.id
-                  ? 'bg-hop/10 text-hop ring-1 ring-inset ring-hop/30'
-                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+                  ? 'bg-primary/10 text-primary border-primary/25 shadow-sm shadow-primary/5'
+                  : 'text-muted-foreground border-transparent hover:bg-muted hover:text-foreground',
               )}
             >
               {t.label}
