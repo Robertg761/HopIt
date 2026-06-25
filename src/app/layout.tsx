@@ -1,8 +1,8 @@
 import type { Metadata } from "next";
-import "./globals.css";
+import "@/website/styles/globals.css";
 import { Toaster } from "@/components/ui/toaster";
-import { ThemeProvider } from "@/components/hopit/theme-provider";
-import { ClerkAuthProvider } from "@/components/hopit/clerk-auth-provider";
+import { ThemeProvider } from "@/website/components/theme-provider";
+import { ClerkAuthProvider } from "@/website/components/clerk-auth-provider";
 import { shouldEnableClerkUi } from "@/lib/auth-config";
 
 export const metadata: Metadata = {

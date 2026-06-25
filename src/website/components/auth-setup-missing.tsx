@@ -1,4 +1,4 @@
-import { HopItLogo } from '@/components/hopit/logo'
+import { HopItLogo } from '@/website/components/logo'
 
 type AuthSetupMissingProps = {
   title?: string

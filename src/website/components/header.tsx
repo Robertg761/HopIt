@@ -25,11 +25,11 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { useTheme } from 'next-themes'
-import { AuthMenu } from '@/components/hopit/auth-menu'
+import { AuthMenu } from '@/website/components/auth-menu'
 import {
   dashboardSections,
   navigateToSection,
-} from '@/components/hopit/navigation'
+} from '@/website/components/navigation'
 
 type HeaderProps = {
   onOpenSidebar: () => void

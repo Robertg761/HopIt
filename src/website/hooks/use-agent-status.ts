@@ -5,7 +5,7 @@ import {
   type AgentStatusSnapshot,
   mapAgentStatusResponse,
   offlineAgentStatus,
-} from '@/lib/agent-status'
+} from '@/website/lib/agent-status'
 
 type AgentStatusState = {
   status: AgentStatusSnapshot

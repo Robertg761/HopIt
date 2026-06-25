@@ -21,7 +21,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { codebases, type Codebase } from './data'
 import { cn } from '@/lib/utils'
-import type { AgentStatusSnapshot } from '@/lib/agent-status'
+import type { AgentStatusSnapshot } from '@/website/lib/agent-status'
 
 type ReposSectionProps = {
   status: AgentStatusSnapshot

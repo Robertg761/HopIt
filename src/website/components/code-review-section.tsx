@@ -19,7 +19,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { createCollaborationItem } from '@/lib/collaboration'
-import type { AgentFile, AgentStatusSnapshot } from '@/lib/agent-status'
+import type { AgentFile, AgentStatusSnapshot } from '@/website/lib/agent-status'
 
 type CodeReviewSectionProps = {
   status: AgentStatusSnapshot

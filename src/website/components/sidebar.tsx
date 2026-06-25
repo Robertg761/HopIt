@@ -18,7 +18,7 @@ import {
   navigateToSection,
   sectionHref,
   type DashboardSection,
-} from '@/components/hopit/navigation'
+} from '@/website/components/navigation'
 
 type SidebarProps = {
   open: boolean

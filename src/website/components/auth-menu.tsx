@@ -7,7 +7,7 @@ import {
 } from '@clerk/nextjs'
 import { LogIn, ShieldAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { useClerkAuthEnabled } from '@/components/hopit/clerk-auth-provider'
+import { useClerkAuthEnabled } from '@/website/components/clerk-auth-provider'
 
 export function AuthMenu() {
   const clerkEnabled = useClerkAuthEnabled()

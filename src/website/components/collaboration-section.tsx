@@ -26,7 +26,7 @@ import {
   type CollaborationRelease,
   type WorkItemsResponse,
 } from '@/lib/collaboration'
-import type { AgentStatusSnapshot } from '@/lib/agent-status'
+import type { AgentStatusSnapshot } from '@/website/lib/agent-status'
 import { cn } from '@/lib/utils'
 
 type CollaborationSectionProps = {

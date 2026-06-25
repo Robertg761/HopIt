@@ -8,7 +8,7 @@ import {
   GitPullRequest,
   History,
 } from 'lucide-react'
-import type { AgentStatusSnapshot } from '@/lib/agent-status'
+import type { AgentStatusSnapshot } from '@/website/lib/agent-status'
 
 type Stat = {
   label: string

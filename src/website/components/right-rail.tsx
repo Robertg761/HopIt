@@ -18,8 +18,8 @@ import {
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import type { AgentStatusSnapshot } from '@/lib/agent-status'
-import type { AgentCommand, AgentCommandResult } from '@/hooks/use-agent-status'
+import type { AgentStatusSnapshot } from '@/website/lib/agent-status'
+import type { AgentCommand, AgentCommandResult } from '@/website/hooks/use-agent-status'
 
 const cacheStateLabels: Record<AgentStatusSnapshot['cacheState'], string> = {
   ready: 'Ready',

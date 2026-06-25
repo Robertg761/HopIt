@@ -11,7 +11,7 @@ import {
   Sheet,
   Upload,
   Video,
-} from '@/components/hopit/icons'
+} from '@/website/components/icons'
 
 export type Codebase = {
   id: string

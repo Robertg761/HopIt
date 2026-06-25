@@ -37,26 +37,26 @@ import {
 } from 'lucide-react'
 import { useTheme } from 'next-themes'
 
-import { ActivityFeed } from '@/components/hopit/activity-feed'
-import { AuthMenu } from '@/components/hopit/auth-menu'
-import { CodeReviewSection } from '@/components/hopit/code-review-section'
-import { CollaborationSection } from '@/components/hopit/collaboration-section'
-import { DriveSection } from '@/components/hopit/drive-section'
-import { HopItLogo } from '@/components/hopit/logo'
-import { MembersInvitationsPanel } from '@/components/hopit/members-invitations-panel'
-import { ReposSection } from '@/components/hopit/repos-section'
-import { RightRail } from '@/components/hopit/right-rail'
+import { ActivityFeed } from '@/website/components/activity-feed'
+import { AuthMenu } from '@/website/components/auth-menu'
+import { CodeReviewSection } from '@/website/components/code-review-section'
+import { CollaborationSection } from '@/website/components/collaboration-section'
+import { DriveSection } from '@/website/components/drive-section'
+import { HopItLogo } from '@/website/components/logo'
+import { MembersInvitationsPanel } from '@/website/components/members-invitations-panel'
+import { ReposSection } from '@/website/components/repos-section'
+import { RightRail } from '@/website/components/right-rail'
 import {
   dashboardSections,
   navigateToSection,
   sectionHref,
-} from '@/components/hopit/navigation'
+} from '@/website/components/navigation'
 import {
   type AgentCommand,
   type AgentCommandResult,
   useAgentStatus,
-} from '@/hooks/use-agent-status'
-import type { AgentFile, AgentStatusSnapshot } from '@/lib/agent-status'
+} from '@/website/hooks/use-agent-status'
+import type { AgentFile, AgentStatusSnapshot } from '@/website/lib/agent-status'
 import { cn } from '@/lib/utils'
 
 type IconComponent = React.ComponentType<{ className?: string }>

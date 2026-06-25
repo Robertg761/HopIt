@@ -1,5 +1,5 @@
 import { SignUp } from '@clerk/nextjs'
-import { AuthSetupMissing } from '@/components/hopit/auth-setup-missing'
+import { AuthSetupMissing } from '@/website/components/auth-setup-missing'
 import { shouldEnableClerkUi, signInPath, signUpPath } from '@/lib/auth-config'
 
 export default function SignUpPage() {

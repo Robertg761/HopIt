@@ -20,7 +20,7 @@ import {
   type DriveFile,
 } from './data'
 import { cn } from '@/lib/utils'
-import type { AgentFile, AgentStatusSnapshot } from '@/lib/agent-status'
+import type { AgentFile, AgentStatusSnapshot } from '@/website/lib/agent-status'
 
 const folderColorMap: Record<string, string> = {
   hop: 'bg-hop/15 text-hop ring-hop/30',

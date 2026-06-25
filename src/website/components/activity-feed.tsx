@@ -10,7 +10,7 @@ import {
 } from 'lucide-react'
 import { type ActivityItem } from './data'
 import { cn } from '@/lib/utils'
-import type { AgentStatusSnapshot } from '@/lib/agent-status'
+import type { AgentStatusSnapshot } from '@/website/lib/agent-status'
 
 type PrototypeActivityType = Extract<
   ActivityItem['what'],

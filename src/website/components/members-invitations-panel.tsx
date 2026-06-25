@@ -28,7 +28,7 @@ import {
   type MembersResponse,
   type PendingInvitation,
 } from '@/lib/collaboration'
-import type { AgentMember, AgentStatusSnapshot } from '@/lib/agent-status'
+import type { AgentMember, AgentStatusSnapshot } from '@/website/lib/agent-status'
 import { cn } from '@/lib/utils'
 
 type MembersInvitationsPanelProps = {
