@@ -60,11 +60,15 @@ For Git checkout conversion, use:
 
 ```bash
 npm run hop -- import-git --source /path/to/repo --production-safe
+npm run hop -- import-git-url --url https://github.com/org/repo.git
 ```
 
 `import-git` requires a `.git` entry and uses the literal mirror path. With a
 local `HOPIT_CLIENT_ENCRYPTION_KEY`, routed secrets can sync as encrypted object
 blobs; without it, the local mirror completes but cloud sync is skipped.
+`import-git-url` clones the remote URL into a temporary checkout, then runs the
+same production-safe import path. Pass `--branch <name>` to import a specific
+branch or tag.
 
 Object storage maintenance is dry-run by default:
 

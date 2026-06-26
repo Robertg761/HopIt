@@ -91,6 +91,21 @@ const serviceStatusFetchTimeoutMs = 5_000
 const defaultMirrorSecretRoutes = new Map([
   ['.env.local', '.private/env/repo-root/.env.local'],
 ])
+const mirrorSecretFileNames = new Set([
+  '.env',
+  '.npmrc',
+  '.pypirc',
+  '.netrc',
+  'id_rsa',
+  'id_ed25519',
+])
+const mirrorNonSecretEnvSuffixes = new Set([
+  'example',
+  'sample',
+  'template',
+  'dist',
+  'default',
+])
 const defaultLaunchAgentLabelPrefix = 'com.hopit.agent'
 
 class ConflictError extends Error {
@@ -133,6 +148,11 @@ async function main() {
 
   if (command === 'import-git') {
     await importGitProject(options)
+    return
+  }
+
+  if (command === 'import-git-url') {
+    await importRemoteGitProject(options)
     return
   }
 
@@ -263,6 +283,8 @@ function normalizeCommand(command) {
     import: 'import-local',
     mirror: 'mirror-local',
     'git-import': 'import-git',
+    'git-url-import': 'import-git-url',
+    'import-remote-git': 'import-git-url',
     sync: 'sync-once',
     review: 'review-open',
     export: 'export-git',
@@ -532,7 +554,7 @@ async function mirrorLocalProject(options, context = {}) {
 
   const codebaseId = options['codebase-id'] ?? path.basename(workspace)
   const launchAgentLabel = options['launch-agent-label'] ?? `${defaultLaunchAgentLabelPrefix}.${codebaseId}`
-  const routes = mirrorSecretRoutesFromOptions(options)
+  const routes = await mirrorSecretRoutesFromOptions(source, options)
   const secretSync = secretSyncStatus(options)
   const startedAt = new Date().toISOString()
   const stoppedService = options['skip-service-control']
@@ -548,7 +570,8 @@ async function mirrorLocalProject(options, context = {}) {
   const destinationManifest = await buildLiteralMirrorManifest(workspace)
   const diff = diffLiteralManifests(sourceManifest, destinationManifest)
   const rootEnvExists = existsSync(path.join(workspace, '.env.local'))
-  const routedSecretExists = existsSync(path.join(workspace, '.private/env/repo-root/.env.local'))
+  const routedSecretCount = countLocalOnlySecretManifestEntries(destinationManifest)
+  const routedSecretExists = routedSecretCount > 0
   const budget = storageBudgetReport(destinationManifest, storageBudgetBytes)
 
   const result = {
@@ -563,6 +586,7 @@ async function mirrorLocalProject(options, context = {}) {
     backup,
     copied: copyResult,
     routes: [...routes.entries()].map(([from, to]) => ({ from, to })),
+    remoteGit: context.remoteGit ?? null,
     manifest: {
       source: literalManifestSummary(sourceManifest),
       destination: literalManifestSummary(destinationManifest),
@@ -571,6 +595,7 @@ async function mirrorLocalProject(options, context = {}) {
     secrets: {
       rootEnvExists,
       routedEnvExists: routedSecretExists,
+      routedSecretCount,
       encryptedSyncEnabled: secretSync.enabled,
       encryptedSyncReason: secretSync.reason,
       encryptionScope: secretSync.scope,
@@ -648,6 +673,11 @@ async function mirrorLocalProject(options, context = {}) {
 }
 
 async function importGitProject(options) {
+  if (options.url || options['git-url']) {
+    await importRemoteGitProject(options)
+    return
+  }
+
   if (!options.source) {
     throw new Error('Missing --source <path> for import-git.')
   }
@@ -663,6 +693,159 @@ async function importGitProject(options) {
     'production-safe': true,
   }
   await mirrorLocalProject(nextOptions, { action: 'import-git', requireGit: true })
+}
+
+async function importRemoteGitProject(options) {
+  const remoteUrl = options.url ?? options['git-url']
+  if (!remoteUrl) {
+    throw new Error('Missing --url <git-url> for import-git-url.')
+  }
+
+  validateGitRemoteUrl(remoteUrl)
+
+  const cloneRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hopit-git-import-'))
+  const clonePath = path.join(cloneRoot, 'repo')
+  const cloneStartedAt = new Date().toISOString()
+
+  try {
+    const cloneResult = await cloneGitRepository(remoteUrl, clonePath, options)
+    await emit(options, 'git.clone_complete', {
+      url: redactGitRemoteUrl(remoteUrl),
+      source: clonePath,
+      elapsedMs: cloneResult.elapsedMs,
+    })
+
+    const nextOptions = {
+      ...options,
+      source: clonePath,
+      'production-safe': true,
+    }
+    await mirrorLocalProject(nextOptions, {
+      action: 'import-git-url',
+      requireGit: true,
+      remoteGit: {
+        url: redactGitRemoteUrl(remoteUrl),
+        branch: options.branch ?? null,
+        clonedAt: cloneStartedAt,
+      },
+    })
+  } finally {
+    await fs.rm(cloneRoot, { recursive: true, force: true })
+  }
+}
+
+async function cloneGitRepository(remoteUrl, outputPath, options) {
+  const args = ['clone']
+  if (options.branch) {
+    assertSafeGitOptionValue(options.branch, '--branch')
+    args.push('--branch', options.branch)
+  }
+  if (options.depth) {
+    const depth = Number(options.depth)
+    if (!Number.isInteger(depth) || depth < 1) {
+      throw new Error(`Invalid --depth value: ${options.depth}`)
+    }
+    args.push('--depth', String(depth))
+  }
+  args.push('--', remoteUrl, outputPath)
+
+  const timeoutMs = Number(options['git-timeout-ms'] ?? 10 * 60 * 1000)
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 1000) {
+    throw new Error(`Invalid --git-timeout-ms value: ${options['git-timeout-ms']}`)
+  }
+
+  const startedAt = Date.now()
+  const result = await runProcess('git', args, { timeoutMs })
+  if (result.exitCode !== 0) {
+    const detail = result.stderr || result.stdout || 'git clone failed.'
+    throw new Error(`Unable to clone Git repository: ${detail}`)
+  }
+  return {
+    ...result,
+    elapsedMs: Date.now() - startedAt,
+  }
+}
+
+function validateGitRemoteUrl(remoteUrl) {
+  if (typeof remoteUrl !== 'string' || remoteUrl.trim() !== remoteUrl || remoteUrl.length === 0) {
+    throw new Error('Git URL must be a non-empty string without leading or trailing whitespace.')
+  }
+  if (remoteUrl.includes('\0') || remoteUrl.includes('\n') || remoteUrl.includes('\r')) {
+    throw new Error('Git URL contains unsupported control characters.')
+  }
+  if (remoteUrl.startsWith('-')) {
+    throw new Error('Git URL cannot start with a dash.')
+  }
+}
+
+function assertSafeGitOptionValue(value, optionName) {
+  if (typeof value !== 'string' || value.length === 0 || value.startsWith('-')) {
+    throw new Error(`${optionName} must be a non-empty value and cannot start with a dash.`)
+  }
+  if (value.includes('\0') || value.includes('\n') || value.includes('\r')) {
+    throw new Error(`${optionName} contains unsupported control characters.`)
+  }
+}
+
+function redactGitRemoteUrl(remoteUrl) {
+  try {
+    const parsed = new URL(remoteUrl)
+    if (parsed.username || parsed.password) {
+      parsed.username = parsed.username ? '***' : ''
+      parsed.password = parsed.password ? '***' : ''
+    }
+    return parsed.toString()
+  } catch {
+    return remoteUrl.replace(/^(ssh:\/\/)?([^@\s]+)@/, '$1***@')
+  }
+}
+
+function runProcess(command, args, { timeoutMs = 60_000, cwd = process.cwd(), input = null, outputLimit = 16_000 } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd,
+      env: process.env,
+      stdio: [input === null ? 'ignore' : 'pipe', 'pipe', 'pipe'],
+    })
+
+    let stdout = ''
+    let stderr = ''
+    const timeout = setTimeout(() => {
+      child.kill('SIGTERM')
+      reject(new Error(`${command} timed out.`))
+    }, timeoutMs)
+
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => {
+      stdout = capText(stdout + chunk, outputLimit)
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr = capText(stderr + chunk, outputLimit)
+    })
+    if (input !== null) {
+      child.stdin.on('error', (error) => {
+        if (error.code !== 'EPIPE') reject(error)
+      })
+      child.stdin.end(input)
+    }
+    child.on('error', (error) => {
+      clearTimeout(timeout)
+      reject(error)
+    })
+    child.on('close', (exitCode) => {
+      clearTimeout(timeout)
+      resolve({
+        exitCode,
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+      })
+    })
+  })
+}
+
+function capText(output, limit = 16_000) {
+  return output.length > limit ? output.slice(-limit) : output
 }
 
 async function manageStorage(options, args = []) {
@@ -2639,8 +2822,100 @@ async function backupAgentState(options) {
   }, null, 2))
 }
 
-function mirrorSecretRoutesFromOptions(_options) {
-  return new Map(defaultMirrorSecretRoutes)
+async function mirrorSecretRoutesFromOptions(source, _options) {
+  const routes = new Map()
+  const sourcePaths = await listLiteralMirrorSourcePaths(source)
+  const ignoredPaths = await listGitIgnoredMirrorPaths(source, sourcePaths)
+
+  for (const [from, to] of defaultMirrorSecretRoutes) {
+    if (sourcePaths.has(from)) {
+      addMirrorSecretRoute(routes, sourcePaths, from, to)
+    }
+  }
+
+  for (const relativePath of sourcePaths) {
+    if (routes.has(relativePath) || relativePath.startsWith('.git/')) continue
+    if (isMirrorSecretPath(relativePath)) {
+      addMirrorSecretRoute(routes, sourcePaths, relativePath, `.private/env/repo-root/${relativePath}`)
+    }
+  }
+
+  for (const relativePath of ignoredPaths) {
+    if (routes.has(relativePath) || relativePath.startsWith('.git/')) continue
+    addMirrorSecretRoute(routes, sourcePaths, relativePath, `.private/env/gitignored/${relativePath}`)
+  }
+
+  return routes
+}
+
+async function listLiteralMirrorSourcePaths(source) {
+  const paths = new Set()
+
+  async function walk(dir, relativeDir = '') {
+    const entries = await sortedDirEntries(dir)
+    for (const entry of entries) {
+      const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name
+      if (shouldSkipLiteralMirrorPath(relativePath, entry)) continue
+      const absolutePath = path.join(dir, entry.name)
+      if (entry.isDirectory()) {
+        await walk(absolutePath, relativePath)
+        continue
+      }
+      if (entry.isFile() || entry.isSymbolicLink()) paths.add(relativePath)
+    }
+  }
+
+  await walk(source)
+  return paths
+}
+
+async function listGitIgnoredMirrorPaths(source, sourcePaths) {
+  if (!existsSync(path.join(source, '.git')) || sourcePaths.size === 0) return new Set()
+  if (!(await isGitWorkTree(source))) return new Set()
+
+  const input = `${[...sourcePaths].join('\0')}\0`
+  const result = await runProcess('git', ['check-ignore', '-z', '--stdin', '--no-index'], {
+    cwd: source,
+    input,
+    outputLimit: 1_000_000,
+  })
+  if (result.exitCode === 1) return new Set()
+  if (result.exitCode !== 0) return new Set()
+
+  return new Set(result.stdout.split('\0').filter(Boolean).map(toCloudPath))
+}
+
+async function isGitWorkTree(source) {
+  const result = await runProcess('git', ['-C', source, 'rev-parse', '--is-inside-work-tree'])
+  return result.exitCode === 0 && result.stdout === 'true'
+}
+
+function addMirrorSecretRoute(routes, sourcePaths, from, desiredTo) {
+  if (from.startsWith('.private/env/')) return
+
+  let to = assertSafeCloudPath(desiredTo)
+  if (to === from) return
+
+  const routeTargets = new Set(routes.values())
+  if (sourcePaths.has(to) || routeTargets.has(to)) {
+    const ext = path.posix.extname(to)
+    const stem = ext ? to.slice(0, -ext.length) : to
+    const hash = hashContent(from).slice(0, 8)
+    to = `${stem}.${hash}${ext}`
+  }
+
+  routes.set(from, to)
+}
+
+function isMirrorSecretPath(relativePath) {
+  const basename = relativePath.split('/').at(-1) ?? relativePath
+  if (mirrorSecretFileNames.has(basename)) return true
+  if (basename.startsWith('.env.')) {
+    const suffixes = basename.slice('.env.'.length).split('.')
+    return !suffixes.some((suffix) => mirrorNonSecretEnvSuffixes.has(suffix))
+  }
+  if (basename.endsWith('.pem') || basename.endsWith('.key')) return true
+  return false
 }
 
 async function backupWorkspaceForMirror(options, startedAt) {
@@ -2708,10 +2983,17 @@ async function copyLiteralMirrorSource(source, destination, routes = new Map()) 
       await fs.mkdir(destinationPath, { recursive: true })
       result.directories += 1
       const entries = await fs.readdir(sourcePath, { withFileTypes: true })
+      let consideredChildren = 0
       for (const entry of entries) {
         const childRelativePath = relativePath ? `${relativePath}/${entry.name}` : entry.name
         if (shouldSkipLiteralMirrorPath(childRelativePath, entry)) continue
+        consideredChildren += 1
         await copyEntry(path.join(sourcePath, entry.name), childRelativePath)
+      }
+      if (consideredChildren > 0 && await isDirectoryEmpty(destinationPath)) {
+        await fs.rmdir(destinationPath)
+        result.directories -= 1
+        return
       }
       await fs.chmod(destinationPath, stat.mode)
       await fs.utimes(destinationPath, stat.atime, stat.mtime)
@@ -2721,7 +3003,8 @@ async function copyLiteralMirrorSource(source, destination, routes = new Map()) 
     if (!stat.isFile()) return
 
     await fs.mkdir(path.dirname(destinationPath), { recursive: true })
-    await fs.copyFile(sourcePath, destinationPath)
+    const buffer = await readLiteralMirrorFileBuffer(sourcePath, relativePath)
+    await fs.writeFile(destinationPath, buffer)
     await fs.chmod(destinationPath, stat.mode)
     await fs.utimes(destinationPath, stat.atime, stat.mtime)
     result.files += 1
@@ -2806,7 +3089,7 @@ async function buildLiteralMirrorManifest(root, options = {}) {
 
       if (!stat.isFile()) continue
 
-      const buffer = await fs.readFile(absolutePath)
+      const buffer = await readLiteralMirrorFileBuffer(absolutePath, relativePath)
       addEntry(manifestPath, {
         kind: entryKind.file,
         hash: hashBuffer(buffer),
@@ -2831,6 +3114,42 @@ async function buildLiteralMirrorManifest(root, options = {}) {
     scopeCounts,
     entries,
     largestEntries,
+  }
+}
+
+async function isDirectoryEmpty(dir) {
+  return (await fs.readdir(dir)).length === 0
+}
+
+async function readLiteralMirrorFileBuffer(absolutePath, relativePath) {
+  const buffer = await fs.readFile(absolutePath)
+  if (relativePath !== '.git/config') return buffer
+
+  return Buffer.from(sanitizeGitConfigContent(buffer.toString('utf8')), 'utf8')
+}
+
+function sanitizeGitConfigContent(content) {
+  return content.replace(
+    /^(\s*(?:url|pushurl)\s*=\s*)(\S+)(.*)$/gim,
+    (_match, prefix, url, suffix) => `${prefix}${stripGitRemoteCredentials(url)}${suffix}`,
+  )
+}
+
+function stripGitRemoteCredentials(remoteUrl) {
+  try {
+    const parsed = new URL(remoteUrl)
+    if (parsed.protocol === 'http:' || parsed.protocol === 'https:') {
+      parsed.username = ''
+      parsed.password = ''
+      return parsed.toString()
+    }
+    if (parsed.password) {
+      parsed.password = ''
+      return parsed.toString()
+    }
+    return remoteUrl
+  } catch {
+    return remoteUrl
   }
 }
 
@@ -2877,6 +3196,10 @@ function literalManifestSummary(manifest) {
     scopeCounts: manifest.scopeCounts,
     largestEntries: manifest.largestEntries.slice(0, 10),
   }
+}
+
+function countLocalOnlySecretManifestEntries(manifest) {
+  return Object.keys(manifest.entries ?? {}).filter((relativePath) => isLocalOnlySecretPath(relativePath)).length
 }
 
 function storageBudgetReport(manifest, budgetBytes) {
@@ -7757,6 +8080,7 @@ Commands:
   init        Seed a local cloud file graph
   import      Import a real local folder into the HopIt graph and hydrate it
   import-git  Production-safe literal Git checkout conversion into HopIt
+  import-git-url Clone a remote Git URL, then production-safe import the checkout
   mirror      Literal-copy a local folder into the managed workspace with safety checks
   hydrate     Materialize cloud files into the managed workspace
   refresh     Update the managed workspace from cloud when journal and disk are safe
@@ -7782,10 +8106,14 @@ Commands:
   demo        Run init, hydrate, edit, sync, and verify
 
 Compatibility aliases:
-  import-local, mirror-local, sync-once, review-open, status-server, workspaces, device, devices, sessions, key, keyring
+  import-local, import-remote-git, git-url-import, mirror-local, sync-once, review-open, status-server, workspaces, device, devices, sessions, key, keyring
 
 Options:
   --source <path>     Source folder for import
+  --url <git-url>     Remote Git URL for import-git-url or import-git --url
+  --branch <name>     Branch or tag to clone for remote Git import
+  --depth <n>         Optional clone depth for remote Git import
+  --git-timeout-ms <n> Remote Git clone timeout, default 600000
   --storage-budget-bytes <n> mirror: maximum encoded bytes before cloud sync is skipped
   --blob-provider <provider> Object blob provider: r2, b2, s3, or filesystem
   --blob-free-only <1|0> Keep provider uploads under the configured free-only budget

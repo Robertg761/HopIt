@@ -1,5 +1,6 @@
 'use client'
 
+import * as React from 'react'
 import { motion } from 'framer-motion'
 import {
   Activity,
@@ -8,6 +9,7 @@ import {
   Clock3,
   FileStack,
   FolderOpen,
+  GitBranch,
   HardDrive,
   GitMerge,
   GitPullRequest,
@@ -19,7 +21,11 @@ import {
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import type { AgentStatusSnapshot } from '@/website/lib/agent-status'
-import type { AgentCommand, AgentCommandResult } from '@/website/hooks/use-agent-status'
+import type {
+  AgentCommand,
+  AgentCommandPayload,
+  AgentCommandResult,
+} from '@/website/hooks/use-agent-status'
 
 const cacheStateLabels: Record<AgentStatusSnapshot['cacheState'], string> = {
   ready: 'Ready',
@@ -46,7 +52,7 @@ type AgentEvent = AgentStatusSnapshot['events'][number]
 type RightRailProps = {
   status: AgentStatusSnapshot
   loading: boolean
-  runCommand: (command: AgentCommand) => Promise<void>
+  runCommand: (command: AgentCommand, payload?: AgentCommandPayload) => Promise<void>
   runningCommand: AgentCommand | null
   commandResult: AgentCommandResult | null
 }
@@ -92,13 +98,28 @@ function AgentStatusPanel({
 }: {
   status: AgentStatusSnapshot
   loading: boolean
-  runCommand: (command: AgentCommand) => Promise<void>
+  runCommand: (command: AgentCommand, payload?: AgentCommandPayload) => Promise<void>
   runningCommand: AgentCommand | null
   commandResult: AgentCommandResult | null
 }) {
   const isOnline = status.state === 'online' || status.state === 'syncing'
   const isBlocked = status.state === 'blocked'
   const StatusIcon = status.state === 'offline' ? WifiOff : HardDrive
+  const [gitUrl, setGitUrl] = React.useState('')
+  const [gitBranch, setGitBranch] = React.useState('')
+  const trimmedGitUrl = gitUrl.trim()
+  const importRunning = runningCommand === 'importGitUrl'
+  const importDisabledReason = remoteImportDisabledReason(status, runningCommand, trimmedGitUrl)
+
+  function submitRemoteImport(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (importDisabledReason) return
+
+    void runCommand('importGitUrl', {
+      url: trimmedGitUrl,
+      branch: gitBranch.trim() || undefined,
+    })
+  }
 
   return (
     <section className="panel-surface overflow-hidden rounded-xl border border-border shadow-sm">
@@ -257,28 +278,66 @@ function AgentStatusPanel({
             ) : null}
           </div>
           {status.commandsAvailable ? (
-            <div className="grid grid-cols-2 gap-2">
-              {prototypeActions.map((action) => {
-                const Icon = action.icon
-                const isRunning = runningCommand === action.command
-                const disabledReason = commandDisabledReason(action.command, status, runningCommand)
-                return (
+            <>
+              <div className="grid grid-cols-2 gap-2">
+                {prototypeActions.map((action) => {
+                  const Icon = action.icon
+                  const isRunning = runningCommand === action.command
+                  const disabledReason = commandDisabledReason(action.command, status, runningCommand)
+                  return (
+                    <Button
+                      key={action.command}
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      disabled={Boolean(disabledReason)}
+                      title={disabledReason ?? action.label}
+                      className="h-8 justify-start gap-1.5 rounded-lg px-2 text-xs"
+                      onClick={() => void runCommand(action.command)}
+                    >
+                      <Icon className={cn('size-3.5 shrink-0', isRunning && 'animate-spin')} />
+                      <span className="truncate">{isRunning ? 'Running' : action.label}</span>
+                    </Button>
+                  )
+                })}
+              </div>
+              <form
+                className="mt-3 space-y-2 rounded-lg border border-border/60 bg-background/50 p-2.5"
+                onSubmit={submitRemoteImport}
+              >
+                <label className="block text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+                  Remote Git URL
+                </label>
+                <input
+                  type="text"
+                  value={gitUrl}
+                  onChange={(event) => setGitUrl(event.target.value)}
+                  placeholder="https://github.com/org/repo.git"
+                  className="h-8 w-full rounded-lg border border-border bg-background px-2.5 font-mono text-xs outline-none transition placeholder:text-muted-foreground/55 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                  disabled={Boolean(runningCommand)}
+                />
+                <div className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                  <input
+                    type="text"
+                    value={gitBranch}
+                    onChange={(event) => setGitBranch(event.target.value)}
+                    placeholder="branch"
+                    className="h-8 min-w-0 rounded-lg border border-border bg-background px-2.5 font-mono text-xs outline-none transition placeholder:text-muted-foreground/55 focus:border-primary focus:ring-2 focus:ring-primary/20"
+                    disabled={Boolean(runningCommand)}
+                  />
                   <Button
-                    key={action.command}
-                    type="button"
+                    type="submit"
                     size="sm"
-                    variant="outline"
-                    disabled={Boolean(disabledReason)}
-                    title={disabledReason ?? action.label}
-                    className="h-8 justify-start gap-1.5 rounded-lg px-2 text-xs"
-                    onClick={() => void runCommand(action.command)}
+                    disabled={Boolean(importDisabledReason)}
+                    title={importDisabledReason ?? 'Import remote Git URL'}
+                    className="h-8 rounded-lg px-2.5 text-xs"
                   >
-                    <Icon className={cn('size-3.5 shrink-0', isRunning && 'animate-spin')} />
-                    <span className="truncate">{isRunning ? 'Running' : action.label}</span>
+                    <GitBranch className={cn('size-3.5', importRunning && 'animate-spin')} />
+                    <span>{importRunning ? 'Importing' : 'Import'}</span>
                   </Button>
-                )
-              })}
-            </div>
+                </div>
+              </form>
+            </>
           ) : (
             <div className="rounded-lg bg-muted/40 px-2.5 py-2 text-[11px] text-muted-foreground ring-1 ring-border/50">
               Commands run from the local HopIt agent. This dashboard is currently reading {status.backend}.
@@ -406,5 +465,16 @@ function commandDisabledReason(
   if (command === 'merge' && (status.pendingWrites > 0 || status.failedWrites > 0)) {
     return 'Clear pending or failed writes before merge.'
   }
+  return null
+}
+
+function remoteImportDisabledReason(
+  status: AgentStatusSnapshot,
+  runningCommand: AgentCommand | null,
+  gitUrl: string,
+) {
+  if (runningCommand) return `Running ${runningCommand}`
+  if (!status.commandsAvailable) return 'Local workspace commands are unavailable.'
+  if (!gitUrl) return 'Enter a Git URL.'
   return null
 }

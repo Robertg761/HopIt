@@ -206,6 +206,21 @@ async function runCliFailure(command, args = []) {
 
 let refreshAvailable
 
+let gitAvailable
+
+async function skipUnlessGitAvailable(t) {
+  if (gitAvailable === undefined) {
+    try {
+      await execFileAsync('git', ['--version'], { encoding: 'utf8' })
+      gitAvailable = true
+    } catch {
+      gitAvailable = false
+    }
+  }
+
+  if (!gitAvailable) t.skip('git is not available in this environment')
+}
+
 async function skipUnlessRefreshAvailable(t) {
   if (refreshAvailable === undefined) {
     const probeRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hopit-agent-refresh-probe-'))
@@ -773,7 +788,11 @@ test('mirror routes root env secrets into .private and skips cloud sync when ove
   await fs.writeFile(path.join(source, 'README.md'), '# Literal mirror\n', 'utf8')
   await fs.writeFile(path.join(source, '.env.local'), 'SECRET=route-me\n', 'utf8')
   await fs.writeFile(path.join(source, '.env.example'), 'SECRET=\n', 'utf8')
-  await fs.writeFile(path.join(source, '.git/config'), '[core]\nrepositoryformatversion = 0\n', 'utf8')
+  await fs.writeFile(
+    path.join(source, '.git/config'),
+    '[core]\nrepositoryformatversion = 0\n[remote "origin"]\n\turl = https://token@github.com/org/repo.git\n',
+    'utf8',
+  )
   await fs.mkdir(state.workspace, { recursive: true })
   await fs.writeFile(path.join(state.workspace, 'old.txt'), 'old workspace\n', 'utf8')
 
@@ -812,7 +831,11 @@ test('import-git production-safe mirror skips cloud sync when routed secrets are
   await fs.mkdir(path.join(source, '.git'), { recursive: true })
   await fs.writeFile(path.join(source, 'README.md'), '# Git source\n', 'utf8')
   await fs.writeFile(path.join(source, '.env.local'), 'SECRET=local-only\n', 'utf8')
-  await fs.writeFile(path.join(source, '.git/config'), '[core]\nrepositoryformatversion = 0\n', 'utf8')
+  await fs.writeFile(
+    path.join(source, '.git/config'),
+    '[core]\nrepositoryformatversion = 0\n[remote "origin"]\n\turl = https://token@github.com/org/repo.git\n',
+    'utf8',
+  )
   await runCli('init', [...stateArgs(state), '--force'])
 
   const result = parseLastJsonObject((await runCli('import-git', [
@@ -853,7 +876,11 @@ test('import-git with client encryption syncs literal repo, .git metadata, and r
   await fs.mkdir(path.join(source, '.git'), { recursive: true })
   await fs.writeFile(path.join(source, 'README.md'), '# Git source encrypted\n', 'utf8')
   await fs.writeFile(path.join(source, '.env.local'), 'SECRET=encrypted-import\n', 'utf8')
-  await fs.writeFile(path.join(source, '.git/config'), '[core]\nrepositoryformatversion = 0\n', 'utf8')
+  await fs.writeFile(
+    path.join(source, '.git/config'),
+    '[core]\nrepositoryformatversion = 0\n[remote "origin"]\n\turl = https://token@github.com/org/repo.git\n',
+    'utf8',
+  )
   await runCli('init', [...stateArgs(state), ...blobArgs, '--force'])
 
   const result = parseLastJsonObject((await runCli('import-git', [
@@ -884,6 +911,136 @@ test('import-git with client encryption syncs literal repo, .git metadata, and r
   await runCli('hydrate', [...stateArgs(state), ...blobArgs])
   assert.equal(await fs.readFile(path.join(state.workspace, 'README.md'), 'utf8'), '# Git source encrypted\n')
   assert.equal(await fs.readFile(path.join(state.workspace, '.private/env/repo-root/.env.local'), 'utf8'), 'SECRET=encrypted-import\n')
+  const gitConfig = await fs.readFile(path.join(state.workspace, '.git/config'), 'utf8')
+  assert.match(gitConfig, /repositoryformatversion/)
+  assert.match(gitConfig, /https:\/\/github\.com\/org\/repo\.git/)
+  assert.equal(gitConfig.includes('token@'), false)
+})
+
+test('import-git routes secret-looking and gitignored files into encrypted private env storage', async (t) => {
+  await skipUnlessGitAvailable(t)
+
+  const state = await makeState()
+  const source = path.join(state.root, 'git-source-routed-secrets')
+  const blobRoot = path.join(state.root, 'blob-store')
+  const key = Buffer.alloc(32, 19).toString('base64')
+  const blobArgs = [
+    '--blob-provider',
+    'filesystem',
+    '--blob-root',
+    blobRoot,
+    '--client-encryption-key',
+    `base64:${key}`,
+  ]
+
+  await fs.mkdir(source, { recursive: true })
+  await execFileAsync('git', ['-C', source, 'init'], { encoding: 'utf8' })
+  await execFileAsync('git', ['-C', source, 'config', 'user.email', 'test@hopit.dev'], { encoding: 'utf8' })
+  await execFileAsync('git', ['-C', source, 'config', 'user.name', 'HopIt Test'], { encoding: 'utf8' })
+  await fs.mkdir(path.join(source, 'ignored-dir'), { recursive: true })
+  await fs.writeFile(path.join(source, 'README.md'), '# Routed secret import\n', 'utf8')
+  await fs.writeFile(path.join(source, '.gitignore'), 'ignored-secret.json\nignored-dir/\n', 'utf8')
+  await fs.writeFile(path.join(source, '.env'), 'ROOT_SECRET=route-env\n', 'utf8')
+  await fs.writeFile(path.join(source, '.env.example'), 'ROOT_SECRET=\n', 'utf8')
+  await fs.writeFile(path.join(source, '.npmrc'), '//registry.npmjs.org/:_authToken=npm-secret\n', 'utf8')
+  await fs.writeFile(path.join(source, 'ignored-secret.json'), '{"secret":true}\n', 'utf8')
+  await fs.writeFile(path.join(source, 'ignored-dir/cache.txt'), 'ignored cache\n', 'utf8')
+  await execFileAsync('git', ['-C', source, 'add', 'README.md', '.gitignore', '.env.example'], { encoding: 'utf8' })
+  await execFileAsync('git', ['-C', source, 'commit', '-m', 'Initial routed secret fixture'], { encoding: 'utf8' })
+  await runCli('init', [...stateArgs(state), ...blobArgs, '--force'])
+
+  const result = parseLastJsonObject((await runCli('import-git', [
+    ...stateArgs(state),
+    ...blobArgs,
+    '--source',
+    source,
+    '--skip-service-control',
+  ])).stdout)
+
+  assert.equal(result.sync.skipped, false)
+  assert.equal(result.secrets.routedSecretCount, 4)
+  assert.equal(await pathExists(path.join(state.workspace, '.env')), false)
+  assert.equal(await pathExists(path.join(state.workspace, '.npmrc')), false)
+  assert.equal(await pathExists(path.join(state.workspace, 'ignored-secret.json')), false)
+  assert.equal(await pathExists(path.join(state.workspace, 'ignored-dir/cache.txt')), false)
+  assert.equal(await fs.readFile(path.join(state.workspace, '.private/env/repo-root/.env'), 'utf8'), 'ROOT_SECRET=route-env\n')
+  assert.equal(
+    await fs.readFile(path.join(state.workspace, '.private/env/repo-root/.npmrc'), 'utf8'),
+    '//registry.npmjs.org/:_authToken=npm-secret\n',
+  )
+  assert.equal(
+    await fs.readFile(path.join(state.workspace, '.private/env/gitignored/ignored-secret.json'), 'utf8'),
+    '{"secret":true}\n',
+  )
+  assert.equal(await fs.readFile(path.join(state.workspace, '.private/env/gitignored/ignored-dir/cache.txt'), 'utf8'), 'ignored cache\n')
+
+  const cloud = await readJson(state.cloud)
+  assert.equal(cloud.files['.env'], undefined)
+  assert.equal(cloud.files['.npmrc'], undefined)
+  assert.equal(cloud.files['ignored-secret.json'], undefined)
+  assert.equal(cloud.files['ignored-dir/cache.txt'], undefined)
+  assert.equal(cloud.files['.env.example'].scope, 'shared')
+  for (const routedPath of [
+    '.private/env/repo-root/.env',
+    '.private/env/repo-root/.npmrc',
+    '.private/env/gitignored/ignored-secret.json',
+    '.private/env/gitignored/ignored-dir/cache.txt',
+  ]) {
+    assert.equal(cloud.files[routedPath].scope, 'owner-private')
+    assert.equal(cloud.files[routedPath].contentStorage, 'object-blob')
+    assert.equal(cloud.files[routedPath].clientEncryption.state, 'client-encrypted')
+  }
+})
+
+test('import-git-url clones a remote repository before production-safe import', async (t) => {
+  await skipUnlessGitAvailable(t)
+
+  const state = await makeState()
+  const remoteSource = path.join(state.root, 'remote-source')
+  const blobRoot = path.join(state.root, 'blob-store')
+  const key = Buffer.alloc(32, 17).toString('base64')
+  const blobArgs = [
+    '--blob-provider',
+    'filesystem',
+    '--blob-root',
+    blobRoot,
+    '--client-encryption-key',
+    `base64:${key}`,
+  ]
+
+  await fs.mkdir(remoteSource, { recursive: true })
+  await execFileAsync('git', ['-C', remoteSource, 'init'], { encoding: 'utf8' })
+  await execFileAsync('git', ['-C', remoteSource, 'config', 'user.email', 'test@hopit.dev'], { encoding: 'utf8' })
+  await execFileAsync('git', ['-C', remoteSource, 'config', 'user.name', 'HopIt Test'], { encoding: 'utf8' })
+  await fs.writeFile(path.join(remoteSource, 'README.md'), '# Remote Git source\n', 'utf8')
+  await fs.writeFile(path.join(remoteSource, '.env.local'), 'SECRET=remote-import\n', 'utf8')
+  await execFileAsync('git', ['-C', remoteSource, 'add', '.'], { encoding: 'utf8' })
+  await execFileAsync('git', ['-C', remoteSource, 'commit', '-m', 'Initial remote import fixture'], { encoding: 'utf8' })
+  await runCli('init', [...stateArgs(state), ...blobArgs, '--force'])
+
+  const remoteUrl = pathToFileURL(remoteSource).href
+  const result = parseLastJsonObject((await runCli('import-git-url', [
+    ...stateArgs(state),
+    ...blobArgs,
+    '--url',
+    remoteUrl,
+    '--skip-service-control',
+  ])).stdout)
+
+  assert.equal(result.action, 'import-git-url')
+  assert.equal(result.remoteGit.url, remoteUrl)
+  assert.equal(result.sync.skipped, false)
+
+  const cloud = await readJson(state.cloud)
+  const secretEntry = cloud.files['.private/env/repo-root/.env.local']
+  assert.equal(cloud.files['README.md'].contentStorage, 'object-blob')
+  assert.equal(cloud.files['.git/config'].scope, 'owner-private')
+  assert.equal(secretEntry.clientEncryption.state, 'client-encrypted')
+
+  await fs.rm(state.workspace, { recursive: true, force: true })
+  await runCli('hydrate', [...stateArgs(state), ...blobArgs])
+  assert.equal(await fs.readFile(path.join(state.workspace, 'README.md'), 'utf8'), '# Remote Git source\n')
+  assert.equal(await fs.readFile(path.join(state.workspace, '.private/env/repo-root/.env.local'), 'utf8'), 'SECRET=remote-import\n')
   assert.match(await fs.readFile(path.join(state.workspace, '.git/config'), 'utf8'), /repositoryformatversion/)
 })
 

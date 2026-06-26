@@ -193,6 +193,7 @@ Start on login:
 Run:
   ./bin/hop help
   ./bin/hop import --profile production --source /path/to/project --codebase-id my-project --force
+  ./bin/hop import-git-url --profile production --url https://github.com/org/repo.git --codebase-id my-project
   ./bin/hop workspace ensure --profile production --codebase-id my-project
   ./bin/hop service start --profile production --codebase-id my-project
   ./bin/hop service status --profile production --codebase-id my-project

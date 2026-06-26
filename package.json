@@ -28,6 +28,7 @@
     "convex:deploy:prod": "CONVEX_DEPLOYMENT=prod:sincere-jaguar-17 convex deploy",
     "agent:demo": "node packages/agent/src/cli.js demo",
     "agent:import": "node packages/agent/src/cli.js import",
+    "agent:import-git-url": "node packages/agent/src/cli.js import-git-url",
     "agent:init": "node packages/agent/src/cli.js init",
     "agent:hydrate": "node packages/agent/src/cli.js hydrate",
     "agent:refresh": "node packages/agent/src/cli.js refresh",

@@ -11,14 +11,19 @@ type AgentStatusState = {
   status: AgentStatusSnapshot
   loading: boolean
   refresh: () => Promise<void>
-  runCommand: (command: AgentCommand) => Promise<void>
+  runCommand: (command: AgentCommand, payload?: AgentCommandPayload) => Promise<void>
   runningCommand: AgentCommand | null
   commandResult: AgentCommandResult | null
 }
 
 const pollMs = 2500
 
-export type AgentCommand = 'sync' | 'refresh' | 'recover' | 'review' | 'merge'
+export type AgentCommand = 'sync' | 'refresh' | 'recover' | 'review' | 'merge' | 'importGitUrl'
+
+export type AgentCommandPayload = {
+  url?: string
+  branch?: string
+}
 
 export type AgentCommandResult = {
   ok: boolean
@@ -58,7 +63,7 @@ export function useAgentStatus(): AgentStatusState {
   }, [])
 
   const runCommand = React.useCallback(
-    async (command: AgentCommand) => {
+    async (command: AgentCommand, payload: AgentCommandPayload = {}) => {
       if (!status.commandsAvailable) {
         setCommandResult({
           ok: false,
@@ -75,7 +80,7 @@ export function useAgentStatus(): AgentStatusState {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ command }),
+          body: JSON.stringify({ command, ...payload }),
         })
         const result = (await response.json()) as AgentCommandResult
         setCommandResult({

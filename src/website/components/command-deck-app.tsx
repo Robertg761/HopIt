@@ -54,6 +54,7 @@ import {
 } from '@/website/components/navigation'
 import {
   type AgentCommand,
+  type AgentCommandPayload,
   type AgentCommandResult,
   useAgentStatus,
 } from '@/website/hooks/use-agent-status'
@@ -147,7 +148,7 @@ function PageContent({
   status: AgentStatusSnapshot
   loading: boolean
   refreshStatus: () => Promise<void>
-  runCommand: (command: AgentCommand) => Promise<void>
+  runCommand: (command: AgentCommand, payload?: AgentCommandPayload) => Promise<void>
   runningCommand: AgentCommand | null
   commandResult: AgentCommandResult | null
 }) {
@@ -581,7 +582,7 @@ function CommandDeck({
 }: {
   status: AgentStatusSnapshot
   loading: boolean
-  runCommand: (command: AgentCommand) => Promise<void>
+  runCommand: (command: AgentCommand, payload?: AgentCommandPayload) => Promise<void>
   runningCommand: AgentCommand | null
 }) {
   const online = status.state === 'online' || status.state === 'syncing'

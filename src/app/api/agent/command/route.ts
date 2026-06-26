@@ -30,21 +30,33 @@ const commandMap = {
   recover: { label: 'Recover', cliCommand: 'recover' },
   review: { label: 'Open review', cliCommand: 'review' },
   merge: { label: 'Merge', cliCommand: 'merge' },
+  importGitUrl: { label: 'Import Git URL', cliCommand: 'import-git-url', timeoutMs: 10 * 60 * 1000 },
 } as const
 
 type AgentCommand = keyof typeof commandMap
+type AgentCommandRequest = {
+  command?: unknown
+  url?: unknown
+  branch?: unknown
+}
 
 let activeCommand: string | null = null
 
 export async function POST(request: Request) {
+  let body: AgentCommandRequest
   let command: AgentCommand
 
   try {
-    const body = await request.json()
-    command = body.command
+    body = await request.json()
   } catch {
     return commandError('invalid_request', 'Expected a JSON body with a command field.', 400)
   }
+
+  if (typeof body.command !== 'string') {
+    return commandError('invalid_request', 'Expected a JSON body with a command field.', 400)
+  }
+
+  command = body.command as AgentCommand
 
   const commandConfig = commandMap[command]
   if (!commandConfig) {
@@ -60,7 +72,12 @@ export async function POST(request: Request) {
   }
 
   return runExclusiveCommand(command, async () => {
-    const result = await runAgentCli(commandConfig.cliCommand)
+    const extraArgs = commandArgsFromRequest(command, body)
+    if (extraArgs instanceof NextResponse) return extraArgs
+
+    const result = await runAgentCli(commandConfig.cliCommand, extraArgs, {
+      timeoutMs: 'timeoutMs' in commandConfig ? commandConfig.timeoutMs : undefined,
+    })
 
     return NextResponse.json(
       {
@@ -108,27 +125,41 @@ function summarizeCommandResult(
   if (command === 'recover') return summarizeRecover(result.stdout)
   if (command === 'review') return 'Opened the active change set for review.'
   if (command === 'merge') return 'Merged the active change set into Main.'
+  if (command === 'importGitUrl') return summarizeGitUrlImport(result.stdout)
 
   return 'Agent command completed.'
 }
 
 function summarizeSync(stdout: string) {
-  const writes = matchNumber(stdout, /"writes":(\d+)/)
+  const writes = matchNumber(stdout, /"writes":\s*(\d+)/)
   if (writes === null) return 'Synced local workspace changes.'
   return `Synced ${writes} write${writes === 1 ? '' : 's'} into the active change set.`
 }
 
 function summarizeRefresh(stdout: string) {
-  const written = matchNumber(stdout, /"written":(\d+)/)
-  const deleted = matchNumber(stdout, /"deleted":(\d+)/)
+  const written = matchNumber(stdout, /"written":\s*(\d+)/)
+  const deleted = matchNumber(stdout, /"deleted":\s*(\d+)/)
   if (written === null && deleted === null) return 'Refreshed the managed workspace.'
   return `Refreshed workspace: ${written ?? 0} written, ${deleted ?? 0} deleted.`
 }
 
 function summarizeRecover(stdout: string) {
-  const failed = matchNumber(stdout, /"failed":(\d+)/)
+  const failed = matchNumber(stdout, /"failed":\s*(\d+)/)
   if (failed && failed > 0) return `Recovery found ${failed} unresolved entr${failed === 1 ? 'y' : 'ies'}.`
   return 'Recovered pending journal entries.'
+}
+
+function summarizeGitUrlImport(stdout: string) {
+  const parsed = parseLastJsonObject(stdout)
+  if (!parsed || typeof parsed !== 'object') return 'Imported the remote Git repository.'
+  const fileCount = nestedNumber(parsed, ['manifest', 'destination', 'entryCount'])
+  const syncSkipped = nestedBoolean(parsed, ['sync', 'skipped'])
+  const syncReason = nestedString(parsed, ['sync', 'reason'])
+  if (syncSkipped) {
+    return `Cloned Git repository into the workspace; cloud sync was skipped${syncReason ? ` (${syncReason})` : ''}.`
+  }
+  if (fileCount !== null) return `Imported remote Git repository with ${fileCount} workspace entries.`
+  return 'Imported the remote Git repository.'
 }
 
 function matchNumber(text: string, pattern: RegExp) {
@@ -136,9 +167,9 @@ function matchNumber(text: string, pattern: RegExp) {
   return match ? Number(match[1]) : null
 }
 
-function runAgentCli(command: string) {
+function runAgentCli(command: string, extraArgs: string[] = [], config: { timeoutMs?: number } = {}) {
   return new Promise<{ exitCode: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn(process.execPath, [agentCli, command, ...remoteStateArgs], {
+    const child = spawn(process.execPath, [agentCli, command, ...remoteStateArgs, ...extraArgs], {
       cwd,
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -149,7 +180,7 @@ function runAgentCli(command: string) {
     const timeout = setTimeout(() => {
       child.kill('SIGTERM')
       reject(new Error(`Agent command timed out: ${command}`))
-    }, 15_000)
+    }, config.timeoutMs ?? 15_000)
 
     child.stdout.setEncoding('utf8')
     child.stderr.setEncoding('utf8')
@@ -176,6 +207,74 @@ function runAgentCli(command: string) {
     stdout: '',
     stderr: error instanceof Error ? error.message : 'Agent command failed.',
   }))
+}
+
+function commandArgsFromRequest(command: AgentCommand, body: AgentCommandRequest) {
+  if (command !== 'importGitUrl') return []
+
+  if (typeof body.url !== 'string' || body.url.trim().length === 0) {
+    return commandError('invalid_git_url', 'Expected a non-empty Git URL.', 400)
+  }
+
+  const url = body.url.trim()
+  if (!isRemoteGitUrl(url)) {
+    return commandError('invalid_git_url', 'Expected an HTTPS, SSH, or git@host:owner/repo Git URL.', 400)
+  }
+
+  const args = ['--url', url, '--skip-service-control']
+  if (typeof body.branch === 'string' && body.branch.trim().length > 0) {
+    const branch = body.branch.trim()
+    if (branch.startsWith('-') || /[\0\r\n]/.test(branch)) {
+      return commandError('invalid_git_branch', 'Git branch contains unsupported characters.', 400)
+    }
+    args.push('--branch', branch)
+  }
+  return args
+}
+
+function isRemoteGitUrl(value: string) {
+  if (/^git@[^:\s]+:[^ \t\r\n]+$/.test(value)) return true
+
+  try {
+    const parsed = new URL(value)
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:' || parsed.protocol === 'ssh:' || parsed.protocol === 'git:'
+  } catch {
+    return false
+  }
+}
+
+function parseLastJsonObject(text: string): unknown {
+  const start = text.lastIndexOf('\n{')
+  const slice = start >= 0 ? text.slice(start + 1) : text
+  try {
+    return JSON.parse(slice)
+  } catch {
+    return null
+  }
+}
+
+function nestedNumber(value: unknown, path: string[]) {
+  const found = nestedValue(value, path)
+  return typeof found === 'number' ? found : null
+}
+
+function nestedBoolean(value: unknown, path: string[]) {
+  const found = nestedValue(value, path)
+  return typeof found === 'boolean' ? found : null
+}
+
+function nestedString(value: unknown, path: string[]) {
+  const found = nestedValue(value, path)
+  return typeof found === 'string' ? found : null
+}
+
+function nestedValue(value: unknown, path: string[]): unknown {
+  let current = value
+  for (const key of path) {
+    if (!current || typeof current !== 'object' || !(key in current)) return null
+    current = (current as Record<string, unknown>)[key]
+  }
+  return current
 }
 
 function optionArg(name: string, value: string | undefined) {
