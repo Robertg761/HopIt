@@ -10,7 +10,10 @@ export type ConvexDashboardRequester = {
   requesterSessionId?: string | null
 }
 
-export async function readConvexAgentDashboard(requester: ConvexDashboardRequester = {}) {
+export async function readConvexAgentDashboard(
+  requester: ConvexDashboardRequester = {},
+  codebaseId = process.env.HOPIT_CODEBASE_ID ?? 'hopit',
+) {
   const url = convexUrl()
   if (!url) {
     throw new Error('Convex is not configured. Set HOPIT_CONVEX_URL or CONVEX_URL.')
@@ -18,7 +21,7 @@ export async function readConvexAgentDashboard(requester: ConvexDashboardRequest
 
   const client = new ConvexHttpClient(url, { logger: false })
   const args: { codebaseId: string; token?: string; requesterUserId?: string; requesterSessionId?: string } = {
-    codebaseId: process.env.HOPIT_CODEBASE_ID ?? 'hopit',
+    codebaseId,
   }
   if (process.env.HOPIT_AGENT_TOKEN) args.token = process.env.HOPIT_AGENT_TOKEN
   if (requester.requesterUserId) args.requesterUserId = requester.requesterUserId

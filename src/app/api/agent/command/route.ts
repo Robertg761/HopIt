@@ -52,7 +52,7 @@ export async function POST(request: Request) {
     return commandError('invalid_request', 'Expected a JSON body with a command field.', 400)
   }
 
-  if (typeof body.command !== 'string') {
+  if (!body || typeof body !== 'object' || Array.isArray(body) || typeof body.command !== 'string') {
     return commandError('invalid_request', 'Expected a JSON body with a command field.', 400)
   }
 

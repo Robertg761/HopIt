@@ -122,6 +122,8 @@ export function HopItDashboardPage({ view }: HopItDashboardPageProps) {
             view={view}
             status={status}
             loading={agentStatus.loading}
+            selectedCodebaseId={agentStatus.selectedCodebaseId}
+            onSelectCodebase={agentStatus.selectCodebase}
             refreshStatus={agentStatus.refresh}
             runCommand={agentStatus.runCommand}
             runningCommand={agentStatus.runningCommand}
@@ -139,6 +141,8 @@ function PageContent({
   view,
   status,
   loading,
+  selectedCodebaseId,
+  onSelectCodebase,
   refreshStatus,
   runCommand,
   runningCommand,
@@ -147,6 +151,8 @@ function PageContent({
   view: HopItDashboardView
   status: AgentStatusSnapshot
   loading: boolean
+  selectedCodebaseId: string | null
+  onSelectCodebase: (codebaseId: string) => void
   refreshStatus: () => Promise<void>
   runCommand: (command: AgentCommand, payload?: AgentCommandPayload) => Promise<void>
   runningCommand: AgentCommand | null
@@ -182,7 +188,12 @@ function PageContent({
         />
         <section className="grid gap-5 xl:grid-cols-[minmax(0,1.1fr)_minmax(420px,0.9fr)]">
           <RepoTopologyPanel status={status} />
-          <ReposSection status={status} />
+          <ReposSection
+            status={status}
+            selectedCodebaseId={selectedCodebaseId}
+            onSelectCodebase={onSelectCodebase}
+            onChanged={refreshStatus}
+          />
         </section>
       </>
     )
@@ -200,7 +211,7 @@ function PageContent({
         />
         <section className="grid gap-5 xl:grid-cols-[minmax(380px,0.55fr)_minmax(0,1fr)]">
           <FileCloudPanel status={status} />
-          <DriveSection status={status} />
+          <DriveSection status={status} onChanged={refreshStatus} />
         </section>
       </>
     )

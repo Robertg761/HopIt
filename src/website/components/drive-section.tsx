@@ -5,10 +5,12 @@ import { motion } from 'framer-motion'
 import {
   ChevronRight,
   CloudUpload,
+  FilePlus2,
   Grid3x3,
   List,
   Lock,
   MoreHorizontal,
+  Save,
   Search,
   Share2,
   Users,
@@ -31,6 +33,7 @@ const folderColorMap: Record<string, string> = {
 
 type DriveSectionProps = {
   status: AgentStatusSnapshot
+  onChanged: () => Promise<void>
 }
 
 type DriveScopeFilter = 'all' | 'shared' | 'private'
@@ -46,20 +49,87 @@ type DriveFolder = DriveFile & {
   directory: string
 }
 
-export function DriveSection({ status }: DriveSectionProps) {
+export function DriveSection({ status, onChanged }: DriveSectionProps) {
   const [view, setView] = React.useState<'grid' | 'list'>('grid')
   const [activeFolder, setActiveFolder] = React.useState('all')
   const [scopeFilter, setScopeFilter] = React.useState<DriveScopeFilter>('all')
   const [fileQuery, setFileQuery] = React.useState('')
+  const [selectedPath, setSelectedPath] = React.useState<string | null>(null)
+  const [draft, setDraft] = React.useState('')
+  const [newFilePath, setNewFilePath] = React.useState('')
+  const [saving, setSaving] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
   const filteredAgentFiles = React.useMemo(
     () => filterAgentFiles(status.files, activeFolder, scopeFilter, fileQuery),
     [activeFolder, fileQuery, scopeFilter, status.files],
   )
   const liveFiles = filteredAgentFiles.map(agentFileToDriveFile)
   const liveFolders = status.files.length > 0 ? agentFoldersFromFiles(status.files) : []
+  const selectedFile = status.files.find((file) => file.path === selectedPath) ?? null
+  const canEditSelectedFile =
+    Boolean(status.codebaseId) &&
+    selectedFile?.kind === 'file' &&
+    selectedFile.encoding === 'utf8' &&
+    selectedFile.contentPreview !== null &&
+    !selectedFile.contentPreviewTruncated
   const fileCountLabel = `${status.files.length} files`
   const privateFileCount = status.files.filter((file) => file.scope === 'owner-private').length
   const sharedFileCount = status.files.length - privateFileCount
+
+  async function saveFile() {
+    if (!status.codebaseId || !selectedFile || !canEditSelectedFile) return
+    await mutateFile({
+      path: selectedFile.path,
+      content: draft,
+      baseRevision: selectedFile.revision,
+    })
+  }
+
+  async function createFile(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const path = newFilePath.trim()
+    if (!status.codebaseId || !path) return
+
+    await mutateFile({
+      path,
+      content: '',
+      baseRevision: null,
+    })
+    setSelectedPath(path)
+    setNewFilePath('')
+  }
+
+  async function mutateFile(payload: { path: string; content: string; baseRevision: number | null }) {
+    if (!status.codebaseId) return
+
+    setSaving(true)
+    try {
+      const response = await fetch('/api/codebase-files', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          codebaseId: status.codebaseId,
+          ...payload,
+        }),
+      })
+      const body = await response.json()
+      if (!response.ok || body?.ok === false) {
+        throw new Error(body?.error?.message ?? 'File save failed.')
+      }
+      setError(null)
+      await onChanged()
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'File save failed.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  function selectFile(path: string) {
+    const file = status.files.find((entry) => entry.path === path) ?? null
+    setSelectedPath(path)
+    setDraft(file?.contentPreview ?? '')
+  }
 
   return (
     <section className="panel-surface flex flex-col rounded-xl border border-border shadow-sm">
@@ -206,19 +276,50 @@ export function DriveSection({ status }: DriveSectionProps) {
 
       {/* Files */}
       <div className="p-4">
-        <div className="mb-2.5 flex items-center justify-between">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
-            Files
-          </p>
-          <span className="text-[10.5px] font-semibold text-muted-foreground">{liveFiles.length} visible</span>
+        <div className="mb-3 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">
+              Files
+            </p>
+            <span className="text-[10.5px] font-semibold text-muted-foreground">{liveFiles.length} visible</span>
+          </div>
+          <form onSubmit={createFile} className="flex min-w-0 gap-2 lg:max-w-md lg:flex-1">
+            <input
+              value={newFilePath}
+              onChange={(event) => setNewFilePath(event.target.value)}
+              placeholder="path/to/file.txt"
+              className="min-h-9 min-w-0 flex-1 rounded-md border border-border/70 bg-background px-3 text-xs outline-none transition focus:border-primary/60 focus:ring-2 focus:ring-primary/10"
+            />
+            <Button
+              size="sm"
+              disabled={!status.codebaseId || saving || !newFilePath.trim()}
+              className="gap-1.5 rounded-md"
+            >
+              <FilePlus2 className="size-3.5" />
+              Create
+            </Button>
+          </form>
         </div>
+        {error ? (
+          <div className="mb-3 rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-xs font-medium text-destructive">
+            {error}
+          </div>
+        ) : null}
         {liveFiles.length === 0 ? (
           <EmptyFiles activeFolder={activeFolder} />
         ) : view === 'grid' ? (
-          <FileGrid files={liveFiles} />
+          <FileGrid files={liveFiles} selectedPath={selectedPath} onSelect={selectFile} />
         ) : (
-          <FileList files={liveFiles} />
+          <FileList files={liveFiles} selectedPath={selectedPath} onSelect={selectFile} />
         )}
+        <FileEditor
+          file={selectedFile}
+          draft={draft}
+          saving={saving}
+          canEdit={canEditSelectedFile}
+          onDraftChange={setDraft}
+          onSave={saveFile}
+        />
       </div>
     </section>
   )
@@ -343,19 +444,32 @@ function formatBytes(bytes: number | null) {
   return `${(bytes / 1024).toFixed(1)} KB`
 }
 
-function FileGrid({ files }: { files: DriveBrowserFile[] }) {
+function FileGrid({
+  files,
+  selectedPath,
+  onSelect,
+}: {
+  files: DriveBrowserFile[]
+  selectedPath: string | null
+  onSelect: (path: string) => void
+}) {
   return (
     <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
       {files.map((f, i) => {
         const Icon = f.type ? fileTypeIconMap[f.type] : fileTypeIconMap.doc
         const color = f.type ? fileTypeColorMap[f.type] : '#3b82f6'
         return (
-          <motion.article
+          <motion.button
             key={f.id}
+            type="button"
+            onClick={() => onSelect(f.path)}
             initial={{ opacity: 0, scale: 0.97 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ delay: i * 0.03, duration: 0.3 }}
-            className="group relative flex flex-col gap-2 rounded-xl border border-border bg-card p-4.5 transition duration-200 hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md"
+            className={cn(
+              'group relative flex flex-col gap-2 rounded-xl border bg-card p-4.5 text-left transition duration-200 hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md',
+              selectedPath === f.path ? 'border-primary/55 ring-2 ring-primary/10' : 'border-border',
+            )}
           >
             <div className="flex items-center justify-between">
               <div
@@ -380,23 +494,30 @@ function FileGrid({ files }: { files: DriveBrowserFile[] }) {
               <div className="flex items-center gap-1">
                 <ScopePill scope={f.scope} />
               </div>
-              <button
-                disabled
-                title="File actions are not available in this view yet."
-                className="rounded-lg p-1 text-muted-foreground opacity-0 transition disabled:cursor-not-allowed group-hover:opacity-100"
+              <span
+                title="Select this file to edit it."
+                className="rounded-lg p-1 text-muted-foreground opacity-0 transition group-hover:opacity-100"
                 aria-label="File actions"
               >
                 <MoreHorizontal className="size-3.5" />
-              </button>
+              </span>
             </div>
-          </motion.article>
+          </motion.button>
         )
       })}
     </div>
   )
 }
 
-function FileList({ files }: { files: DriveBrowserFile[] }) {
+function FileList({
+  files,
+  selectedPath,
+  onSelect,
+}: {
+  files: DriveBrowserFile[]
+  selectedPath: string | null
+  onSelect: (path: string) => void
+}) {
   return (
     <ul className="divide-y divide-border/40 overflow-hidden rounded-xl border border-border/80 shadow-sm">
       <li className="grid grid-cols-12 gap-2 bg-secondary/35 px-4 py-2.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground border-b border-border/50">
@@ -411,12 +532,19 @@ function FileList({ files }: { files: DriveBrowserFile[] }) {
         return (
           <li
             key={f.id}
-            className="group grid grid-cols-12 items-center gap-2 px-4 py-2.5 text-xs transition duration-150 hover:bg-primary/5 hover:text-primary"
+            className={cn(
+              'group grid grid-cols-12 items-center gap-2 px-4 py-2.5 text-xs transition duration-150 hover:bg-primary/5 hover:text-primary',
+              selectedPath === f.path && 'bg-primary/8',
+            )}
           >
-            <span className="col-span-5 flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onSelect(f.path)}
+              className="col-span-5 flex min-w-0 items-center gap-2 text-left"
+            >
               <Icon className="size-3.5 shrink-0" style={{ color }} />
               <span className="truncate font-medium text-foreground group-hover:text-primary" title={f.path}>{f.name}</span>
-            </span>
+            </button>
             <span className="col-span-3 hidden truncate font-mono text-[10.5px] text-muted-foreground md:block">{f.directory}</span>
             <span className="col-span-2 hidden text-muted-foreground sm:block">{f.size}</span>
             <span className="col-span-7 flex justify-end sm:col-span-5 md:col-span-2">
@@ -426,6 +554,64 @@ function FileList({ files }: { files: DriveBrowserFile[] }) {
         )
       })}
     </ul>
+  )
+}
+
+function FileEditor({
+  file,
+  draft,
+  saving,
+  canEdit,
+  onDraftChange,
+  onSave,
+}: {
+  file: AgentFile | null
+  draft: string
+  saving: boolean
+  canEdit: boolean
+  onDraftChange: (value: string) => void
+  onSave: () => void
+}) {
+  if (!file) {
+    return (
+      <div className="mt-4 rounded-lg border border-dashed border-border/70 bg-muted/20 p-4 text-sm text-muted-foreground">
+        Select a text file to view or edit it.
+      </div>
+    )
+  }
+
+  return (
+    <div className="mt-4 overflow-hidden rounded-lg border border-border/80 bg-card">
+      <div className="flex flex-col gap-2 border-b border-border/60 bg-secondary/25 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <p className="truncate font-mono text-xs font-semibold text-foreground">{file.path}</p>
+          <p className="mt-0.5 text-[10.5px] text-muted-foreground">
+            {file.encoding ?? file.kind} · rev {file.revision ?? 'new'} · {file.scope}
+          </p>
+        </div>
+        <Button
+          size="sm"
+          disabled={!canEdit || saving}
+          onClick={onSave}
+          className="gap-1.5 rounded-md"
+        >
+          <Save className="size-3.5" />
+          {saving ? 'Saving' : 'Save'}
+        </Button>
+      </div>
+      {canEdit ? (
+        <textarea
+          value={draft}
+          onChange={(event) => onDraftChange(event.target.value)}
+          spellCheck={false}
+          className="h-[360px] w-full resize-y bg-background p-4 font-mono text-xs leading-5 outline-none"
+        />
+      ) : (
+        <div className="p-4 text-sm text-muted-foreground">
+          This file is not editable in the browser view. Use a visible UTF-8 text file under 2,400 characters.
+        </div>
+      )}
+    </div>
   )
 }
 

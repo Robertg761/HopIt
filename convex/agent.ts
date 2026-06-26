@@ -31,6 +31,8 @@ import {
   userIdFromIdentity,
 } from "./access";
 
+type PrivacyZoneKind = "repo-content" | "owner-private" | "secrets" | "git-internals" | "public-snapshot";
+
 const graphValidator = v.any();
 const detailValidator = v.any();
 const invitableCodebaseRoleValidator = v.union(
@@ -49,6 +51,11 @@ const fileEntryKindValidator = v.union(
   v.literal("directory"),
 );
 const fileEntryEncodingValidator = v.union(v.literal("utf8"), v.literal("base64"));
+const changeSetVisibilityValidator = v.union(
+  v.literal("private"),
+  v.literal("team-visible"),
+  v.literal("review-visible"),
+);
 const privacyZoneKindValidator = v.union(
   v.literal("repo-content"),
   v.literal("owner-private"),
@@ -124,6 +131,225 @@ export const getGraphHead = query({
     const codebase = await readCodebaseById(ctx, args.codebaseId);
     if (!codebase) return null;
     return summarizeCodebaseHead(codebase, access.kind === "service" ? null : access.access);
+  },
+});
+
+export const listCodebases = query({
+  args: {},
+  handler: async (ctx) => {
+    const actor = await resolveReadActor(ctx, undefined);
+    const memberships = await ctx.db
+      .query("codebaseMembers")
+      .withIndex("by_user", (q) => q.eq("userId", actor.userId))
+      .collect();
+    const codebasesById = new Map<string, any>();
+
+    for (const membership of memberships) {
+      if (membership.status !== "active") continue;
+      const codebase = await readCodebaseById(ctx, membership.codebaseId);
+      if (codebase) codebasesById.set(codebase.codebaseId, codebase);
+    }
+
+    const allCodebases = await ctx.db.query("codebases").collect();
+    for (const codebase of allCodebases) {
+      if (codebase.ownerId === actor.userId || codebase.owner?.id === actor.userId) {
+        codebasesById.set(codebase.codebaseId, codebase);
+      }
+    }
+
+    const rows: any[] = [];
+    for (const codebase of codebasesById.values()) {
+      const access = await readCodebaseAccessContext(ctx, accessSourceFromCodebase(codebase), {
+        userId: actor.userId,
+      });
+      const [files, members] = await Promise.all([
+        ctx.db
+          .query("files")
+          .withIndex("by_codebase", (q) => q.eq("codebaseId", codebase.codebaseId))
+          .collect(),
+        ctx.db
+          .query("codebaseMembers")
+          .withIndex("by_codebase", (q) => q.eq("codebaseId", codebase.codebaseId))
+          .collect(),
+      ]);
+      rows.push({
+        ...summarizeCodebaseHead(codebase, access),
+        fileCount: files.length,
+        privateFileCount: files.filter((file) => file.scope === "owner-private").length,
+        memberCount: members.filter((member) => member.status === "active").length,
+      });
+    }
+
+    rows.sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")));
+    return rows;
+  },
+});
+
+export const createCodebase = mutation({
+  args: {
+    name: v.string(),
+    codebaseId: v.optional(v.string()),
+    description: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await resolveWriteActor(ctx, undefined);
+    const name = normalizeCodebaseName(args.name);
+    const codebaseId = normalizeNewCodebaseId(args.codebaseId ?? slugifyCodebaseId(name));
+    const existing = await readCodebaseById(ctx, codebaseId);
+    if (existing) throw new Error(`Codebase ${codebaseId} already exists.`);
+
+    const now = new Date().toISOString();
+    const graph = buildNewCodebaseGraph({
+      codebaseId,
+      name,
+      ownerId: actor.userId,
+      ownerName: actor.displayName ?? null,
+      ownerEmail: actor.primaryEmail ?? null,
+      description: optionalText(args.description) ?? null,
+      now,
+    });
+    validateGraph(graph);
+
+    await ctx.db.insert("codebases", {
+      codebaseId,
+      name,
+      ownerId: actor.userId,
+      schemaVersion: graph.schemaVersion,
+      revision: graph.revision,
+      main: graph.main,
+      selectedState: graph.selectedState,
+      owner: graph.owner,
+      collaborators: graph.collaborators,
+      session: graph.session,
+      visibility: graph.visibility,
+      updatedAt: now,
+    });
+    await syncGraphAccessRows(ctx, graph, now);
+
+    for (const [filePath, file] of Object.entries(graph.files)) {
+      const normalizedFile = normalizeFileEntryForStorage(filePath, file, graph.revision, now);
+      await ctx.db.insert("files", {
+        codebaseId,
+        path: filePath,
+        kind: normalizedFile.kind,
+        content: normalizedFile.content,
+        encoding: normalizedFile.encoding,
+        target: normalizedFile.target,
+        contentStorage: "inline",
+        hash: normalizedFile.hash,
+        blobHash: normalizedFile.hash,
+        size: normalizedFile.size,
+        scope: normalizedFile.scope,
+        privacyZone: normalizedFile.privacyZone,
+        zoneId: zoneIdForPath(codebaseId, filePath),
+        revision: normalizedFile.revision,
+        updatedAt: now,
+      });
+    }
+
+    await ctx.db.insert("agentEvents", {
+      codebaseId,
+      event: "codebase.created",
+      detail: { name, createdBy: actor.userId },
+      at: now,
+      source: "browser",
+    });
+
+    const createdCodebase = {
+      codebaseId,
+      name,
+      ownerId: actor.userId,
+      schemaVersion: graph.schemaVersion,
+      revision: graph.revision,
+      main: graph.main,
+      selectedState: graph.selectedState,
+      owner: graph.owner,
+      collaborators: graph.collaborators,
+      session: graph.session,
+      visibility: graph.visibility,
+      updatedAt: now,
+    };
+    const access = await readCodebaseAccessContext(ctx, accessSourceFromGraph(graph), {
+      userId: actor.userId,
+    });
+    return {
+      ...summarizeCodebaseHead(createdCodebase, access),
+      fileCount: Object.keys(graph.files).length,
+      privateFileCount: 0,
+      memberCount: 1,
+    };
+  },
+});
+
+export const updateCodebase = mutation({
+  args: {
+    codebaseId: v.string(),
+    name: v.optional(v.string()),
+    visibility: v.optional(changeSetVisibilityValidator),
+  },
+  handler: async (ctx, args) => {
+    const actor = await resolveWriteActor(ctx, undefined);
+    const { codebase } = await requireCodebaseCapabilityForActor(ctx, args.codebaseId, actor, "write");
+    const now = new Date().toISOString();
+    const patch: any = { updatedAt: now };
+
+    if (args.name !== undefined) patch.name = normalizeCodebaseName(args.name);
+    if (args.visibility !== undefined) {
+      patch.visibility = {
+        ...(codebase.visibility && typeof codebase.visibility === "object" ? codebase.visibility : {}),
+        effective: args.visibility,
+      };
+      patch.selectedState = {
+        ...(codebase.selectedState && typeof codebase.selectedState === "object" ? codebase.selectedState : {}),
+        visibility: args.visibility,
+        effectiveVisibility: args.visibility,
+      };
+    }
+
+    await ctx.db.patch(codebase._id, patch);
+    await ctx.db.insert("agentEvents", {
+      codebaseId: args.codebaseId,
+      event: "codebase.updated",
+      detail: { updatedBy: actor.userId, name: patch.name ?? codebase.name, visibility: args.visibility ?? null },
+      at: now,
+      source: "browser",
+    });
+
+    return summarizeCodebaseHead({ ...codebase, ...patch }, null);
+  },
+});
+
+export const deleteCodebase = mutation({
+  args: {
+    codebaseId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const actor = await resolveWriteActor(ctx, undefined);
+    const { codebase, access } = await requireCodebaseCapabilityForActor(ctx, args.codebaseId, actor, "manage_members");
+    if (!access.isOwner) throw new Error("Only the codebase owner can delete a codebase.");
+
+    await deleteRowsByCodebase(ctx, "files", args.codebaseId);
+    await deleteRowsByCodebase(ctx, "fileBlobs", args.codebaseId);
+    await deleteRowsByCodebase(ctx, "agentEvents", args.codebaseId);
+    await deleteRowsByCodebase(ctx, "codebaseMembers", args.codebaseId);
+    await deleteRowsByCodebase(ctx, "codebaseInvitations", args.codebaseId);
+    await deleteRowsByCodebase(ctx, "agentSessions", args.codebaseId);
+    await deleteRowsByCodebase(ctx, "privacyZones", args.codebaseId);
+    await deleteRowsByCodebase(ctx, "codebaseKeyrings", args.codebaseId);
+    await deleteRowsByCodebase(ctx, "wrappedKeys", args.codebaseId);
+    await deleteRowsByCodebase(ctx, "keyAuditEvents", args.codebaseId);
+    await deleteRowsByCodebase(ctx, "collaborationCounters", args.codebaseId);
+    await deleteRowsByCodebase(ctx, "issues", args.codebaseId);
+    await deleteRowsByCodebase(ctx, "issueComments", args.codebaseId);
+    await deleteRowsByCodebase(ctx, "projects", args.codebaseId);
+    await deleteRowsByCodebase(ctx, "discussions", args.codebaseId);
+    await deleteRowsByCodebase(ctx, "discussionComments", args.codebaseId);
+    await deleteRowsByCodebase(ctx, "releases", args.codebaseId);
+    await deleteRowsByCodebase(ctx, "releaseAssets", args.codebaseId);
+    await deleteRowsByCodebase(ctx, "projectItems", args.codebaseId);
+    await ctx.db.delete(codebase._id);
+
+    return { ok: true, codebaseId: args.codebaseId, deletedBy: actor.userId };
   },
 });
 
@@ -846,6 +1072,99 @@ export const applyFileMutation = mutation({
       selectedStateType: selectedState?.type ?? null,
       selectedStateId: selectedState?.id ?? null,
       selectedStateRevision: nextRevision !== previousRevision ? nextRevision : (selectedState?.revision ?? null),
+    };
+  },
+});
+
+export const mutateTextFile = mutation({
+  args: {
+    codebaseId: v.string(),
+    path: v.string(),
+    content: v.string(),
+    baseRevision: v.optional(v.union(v.number(), v.null())),
+  },
+  handler: async (ctx, args) => {
+    const actor = await resolveWriteActor(ctx, undefined);
+    const { codebase } = await requireCodebaseCapabilityForActor(ctx, args.codebaseId, actor, "write");
+    assertSafeGraphPath(args.path);
+    if (scopeForPath(args.path) === "owner-private" && codebase.ownerId !== actor.userId) {
+      throw new Error("Only the owner can edit owner-private files from the browser.");
+    }
+    if (privacyZoneForPath(args.path) === "secrets") {
+      throw new Error("Secret-zone files cannot be edited from the browser.");
+    }
+
+    const existingFile = await readFileByPath(ctx, args.codebaseId, args.path);
+    if (args.baseRevision !== undefined) {
+      const actualRevision = existingFile?.revision ?? null;
+      if (args.baseRevision !== actualRevision) {
+        throw new Error(`base_revision_mismatch: expected ${args.baseRevision}, got ${actualRevision}`);
+      }
+    }
+
+    const now = new Date().toISOString();
+    const previousRevision = codebase.revision;
+    const nextRevision = previousRevision + 1;
+    const selectedState = codebase.selectedState as any;
+    const nextFile = normalizeFileEntryForStorage(args.path, {
+      kind: "file",
+      content: args.content,
+      encoding: "utf8",
+      hash: hashText(args.content),
+      scope: scopeForPath(args.path),
+      privacyZone: privacyZoneForPath(args.path),
+      zoneId: zoneIdForPath(args.codebaseId, args.path),
+    }, nextRevision, now);
+    const fileValue: any = {
+      codebaseId: args.codebaseId,
+      path: args.path,
+      kind: "file",
+      content: nextFile.content,
+      encoding: "utf8",
+      contentStorage: "inline",
+      blobProvider: null,
+      blobKey: null,
+      blobHash: nextFile.hash,
+      hash: nextFile.hash,
+      size: nextFile.size,
+      scope: nextFile.scope,
+      privacyZone: privacyZoneForPath(args.path),
+      zoneId: zoneIdForPath(args.codebaseId, args.path),
+      revision: nextRevision,
+      updatedAt: now,
+    };
+
+    if (existingFile) {
+      await ctx.db.patch(existingFile._id, fileValue);
+    } else {
+      await ctx.db.insert("files", fileValue);
+    }
+
+    const nextSelectedState = selectedState && typeof selectedState === "object"
+      ? {
+          ...selectedState,
+          revision: nextRevision,
+        }
+      : selectedState;
+    await ctx.db.patch(codebase._id, {
+      revision: nextRevision,
+      selectedState: nextSelectedState,
+      updatedAt: now,
+    });
+    await ctx.db.insert("agentEvents", {
+      codebaseId: args.codebaseId,
+      event: "browser.file_written",
+      detail: { path: args.path, updatedBy: actor.userId, revision: nextRevision },
+      at: now,
+      source: "browser",
+    });
+
+    return {
+      ok: true,
+      codebaseId: args.codebaseId,
+      path: args.path,
+      revision: nextRevision,
+      selectedStateRevision: nextRevision,
     };
   },
 });
@@ -2287,6 +2606,138 @@ function byteLength(value: string) {
   return new TextEncoder().encode(value).length;
 }
 
+function normalizeCodebaseName(value: string) {
+  const name = optionalText(value);
+  if (!name) throw new Error("Codebase name is required.");
+  if (name.length > 80) throw new Error("Codebase name must be 80 characters or fewer.");
+  return name;
+}
+
+function slugifyCodebaseId(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 72)
+    .replace(/-+$/g, "") || `codebase-${Date.now()}`;
+}
+
+function normalizeNewCodebaseId(value: string) {
+  const codebaseId = slugifyCodebaseId(value);
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/.test(codebaseId)) {
+    throw new Error("Codebase id may only contain lowercase letters, numbers, and dashes.");
+  }
+  return codebaseId;
+}
+
+function buildNewCodebaseGraph({
+  codebaseId,
+  name,
+  ownerId,
+  ownerName,
+  ownerEmail,
+  description,
+  now,
+}: {
+  codebaseId: string;
+  name: string;
+  ownerId: string;
+  ownerName: string | null;
+  ownerEmail: string | null;
+  description: string | null;
+  now: string;
+}) {
+  const readme = [
+    `# ${name}`,
+    "",
+    description ?? "Created in HopIt.",
+    "",
+  ].join("\n");
+
+  return {
+    schemaVersion: 2,
+    codebase: {
+      id: codebaseId,
+      name,
+      ownerId,
+    },
+    main: {
+      id: "main",
+      revision: 1,
+      updatedAt: now,
+      mergedChangeSetId: null,
+    },
+    selectedState: {
+      type: "active-change-set",
+      id: `cs_${codebaseId}_browser`,
+      ownerId,
+      baseMainId: "main",
+      baseRevision: 1,
+      revision: 1,
+      visibility: "private",
+      effectiveVisibility: "private",
+      reviewState: "not-open",
+      mergeState: "unmerged",
+      conflictState: "none",
+      conflict: null,
+      review: null,
+      merge: null,
+    },
+    owner: {
+      id: ownerId,
+      ...(ownerName ? { name: ownerName } : {}),
+      ...(ownerEmail ? { email: ownerEmail } : {}),
+    },
+    collaborators: [],
+    session: {
+      id: `session_${codebaseId}_browser`,
+      deviceName: "HopIt web",
+    },
+    visibility: {
+      productDefault: "private",
+      globalUserDefault: null,
+      codebaseOverride: null,
+      changeSetOverride: null,
+      effective: "private",
+    },
+    revision: 1,
+    files: {
+      "README.md": {
+        kind: "file",
+        content: readme,
+        encoding: "utf8",
+        hash: hashText(readme),
+        size: byteLength(readme),
+        scope: "shared",
+        privacyZone: "repo-content",
+        zoneId: zoneIdForPath(codebaseId, "README.md"),
+        revision: 1,
+        updatedAt: now,
+      },
+    },
+  };
+}
+
+async function deleteRowsByCodebase(ctx: any, tableName: string, codebaseId: string) {
+  if (tableName === "collaborationCounters") {
+    const rows = await ctx.db.query(tableName).collect();
+    await Promise.all(
+      rows
+        .filter((row: any) => row.codebaseId === codebaseId)
+        .map((row: any) => ctx.db.delete(row._id)),
+    );
+    return;
+  }
+
+  const rows = await ctx.db
+    .query(tableName)
+    .withIndex("by_codebase", (q: any) => q.eq("codebaseId", codebaseId))
+    .collect();
+
+  await Promise.all(rows.map((row: any) => ctx.db.delete(row._id)));
+}
+
 function normalizeGraph(graph: unknown) {
   if (!graph || typeof graph !== "object") {
     throw new Error("Expected a HopIt cloud graph object.");
@@ -2432,7 +2883,7 @@ function validateGraph(graph: ReturnType<typeof normalizeGraph>) {
   }
 }
 
-function privacyZoneForPath(filePath: string) {
+function privacyZoneForPath(filePath: string): PrivacyZoneKind {
   if (filePath === ".private/env" || filePath.startsWith(".private/env/")) return "secrets";
   if (filePath === ".git" || filePath.startsWith(".git/")) return "git-internals";
   if (filePath === ".private" || filePath.startsWith(".private/")) return "owner-private";

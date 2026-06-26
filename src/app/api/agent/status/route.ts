@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic'
 const agentBaseUrl = process.env.HOPIT_AGENT_BASE_URL ?? 'http://127.0.0.1:4785'
 const localAgentTimeoutMs = 5000
 
-export async function GET() {
+export async function GET(request: Request) {
   const missingHostedConfig = requiredHostedConfigMissing()
   if (missingHostedConfig.length > 0) {
     return unavailableStatusResponse(
@@ -23,10 +23,11 @@ export async function GET() {
   if (isConvexConfigured()) {
     try {
       const requester = await readRequester()
+      const codebaseId = codebaseIdFromRequest(request)
 
       return NextResponse.json(
         {
-          ...(await readConvexAgentDashboard(requester)),
+          ...(await readConvexAgentDashboard(requester, codebaseId)),
           capabilities: agentCapabilities('convex'),
         },
         {
@@ -143,11 +144,16 @@ function requiredHostedConfigMissing() {
   if (!isHostedRuntime()) return []
 
   const missing: string[] = []
-  if (!process.env.HOPIT_CODEBASE_ID) missing.push('HOPIT_CODEBASE_ID')
   if (!process.env.HOPIT_AGENT_TOKEN) missing.push('HOPIT_AGENT_TOKEN')
   if (!isConvexConfigured()) missing.push('HOPIT_CONVEX_URL or NEXT_PUBLIC_CONVEX_URL')
 
   return missing
+}
+
+function codebaseIdFromRequest(request: Request) {
+  const url = new URL(request.url)
+  const requested = url.searchParams.get('codebaseId')?.trim()
+  return requested || process.env.HOPIT_CODEBASE_ID || 'hopit'
 }
 
 function isHostedRuntime() {
