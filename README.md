@@ -28,7 +28,7 @@ The current setup source of truth is [docs/personal-production.md](docs/personal
 - Active change sets that receive live synced edits before review or merge into Main.
 - Change-set visibility controls with global defaults, per-codebase overrides, and per-change-set overrides.
 - Automatic remote-update delivery so same-owner devices can receive current active change-set state without a manual refresh ritual.
-- Production storage based on Convex metadata, S3-compatible object blobs, content hashes, and per-file revision guards rather than whole-graph overwrites.
+- Production storage based on Cloudflare D1 graph metadata, S3-compatible object blobs, content hashes, and per-file revision guards rather than whole-graph overwrites. Convex remains a legacy backend while the D1 migration finishes.
 - Scoped device/session auth separate from human product auth.
 - Client-side encryption, device trust, and wrapped key grants so private repos,
   `.private/`, and secrets are decrypted only by intended users/devices.
@@ -41,29 +41,29 @@ HopIt has moved past a local-only spike. The current dogfood baseline is a deplo
 
 - Vercel production dashboard at `https://hopit.dev` with `https://www.hopit.dev` and generated Vercel aliases attached to the same deployment.
 - Vercel project `robertg761s-projects/hopit`, project id `prj_hO8U1QmyliQjGODz4R339UkgE86S`, org/team id `team_x1SyEPIryEghBSkkwoXSTIZ2`.
-- Convex production graph at `https://sincere-jaguar-17.convex.cloud`.
-- Convex project `robertgordon761/hopit`.
+- Cloudflare D1 is now the free-first graph backend target. The codebase includes a D1 HTTP backend, schema at `cloudflare/d1/schema.sql`, D1 API proxy worker at `cloudflare/d1/api-worker.js`, and Convex-export migration script `npm run d1:migrate:convex-export`.
+- Legacy Convex production graph at `https://sincere-jaguar-17.convex.cloud`; as of 2026-06-30 the deployment is disabled for Convex Free-plan limits. A snapshot backup is available for D1 migration.
 - Cloudflare R2 bucket `hopit-blobs`, private/public access disabled, configured as the first S3-compatible object-blob provider.
 - Porkbun domain `hopit.dev` points at Vercel, and Clerk production DNS for `clerk.hopit.dev`, `accounts.hopit.dev`, and mail/DKIM subdomains is verified.
 - A seeded `hopit` codebase graph with 58 source files.
 - A production-profile managed workspace at `/Users/robert/HopIt Workspaces/hopit`.
-- An installed local LaunchAgent service, `com.hopit.agent.hopit`, running the packaged `hop-darwin-arm64` runtime from `/Users/robert/Library/Application Support/HopIt/Runtime`.
+- An installed and running local LaunchAgent service, `com.hopit.agent.hopit`, for the packaged `hop-darwin-arm64` runtime from `/Users/robert/Library/Application Support/HopIt/Runtime`; it now reports D1-backed cloud status on `http://127.0.0.1:4785`.
 - Hosted dashboard now uses Clerk product auth on `hopit.dev`; Google OAuth is enabled through the production Clerk instance and allowed for `robertgordon761@gmail.com` while the Google app remains in Testing mode. Basic Auth fallback remains enabled temporarily as an emergency recovery path until owner sign-in and owner mapping are verified.
-- Hosted status reads from Convex; hosted workspace commands are intentionally disabled.
+- Hosted status reads from D1 when `HOPIT_CLOUD_BACKEND=d1` is configured, with Convex as a legacy fallback. Hosted workspace commands are intentionally disabled.
 - Local production-profile `hop` commands can import, hydrate, sync, refresh, recover, review, merge, export, publish, and validate.
 - `hop workspace` persists a root-level `workspaces.json` index with per-workspace hydration/cursor state, can discover the configured cloud codebase, attach it into the Workspace Root as metadata-only, list visible cloud files, hydrate one file, and dehydrate clean workspaces back to metadata-only state.
-- `hop device` / `hop session` can report local device identity, and Convex can issue, list, touch, revoke, and authorize scoped agent-session tokens for graph reads, per-file writes, and event sync.
+- `hop device` / `hop session` can report local device identity. Scoped device-session issuance is still legacy Convex-only and needs a D1 port after the graph/status migration.
 - `hop keys` can initialize a local per-codebase device keyring, report redacted key status, and export a passphrase-encrypted recovery file. The keyring stores device private keys locally and stores the user vault key only as a self-wrapped payload.
-- The dashboard now includes provider sign-in routes, owner claim, member/invite management, a read-only code browser, and first issue/discussion/release workflows backed by Convex.
+- The dashboard now includes provider sign-in routes, owner claim, member/invite management, a read-only code browser, and first issue/discussion/release workflows. Codebase listing, file reads/edits, status, account sync, and hosted action jobs now use the D1 backend selector; member/invite/work-item collaboration routes are still legacy Convex until ported.
 - The literal mirror path supports binary files, symlinks, empty directories, `.git/`, root `.env.local` routing into `.private/env/repo-root/.env.local`, production-safe `import-git`, client-encrypted routed-secret sync, and dry-run object GC. The full repository still should not be treated as safely uploaded until the production-safe conversion flow has been run and verified.
 - Client-side encryption currently covers routed secrets only. Device keyrings,
-  user vault keys, recovery export, and first Convex device/wrapped-key APIs now
+  user vault keys, recovery export, and first legacy Convex device/wrapped-key APIs now
   exist, but full private-repo encryption, repo/private/secret zone keys,
   invite-time key sharing, independent secret sharing, path encryption, and
   complete revocation/rekey flows remain the next security milestone.
 - The first privacy/encryption foundation is implemented: shared agent
   crypto/envelope helpers, derived file privacy zones, local device keyrings,
-  encrypted recovery export, Convex key-management tables and APIs, and
+  encrypted recovery export, legacy Convex key-management tables and APIs, and
   validation that rejects plaintext secret-zone files.
 
 The system is now usable as a one-person private dogfood environment, but it is not yet a full GitHub or Git replacement. The next major product phase is a solid v1 workspace: HopIt Workspace Root, managed-folder/lazy materialization, automatic remote update delivery, broader history/review reconstruction on top of object blobs, scoped device/session auth, client-side privacy/key grants, and GitHub-like collaboration surfaces. The owned-domain work is no longer blocked: `hopit.dev` is live and Clerk production auth is the primary hosted auth layer, with production Google OAuth configured for owner testing. Removing Basic Auth fallback is a deliberate next handoff after owner sign-in verification and owner mapping.
@@ -82,7 +82,7 @@ The v1 target is not a Git clone manager and not yet a true native filesystem pr
 - Other same-owner devices receive acknowledged changes automatically when the local journal is clean, or get a visible conflict/blocked state when it is not.
 - Web surfaces show code, diffs, review state, history, issues, discussions, projects, releases, members, invitations, and permissions.
 
-Today HopIt has the managed-folder spike, workspace-root command surface with a durable index, configured-codebase discovery, metadata-only attach, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, service wrapper, Convex graph metadata, S3-compatible object-blob storage support, Clerk-protected hosted dashboard with temporary Basic Auth recovery fallback, first collaboration objects, explicit refresh-based two-session continuity, scoped agent-session token groundwork, and opt-in safe remote-pull polling plus one-shot remote-pull checks for personal dogfooding. Remote-pull now uses a lightweight Convex graph-head cursor before any full graph read, so unchanged polling does not repeatedly scan the file table or burn database bandwidth. Remaining v1 work is account-wide codebase discovery, full lazy materialization policy, production-grade push/subscription remote-update delivery, routeable diff/review/history UI, installer/tray setup, and broader cross-device verification.
+Today HopIt has the managed-folder spike, workspace-root command surface with a durable index, configured-codebase discovery, metadata-only attach, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, service wrapper, a Cloudflare D1 graph backend, S3-compatible object-blob storage support, Clerk-protected hosted dashboard with temporary Basic Auth recovery fallback, first collaboration objects, explicit refresh-based two-session continuity, scoped agent-session groundwork, and opt-in safe remote-pull polling plus one-shot remote-pull checks for personal dogfooding. Remote-pull uses a lightweight graph-head cursor before any full graph read, so unchanged polling does not scan the file table. The current personal production D1 database is provisioned, schema-applied, seeded from the saved Convex export, and fronted by the `hopit-d1-api` Worker for Vercel. Remaining v1 work is account-wide codebase discovery, full lazy materialization policy, production-grade push/subscription remote-update delivery, routeable diff/review/history UI, installer/tray setup, and broader cross-device verification.
 
 ## Product Principles
 
@@ -140,13 +140,15 @@ plus macOS LaunchAgent and Linux systemd user-service support scripts under
 
 ## Hosted Backend
 
-HopIt now supports a Convex-backed cloud graph for the real shared backend. The local JSON graph remains useful for offline development, but Convex is the intended shared source of truth when these variables are configured:
+HopIt now supports a Cloudflare D1-backed cloud graph for the free-first shared backend. The local JSON graph remains useful for offline development, and Convex remains a legacy fallback, but D1 is the intended no-budget production source of truth when these variables are configured:
 
 ```bash
 HOPIT_CODEBASE_ID=hopit
-HOPIT_AGENT_TOKEN=replace-with-a-long-random-secret
-HOPIT_CONVEX_URL=https://your-convex-deployment.convex.cloud
-NEXT_PUBLIC_CONVEX_URL=https://your-convex-deployment.convex.cloud
+HOPIT_CLOUD_BACKEND=d1
+HOPIT_D1_ACCOUNT_ID=replace-with-cloudflare-account-id
+HOPIT_D1_DATABASE_ID=replace-with-cloudflare-d1-database-id
+HOPIT_D1_API_TOKEN=replace-with-cloudflare-d1-api-token-or-hopit-d1-proxy-token
+HOPIT_D1_API_BASE_URL=https://hopit-d1-api.<account-subdomain>.workers.dev
 HOPIT_AUTH_PROVIDER=clerk
 HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1
 HOPIT_DASHBOARD_USERNAME=hopit
@@ -180,9 +182,9 @@ HOPIT_CLIENT_ENCRYPTION_KEY=base64:replace-with-32-random-bytes
 HOPIT_CLIENT_ENCRYPTION_SCOPE=secrets
 ```
 
-Convex is the graph, permission, event, and realtime coordination service. File bytes should use the object-blob layer for real production. `HOPIT_BLOB_PROVIDER=r2` targets Cloudflare R2 through HopIt's S3-compatible adapter. For current personal use, keep `HOPIT_BLOB_FREE_ONLY=1` and the 8 GB storage budget so HopIt stops before crossing Cloudflare R2's free storage tier. The same adapter can migrate to Backblaze B2 later by switching to `HOPIT_BLOB_PROVIDER=b2` plus the B2 S3 endpoint/key variables.
+D1 is the graph, event, codebase, file-metadata, account-sync, and hosted-action queue backend. File bytes should use the object-blob layer for real production. `HOPIT_BLOB_PROVIDER=r2` targets Cloudflare R2 through HopIt's S3-compatible adapter. For current personal use, keep `HOPIT_BLOB_FREE_ONLY=1` and the 8 GB storage budget so HopIt stops before crossing Cloudflare R2's free storage tier. The same adapter can migrate to Backblaze B2 later by switching to `HOPIT_BLOB_PROVIDER=b2` plus the B2 S3 endpoint/key variables.
 
-`HOPIT_CLIENT_ENCRYPTION_KEY` is local-only; it must not be configured in Vercel, Convex, R2, docs, commits, or chat. It lets routed `.private/env/` secrets sync as encrypted object blobs that only trusted devices with the key can hydrate. For new devices, prefer `hop keys init-device`: it stores device private keys locally, keeps the user vault key self-wrapped, and exposes the vault key to the current secret-sync bridge only in memory. The remaining encryption model still needs repo/zone keys, file data-encryption keys, invite-time wrapped grants, and rotation/revocation flows. That work is planned in [docs/privacy-encryption-plan.md](docs/privacy-encryption-plan.md).
+`HOPIT_CLIENT_ENCRYPTION_KEY` is local-only; it must not be configured in Vercel, D1, Convex, R2, docs, commits, or chat. It lets routed `.private/env/` secrets sync as encrypted object blobs that only trusted devices with the key can hydrate. For new devices, prefer `hop keys init-device`: it stores device private keys locally, keeps the user vault key self-wrapped, and exposes the vault key to the current secret-sync bridge only in memory. The remaining encryption model still needs repo/zone keys, file data-encryption keys, invite-time wrapped grants, and rotation/revocation flows. That work is planned in [docs/privacy-encryption-plan.md](docs/privacy-encryption-plan.md).
 
 Important local config locations for the current setup:
 
@@ -193,7 +195,18 @@ Important local config locations for the current setup:
 - `/Users/robert/HopIt Workspaces`: managed workspace root.
 - `/Users/robert/HopIt-Backups` and `/Users/robert/HopIt-Exports`: operational recovery and Git escape hatches.
 
-Start Convex locally and link the project with:
+Create/apply the D1 schema from `cloudflare/d1/schema.sql`, then migrate the saved Convex export:
+
+```bash
+npm run d1:migrate:convex-export -- \
+  --export /Users/robert/HopIt-Backups/convex/hopit-convex-prod-2026-06-30-disabled-snapshot.zip \
+  --codebase-id hopit \
+  --dry-run
+```
+
+Remove `--dry-run` only after `HOPIT_D1_ACCOUNT_ID`, `HOPIT_D1_DATABASE_ID`, and `HOPIT_D1_API_TOKEN` are configured. When using Vercel, set `HOPIT_D1_API_BASE_URL` to the deployed `hopit-d1-api` Worker so production does not need a broad Cloudflare account API token. The migration imports the graph and latest 500 events by default; pass `--all-events` only if the D1 daily write budget can absorb the full history.
+
+Legacy Convex development is still available with:
 
 ```bash
 npm run convex:dev
@@ -205,28 +218,27 @@ That command prompts for Convex login/project setup, pushes the `convex/` backen
 npm run convex:deploy:prod
 ```
 
-Set the same `HOPIT_AGENT_TOKEN` in Convex with:
+For the legacy Convex fallback, set the same `HOPIT_AGENT_TOKEN` in Convex with:
 
 ```bash
 npx convex env set HOPIT_AGENT_TOKEN replace-with-a-long-random-secret
 ```
 
-Import a real local project into the Convex backend with:
+Import a real local project into the active cloud backend with:
 
 ```bash
-npm run hop -- import --source /path/to/project --codebase-id hopit --convex-url "$HOPIT_CONVEX_URL" --agent-token "$HOPIT_AGENT_TOKEN" --force
+npm run hop -- import --source /path/to/project --codebase-id hopit --profile production --force
 ```
 
-After the bootstrap token is configured, register this device and store the returned `sessionToken` as `HOPIT_AGENT_SESSION_TOKEN`:
+Device-session registration is still legacy Convex-only. Until it is ported to D1, D1 production uses the Cloudflare API token server-side/local-agent side and does not require `HOPIT_AGENT_TOKEN`:
 
 ```bash
 npm run hop -- device register --profile production --codebase-id "$HOPIT_CODEBASE_ID"
 ```
 
-The deployment-wide `HOPIT_AGENT_TOKEN` remains the bootstrap/admin secret. Installed devices should use scoped session tokens for normal reads, per-file sync, and event writes.
-When both tokens are present, normal commands prefer `HOPIT_AGENT_SESSION_TOKEN`; pass `--agent-token` explicitly for bootstrap/admin operations.
+The deployment-wide `HOPIT_AGENT_TOKEN` remains the legacy Convex bootstrap/admin secret. Installed devices should use scoped session tokens again after the D1 device-session port lands.
 
-For current personal production hosting, deploy the Next.js app to Vercel and set `HOPIT_CODEBASE_ID`, `HOPIT_AGENT_TOKEN`, `HOPIT_CONVEX_URL`, `NEXT_PUBLIC_CONVEX_URL`, `HOPIT_AUTH_PROVIDER=clerk`, `HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1`, `HOPIT_DASHBOARD_USERNAME`, `HOPIT_DASHBOARD_PASSWORD`, Clerk live-key variables, and the object-storage variables beginning with `HOPIT_BLOB_`/`HOPIT_R2_` as environment variables. The hosted dashboard reads from Convex through `/api/agent/status`; local workspace commands still run through the local HopIt agent on your machine and are refused on Vercel. Google OAuth provider credentials live in Clerk/Google Cloud, not in Vercel env or repo files. Remove `HOPIT_ALLOW_BASIC_AUTH_FALLBACK` only after the production sign-in/sign-up path and owner mapping have been smoke-tested.
+For current personal production hosting, deploy the Next.js app to Vercel and set `HOPIT_CODEBASE_ID`, `HOPIT_CLOUD_BACKEND=d1`, `HOPIT_D1_ACCOUNT_ID`, `HOPIT_D1_DATABASE_ID`, `HOPIT_D1_API_TOKEN`, `HOPIT_D1_API_BASE_URL`, `HOPIT_AUTH_PROVIDER=clerk`, `HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1`, `HOPIT_DASHBOARD_USERNAME`, `HOPIT_DASHBOARD_PASSWORD`, Clerk live-key variables, and the object-storage variables beginning with `HOPIT_BLOB_`/`HOPIT_R2_` as environment variables. The hosted dashboard reads from D1 through `/api/agent/status`; local workspace commands still run through the local HopIt agent on your machine and are refused on Vercel. Google OAuth provider credentials live in Clerk/Google Cloud, not in Vercel env or repo files. Remove `HOPIT_ALLOW_BASIC_AUTH_FALLBACK` only after the production sign-in/sign-up path and owner mapping have been smoke-tested.
 
 Validate production configuration with:
 

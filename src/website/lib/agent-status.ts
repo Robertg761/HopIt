@@ -69,7 +69,7 @@ export type AgentStatusSnapshot = {
   workspaceIndexPath: string | null
   remoteBehindByRevisions: number | null
   commandsAvailable: boolean
-  backend: 'local-agent' | 'convex' | 'unknown'
+  backend: 'local-agent' | 'convex' | 'd1' | 'unknown'
   requester: AgentRequester
   members: AgentMember[]
   files: AgentFile[]
@@ -570,6 +570,7 @@ function mapCloudFiles(cloud: RawCloudResponse | null | undefined): AgentFile[] 
 }
 
 function backendName(value: string | undefined): AgentStatusSnapshot['backend'] {
+  if (value === 'd1' || value === 'cloudflare-d1-graph') return 'd1'
   if (value === 'local-agent' || value === 'convex') return value
   return 'unknown'
 }

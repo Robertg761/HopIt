@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
-import { isConvexConfigured, readConvexAgentDashboard } from '@/lib/convex-agent'
 import { shouldUseClerkAuth } from '@/lib/auth-config'
+import { hasValidBasicAuthFallbackCredentials } from '@/lib/basic-auth-fallback'
+import { configuredCloudBackend, missingCloudBackendConfig, readCloudAgentDashboard } from '@/lib/cloud-backend'
 import { auth } from '@clerk/nextjs/server'
 
 export const dynamic = 'force-dynamic'
@@ -13,22 +14,23 @@ export async function GET(request: Request) {
   if (missingHostedConfig.length > 0) {
     return unavailableStatusResponse(
       'hosted_config_missing',
-      `Hosted HopIt requires Convex-backed status. Missing: ${missingHostedConfig.join(', ')}.`,
+      `Hosted HopIt requires a cloud-backed status backend. Missing: ${missingHostedConfig.join(', ')}.`,
       {
         missing: missingHostedConfig,
       },
     )
   }
 
-  if (isConvexConfigured()) {
+  const cloudBackend = configuredCloudBackend()
+  if (cloudBackend !== 'unavailable') {
     try {
-      const requester = await readRequester()
+      const requester = await readRequester(request)
       const codebaseId = codebaseIdFromRequest(request)
 
       return NextResponse.json(
         {
-          ...(await readConvexAgentDashboard(requester, codebaseId)),
-          capabilities: agentCapabilities('convex'),
+          ...(await readCloudAgentDashboard(requester, codebaseId)),
+          capabilities: agentCapabilities(cloudBackend),
         },
         {
           headers: {
@@ -37,9 +39,9 @@ export async function GET(request: Request) {
         },
       )
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Unknown Convex status error'
+      const message = error instanceof Error ? error.message : 'Unknown cloud status error'
 
-      return unavailableStatusResponse('convex_unavailable', message)
+      return unavailableStatusResponse('cloud_unavailable', message)
     }
   }
 
@@ -100,8 +102,9 @@ function unavailableStatusResponse(
   )
 }
 
-async function readRequester() {
+async function readRequester(request: Request) {
   if (!shouldUseClerkAuth()) return {}
+  if (hasValidBasicAuthFallbackCredentials(request.headers)) return {}
 
   const { userId, sessionId } = await auth()
   return {
@@ -142,12 +145,7 @@ function endpointErrors(results: Record<string, PromiseSettledResult<unknown>>) 
 
 function requiredHostedConfigMissing() {
   if (!isHostedRuntime()) return []
-
-  const missing: string[] = []
-  if (!process.env.HOPIT_AGENT_TOKEN) missing.push('HOPIT_AGENT_TOKEN')
-  if (!isConvexConfigured()) missing.push('HOPIT_CONVEX_URL or NEXT_PUBLIC_CONVEX_URL')
-
-  return missing
+  return missingCloudBackendConfig()
 }
 
 function codebaseIdFromRequest(request: Request) {
@@ -157,10 +155,10 @@ function codebaseIdFromRequest(request: Request) {
 }
 
 function isHostedRuntime() {
-  return process.env.VERCEL === '1' || process.env.HOPIT_REQUIRE_CONVEX === '1'
+  return process.env.VERCEL === '1' || process.env.HOPIT_REQUIRE_CONVEX === '1' || process.env.HOPIT_REQUIRE_CLOUD === '1'
 }
 
-function agentCapabilities(backend: 'convex' | 'local-agent') {
+function agentCapabilities(backend: 'd1' | 'convex' | 'local-agent' | 'unavailable') {
   return {
     backend,
     hosted: isHostedRuntime(),

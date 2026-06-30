@@ -1,18 +1,42 @@
 import { NextResponse } from 'next/server'
 import { auth, currentUser } from '@clerk/nextjs/server'
-import { anyApi } from 'convex/server'
 
 import { shouldUseClerkAuth } from '@/lib/auth-config'
-import { convexAuthToken, convexClient, isConvexConfigured } from '@/lib/convex-auth'
+import { hasValidBasicAuthFallbackCredentials } from '@/lib/basic-auth-fallback'
+import { configuredCloudBackend, upsertCloudUser } from '@/lib/cloud-backend'
 
 export const dynamic = 'force-dynamic'
 
-export async function GET() {
+export async function GET(request: Request) {
   if (!shouldUseClerkAuth()) {
     return NextResponse.json(
       {
         authProvider: 'none',
         user: null,
+      },
+      {
+        headers: {
+          'Cache-Control': 'no-store',
+        },
+      },
+    )
+  }
+
+  if (hasValidBasicAuthFallbackCredentials(request.headers)) {
+    const cloudBackend = configuredCloudBackend()
+    return NextResponse.json(
+      {
+        authProvider: 'basic',
+        user: null,
+        cloud: {
+          backend: cloudBackend,
+          configured: cloudBackend !== 'unavailable',
+          accountSynced: false,
+        },
+        convex: {
+          configured: cloudBackend === 'convex',
+          accountSynced: false,
+        },
       },
       {
         headers: {
@@ -39,7 +63,14 @@ export async function GET() {
   }
 
   const user = await currentUser()
-  const accountSync = await syncConvexAccount()
+  const accountSync = await syncCloudAccount({
+    userId: authState.userId,
+    primaryEmail: user?.primaryEmailAddress?.emailAddress ?? null,
+    displayName: user?.fullName ?? user?.username ?? null,
+    avatarUrl: user?.imageUrl ?? null,
+    emailVerified: user?.primaryEmailAddress?.verification?.status === 'verified',
+  })
+  const cloudBackend = configuredCloudBackend()
 
   return NextResponse.json(
     {
@@ -53,10 +84,16 @@ export async function GET() {
         imageUrl: user?.imageUrl ?? null,
       },
       account: accountSync.account,
-      convex: {
-        configured: isConvexConfigured(),
+      cloud: {
+        backend: cloudBackend,
+        configured: cloudBackend !== 'unavailable',
         accountSynced: accountSync.ok,
         error: accountSync.error,
+      },
+      convex: {
+        configured: cloudBackend === 'convex',
+        accountSynced: cloudBackend === 'convex' ? accountSync.ok : false,
+        error: cloudBackend === 'convex' ? accountSync.error : undefined,
       },
     },
     {
@@ -67,18 +104,18 @@ export async function GET() {
   )
 }
 
-async function syncConvexAccount() {
-  if (!isConvexConfigured()) {
-    return { ok: false, account: null, error: 'Convex is not configured.' }
+async function syncCloudAccount(input: {
+  userId: string
+  primaryEmail: string | null
+  displayName: string | null
+  avatarUrl: string | null
+  emailVerified: boolean
+}) {
+  if (configuredCloudBackend() === 'unavailable') {
+    return { ok: false, account: null, error: 'No HopIt cloud backend is configured.' }
   }
-
-  const authToken = await convexAuthToken()
-  if (!authToken) {
-    return { ok: false, account: null, error: 'Convex auth token is unavailable.' }
-  }
-
   try {
-    const account = await convexClient(authToken).mutation(anyApi.agent.upsertViewer, {})
+    const account = await upsertCloudUser(input)
     return { ok: true, account: accountSummary(account), error: undefined }
   } catch (error) {
     return { ok: false, account: null, error: errorMessage(error) }
@@ -109,5 +146,5 @@ function stringValue(value: unknown) {
 }
 
 function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : 'Convex account sync failed.'
+  return error instanceof Error ? error.message : 'Cloud account sync failed.'
 }

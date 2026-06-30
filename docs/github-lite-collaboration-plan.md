@@ -1,8 +1,8 @@
 # GitHub-Lite Collaboration Plan
 
-Last updated: 2026-06-24
+Last updated: 2026-06-30
 
-This is the collaboration sub-plan under the solid v1 dogfood track. HopIt is moving toward a production-shaped Workspace Root first, while also turning the deployed personal dogfood system into a private GitHub-lite collaboration surface. The current foundation is a Vercel-hosted dashboard, a Convex production graph, a production-profile local agent, a seeded `hopit` codebase, and a managed workspace hydrated outside the source checkout.
+This is the collaboration sub-plan under the solid v1 dogfood track. HopIt is moving toward a production-shaped Workspace Root first, while also turning the deployed personal dogfood system into a private GitHub-lite collaboration surface. The current foundation is a Vercel-hosted dashboard, a D1 graph migration target with legacy Convex export source, a production-profile local agent, a seeded `hopit` codebase, and a managed workspace hydrated outside the source checkout.
 
 This plan covers the collaboration goals that sit beside Workspace Root, storage, scoped device auth, and automatic device-handoff work before deeper Git-replacement internals resume.
 
@@ -16,13 +16,13 @@ devices can decrypt private repo content, `.private/`, and secrets.
 - Production app: `https://hopit.dev`
 - Secondary production alias: `https://www.hopit.dev`
 - Vercel project: `robertg761s-projects/hopit`, project id `prj_hO8U1QmyliQjGODz4R339UkgE86S`, org/team id `team_x1SyEPIryEghBSkkwoXSTIZ2`
-- Production Convex graph: `https://sincere-jaguar-17.convex.cloud`
-- Convex project: `robertgordon761/hopit`
+- Cloud graph target: Cloudflare D1 with schema at `cloudflare/d1/schema.sql`
+- Legacy Convex graph/export source: `https://sincere-jaguar-17.convex.cloud`, project `robertgordon761/hopit`
 - Object storage: private Cloudflare R2 bucket `hopit-blobs`, currently free-only/lifecycle-limited for personal dogfooding
 - Current codebase id: `hopit`
 - Current production graph contents: 58 source files
 - Current workspace: `/Users/robert/HopIt Workspaces/hopit`
-- Current local service: LaunchAgent `com.hopit.agent.hopit` running the packaged `hop-darwin-arm64` runtime
+- Current local service: LaunchAgent `com.hopit.agent.hopit` is installed and running for the packaged `hop-darwin-arm64` runtime, with D1 cloud status verified locally
 - Current config locations: `.env.local` for this checkout and `/Users/robert/.config/hopit/production.env` for the installed local agent
 - Hosted dashboard: Clerk production auth and Google OAuth are active for `hopit.dev`; Basic Auth fallback remains enabled until owner sign-in and owner mapping are complete; read-only for workspace commands
 - Local agent: can import, hydrate, sync, refresh, recover, open review, merge, export, publish, validate, and report status
@@ -34,19 +34,19 @@ The current setup details live in [Personal Production Runbook](personal-product
 
 The first collaboration slice is now started in the repo:
 
-- Convex has user, auth identity, codebase member, invitation, and agent-session tables.
+- D1 now covers the graph/status/account/codebase/file/action-job slice; Convex still has the richer user/auth identity, codebase member, invitation, work-item, and agent-session tables that need D1 ports.
 - Convex exposes authenticated viewer/upsert entrypoints plus owner-claim, member list/manage, and invitation create/accept/revoke mutations.
-- The dashboard query can filter graph files by requester role and `.private/` ownership.
+- The dashboard query can filter graph files by requester role and `.private/` ownership through D1 or legacy Convex.
 - The status mapper carries capped shared-file content previews.
 - The dashboard includes a read-only code-review browser section.
 - The dashboard includes member/invite management plus first issue, discussion, and release workflows.
-- Convex has initial permission-gated tables/functions for issues, projects, discussions, releases, release assets, and per-codebase counters.
-- Convex has scoped agent-session token registration/list/touch/revoke plus token authorization for graph reads, per-file agent writes, and event sync.
+- Convex has initial permission-gated tables/functions for issues, projects, discussions, releases, release assets, and per-codebase counters; these are now migration targets rather than the intended production store.
+- Convex has scoped agent-session token registration/list/touch/revoke plus token authorization for graph reads, per-file agent writes, and event sync; D1 device/session auth remains to be ported.
 - Secret-only client encryption exists for routed `.private/env/` object blobs,
   but full private-repo encryption, invite-time key grants, independent secret
   sharing, path encryption, and revocation/rekey flows are still pending.
 
-This is still a foundation layer, but it is no longer only backend scaffolding. The repo has Clerk-backed sign-in routes, auth middleware, Convex auth config, member/invite UI, work-item UI, owner email config, scoped agent-session token groundwork, and a Convex JWT template. Clerk production DNS, SSL, live Vercel env, Convex issuer, `HOPIT_AUTH_PROVIDER=clerk`, and production Google OAuth are active for `hopit.dev`; retiring Basic Auth fallback is intentionally deferred until owner sign-in and owner mapping are verified. Real diffs, inline review comments, routeable history, project-board UI, immutable release publishing, and complete permission coverage remain pending.
+This is still a foundation layer, but it is no longer only backend scaffolding. The repo has Clerk-backed sign-in routes, auth middleware, D1 backend selection, legacy Convex auth config, member/invite UI, work-item UI, owner email config, scoped agent-session token groundwork, and a Convex JWT template for the legacy path. Clerk production DNS, SSL, live Vercel env, `HOPIT_AUTH_PROVIDER=clerk`, and production Google OAuth are active for `hopit.dev`; retiring Basic Auth fallback is intentionally deferred until owner sign-in and owner mapping are verified. Real diffs, inline review comments, routeable history, project-board UI, immutable release publishing, complete permission coverage, and full D1 collaboration-table parity remain pending.
 
 ## Phase Principle
 
@@ -155,7 +155,7 @@ grants, and revoke/rotate flows are not implemented yet.
 
 ### Product Outcome
 
-The hosted dashboard can browse the Convex-backed codebase graph: folders, files, file contents, metadata, revisions, and scope.
+The hosted dashboard can browse the configured cloud codebase graph: folders, files, file contents, metadata, revisions, and scope. The new production target is D1, with Convex retained as a legacy fallback during the migration.
 
 ### Implementation Plan
 
@@ -253,7 +253,7 @@ HopIt can name accepted Main states as releases and attach notes/artifacts later
 ## Verification Strategy
 
 - Unit tests for permission helpers and schema validators.
-- Convex function tests or CLI smoke checks for seeded data and query/mutation behavior.
+- D1 migration/CLI smoke checks for seeded graph data, plus legacy Convex function checks while those routes remain unported.
 - Browser smoke for auth redirect, code browsing, invite acceptance, review open/comment/merge, issue creation, and release creation.
 - Production smoke on `https://hopit.dev` after each deployment.
 - Explicit negative tests for non-member reads, viewer write attempts, expired invites, `.private/` access, and merge without permission.

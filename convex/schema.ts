@@ -50,6 +50,13 @@ const wrappedKeyRecipientType = v.union(
   v.literal("recovery"),
 );
 const wrappedKeyStatus = v.union(v.literal("active"), v.literal("revoked"), v.literal("expired"));
+const actionJobStatus = v.union(
+  v.literal("queued"),
+  v.literal("running"),
+  v.literal("succeeded"),
+  v.literal("failed"),
+  v.literal("cancelled"),
+);
 
 export default defineSchema({
   users: defineTable({
@@ -90,8 +97,13 @@ export default defineSchema({
     collaborators: v.array(v.any()),
     session: v.any(),
     visibility: v.any(),
+    fileCount: v.optional(v.number()),
+    privateFileCount: v.optional(v.number()),
+    memberCount: v.optional(v.number()),
     updatedAt: v.string(),
-  }).index("by_codebase_id", ["codebaseId"]),
+  })
+    .index("by_codebase_id", ["codebaseId"])
+    .index("by_owner", ["ownerId"]),
 
   codebaseMembers: defineTable({
     codebaseId: v.string(),
@@ -301,6 +313,30 @@ export default defineSchema({
   })
     .index("by_codebase", ["codebaseId"])
     .index("by_codebase_at", ["codebaseId", "at"]),
+
+  actionJobs: defineTable({
+    jobId: v.string(),
+    codebaseId: v.string(),
+    kind: v.string(),
+    command: v.string(),
+    args: v.optional(v.array(v.string())),
+    status: actionJobStatus,
+    requestedByUserId: v.string(),
+    runnerId: v.optional(v.string()),
+    exitCode: v.optional(v.union(v.number(), v.null())),
+    stdout: v.optional(v.string()),
+    stderr: v.optional(v.string()),
+    summary: v.optional(v.string()),
+    createdAt: v.string(),
+    updatedAt: v.string(),
+    claimedAt: v.optional(v.string()),
+    startedAt: v.optional(v.string()),
+    finishedAt: v.optional(v.string()),
+  })
+    .index("by_job_id", ["jobId"])
+    .index("by_status_created", ["status", "createdAt"])
+    .index("by_codebase_created", ["codebaseId", "createdAt"])
+    .index("by_codebase_status", ["codebaseId", "status"]),
 
   collaborationCounters: defineTable({
     codebaseId: v.string(),

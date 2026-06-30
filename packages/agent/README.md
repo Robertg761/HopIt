@@ -12,7 +12,7 @@ It is intentionally not a real FUSE, OS filesystem provider, or clone manager. I
 
 The selected cloud state remains the source of truth for the managed folder. In the production model, day-to-day edits should sync into an active change set; Main advances only after review or merge. The local folder is a materialized cache that HopIt manages so OS file pickers, editors, CLIs, and search tools can work without a special mount or a user-managed clone.
 
-The solid v1 target is a HopIt Workspace Root, such as `~/HopIt Workspaces`, where cloud codebases appear as HopIt-managed project folders. This package currently proves selected managed folders, a durable workspace-root index, configured-codebase discovery and metadata-only attach, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, S3-compatible object-blob storage for file bodies, safe remote-pull polling plus one-shot remote-pull checks, and scoped Convex agent-session tokens. It does not yet provide account-wide codebase discovery, a full automatic lazy-materialization policy, or production-grade push/subscription remote-update delivery.
+The solid v1 target is a HopIt Workspace Root, such as `~/HopIt Workspaces`, where cloud codebases appear as HopIt-managed project folders. This package currently proves selected managed folders, a durable workspace-root index, configured-codebase discovery and metadata-only attach, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, S3-compatible object-blob storage for file bodies, safe remote-pull polling plus one-shot remote-pull checks, Cloudflare D1 graph storage, and legacy scoped Convex agent-session tokens. It does not yet provide account-wide codebase discovery, a full automatic lazy-materialization policy, D1 device-session auth, or production-grade push/subscription remote-update delivery.
 
 HopIt does not use ignore files as product sharing controls. Files under `.private/` are still snapshotted, synced, and versioned, but owner-visible only. Files outside `.private/` are governed by the active change set's effective visibility and the codebase's permissions.
 
@@ -29,7 +29,7 @@ classification, legacy secret-envelope encryption/decryption, device key
 generation, wrapped-key helpers, passphrase recovery export, blob wrap/unwrap,
 and envelope validation shared by the CLI and tests.
 
-Current personal production setup details, including the `hopit.dev` domain, active Vercel/Convex/Clerk/R2 accounts, LaunchAgent paths, env file locations, and temporary safety boundaries, live in [../../docs/personal-production.md](../../docs/personal-production.md).
+Current personal production setup details, including the `hopit.dev` domain, active Vercel/D1/legacy Convex/Clerk/R2 accounts, LaunchAgent paths, env file locations, and temporary safety boundaries, live in [../../docs/personal-production.md](../../docs/personal-production.md).
 
 ## Commands
 
@@ -113,25 +113,27 @@ status` prints only redacted fingerprints and booleans. `keys export-recovery`
 encrypts the user vault key with a passphrase; set the passphrase only for that
 one command through `--recovery-passphrase` or `HOPIT_RECOVERY_PASSPHRASE`, and
 do not leave it in persistent env files. Use `--skip-cloud-registration` only
-for local fixture tests or offline setup; production devices should register
-their public device key and wrapped user-vault grant in Convex.
+for local fixture tests or offline setup; production device cloud registration
+is still legacy Convex-only and needs a D1 port.
 
-Point the same import at the real Convex backend with:
+Point the same import at the real D1 backend with:
 
 ```bash
 npm run hop -- import \
   --source /path/to/project \
   --codebase-id hopit \
-  --convex-url "$HOPIT_CONVEX_URL" \
-  --agent-token "$HOPIT_AGENT_TOKEN" \
+  --profile production \
+  --cloud-backend d1 \
   --force
 ```
 
-Any command can use `--convex-url` and `--agent-token`; when those are present,
-the selected cloud graph is read from and written to Convex instead of the local
-JSON file. Local journal and event files still exist as the device safety log.
+Any command can use `--cloud-backend d1` plus `HOPIT_D1_ACCOUNT_ID`,
+`HOPIT_D1_DATABASE_ID`, and `HOPIT_D1_API_TOKEN`; when those are present, the
+selected cloud graph is read from and written to D1 instead of the local JSON
+file. Convex flags remain as a legacy fallback. Local journal and event files
+still exist as the device safety log.
 
-Production file bytes should use the object-blob layer instead of Convex document/blob storage:
+Production file bytes should use the object-blob layer instead of D1/Convex document storage:
 
 ```bash
 HOPIT_BLOB_PROVIDER=r2
@@ -144,7 +146,7 @@ HOPIT_R2_ACCESS_KEY_ID=<r2-access-key-id>
 HOPIT_R2_SECRET_ACCESS_KEY=<r2-secret-access-key>
 ```
 
-With those variables set, `hop sync` uploads regular file bytes to Cloudflare R2 first, then commits only metadata to Convex: storage mode, provider, object key, SHA-256, size, revision, path, and scope. `HOPIT_BLOB_FREE_ONLY=1` makes R2 use an 8 GB default budget, below Cloudflare R2's free storage tier, and fails before uploading a blob that would exceed that cap. `hydrate`, `refresh`, `hydrate-file`, recovery, export, and publish download object bytes and verify the hash before writing locally. Tests can use `--blob-provider filesystem --blob-root /tmp/hopit-blobs`. A later Backblaze B2 migration should use the same S3-compatible adapter with `HOPIT_BLOB_PROVIDER=b2`, `HOPIT_B2_BUCKET`, `HOPIT_B2_ENDPOINT`, `HOPIT_B2_REGION`, `HOPIT_B2_KEY_ID`, and `HOPIT_B2_APPLICATION_KEY`.
+With those variables set, `hop sync` uploads regular file bytes to Cloudflare R2 first, then commits only metadata to the active cloud graph: storage mode, provider, object key, SHA-256, size, revision, path, and scope. `HOPIT_BLOB_FREE_ONLY=1` makes R2 use an 8 GB default budget, below Cloudflare R2's free storage tier, and fails before uploading a blob that would exceed that cap. `hydrate`, `refresh`, `hydrate-file`, recovery, export, and publish download object bytes and verify the hash before writing locally. Tests can use `--blob-provider filesystem --blob-root /tmp/hopit-blobs`. A later Backblaze B2 migration should use the same S3-compatible adapter with `HOPIT_BLOB_PROVIDER=b2`, `HOPIT_B2_BUCKET`, `HOPIT_B2_ENDPOINT`, `HOPIT_B2_REGION`, `HOPIT_B2_KEY_ID`, and `HOPIT_B2_APPLICATION_KEY`.
 
 Build a Node/npm-free artifact for the current macOS or Linux platform with:
 
@@ -324,13 +326,12 @@ duplicating workspace content.
 
 `hop device` is an alias for `hop session`. `device status` reports the local
 session id, device name, and whether the command is using the bootstrap service
-token or a scoped per-device session token. `device register` calls Convex to
-issue a token for this codebase; store the returned `sessionToken` as
-`HOPIT_AGENT_SESSION_TOKEN`. `device list`, `device touch`, and `device revoke`
-are the management surface for active/revoked sessions.
+token or a scoped per-device session token. `device register` is still a legacy
+Convex-backed flow that needs a D1 port before it can be used on the free-first
+production backend.
 
 When both `HOPIT_AGENT_TOKEN` and `HOPIT_AGENT_SESSION_TOKEN` are present,
-normal Convex-backed commands prefer the scoped session token. Pass
+normal legacy Convex-backed commands prefer the scoped session token. Pass
 `--agent-token` explicitly for bootstrap/admin work such as import, graph
 replacement, or admin session listing.
 
@@ -376,12 +377,12 @@ npm run hop -- service start \
 
 The remote-pull loop checks for a clean local journal, an idle local sync
 scheduler, a fully materialized workspace, and the workspace index cursor before
-calling the same safe `hop refresh` path. For Convex-backed workspaces, the
-polling path first reads `agent.getGraphHead`, which is backed only by the
-`codebases` row. It performs the heavier local hash-manifest scan and full graph
-refresh only after that cursor shows the cloud revision moved, avoiding
-unchanged polls that repeatedly read every file row. `hop remote-pull` runs that
-decision once, which makes same-Mac and cross-device handoff verification
+calling the same safe `hop refresh` path. For D1 and legacy Convex workspaces,
+the polling path first reads only the codebase-level graph head. It performs the
+heavier local hash-manifest scan and full graph refresh only after that cursor
+shows the cloud revision moved, avoiding unchanged polls that repeatedly read
+every file row. `hop remote-pull` runs that decision once, which makes same-Mac
+and cross-device handoff verification
 deterministic without starting a service. If pending or failed journal entries
 exist, the workspace is partial/metadata-only, or disk content differs from the
 last materialized manifest after a remote move, HopIt emits `remote-pull.skipped`

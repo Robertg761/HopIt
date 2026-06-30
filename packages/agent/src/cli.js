@@ -11,6 +11,12 @@ import { fileURLToPath } from 'node:url'
 import { ConvexHttpClient } from 'convex/browser'
 import { anyApi } from 'convex/server'
 import {
+  CloudflareD1HopBackend,
+  d1CloudServiceType,
+  d1ConfigFromOptions,
+  isD1Configured,
+} from '../../../src/lib/d1-backend.js'
+import {
   clientEncryptionConfigFromOptions,
   clientEncryptionScopeFromOptions,
   clientEncryptionScopes,
@@ -3342,7 +3348,7 @@ async function installAgent(options) {
       },
       cloud: {
         path: cloudLocationFromOptions(options, codebaseId),
-        service: convexUrlFromOptions(options) ? convexCloudServiceType : cloudServiceType,
+        service: cloudServiceTypeFromOptions(options),
         exists: false,
       },
       materialization: 'metadata-only',
@@ -4326,7 +4332,7 @@ function workspaceIndexEntryFromCloud(options, cloud, metadata = {}) {
     },
     cloud: {
       path: cloudLocationFromOptions(options, codebaseId),
-      service: convexUrlFromOptions(options) ? convexCloudServiceType : cloudServiceType,
+      service: cloudServiceTypeFromOptions(options),
       exists: true,
     },
     activeChangeSetId: cloud.selectedState?.type === 'active-change-set' ? cloud.selectedState.id : null,
@@ -4781,7 +4787,13 @@ function productionEnvTemplate(options) {
   return `# HopIt production agent environment
 HOPIT_PROFILE=production
 HOPIT_CODEBASE_ID=${codebaseId}
-HOPIT_CONVEX_URL=${convexUrlFromOptions(options) ?? 'https://your-convex-deployment.convex.cloud'}
+HOPIT_CLOUD_BACKEND=d1
+HOPIT_D1_ACCOUNT_ID=${options['d1-account-id'] ?? 'replace-with-cloudflare-account-id'}
+HOPIT_D1_DATABASE_ID=${options['d1-database-id'] ?? 'replace-with-d1-database-id'}
+HOPIT_D1_API_TOKEN=replace-with-cloudflare-d1-api-token-or-hopit-d1-proxy-token
+HOPIT_D1_API_BASE_URL=${options['d1-api-base-url'] ?? 'https://hopit-d1-api.<account-subdomain>.workers.dev'}
+# Legacy Convex fallback only; leave unset for the free-first D1 path.
+# HOPIT_CONVEX_URL=${convexUrlFromOptions(options) ?? 'https://your-convex-deployment.convex.cloud'}
 HOPIT_AGENT_STATE_ROOT=${JSON.stringify(path.resolve(agentStateRootFromOptions(options)))}
 HOPIT_WORKSPACE_ROOT=${JSON.stringify(path.resolve(workspaceRootFromOptions(options)))}
 HOPIT_WORKSPACE_INDEX=${JSON.stringify(path.resolve(workspaceIndexPath(options)))}
@@ -5990,10 +6002,19 @@ function workspaceRootFromOptions(options) {
 }
 
 function cloudLocationFromOptions(options, codebaseId = options['codebase-id'] ?? null) {
-  if (convexUrlFromOptions(options)) {
+  if (shouldUseD1Backend(options)) {
+    return codebaseId ? `d1:${codebaseId}` : 'd1:unconfigured'
+  }
+  if (shouldUseConvexBackend(options)) {
     return codebaseId ? `convex:${codebaseId}` : `convex:${convexUrlFromOptions(options)}`
   }
   return path.resolve(options.cloud)
+}
+
+function cloudServiceTypeFromOptions(options) {
+  if (shouldUseD1Backend(options)) return d1CloudServiceType
+  if (shouldUseConvexBackend(options)) return convexCloudServiceType
+  return cloudServiceType
 }
 
 function remotePullEnabled(options) {
@@ -6950,12 +6971,16 @@ async function prepareEntryForBlobStorage(blobStore, codebaseId, relativePath, e
 }
 
 function createCloudGraphService(options) {
-  if (convexUrlFromOptions(options)) {
+  if (shouldUseD1Backend(options)) {
+    return new D1CloudGraphService(options)
+  }
+
+  if (shouldUseConvexBackend(options)) {
     return new ConvexCloudGraphService(options)
   }
 
   if (options.profile === 'production' && !options['allow-local-cloud']) {
-    throw new Error('Production profile requires --convex-url or HOPIT_CONVEX_URL. Use --allow-local-cloud only for local dry runs.')
+    throw new Error('Production profile requires Cloudflare D1 or Convex backend configuration. Set HOPIT_CLOUD_BACKEND=d1 with HOPIT_D1_* values, or set --convex-url/HOPIT_CONVEX_URL. Use --allow-local-cloud only for local dry runs.')
   }
 
   return new FixtureJsonCloudGraphService(options)
@@ -7274,6 +7299,84 @@ class ConvexCloudGraphService {
       sessionToken: this.sessionToken,
       preferSessionToken: this.preferSessionToken,
     })
+  }
+}
+
+class D1CloudGraphService extends CloudflareD1HopBackend {
+  constructor(options) {
+    super(d1ConfigFromOptions(options))
+    this.codebaseId = options['codebase-id'] || process.env.HOPIT_CODEBASE_ID || this.codebaseId || null
+    this.type = d1CloudServiceType
+    this.location = this.codebaseId ? `d1:${this.codebaseId}` : `d1:${this.config.databaseId ?? 'unconfigured'}`
+    this.usesAtomicFileMutations = false
+    this.blobStore = createObjectBlobStore(options)
+  }
+
+  async initialize(fixture) {
+    const cloud = withComputedMetadata(fixture)
+    this.codebaseId = cloud.codebase.id
+    this.location = `d1:${this.codebaseId}`
+    await prepareGraphForBlobStorage(this, cloud)
+    await super.initialize(cloud)
+    return cloud
+  }
+
+  async readGraph() {
+    const graph = await this.readOptionalGraph()
+    if (!graph) {
+      throw new Error(`D1 graph not found for codebase ${this.codebaseId ?? '(unset)'}.`)
+    }
+    return graph
+  }
+
+  async readOptionalGraph() {
+    const graph = await super.readOptionalGraph(this.codebaseId)
+    return graph ? normalizeValidatedCloudGraph(graph) : null
+  }
+
+  async readGraphHead() {
+    return normalizeCloudGraphHead(await super.readGraphHead(this.codebaseId))
+  }
+
+  async readVisibleGraph(request = {}) {
+    return filterVisibleGraphForRequester(await this.readGraph(), request)
+  }
+
+  async readOptionalVisibleGraph(request = {}) {
+    const graph = await this.readOptionalGraph()
+    return graph ? filterVisibleGraphForRequester(graph, request) : null
+  }
+
+  async writeGraph(cloud) {
+    const normalized = normalizeValidatedCloudGraph(cloud)
+    this.codebaseId = normalized.codebase.id
+    this.location = `d1:${this.codebaseId}`
+    await prepareGraphForBlobStorage(this, normalized)
+    return await super.writeGraph(normalized)
+  }
+
+  applyJournalEntry(cloud, entry, options = {}) {
+    return applyJournalEntryToCloud(cloud, entry, options)
+  }
+
+  async commitJournalEntry(cloud, entry, options = {}) {
+    const payload = options.entry
+      ? await prepareEntryForBlobStorage(this.blobStore, cloud.codebase?.id ?? this.codebaseId ?? 'hopit', entry.path, options.entry)
+      : null
+    const acknowledgement = this.applyJournalEntry(cloud, entry, {
+      ...options,
+      entry: payload ?? options.entry,
+    })
+    await this.writeGraph(cloud)
+    return {
+      ...acknowledgement,
+      storageMode: 'd1-graph-save',
+    }
+  }
+
+  async readBlob(file, context = {}) {
+    if (!this.blobStore) throw new Error('Object-backed file requires HOPIT_BLOB_PROVIDER.')
+    return await this.blobStore.getBlob(file, context)
   }
 }
 
@@ -7966,8 +8069,39 @@ async function emit(options, event, detail) {
     at: new Date().toISOString(),
   }
   await appendNdjson(options.events, payload)
-  await appendConvexEvent(options, payload)
+  await appendRemoteEvent(options, payload)
   console.log(`${event} ${JSON.stringify(detail)}`)
+}
+
+async function appendRemoteEvent(options, payload) {
+  if (shouldUseD1Backend(options)) {
+    await appendD1Event(options, payload)
+    return
+  }
+
+  await appendConvexEvent(options, payload)
+}
+
+async function appendD1Event(options, payload) {
+  const codebaseId = codebaseIdFromEvent(options, payload.detail)
+  if (!codebaseId) return
+
+  try {
+    const backend = new CloudflareD1HopBackend(d1ConfigFromOptions({
+      ...options,
+      'codebase-id': codebaseId,
+    }))
+    await backend.appendEvent({
+      codebaseId,
+      event: payload.event,
+      detail: payload.detail,
+      at: payload.at,
+      source: 'local-agent',
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Unknown D1 event error'
+    console.error(`d1.event_failed ${JSON.stringify({ event: payload.event, reason: message })}`)
+  }
 }
 
 async function appendConvexEvent(options, payload) {
@@ -8007,6 +8141,24 @@ function codebaseIdFromEvent(options, detail) {
 
 function convexUrlFromOptions(options) {
   return options['convex-url'] ?? process.env.HOPIT_CONVEX_URL ?? process.env.CONVEX_URL ?? null
+}
+
+function cloudBackendPreference(options) {
+  return options['cloud-backend'] ?? process.env.HOPIT_CLOUD_BACKEND ?? null
+}
+
+function shouldUseD1Backend(options) {
+  const preference = cloudBackendPreference(options)
+  if (preference === 'd1' || preference === 'cloudflare-d1') return true
+  if (preference === 'convex' || preference === 'fixture' || preference === 'local') return false
+  return isD1Configured(options)
+}
+
+function shouldUseConvexBackend(options) {
+  const preference = cloudBackendPreference(options)
+  if (preference === 'convex') return true
+  if (preference === 'd1' || preference === 'cloudflare-d1' || preference === 'fixture' || preference === 'local') return false
+  return Boolean(convexUrlFromOptions(options))
 }
 
 function agentTokenFromOptions(options) {
@@ -8134,9 +8286,14 @@ Options:
   --workspace-root <path> Root that contains managed HopIt codebase folders
   --workspace-index <path> Optional workspace root index path
   --cloud <path>      Cloud graph JSON path
+  --cloud-backend <name> d1, convex, or local. Defaults to D1 when HOPIT_D1_* is configured
+  --d1-account-id <id> Cloudflare account id for D1
+  --d1-database-id <id> Cloudflare D1 database id
+  --d1-api-token <token> Cloudflare API token with D1 edit/read access
+  --d1-api-base-url <url> Override Cloudflare API base URL for tests/proxies
   --convex-url <url>  Convex deployment URL for the real cloud graph
-  --agent-token <token> Agent token for Convex mutations/queries
-  --session-token <token> Per-device Convex session token
+  --agent-token <token> Legacy Convex agent token
+  --session-token <token> Legacy Convex per-device session token
   --workspace <path>  Managed workspace folder path
   --journal <path>    Pending write journal path
   --events <path>     Event log path

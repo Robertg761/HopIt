@@ -224,9 +224,11 @@ async function writeSupportFiles() {
   await fs.writeFile(
     path.join(examplesRoot, 'production.env.example'),
     `HOPIT_CODEBASE_ID=hopit
-HOPIT_AGENT_TOKEN=replace-with-a-long-random-bootstrap-token
-HOPIT_CONVEX_URL=https://your-convex-deployment.convex.cloud
-NEXT_PUBLIC_CONVEX_URL=https://your-convex-deployment.convex.cloud
+HOPIT_CLOUD_BACKEND=d1
+HOPIT_D1_ACCOUNT_ID=replace-with-cloudflare-account-id
+HOPIT_D1_DATABASE_ID=replace-with-cloudflare-d1-database-id
+HOPIT_D1_API_TOKEN=replace-with-cloudflare-d1-api-token-or-hopit-d1-proxy-token
+HOPIT_D1_API_BASE_URL=https://hopit-d1-api.<account-subdomain>.workers.dev
 HOPIT_AUTH_PROVIDER=clerk
 HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1
 HOPIT_DASHBOARD_USERNAME=hopit
@@ -272,6 +274,11 @@ HOPIT_CLIENT_ENCRYPTION_SCOPE=secrets
 # HOPIT_B2_REGION=us-west-004
 # HOPIT_B2_KEY_ID=replace-with-b2-key-id
 # HOPIT_B2_APPLICATION_KEY=replace-with-b2-application-key
+
+# Legacy Convex fallback only. Leave unset for the free-first D1 path.
+# HOPIT_AGENT_TOKEN=replace-with-a-long-random-bootstrap-token
+# HOPIT_CONVEX_URL=https://your-convex-deployment.convex.cloud
+# NEXT_PUBLIC_CONVEX_URL=https://your-convex-deployment.convex.cloud
 `,
     'utf8',
   )

@@ -8,6 +8,7 @@ import {
   shouldUseClerkAuth,
   signInPath,
 } from '@/lib/auth-config'
+import { hasValidBasicAuthFallbackCredentials } from '@/lib/basic-auth-fallback'
 
 const AUTH_HEADER = 'WWW-Authenticate'
 const REALM = 'Basic realm="HopIt"'
@@ -23,7 +24,7 @@ const clerkProxy = clerkMiddleware(async (auth, request) => {
 export function proxy(request: NextRequest, event: NextFetchEvent) {
   if (shouldUseClerkAuth()) {
     if (!isClerkServerConfigured()) return authProviderMissing()
-    if (!isPublicRoute(request) && shouldAllowBasicAuthFallback() && hasValidBasicCredentials(request)) {
+    if (!isPublicRoute(request) && hasValidBasicAuthFallbackCredentials(request.headers)) {
       return NextResponse.next()
     }
     return clerkProxy(request, event)
@@ -41,7 +42,7 @@ export function proxy(request: NextRequest, event: NextFetchEvent) {
     })
   }
 
-  if (hasValidBasicCredentials(request)) {
+  if (hasValidBasicAuthFallbackCredentials(request.headers)) {
     return NextResponse.next()
   }
 
@@ -52,20 +53,6 @@ export function proxy(request: NextRequest, event: NextFetchEvent) {
       'Cache-Control': 'no-store',
     },
   })
-}
-
-function hasValidBasicCredentials(request: NextRequest) {
-  const expectedPassword = process.env.HOPIT_DASHBOARD_PASSWORD
-  if (!expectedPassword) return false
-
-  const expectedUsername = process.env.HOPIT_DASHBOARD_USERNAME ?? 'hopit'
-  const credentials = readBasicCredentials(request.headers.get('authorization'))
-
-  return Boolean(
-    credentials &&
-      credentials.username === expectedUsername &&
-      credentials.password === expectedPassword,
-  )
 }
 
 export const config = {
@@ -79,23 +66,6 @@ export const config = {
 function shouldRequireDashboardAuth() {
   if (process.env.HOPIT_DISABLE_DASHBOARD_AUTH === '1') return false
   return isHostedRuntime() || process.env.HOPIT_REQUIRE_DASHBOARD_AUTH === '1'
-}
-
-function readBasicCredentials(header: string | null) {
-  if (!header?.startsWith('Basic ')) return null
-
-  try {
-    const decoded = atob(header.slice('Basic '.length))
-    const separator = decoded.indexOf(':')
-    if (separator === -1) return null
-
-    return {
-      username: decoded.slice(0, separator),
-      password: decoded.slice(separator + 1),
-    }
-  } catch {
-    return null
-  }
 }
 
 function authProviderMissing() {

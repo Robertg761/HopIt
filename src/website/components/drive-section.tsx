@@ -58,6 +58,7 @@ export function DriveSection({ status, onChanged }: DriveSectionProps) {
   const [draft, setDraft] = React.useState('')
   const [newFilePath, setNewFilePath] = React.useState('')
   const [saving, setSaving] = React.useState(false)
+  const [loadingFile, setLoadingFile] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const filteredAgentFiles = React.useMemo(
     () => filterAgentFiles(status.files, activeFolder, scopeFilter, fileQuery),
@@ -68,10 +69,10 @@ export function DriveSection({ status, onChanged }: DriveSectionProps) {
   const selectedFile = status.files.find((file) => file.path === selectedPath) ?? null
   const canEditSelectedFile =
     Boolean(status.codebaseId) &&
+    status.requester.permissions.includes('write') &&
     selectedFile?.kind === 'file' &&
     selectedFile.encoding === 'utf8' &&
-    selectedFile.contentPreview !== null &&
-    !selectedFile.contentPreviewTruncated
+    selectedFile.contentStorage !== 'object-blob'
   const fileCountLabel = `${status.files.length} files`
   const privateFileCount = status.files.filter((file) => file.scope === 'owner-private').length
   const sharedFileCount = status.files.length - privateFileCount
@@ -125,10 +126,32 @@ export function DriveSection({ status, onChanged }: DriveSectionProps) {
     }
   }
 
-  function selectFile(path: string) {
+  async function selectFile(path: string) {
     const file = status.files.find((entry) => entry.path === path) ?? null
     setSelectedPath(path)
     setDraft(file?.contentPreview ?? '')
+    if (!status.codebaseId || !file || file.kind !== 'file' || file.encoding !== 'utf8') return
+
+    setLoadingFile(true)
+    try {
+      const params = new URLSearchParams({
+        codebaseId: status.codebaseId,
+        path,
+      })
+      const response = await fetch(`/api/codebase-files?${params.toString()}`, {
+        cache: 'no-store',
+      })
+      const body = await response.json()
+      if (!response.ok || body?.ok === false) {
+        throw new Error(body?.error?.message ?? 'File read failed.')
+      }
+      if (typeof body.file?.content === 'string') setDraft(body.file.content)
+      setError(null)
+    } catch (readError) {
+      setError(readError instanceof Error ? readError.message : 'File read failed.')
+    } finally {
+      setLoadingFile(false)
+    }
   }
 
   return (
@@ -316,6 +339,7 @@ export function DriveSection({ status, onChanged }: DriveSectionProps) {
           file={selectedFile}
           draft={draft}
           saving={saving}
+          loading={loadingFile}
           canEdit={canEditSelectedFile}
           onDraftChange={setDraft}
           onSave={saveFile}
@@ -561,6 +585,7 @@ function FileEditor({
   file,
   draft,
   saving,
+  loading,
   canEdit,
   onDraftChange,
   onSave,
@@ -568,6 +593,7 @@ function FileEditor({
   file: AgentFile | null
   draft: string
   saving: boolean
+  loading: boolean
   canEdit: boolean
   onDraftChange: (value: string) => void
   onSave: () => void
@@ -586,12 +612,12 @@ function FileEditor({
         <div className="min-w-0">
           <p className="truncate font-mono text-xs font-semibold text-foreground">{file.path}</p>
           <p className="mt-0.5 text-[10.5px] text-muted-foreground">
-            {file.encoding ?? file.kind} · rev {file.revision ?? 'new'} · {file.scope}
+          {file.encoding ?? file.kind} · rev {file.revision ?? 'new'} · {file.scope}
           </p>
         </div>
         <Button
           size="sm"
-          disabled={!canEdit || saving}
+          disabled={!canEdit || saving || loading}
           onClick={onSave}
           className="gap-1.5 rounded-md"
         >
@@ -599,7 +625,9 @@ function FileEditor({
           {saving ? 'Saving' : 'Save'}
         </Button>
       </div>
-      {canEdit ? (
+      {loading ? (
+        <div className="p-4 text-sm text-muted-foreground">Loading full file contents...</div>
+      ) : canEdit ? (
         <textarea
           value={draft}
           onChange={(event) => onDraftChange(event.target.value)}

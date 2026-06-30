@@ -224,10 +224,10 @@ Current spike:
 - Requester-aware fixture reads now prove collaborator visibility rules: private change sets hide active work from collaborators, team-visible and review-visible change sets expose non-private paths, and `.private/` remains owner-only.
 - Minimal review/merge fixture commands open the selected active change set for review, merge it into Main, emit `change_set.review_opened` and `change_set.merged`, and surface review/merge state through status. Main stays stable until the explicit merge command runs.
 - Fixture conflict handling detects stale selected-state revisions, stale file/base revisions, and stale Main revisions, emits `change_set.conflict_detected`, and surfaces conflict state while preserving local edits for review.
-- The Next.js product shell now polls `/api/agent/status`, maps live local status/events/cloud data into the dashboard, and can read the Convex dashboard query when `HOPIT_CONVEX_URL` or `NEXT_PUBLIC_CONVEX_URL` is configured.
-- `/api/agent/command` exposes whitelisted local actions for sync, refresh, recover, review, and merge. Hosted Convex-backed deployments can read status but still require the local agent for workspace commands.
+- The Next.js product shell now polls `/api/agent/status`, maps live local status/events/cloud data into the dashboard, and can read the Cloudflare D1 dashboard data when the D1 backend env is configured. Legacy Convex dashboard reads remain available while the old backend is being retired.
+- `/api/agent/command` exposes whitelisted local actions for sync, refresh, recover, review, and merge. Hosted D1-backed deployments can read status but still require the local agent for workspace commands.
 - `hop workspace` persists a root-level index keyed by codebase and concrete workspace path; configured-codebase discovery and metadata-only attach can bind a cloud codebase into the Workspace Root, and hydrate, refresh, and sync update the materialized revision cursor that status and remote-pull use.
-- `hop device` / `hop session` exposes local session status and Convex-backed scoped session registration, listing, touch, and revocation.
+- `hop device` / `hop session` exposes local session status. Scoped session registration, listing, touch, and revocation are still on the legacy Convex path and need a D1 port before free-first production can use them.
 
 Current next work:
 
@@ -308,7 +308,7 @@ Current next work:
 
 - Add real accounts/auth and map every user-facing request to a durable HopIt user.
 - Add codebase memberships, roles, invitations, and server-side permission checks.
-- Build a hosted web code browser for Convex-backed file graphs.
+- Build a hosted web code browser for Cloudflare D1-backed file graphs.
 - Add diff, review, inline comment, and merge-history records around active change sets and Main.
 - Add issues, projects, discussions, and releases as first-class codebase collaboration objects.
 - Keep local-agent service tokens separate from human user auth.

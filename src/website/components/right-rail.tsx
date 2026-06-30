@@ -8,13 +8,17 @@ import {
   Cloud,
   Clock3,
   FileStack,
+  FlaskConical,
   FolderOpen,
   GitBranch,
   HardDrive,
   GitMerge,
   GitPullRequest,
+  Hammer,
+  Play,
   RotateCcw,
   ShieldCheck,
+  Terminal,
   UploadCloud,
   WifiOff,
 } from 'lucide-react'
@@ -48,6 +52,16 @@ const eventToneClasses: Record<AgentEvent['tone'], string> = {
 }
 
 type AgentEvent = AgentStatusSnapshot['events'][number]
+type ActionKind = 'lint' | 'test' | 'build'
+type ActionJob = {
+  jobId: string
+  kind: ActionKind
+  status: string
+  summary: string | null
+  exitCode: number | null
+  createdAt: string
+  updatedAt: string
+}
 
 type RightRailProps = {
   status: AgentStatusSnapshot
@@ -107,9 +121,41 @@ function AgentStatusPanel({
   const StatusIcon = status.state === 'offline' ? WifiOff : HardDrive
   const [gitUrl, setGitUrl] = React.useState('')
   const [gitBranch, setGitBranch] = React.useState('')
+  const [actionJobs, setActionJobs] = React.useState<ActionJob[]>([])
+  const [actionLoading, setActionLoading] = React.useState(false)
+  const [actionError, setActionError] = React.useState<string | null>(null)
   const trimmedGitUrl = gitUrl.trim()
   const importRunning = runningCommand === 'importGitUrl'
   const importDisabledReason = remoteImportDisabledReason(status, runningCommand, trimmedGitUrl)
+
+  const loadActionJobs = React.useCallback(async () => {
+    if (!status.codebaseId) {
+      setActionJobs([])
+      return
+    }
+
+    try {
+      const response = await fetch(`/api/actions?codebaseId=${encodeURIComponent(status.codebaseId)}`, {
+        cache: 'no-store',
+      })
+      const body = await response.json()
+      if (!response.ok || body?.ok === false) {
+        throw new Error(body?.error?.message ?? 'Action list failed.')
+      }
+      setActionJobs(Array.isArray(body.jobs) ? body.jobs.map(normalizeActionJob) : [])
+      setActionError(null)
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Action list failed.')
+    }
+  }, [status.codebaseId])
+
+  React.useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      void loadActionJobs()
+    }, 0)
+
+    return () => window.clearTimeout(timeout)
+  }, [loadActionJobs])
 
   function submitRemoteImport(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -119,6 +165,29 @@ function AgentStatusPanel({
       url: trimmedGitUrl,
       branch: gitBranch.trim() || undefined,
     })
+  }
+
+  async function queueAction(kind: ActionKind) {
+    if (!status.codebaseId) return
+
+    setActionLoading(true)
+    try {
+      const response = await fetch('/api/actions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ codebaseId: status.codebaseId, kind }),
+      })
+      const body = await response.json()
+      if (!response.ok || body?.ok === false) {
+        throw new Error(body?.error?.message ?? 'Action queue failed.')
+      }
+      setActionError(null)
+      await loadActionJobs()
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Action queue failed.')
+    } finally {
+      setActionLoading(false)
+    }
   }
 
   return (
@@ -365,6 +434,58 @@ function AgentStatusPanel({
           ) : null}
         </div>
 
+        <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h3 className="text-xs font-semibold">Hosted actions</h3>
+            <span className="text-[10.5px] text-muted-foreground">
+              {status.codebaseId ? status.codebaseId : 'No codebase'}
+            </span>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <ActionButton
+              icon={Terminal}
+              label="Lint"
+              disabled={actionLoading || !status.codebaseId}
+              onClick={() => void queueAction('lint')}
+            />
+            <ActionButton
+              icon={FlaskConical}
+              label="Test"
+              disabled={actionLoading || !status.codebaseId}
+              onClick={() => void queueAction('test')}
+            />
+            <ActionButton
+              icon={Hammer}
+              label="Build"
+              disabled={actionLoading || !status.codebaseId}
+              onClick={() => void queueAction('build')}
+            />
+          </div>
+          {actionError ? (
+            <div className="mt-2 rounded-lg border border-destructive/20 bg-destructive/8 px-2.5 py-2 text-[11px] text-destructive">
+              {actionError}
+            </div>
+          ) : null}
+          <ol className="mt-3 space-y-2">
+            {actionJobs.slice(0, 4).map((job) => (
+              <li key={job.jobId} className="rounded-lg border border-border/50 bg-background/50 p-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="flex min-w-0 items-center gap-1.5 text-[11px] font-semibold capitalize">
+                    <Play className="size-3 text-primary" />
+                    <span className="truncate">{job.kind}</span>
+                  </span>
+                  <span className={cn('shrink-0 rounded px-1.5 py-0.5 text-[9.5px] font-bold', actionStatusClass(job.status))}>
+                    {job.status}
+                  </span>
+                </div>
+                <p className="mt-1 line-clamp-2 text-[10.5px] text-muted-foreground">
+                  {job.summary ?? actionJobTime(job.updatedAt)}
+                </p>
+              </li>
+            ))}
+          </ol>
+        </div>
+
         <div>
           <div className="mb-2 flex items-center justify-between">
             <h3 className="text-xs font-semibold">Recent agent events</h3>
@@ -404,6 +525,32 @@ function AgentStatusPanel({
         </div>
       </div>
     </section>
+  )
+}
+
+function ActionButton({
+  icon: Icon,
+  label,
+  disabled,
+  onClick,
+}: {
+  icon: React.ComponentType<{ className?: string }>
+  label: string
+  disabled: boolean
+  onClick: () => void
+}) {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      disabled={disabled}
+      className="h-8 justify-start gap-1.5 rounded-lg px-2 text-xs"
+      onClick={onClick}
+    >
+      <Icon className="size-3.5 shrink-0" />
+      <span className="truncate">{label}</span>
+    </Button>
   )
 }
 
@@ -477,4 +624,36 @@ function remoteImportDisabledReason(
   if (!status.commandsAvailable) return 'Local workspace commands are unavailable.'
   if (!gitUrl) return 'Enter a Git URL.'
   return null
+}
+
+function normalizeActionJob(value: unknown): ActionJob {
+  const row = value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+  return {
+    jobId: typeof row.jobId === 'string' ? row.jobId : 'unknown',
+    kind: row.kind === 'lint' || row.kind === 'test' || row.kind === 'build' ? row.kind : 'build',
+    status: typeof row.status === 'string' ? row.status : 'queued',
+    summary: typeof row.summary === 'string' ? row.summary : null,
+    exitCode: typeof row.exitCode === 'number' ? row.exitCode : null,
+    createdAt: typeof row.createdAt === 'string' ? row.createdAt : '',
+    updatedAt: typeof row.updatedAt === 'string' ? row.updatedAt : '',
+  }
+}
+
+function actionStatusClass(status: string) {
+  if (status === 'succeeded') return 'bg-primary/10 text-primary'
+  if (status === 'failed' || status === 'cancelled') return 'bg-destructive/10 text-destructive'
+  if (status === 'running') return 'bg-sky-500/10 text-sky-500'
+  return 'bg-hop-amber/10 text-hop-amber'
+}
+
+function actionJobTime(value: string) {
+  if (!value) return 'Waiting for a hosted runner.'
+  const timestamp = Date.parse(value)
+  if (!Number.isFinite(timestamp)) return 'Waiting for a hosted runner.'
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(timestamp)
 }

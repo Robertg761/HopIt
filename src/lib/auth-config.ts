@@ -14,7 +14,7 @@ export function shouldEnableClerkUi() {
 }
 
 export function isHostedRuntime() {
-  return process.env.VERCEL === '1' || process.env.HOPIT_REQUIRE_CONVEX === '1'
+  return process.env.VERCEL === '1' || process.env.HOPIT_REQUIRE_CLOUD === '1' || process.env.HOPIT_REQUIRE_CONVEX === '1'
 }
 
 export function shouldUseClerkAuth() {

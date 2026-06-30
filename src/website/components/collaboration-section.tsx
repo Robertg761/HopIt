@@ -408,7 +408,7 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
       <div className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(300px,0.6fr)]">
         <div className="min-w-0">
           {loading ? (
-            <StateNotice icon={Loader2} title="Loading collaboration objects" detail="Reading Convex work-item functions." spinning />
+            <StateNotice icon={Loader2} title="Loading collaboration objects" detail="Reading cloud work-item functions." spinning />
           ) : workItems?.error ? (
             <StateNotice icon={AlertCircle} title="Collaboration unavailable" detail={workItems.error.message} />
           ) : tab === 'issues' ? (

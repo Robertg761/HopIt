@@ -75,6 +75,11 @@ const agentSessionStatusValidator = v.union(
   v.literal("active"),
   v.literal("revoked"),
 );
+const actionJobKindValidator = v.union(
+  v.literal("lint"),
+  v.literal("test"),
+  v.literal("build"),
+);
 const deviceKeyStatusValidator = v.union(
   v.literal("pending"),
   v.literal("trusted"),
@@ -150,11 +155,12 @@ export const listCodebases = query({
       if (codebase) codebasesById.set(codebase.codebaseId, codebase);
     }
 
-    const allCodebases = await ctx.db.query("codebases").collect();
-    for (const codebase of allCodebases) {
-      if (codebase.ownerId === actor.userId || codebase.owner?.id === actor.userId) {
-        codebasesById.set(codebase.codebaseId, codebase);
-      }
+    const ownedCodebases = await ctx.db
+      .query("codebases")
+      .withIndex("by_owner", (q) => q.eq("ownerId", actor.userId))
+      .collect();
+    for (const codebase of ownedCodebases) {
+      codebasesById.set(codebase.codebaseId, codebase);
     }
 
     const rows: any[] = [];
@@ -162,21 +168,27 @@ export const listCodebases = query({
       const access = await readCodebaseAccessContext(ctx, accessSourceFromCodebase(codebase), {
         userId: actor.userId,
       });
-      const [files, members] = await Promise.all([
-        ctx.db
-          .query("files")
-          .withIndex("by_codebase", (q) => q.eq("codebaseId", codebase.codebaseId))
-          .collect(),
-        ctx.db
-          .query("codebaseMembers")
-          .withIndex("by_codebase", (q) => q.eq("codebaseId", codebase.codebaseId))
-          .collect(),
-      ]);
+      const [files, members] = hasStoredCodebaseCounters(codebase)
+        ? [[], []]
+        : await Promise.all([
+            ctx.db
+              .query("files")
+              .withIndex("by_codebase", (q) => q.eq("codebaseId", codebase.codebaseId))
+              .collect(),
+            ctx.db
+              .query("codebaseMembers")
+              .withIndex("by_codebase", (q) => q.eq("codebaseId", codebase.codebaseId))
+              .collect(),
+          ]);
       rows.push({
         ...summarizeCodebaseHead(codebase, access),
-        fileCount: files.length,
-        privateFileCount: files.filter((file) => file.scope === "owner-private").length,
-        memberCount: members.filter((member) => member.status === "active").length,
+        fileCount: Number.isInteger(codebase.fileCount) ? codebase.fileCount : files.length,
+        privateFileCount: Number.isInteger(codebase.privateFileCount)
+          ? codebase.privateFileCount
+          : files.filter((file) => file.scope === "owner-private").length,
+        memberCount: Number.isInteger(codebase.memberCount)
+          ? codebase.memberCount
+          : members.filter((member) => member.status === "active").length,
       });
     }
 
@@ -222,6 +234,9 @@ export const createCodebase = mutation({
       collaborators: graph.collaborators,
       session: graph.session,
       visibility: graph.visibility,
+      fileCount: Object.keys(graph.files).length,
+      privateFileCount: graphPrivateFileCount(graph),
+      memberCount: 1,
       updatedAt: now,
     });
     await syncGraphAccessRows(ctx, graph, now);
@@ -267,6 +282,9 @@ export const createCodebase = mutation({
       collaborators: graph.collaborators,
       session: graph.session,
       visibility: graph.visibility,
+      fileCount: Object.keys(graph.files).length,
+      privateFileCount: 0,
+      memberCount: 1,
       updatedAt: now,
     };
     const access = await readCodebaseAccessContext(ctx, accessSourceFromGraph(graph), {
@@ -347,9 +365,166 @@ export const deleteCodebase = mutation({
     await deleteRowsByCodebase(ctx, "releases", args.codebaseId);
     await deleteRowsByCodebase(ctx, "releaseAssets", args.codebaseId);
     await deleteRowsByCodebase(ctx, "projectItems", args.codebaseId);
+    await deleteRowsByCodebase(ctx, "actionJobs", args.codebaseId);
     await ctx.db.delete(codebase._id);
 
     return { ok: true, codebaseId: args.codebaseId, deletedBy: actor.userId };
+  },
+});
+
+export const createActionJob = mutation({
+  args: {
+    codebaseId: v.string(),
+    kind: actionJobKindValidator,
+  },
+  handler: async (ctx, args) => {
+    const actor = await resolveWriteActor(ctx, undefined);
+    const { access } = await requireCodebaseCapabilityForActor(ctx, args.codebaseId, actor, "write");
+    if (!access.isOwner && !access.isService) {
+      throw new Error("Hosted actions are owner-only until sandboxed runners are available.");
+    }
+
+    const now = new Date().toISOString();
+    const command = actionCommandForKind(args.kind);
+    const job = {
+      jobId: createActionJobId(),
+      codebaseId: args.codebaseId,
+      kind: args.kind,
+      command: command.command,
+      args: command.args,
+      status: "queued" as const,
+      requestedByUserId: actor.userId,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    await ctx.db.insert("actionJobs", job);
+    await ctx.db.insert("agentEvents", {
+      codebaseId: args.codebaseId,
+      event: "action.queued",
+      detail: { jobId: job.jobId, kind: args.kind, requestedBy: actor.userId },
+      at: now,
+      source: "browser",
+    });
+
+    return summarizeActionJob(job);
+  },
+});
+
+export const listActionJobs = query({
+  args: {
+    codebaseId: v.string(),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const actor = await resolveReadActor(ctx, undefined);
+    await requireCodebaseCapabilityForActor(ctx, args.codebaseId, actor, "read");
+
+    const limit = boundedLimit(args.limit, 30);
+    const jobs = await ctx.db
+      .query("actionJobs")
+      .withIndex("by_codebase_created", (q) => q.eq("codebaseId", args.codebaseId))
+      .order("desc")
+      .take(limit);
+
+    return jobs.map(summarizeActionJob);
+  },
+});
+
+export const claimNextActionJob = mutation({
+  args: {
+    runnerId: v.string(),
+    token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireAgentToken(args.token);
+
+    const queuedJobs = await ctx.db
+      .query("actionJobs")
+      .withIndex("by_status_created", (q) => q.eq("status", "queued"))
+      .order("asc")
+      .take(1);
+    const job = queuedJobs[0];
+    if (!job) return null;
+
+    const now = new Date().toISOString();
+    await ctx.db.patch(job._id, {
+      status: "running",
+      runnerId: normalizeRunnerId(args.runnerId),
+      claimedAt: now,
+      startedAt: now,
+      updatedAt: now,
+    });
+    await ctx.db.insert("agentEvents", {
+      codebaseId: job.codebaseId,
+      event: "action.started",
+      detail: { jobId: job.jobId, kind: job.kind, runnerId: normalizeRunnerId(args.runnerId) },
+      at: now,
+      source: "hosted-runner",
+    });
+
+    return summarizeActionJob({
+      ...job,
+      status: "running",
+      runnerId: normalizeRunnerId(args.runnerId),
+      claimedAt: now,
+      startedAt: now,
+      updatedAt: now,
+    });
+  },
+});
+
+export const completeActionJob = mutation({
+  args: {
+    jobId: v.string(),
+    runnerId: v.string(),
+    status: v.union(v.literal("succeeded"), v.literal("failed"), v.literal("cancelled")),
+    exitCode: v.optional(v.union(v.number(), v.null())),
+    stdout: v.optional(v.string()),
+    stderr: v.optional(v.string()),
+    summary: v.optional(v.string()),
+    token: v.string(),
+  },
+  handler: async (ctx, args) => {
+    requireAgentToken(args.token);
+
+    const job = await ctx.db
+      .query("actionJobs")
+      .withIndex("by_job_id", (q) => q.eq("jobId", args.jobId))
+      .unique();
+    if (!job) throw new Error(`Action job ${args.jobId} was not found.`);
+    if (job.status !== "running") throw new Error(`Action job ${args.jobId} is not running.`);
+    if (job.runnerId && job.runnerId !== normalizeRunnerId(args.runnerId)) {
+      throw new Error(`Action job ${args.jobId} is claimed by another runner.`);
+    }
+
+    const now = new Date().toISOString();
+    const patch = {
+      status: args.status,
+      exitCode: args.exitCode ?? null,
+      stdout: capActionOutput(args.stdout),
+      stderr: capActionOutput(args.stderr),
+      summary: optionalText(args.summary) ?? actionSummary(args.status, args.exitCode ?? null),
+      runnerId: normalizeRunnerId(args.runnerId),
+      finishedAt: now,
+      updatedAt: now,
+    };
+
+    await ctx.db.patch(job._id, patch);
+    await ctx.db.insert("agentEvents", {
+      codebaseId: job.codebaseId,
+      event: args.status === "succeeded" ? "action.succeeded" : "action.failed",
+      detail: {
+        jobId: job.jobId,
+        kind: job.kind,
+        runnerId: normalizeRunnerId(args.runnerId),
+        exitCode: args.exitCode ?? null,
+      },
+      at: now,
+      source: "hosted-runner",
+    });
+
+    return summarizeActionJob({ ...job, ...patch });
   },
 });
 
@@ -537,6 +712,7 @@ export const claimCodebaseOwner = mutation({
     await ctx.db.patch(codebase._id, {
       ownerId: actor.userId,
       owner: claimedOwnerValue(codebase.owner, actor),
+      memberCount: await activeCodebaseMemberCount(ctx, args.codebaseId),
       updatedAt: now,
     });
 
@@ -708,6 +884,7 @@ export const acceptCodebaseInvitation = mutation({
       acceptedAt: now,
       updatedAt: now,
     });
+    await refreshCodebaseMemberCount(ctx, invitation.codebaseId, now);
 
     return {
       codebaseId: invitation.codebaseId,
@@ -763,6 +940,7 @@ export const suspendCodebaseMember = mutation({
       suspendedAt: now,
       updatedAt: now,
     });
+    await refreshCodebaseMemberCount(ctx, args.codebaseId, now);
 
     return await ctx.db.get(member._id);
   },
@@ -788,6 +966,7 @@ export const removeCodebaseMember = mutation({
       suspendedAt: now,
       updatedAt: now,
     });
+    await refreshCodebaseMemberCount(ctx, args.codebaseId, now);
 
     return {
       ok: true,
@@ -830,6 +1009,9 @@ export const saveGraph = mutation({
       collaborators: graph.collaborators,
       session: graph.session,
       visibility: graph.visibility,
+      fileCount: Object.keys(graph.files).length,
+      privateFileCount: graphPrivateFileCount(graph),
+      memberCount: graphMemberCount(graph),
       updatedAt: now,
     };
 
@@ -1057,6 +1239,7 @@ export const applyFileMutation = mutation({
       await ctx.db.patch(codebase._id, {
         revision: nextRevision,
         selectedState: nextSelectedState,
+        ...codebaseCounterPatchForFileChange(codebase, existingFile, args.type, args.path, true),
         updatedAt: now,
       });
     }
@@ -1149,6 +1332,7 @@ export const mutateTextFile = mutation({
     await ctx.db.patch(codebase._id, {
       revision: nextRevision,
       selectedState: nextSelectedState,
+      ...codebaseCounterPatchForFileChange(codebase, existingFile, "write", args.path, true),
       updatedAt: now,
     });
     await ctx.db.insert("agentEvents", {
@@ -1165,6 +1349,41 @@ export const mutateTextFile = mutation({
       path: args.path,
       revision: nextRevision,
       selectedStateRevision: nextRevision,
+    };
+  },
+});
+
+export const readTextFile = query({
+  args: {
+    codebaseId: v.string(),
+    path: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const actor = await resolveReadActor(ctx, undefined);
+    const { access } = await requireCodebaseCapabilityForActor(ctx, args.codebaseId, actor, "read");
+    assertSafeGraphPath(args.path);
+
+    const file = await readFileByPath(ctx, args.codebaseId, args.path);
+    if (!file) throw new Error(`File ${args.path} was not found.`);
+    if (file.scope === "owner-private" && !access.isOwner) {
+      throw new Error("Only the owner can read owner-private files from the browser.");
+    }
+    if (privacyZoneForPath(args.path) === "secrets") {
+      throw new Error("Secret-zone files cannot be read from the browser.");
+    }
+    if ((file.kind ?? "file") !== "file" || file.encoding !== "utf8") {
+      throw new Error("Only UTF-8 text files can be read in the browser.");
+    }
+    if (file.contentStorage === "object-blob") {
+      throw new Error("Object-backed files are not available through browser text reads yet.");
+    }
+
+    return {
+      codebaseId: args.codebaseId,
+      path: args.path,
+      content: typeof file.content === "string" ? file.content : "",
+      revision: Number.isInteger(file.revision) ? file.revision : null,
+      size: Number.isInteger(file.size) ? file.size : null,
     };
   },
 });
@@ -2192,6 +2411,124 @@ async function createAgentSessionToken() {
 
 function createAgentSessionId() {
   return `as_${randomBase64Url(12)}`;
+}
+
+function createActionJobId() {
+  return `act_${randomBase64Url(12)}`;
+}
+
+function actionCommandForKind(kind: "lint" | "test" | "build") {
+  if (kind === "lint") return { command: "npm", args: ["run", "lint"] };
+  if (kind === "test") return { command: "npm", args: ["test"] };
+  return { command: "npm", args: ["run", "build"] };
+}
+
+function summarizeActionJob(job: any) {
+  return {
+    jobId: job.jobId,
+    codebaseId: job.codebaseId,
+    kind: job.kind,
+    command: job.command,
+    args: Array.isArray(job.args) ? job.args : [],
+    status: job.status,
+    requestedByUserId: job.requestedByUserId,
+    runnerId: stringOrNull(job.runnerId),
+    exitCode: typeof job.exitCode === "number" ? job.exitCode : job.exitCode === null ? null : undefined,
+    stdout: stringOrNull(job.stdout),
+    stderr: stringOrNull(job.stderr),
+    summary: stringOrNull(job.summary),
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+    claimedAt: stringOrNull(job.claimedAt),
+    startedAt: stringOrNull(job.startedAt),
+    finishedAt: stringOrNull(job.finishedAt),
+  };
+}
+
+function hasStoredCodebaseCounters(codebase: any) {
+  return (
+    Number.isInteger(codebase.fileCount) &&
+    Number.isInteger(codebase.privateFileCount) &&
+    Number.isInteger(codebase.memberCount)
+  );
+}
+
+function graphPrivateFileCount(graph: any) {
+  return Object.keys(graph.files ?? {}).filter((filePath) => scopeForPath(filePath) === "owner-private").length;
+}
+
+function graphMemberCount(graph: any) {
+  const collaborators = Array.isArray(graph.collaborators) ? graph.collaborators : [];
+  return 1 + collaborators.filter((entry: any) => entry?.status !== "suspended").length;
+}
+
+async function activeCodebaseMemberCount(ctx: any, codebaseId: string) {
+  const members = await ctx.db
+    .query("codebaseMembers")
+    .withIndex("by_codebase", (q: any) => q.eq("codebaseId", codebaseId))
+    .collect();
+  return members.filter((member: any) => member.status === "active").length;
+}
+
+async function refreshCodebaseMemberCount(ctx: any, codebaseId: string, now: string) {
+  const codebase = await readCodebaseById(ctx, codebaseId);
+  if (!codebase) return;
+  await ctx.db.patch(codebase._id, {
+    memberCount: await activeCodebaseMemberCount(ctx, codebaseId),
+    updatedAt: now,
+  });
+}
+
+function codebaseCounterPatchForFileChange(
+  codebase: any,
+  existingFile: any,
+  type: "create" | "write" | "delete",
+  filePath: string,
+  changed: boolean,
+) {
+  if (!changed || !hasStoredCodebaseCounters(codebase)) return {};
+
+  const fileCount = Number(codebase.fileCount);
+  const privateFileCount = Number(codebase.privateFileCount);
+  if (type === "delete") {
+    if (!existingFile) return {};
+    const existingPrivate = existingFile.scope === "owner-private";
+    return {
+      fileCount: Math.max(0, fileCount - 1),
+      privateFileCount: Math.max(0, privateFileCount - (existingPrivate ? 1 : 0)),
+    };
+  }
+
+  if (existingFile) return {};
+  const nextPrivate = scopeForPath(filePath) === "owner-private";
+  return {
+    fileCount: fileCount + 1,
+    privateFileCount: privateFileCount + (nextPrivate ? 1 : 0),
+  };
+}
+
+function boundedLimit(value: number | undefined, fallback: number) {
+  if (!Number.isFinite(value ?? NaN)) return fallback;
+  return Math.max(1, Math.min(100, Math.floor(value as number)));
+}
+
+function normalizeRunnerId(value: string) {
+  const runnerId = optionalText(value);
+  if (!runnerId) throw new Error("Runner id is required.");
+  if (runnerId.length > 120) throw new Error("Runner id must be 120 characters or fewer.");
+  if (/[\0\r\n]/.test(runnerId)) throw new Error("Runner id contains unsupported characters.");
+  return runnerId;
+}
+
+function capActionOutput(value: string | undefined) {
+  if (typeof value !== "string" || value.length === 0) return undefined;
+  return value.length > 20_000 ? value.slice(-20_000) : value;
+}
+
+function actionSummary(status: string, exitCode: number | null) {
+  if (status === "succeeded") return "Action completed successfully.";
+  if (status === "cancelled") return "Action was cancelled.";
+  return `Action failed${exitCode === null ? "" : ` with exit code ${exitCode}`}.`;
 }
 
 async function hashAgentSessionToken(token: string) {

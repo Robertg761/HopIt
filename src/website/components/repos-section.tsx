@@ -327,6 +327,10 @@ function CodebaseCard({
   const visibility = codebase.selectedState?.effectiveVisibility ?? 'private'
   const role = codebase.access?.role ?? 'member'
   const latestRevision = codebase.revision ?? codebase.selectedState?.revision ?? 0
+  const permissions = new Set(codebase.access?.permissions ?? [])
+  const canRename = permissions.has('write')
+  const canShare = permissions.has('invite') || permissions.has('manage_members')
+  const canDelete = codebase.access?.isOwner === true
 
   return (
     <motion.article
@@ -368,11 +372,12 @@ function CodebaseCard({
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuItem onSelect={onRename}>
+              <DropdownMenuItem disabled={!canRename} onSelect={onRename}>
                 <Pencil className="mr-2 size-3.5" />
                 Rename
               </DropdownMenuItem>
               <DropdownMenuItem
+                disabled={!canShare}
                 onSelect={() => {
                   onSelect()
                   navigateToSection('members')
@@ -381,10 +386,12 @@ function CodebaseCard({
                 <Share2 className="mr-2 size-3.5" />
                 Share
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={onDelete} className="text-destructive focus:text-destructive">
-                <Trash2 className="mr-2 size-3.5" />
-                Delete
-              </DropdownMenuItem>
+              {canDelete ? (
+                <DropdownMenuItem onSelect={onDelete} className="text-destructive focus:text-destructive">
+                  <Trash2 className="mr-2 size-3.5" />
+                  Delete
+                </DropdownMenuItem>
+              ) : null}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>

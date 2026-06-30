@@ -6,16 +6,38 @@ import path from 'node:path'
 const env = process.env
 
 const authProvider = env.HOPIT_AUTH_PROVIDER || 'clerk'
+const cloudBackend = normalizeCloudBackend(env.HOPIT_CLOUD_BACKEND)
 const checks = [
   required('HOPIT_CODEBASE_ID'),
-  requiredOneOf(['HOPIT_CONVEX_URL', 'CONVEX_URL']),
-  required('NEXT_PUBLIC_CONVEX_URL'),
-  secret('HOPIT_AGENT_TOKEN', { minLength: 32 }),
 ]
 
 const warnings = []
 if (!env.HOPIT_AUTH_PROVIDER) {
   warnings.push('HOPIT_AUTH_PROVIDER is unset; the checker assumes "clerk". Set it explicitly for production.')
+}
+if (!env.HOPIT_CLOUD_BACKEND) {
+  warnings.push(`HOPIT_CLOUD_BACKEND is unset; the checker inferred "${cloudBackend}". Set it explicitly for production.`)
+}
+if (cloudBackend === 'd1') {
+  checks.push(exactNormalized('HOPIT_CLOUD_BACKEND', ['d1', 'cloudflare-d1'], { allowUnset: true }))
+  checks.push(requiredOneOf(['HOPIT_D1_ACCOUNT_ID', 'CLOUDFLARE_ACCOUNT_ID']))
+  checks.push(required('HOPIT_D1_DATABASE_ID'))
+  checks.push(secretOneOf(['HOPIT_D1_API_TOKEN', 'CLOUDFLARE_API_TOKEN'], { minLength: 32 }))
+  if (env.HOPIT_D1_API_BASE_URL) checks.push(urlCheck('HOPIT_D1_API_BASE_URL'))
+  if (env.HOPIT_CONVEX_URL || env.CONVEX_URL || env.NEXT_PUBLIC_CONVEX_URL) {
+    warnings.push('Convex URL variables are still set, but HOPIT_CLOUD_BACKEND=d1 will use Cloudflare D1 for graph/status/actions.')
+  }
+} else if (cloudBackend === 'convex') {
+  checks.push(exactNormalized('HOPIT_CLOUD_BACKEND', ['convex'], { allowUnset: true }))
+  checks.push(requiredOneOf(['HOPIT_CONVEX_URL', 'CONVEX_URL']))
+  checks.push(required('NEXT_PUBLIC_CONVEX_URL'))
+  checks.push(secret('HOPIT_AGENT_TOKEN', { minLength: 32 }))
+  warnings.push('Convex is a legacy production backend for this repo. Prefer HOPIT_CLOUD_BACKEND=d1 for the free-first path.')
+} else {
+  checks.push({
+    name: 'HOPIT_CLOUD_BACKEND',
+    failures: ['Configure HOPIT_CLOUD_BACKEND=d1 with HOPIT_D1_* values, or set Convex URL/token variables for the legacy backend.'],
+  })
 }
 
 if (authProvider === 'clerk') {
@@ -60,10 +82,12 @@ if (!env.HOPIT_WORKSPACE_INDEX) {
   checks.push(absolutePath('HOPIT_WORKSPACE_INDEX'))
 }
 if (!env.HOPIT_AGENT_SESSION_TOKEN) {
-  warnings.push('HOPIT_AGENT_SESSION_TOKEN is unset; bootstrap can use HOPIT_AGENT_TOKEN, but installed devices should use scoped session tokens.')
+  warnings.push(cloudBackend === 'd1'
+    ? 'HOPIT_AGENT_SESSION_TOKEN is unset; scoped device sessions are still legacy Convex-only and will be ported after the D1 graph migration.'
+    : 'HOPIT_AGENT_SESSION_TOKEN is unset; bootstrap can use HOPIT_AGENT_TOKEN, but installed devices should use scoped session tokens.')
 } else {
   checks.push(secret('HOPIT_AGENT_SESSION_TOKEN', { minLength: 32 }))
-  checks.push(notEqual('HOPIT_AGENT_SESSION_TOKEN', 'HOPIT_AGENT_TOKEN'))
+  if (env.HOPIT_AGENT_TOKEN) checks.push(notEqual('HOPIT_AGENT_SESSION_TOKEN', 'HOPIT_AGENT_TOKEN'))
 }
 if (!env.HOPIT_SESSION_ID) {
   warnings.push('HOPIT_SESSION_ID is unset; hop device register can allocate one for this device.')
@@ -90,7 +114,7 @@ if (env.HOPIT_AGENT_BASE_URL) {
   checks.push(loopbackUrl('HOPIT_AGENT_BASE_URL'))
 }
 if (!env.HOPIT_BLOB_PROVIDER) {
-  warnings.push('HOPIT_BLOB_PROVIDER is unset; this avoids R2 object-storage charges, but synced file bodies will stay in Convex-backed storage if the agent is started. Keep large repo sync paused or configure R2 free-only first.')
+  warnings.push('HOPIT_BLOB_PROVIDER is unset; this avoids R2 object-storage charges, but synced file bodies will stay inline in the graph backend if the agent is started. Keep large repo sync paused or configure R2 free-only first.')
 } else {
   const blobProvider = normalizeBlobProvider(env.HOPIT_BLOB_PROVIDER)
   checks.push(nonPlaceholder('HOPIT_BLOB_PROVIDER'))
@@ -170,6 +194,7 @@ const result = {
   failures,
   warnings,
   authProvider,
+  cloudBackend,
   required: checks.map((check) => check.name),
 }
 
@@ -209,10 +234,34 @@ function secret(name, options = {}) {
   return { name, failures }
 }
 
+function secretOneOf(names, options = {}) {
+  const present = names.filter((name) => Boolean(env[name]))
+  const failures = []
+  if (present.length === 0) {
+    failures.push(`One of ${names.join(', ')} is required.`)
+  }
+  for (const name of present) {
+    const value = env[name]
+    if (value && isPlaceholder(value)) failures.push(`${name} still has a placeholder value.`)
+    if (value && options.minLength && value.length < options.minLength) {
+      failures.push(`${name} must be at least ${options.minLength} characters.`)
+    }
+  }
+  return { name: names.join(' or '), failures }
+}
+
 function exact(name, expected) {
   const value = env[name]
   const failures = []
   if (value !== expected) failures.push(`${name} must be "${expected}".`)
+  return { name, failures }
+}
+
+function exactNormalized(name, expectedValues, options = {}) {
+  const value = env[name]
+  const failures = []
+  if (!value && options.allowUnset) return { name, failures }
+  if (!expectedValues.includes(value)) failures.push(`${name} must be one of ${expectedValues.join(', ')}.`)
   return { name, failures }
 }
 
@@ -341,6 +390,14 @@ function normalizeBlobProvider(value) {
   if (value === 'local' || value === 'fs') return 'filesystem'
   if (value === 'backblaze') return 'b2'
   return value
+}
+
+function normalizeCloudBackend(value) {
+  if (value === 'd1' || value === 'cloudflare-d1') return 'd1'
+  if (value === 'convex') return 'convex'
+  if (env.HOPIT_D1_DATABASE_ID || env.HOPIT_D1_ACCOUNT_ID || env.HOPIT_D1_API_TOKEN) return 'd1'
+  if (env.HOPIT_CONVEX_URL || env.CONVEX_URL || env.NEXT_PUBLIC_CONVEX_URL) return 'convex'
+  return 'unavailable'
 }
 
 function bothAbsolute(name, otherName) {

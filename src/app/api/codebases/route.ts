@@ -1,18 +1,26 @@
 import { NextResponse } from 'next/server'
-import { anyApi } from 'convex/server'
+import { auth } from '@clerk/nextjs/server'
 
-import { convexAuthToken, convexClient, convexUrl } from '@/lib/convex-auth'
+import { hasValidBasicAuthFallbackCredentials } from '@/lib/basic-auth-fallback'
+import {
+  createCloudCodebase,
+  deleteCloudCodebase,
+  listCloudCodebases,
+  missingCloudBackendConfig,
+  updateCloudCodebase,
+  type CloudActor,
+} from '@/lib/cloud-backend'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
-export async function GET() {
-  const unavailable = await unavailableReason()
+export async function GET(request: Request) {
+  const unavailable = await unavailableReason(request, { allowBasicFallback: true })
   if (unavailable) return codebaseError(unavailable.code, unavailable.message, unavailable.status)
 
   try {
-    const authToken = await convexAuthToken()
-    const codebases = await convexClient(authToken).query(anyApi.agent.listCodebases, {})
+    const actor = await requireActor(request, { allowBasicFallback: true })
+    const codebases = await listCloudCodebases(actor)
     return NextResponse.json({ ok: true, codebases: Array.isArray(codebases) ? codebases : [] }, responseInit())
   } catch (error) {
     return codebaseError('codebase_list_failed', errorMessage(error), 400)
@@ -21,17 +29,18 @@ export async function GET() {
 
 export async function POST(request: Request) {
   const body = await readBody(request)
-  const unavailable = await unavailableReason()
+  const unavailable = await unavailableReason(request)
   if (unavailable) return codebaseError(unavailable.code, unavailable.message, unavailable.status)
 
   try {
-    const authToken = await convexAuthToken()
-    const codebase = await convexClient(authToken).mutation(anyApi.agent.createCodebase, {
+    const actor = await requireActor(request)
+    const codebase = await createCloudCodebase({
       name: requireText(body.name, 'name'),
       codebaseId: optionalText(body.codebaseId),
       description: optionalText(body.description),
+      actor,
     })
-    const codebases = await convexClient(authToken).query(anyApi.agent.listCodebases, {})
+    const codebases = await listCloudCodebases(actor)
 
     return NextResponse.json(
       {
@@ -48,17 +57,18 @@ export async function POST(request: Request) {
 
 export async function PATCH(request: Request) {
   const body = await readBody(request)
-  const unavailable = await unavailableReason()
+  const unavailable = await unavailableReason(request)
   if (unavailable) return codebaseError(unavailable.code, unavailable.message, unavailable.status)
 
   try {
-    const authToken = await convexAuthToken()
-    const codebase = await convexClient(authToken).mutation(anyApi.agent.updateCodebase, {
+    const actor = await requireActor(request)
+    const codebase = await updateCloudCodebase({
       codebaseId: requireText(body.codebaseId, 'codebaseId'),
       name: optionalText(body.name),
       visibility: visibilityValue(body.visibility),
+      actor,
     })
-    const codebases = await convexClient(authToken).query(anyApi.agent.listCodebases, {})
+    const codebases = await listCloudCodebases(actor)
 
     return NextResponse.json(
       {
@@ -75,15 +85,16 @@ export async function PATCH(request: Request) {
 
 export async function DELETE(request: Request) {
   const body = await readBody(request)
-  const unavailable = await unavailableReason()
+  const unavailable = await unavailableReason(request)
   if (unavailable) return codebaseError(unavailable.code, unavailable.message, unavailable.status)
 
   try {
-    const authToken = await convexAuthToken()
-    await convexClient(authToken).mutation(anyApi.agent.deleteCodebase, {
+    const actor = await requireActor(request)
+    await deleteCloudCodebase({
       codebaseId: requireText(body.codebaseId, 'codebaseId'),
+      actor,
     })
-    const codebases = await convexClient(authToken).query(anyApi.agent.listCodebases, {})
+    const codebases = await listCloudCodebases(actor)
 
     return NextResponse.json(
       {
@@ -97,13 +108,28 @@ export async function DELETE(request: Request) {
   }
 }
 
-async function unavailableReason() {
-  if (!convexUrl()) {
-    return { code: 'convex_unavailable', message: 'Convex is not configured for codebases.', status: 503 }
+async function unavailableReason(request: Request, { allowBasicFallback = false } = {}) {
+  const missing = missingCloudBackendConfig()
+  if (missing.length > 0) {
+    return {
+      code: 'cloud_backend_unavailable',
+      message: `No HopIt cloud backend is configured for codebases. Missing: ${missing.join(', ')}.`,
+      status: 503,
+    }
   }
 
-  const authToken = await convexAuthToken()
-  if (!authToken) {
+  if (hasValidBasicAuthFallbackCredentials(request.headers)) {
+    return allowBasicFallback
+      ? null
+      : {
+          code: 'browser_auth_required',
+          message: 'Managing codebases requires product auth.',
+          status: 401,
+        }
+  }
+
+  const { userId } = await auth()
+  if (!userId) {
     return {
       code: 'browser_auth_required',
       message: 'Managing codebases requires product auth.',
@@ -112,6 +138,13 @@ async function unavailableReason() {
   }
 
   return null
+}
+
+async function requireActor(request: Request, { allowBasicFallback = false } = {}): Promise<CloudActor> {
+  if (allowBasicFallback && hasValidBasicAuthFallbackCredentials(request.headers)) return {}
+  const { userId } = await auth()
+  if (!userId) throw new Error('Product auth is required.')
+  return { userId }
 }
 
 async function readBody(request: Request): Promise<Record<string, unknown>> {

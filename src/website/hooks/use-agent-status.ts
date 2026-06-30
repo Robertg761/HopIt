@@ -23,6 +23,7 @@ const pollMs = 2500
 export type AgentCommand = 'sync' | 'refresh' | 'recover' | 'review' | 'merge' | 'importGitUrl'
 
 export type AgentCommandPayload = {
+  codebaseId?: string | null
   url?: string
   branch?: string
 }
@@ -88,7 +89,7 @@ export function useAgentStatus(): AgentStatusState {
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ command, ...payload }),
+          body: JSON.stringify({ command, codebaseId: selectedCodebaseId ?? status.codebaseId, ...payload }),
         })
         const result = (await response.json()) as AgentCommandResult
         setCommandResult({
@@ -106,7 +107,7 @@ export function useAgentStatus(): AgentStatusState {
         await refresh()
       }
     },
-    [refresh, status.commandsAvailable],
+    [refresh, selectedCodebaseId, status.codebaseId, status.commandsAvailable],
   )
 
   React.useEffect(() => {

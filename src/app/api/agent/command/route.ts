@@ -7,22 +7,7 @@ export const runtime = 'nodejs'
 
 const cwd = process.cwd()
 const agentCli = path.join(cwd, 'packages/agent/src/cli.js')
-const localStateArgs = [
-  '--cloud',
-  '.hopit-agent/cloud.json',
-  '--workspace',
-  '.hopit-agent/workspaces/hopit-core',
-  '--journal',
-  '.hopit-agent/journal.ndjson',
-  '--events',
-  '.hopit-agent/events.ndjson',
-]
-const remoteStateArgs = [
-  ...localStateArgs,
-  ...optionArg('--convex-url', process.env.HOPIT_CONVEX_URL ?? process.env.CONVEX_URL),
-  ...optionArg('--agent-token', process.env.HOPIT_AGENT_TOKEN),
-  ...optionArg('--codebase-id', process.env.HOPIT_CODEBASE_ID),
-]
+const localStateRoot = '.hopit-agent'
 
 const commandMap = {
   sync: { label: 'Sync once', cliCommand: 'sync' },
@@ -36,6 +21,7 @@ const commandMap = {
 type AgentCommand = keyof typeof commandMap
 type AgentCommandRequest = {
   command?: unknown
+  codebaseId?: unknown
   url?: unknown
   branch?: unknown
 }
@@ -72,10 +58,16 @@ export async function POST(request: Request) {
   }
 
   return runExclusiveCommand(command, async () => {
+    let codebaseId: string
+    try {
+      codebaseId = codebaseIdFromRequest(body)
+    } catch (error) {
+      return commandError('invalid_codebase_id', error instanceof Error ? error.message : 'Invalid codebase id.', 400)
+    }
     const extraArgs = commandArgsFromRequest(command, body)
     if (extraArgs instanceof NextResponse) return extraArgs
 
-    const result = await runAgentCli(commandConfig.cliCommand, extraArgs, {
+    const result = await runAgentCli(commandConfig.cliCommand, codebaseId, extraArgs, {
       timeoutMs: 'timeoutMs' in commandConfig ? commandConfig.timeoutMs : undefined,
     })
 
@@ -167,9 +159,9 @@ function matchNumber(text: string, pattern: RegExp) {
   return match ? Number(match[1]) : null
 }
 
-function runAgentCli(command: string, extraArgs: string[] = [], config: { timeoutMs?: number } = {}) {
+function runAgentCli(command: string, codebaseId: string, extraArgs: string[] = [], config: { timeoutMs?: number } = {}) {
   return new Promise<{ exitCode: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn(process.execPath, [agentCli, command, ...remoteStateArgs, ...extraArgs], {
+    const child = spawn(process.execPath, [agentCli, command, ...stateArgsForCodebase(codebaseId), ...extraArgs], {
       cwd,
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -230,6 +222,53 @@ function commandArgsFromRequest(command: AgentCommand, body: AgentCommandRequest
     args.push('--branch', branch)
   }
   return args
+}
+
+function codebaseIdFromRequest(body: AgentCommandRequest) {
+  const requested = typeof body.codebaseId === 'string' ? body.codebaseId.trim() : ''
+  const fallback = process.env.HOPIT_CODEBASE_ID ?? 'hopit'
+  const codebaseId = requested || fallback
+  if (!/^[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/.test(codebaseId)) {
+    throw new Error('Codebase id may only contain lowercase letters, numbers, and dashes.')
+  }
+  return codebaseId
+}
+
+function stateArgsForCodebase(codebaseId: string) {
+  return [
+    '--cloud',
+    path.join(localStateRoot, 'cloud', `${codebaseId}.json`),
+    '--workspace-root',
+    path.join(localStateRoot, 'workspaces'),
+    '--workspace',
+    path.join(localStateRoot, 'workspaces', codebaseId),
+    '--workspace-index',
+    path.join(localStateRoot, 'workspaces.json'),
+    '--journal',
+    path.join(localStateRoot, 'journal', `${codebaseId}.ndjson`),
+    '--events',
+    path.join(localStateRoot, 'events', `${codebaseId}.ndjson`),
+    '--codebase-id',
+    codebaseId,
+    ...backendArgs(),
+  ]
+}
+
+function backendArgs() {
+  const backend = process.env.HOPIT_CLOUD_BACKEND
+  if (backend === 'd1' || backend === 'cloudflare-d1') {
+    return [
+      '--cloud-backend',
+      'd1',
+      ...optionArg('--d1-account-id', process.env.HOPIT_D1_ACCOUNT_ID ?? process.env.CLOUDFLARE_ACCOUNT_ID),
+      ...optionArg('--d1-database-id', process.env.HOPIT_D1_DATABASE_ID),
+      ...optionArg('--d1-api-base-url', process.env.HOPIT_D1_API_BASE_URL),
+    ]
+  }
+  return [
+    ...optionArg('--convex-url', process.env.HOPIT_CONVEX_URL ?? process.env.CONVEX_URL),
+    ...optionArg('--agent-token', process.env.HOPIT_AGENT_TOKEN),
+  ]
 }
 
 function isRemoteGitUrl(value: string) {

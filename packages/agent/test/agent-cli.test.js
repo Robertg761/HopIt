@@ -1833,7 +1833,7 @@ test('remote-pull applied event clears a previous skipped health state', async (
   assert.equal(status.remotePull.lastApplied.detail.toRevision, 2)
 })
 
-test('production profile refuses local JSON cloud unless explicitly allowed', async () => {
+test('production profile refuses local JSON cloud unless an explicit cloud backend is configured or local dry-run is allowed', async () => {
   const state = await makeState()
   const failure = await runCliFailure('status', [
     '--profile',
@@ -1846,7 +1846,7 @@ test('production profile refuses local JSON cloud unless explicitly allowed', as
     path.join(state.root, 'managed-workspaces'),
   ])
 
-  assert.match(failure.stderr, /Production profile requires --convex-url/)
+  assert.match(failure.stderr, /Production profile requires Cloudflare D1 or Convex backend configuration/)
 })
 
 test('service start exposes status and service stop cleans up the pid file', async (t) => {

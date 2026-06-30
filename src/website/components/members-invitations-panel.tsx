@@ -516,7 +516,7 @@ function MembersList({
           title={offline ? 'Agent offline' : 'No members returned'}
           detail={
             offline
-              ? 'Start the local agent or configure Convex status to read members.'
+              ? 'Start the local agent or configure cloud status to read members.'
               : 'The current graph did not return owner or collaborator rows.'
           }
         />

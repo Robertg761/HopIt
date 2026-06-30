@@ -1,0 +1,15 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "hopit-d1-api",
+  "main": "api-worker.js",
+  "compatibility_date": "2026-06-30",
+  "workers_dev": true,
+  "preview_urls": false,
+  "d1_databases": [
+    {
+      "binding": "HOPIT_D1_DB",
+      "database_name": "hopit",
+      "database_id": "5447007f-8bc8-4d24-ae49-08ad252e53f4"
+    }
+  ]
+}
