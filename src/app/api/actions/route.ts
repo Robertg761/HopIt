@@ -1,26 +1,29 @@
 import { NextResponse } from 'next/server'
-import { auth } from '@clerk/nextjs/server'
 
-import { hasValidBasicAuthFallbackCredentials } from '@/lib/basic-auth-fallback'
 import {
   createCloudActionJob,
   listCloudActionJobs,
   missingCloudBackendConfig,
-  type CloudActor,
 } from '@/lib/cloud-backend'
+import { cloudActorFromRequest } from '@/lib/request-cloud-actor'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
 export async function GET(request: Request) {
-  const unavailable = await unavailableReason(request, { allowBasicFallback: true })
+  const unavailable = unavailableReason({ feature: 'actions' })
   if (unavailable) return actionError(unavailable.code, unavailable.message, unavailable.status)
 
   const codebaseId = new URL(request.url).searchParams.get('codebaseId')?.trim()
   if (!codebaseId) return actionError('codebase_required', 'Expected a codebaseId query parameter.', 400)
 
   try {
-    const actor = await requireActor(request, { allowBasicFallback: true })
+    const actor = await cloudActorFromRequest(request, {
+      allowBasicFallback: true,
+      codebaseId,
+      agentCapability: 'read',
+    })
+    if (!actor) return actionError('browser_auth_required', 'Running actions requires product auth.', 401)
     const jobs = await listCloudActionJobs({
       codebaseId,
       limit: 20,
@@ -34,13 +37,18 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const body = await readBody(request)
-  const unavailable = await unavailableReason(request)
+  const unavailable = unavailableReason({ feature: 'actions' })
   if (unavailable) return actionError(unavailable.code, unavailable.message, unavailable.status)
 
   try {
-    const actor = await requireActor(request)
+    const codebaseId = requireText(body.codebaseId, 'codebaseId')
+    const actor = await cloudActorFromRequest(request, {
+      codebaseId,
+      agentCapability: 'write',
+    })
+    if (!actor) return actionError('browser_auth_required', 'Running actions requires product auth.', 401)
     const job = await createCloudActionJob({
-      codebaseId: requireText(body.codebaseId, 'codebaseId'),
+      codebaseId,
       kind: actionKind(body.kind),
       actor,
     })
@@ -50,43 +58,17 @@ export async function POST(request: Request) {
   }
 }
 
-async function unavailableReason(request: Request, { allowBasicFallback = false } = {}) {
+function unavailableReason({ feature }: { feature: string }) {
   const missing = missingCloudBackendConfig()
   if (missing.length > 0) {
     return {
       code: 'cloud_backend_unavailable',
-      message: `No HopIt cloud backend is configured for actions. Missing: ${missing.join(', ')}.`,
+      message: `No HopIt cloud backend is configured for ${feature}. Missing: ${missing.join(', ')}.`,
       status: 503,
     }
   }
 
-  if (hasValidBasicAuthFallbackCredentials(request.headers)) {
-    return allowBasicFallback
-      ? null
-      : {
-          code: 'browser_auth_required',
-          message: 'Running actions requires product auth.',
-          status: 401,
-        }
-  }
-
-  const { userId } = await auth()
-  if (!userId) {
-    return {
-      code: 'browser_auth_required',
-      message: 'Running actions requires product auth.',
-      status: 401,
-    }
-  }
-
   return null
-}
-
-async function requireActor(request: Request, { allowBasicFallback = false } = {}): Promise<CloudActor> {
-  if (allowBasicFallback && hasValidBasicAuthFallbackCredentials(request.headers)) return {}
-  const { userId } = await auth()
-  if (!userId) throw new Error('Product auth is required.')
-  return { userId }
 }
 
 async function readBody(request: Request): Promise<Record<string, unknown>> {

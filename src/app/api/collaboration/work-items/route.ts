@@ -12,6 +12,8 @@ import type {
   CollaborationCapabilities,
   CollaborationDiscussion,
   CollaborationIssue,
+  CollaborationProject,
+  CollaborationProjectItem,
   CollaborationRelease,
   WorkItemsResponse,
 } from '@/lib/collaboration'
@@ -25,12 +27,11 @@ export async function GET(request: Request) {
   const unavailable = cloudUnavailable('collaboration reads')
   if (unavailable) return workItemsUnavailable(codebaseId, unavailable.message)
 
-  const actor = await readActor(request)
-  if (!actor) {
-    return workItemsError(codebaseId, 'browser_auth_required', 'Reading collaboration items requires product auth or Basic Auth fallback.', 401)
-  }
-
   try {
+    const actor = await readActor(request, codebaseId)
+    if (!actor) {
+      return workItemsError(codebaseId, 'browser_auth_required', 'Reading collaboration items requires product auth or Basic Auth fallback.', 401)
+    }
     return NextResponse.json(await readWorkItems(codebaseId, actor), responseInit())
   } catch (error) {
     return workItemsError(codebaseId, 'collaboration_read_failed', errorMessage(error), 502)
@@ -43,12 +44,14 @@ export async function POST(request: Request) {
   const unavailable = cloudUnavailable('collaboration writes')
   if (unavailable) return workItemsUnavailable(codebaseId, unavailable.message)
 
-  const actor = await cloudActorFromRequest(request)
-  if (!actor?.userId) {
-    return workItemsError(codebaseId, 'browser_auth_required', 'Creating collaboration items requires product auth.', 401)
-  }
-
   try {
+    const actor = await cloudActorFromRequest(request, {
+      codebaseId,
+      agentCapability: body.type === 'release' ? 'release' : 'write',
+    })
+    if (!actor?.userId) {
+      return workItemsError(codebaseId, 'browser_auth_required', 'Creating collaboration items requires product auth.', 401)
+    }
     const createdBy = optionalText(body.createdBy)
 
     if (body.type === 'issue') {
@@ -88,8 +91,29 @@ export async function POST(request: Request) {
         createdBy,
         actor,
       })
+    } else if (body.type === 'project') {
+      await createCloudWorkItem({
+        type: 'project',
+        codebaseId,
+        name: requireText(body.name, 'name'),
+        description: optionalText(body.description),
+        columns: projectColumns(body.columns),
+        createdBy,
+        actor,
+      })
+    } else if (body.type === 'projectItem') {
+      await createCloudWorkItem({
+        type: 'projectItem',
+        codebaseId,
+        projectId: requireText(body.projectId, 'projectId'),
+        item: projectItem(body.item),
+        columnId: optionalText(body.columnId),
+        position: optionalNumber(body.position),
+        createdBy,
+        actor,
+      })
     } else {
-      return workItemsError(codebaseId, 'invalid_type', 'Expected type to be issue, discussion, or release.', 400)
+      return workItemsError(codebaseId, 'invalid_type', 'Expected type to be issue, discussion, release, project, or projectItem.', 400)
     }
 
     return NextResponse.json(await readWorkItems(codebaseId, actor), responseInit())
@@ -104,12 +128,14 @@ export async function PATCH(request: Request) {
   const unavailable = cloudUnavailable('collaboration writes')
   if (unavailable) return workItemsUnavailable(codebaseId, unavailable.message)
 
-  const actor = await cloudActorFromRequest(request)
-  if (!actor?.userId) {
-    return workItemsError(codebaseId, 'browser_auth_required', 'Updating collaboration items requires product auth.', 401)
-  }
-
   try {
+    const actor = await cloudActorFromRequest(request, {
+      codebaseId,
+      agentCapability: body.action === 'publishRelease' ? 'release' : 'write',
+    })
+    if (!actor?.userId) {
+      return workItemsError(codebaseId, 'browser_auth_required', 'Updating collaboration items requires product auth.', 401)
+    }
     const updatedBy = optionalText(body.updatedBy)
 
     if (body.action === 'setIssueStatus') {
@@ -138,6 +164,24 @@ export async function PATCH(request: Request) {
         updatedBy,
         actor,
       })
+    } else if (body.action === 'archiveProject') {
+      await updateCloudWorkItem({
+        action: 'archiveProject',
+        codebaseId,
+        projectId: requireText(body.projectId, 'projectId'),
+        updatedBy,
+        actor,
+      })
+    } else if (body.action === 'moveProjectItem') {
+      await updateCloudWorkItem({
+        action: 'moveProjectItem',
+        codebaseId,
+        projectItemId: requireText(body.projectItemId, 'projectItemId'),
+        columnId: optionalText(body.columnId),
+        position: optionalNumber(body.position),
+        updatedBy,
+        actor,
+      })
     } else {
       return workItemsError(codebaseId, 'invalid_action', 'Unknown collaboration update action.', 400)
     }
@@ -148,8 +192,8 @@ export async function PATCH(request: Request) {
   }
 }
 
-async function readActor(request: Request): Promise<CloudActor | null> {
-  const actor = await cloudActorFromRequest(request, { allowBasicFallback: true })
+async function readActor(request: Request, codebaseId: string): Promise<CloudActor | null> {
+  const actor = await cloudActorFromRequest(request, { allowBasicFallback: true, codebaseId, agentCapability: 'read' })
   if (actor) return actor
   if (configuredCloudBackend() === 'convex' && process.env.HOPIT_AGENT_TOKEN) return {}
   return null
@@ -166,6 +210,7 @@ async function readWorkItems(codebaseId: string, actor: CloudActor): Promise<Wor
     issues: Array.isArray(itemRows.issues) ? itemRows.issues.map(mapIssue) : [],
     discussions: Array.isArray(itemRows.discussions) ? itemRows.discussions.map(mapDiscussion) : [],
     releases: Array.isArray(itemRows.releases) ? itemRows.releases.map(mapRelease) : [],
+    projects: Array.isArray(itemRows.projects) ? itemRows.projects.map(mapProject) : [],
   }
 }
 
@@ -231,6 +276,44 @@ function mapRelease(row: Record<string, unknown>): CollaborationRelease {
   }
 }
 
+function mapProject(row: Record<string, unknown>): CollaborationProject {
+  return {
+    id: documentId(row),
+    number: numberValue(row.number) ?? 0,
+    name: stringValue(row.name) ?? 'Untitled project',
+    description: stringValue(row.description),
+    status: row.status === 'archived' ? 'archived' : 'active',
+    columns: projectColumns(row.columns),
+    items: Array.isArray(row.items) ? row.items.map((item) => mapProjectItem(recordValue(item) ?? {})) : [],
+    createdBy: stringValue(row.createdBy) ?? 'unknown',
+    updatedBy: stringValue(row.updatedBy),
+    createdAt: stringValue(row.createdAt) ?? '',
+    updatedAt: stringValue(row.updatedAt) ?? '',
+    archivedAt: stringValue(row.archivedAt),
+  }
+}
+
+function mapProjectItem(row: Record<string, unknown>): CollaborationProjectItem {
+  const item = recordValue(row.item) ?? {}
+  return {
+    id: documentId(row),
+    projectId: stringValue(row.projectId) ?? '',
+    item: {
+      type: projectItemTypeOrUndefined(item.type),
+      id: stringValue(item.id) ?? undefined,
+      title: stringValue(item.title) ?? undefined,
+      body: stringValue(item.body),
+      version: stringValue(item.version) ?? undefined,
+    },
+    columnId: stringValue(row.columnId) ?? 'todo',
+    position: numberValue(row.position) ?? 0,
+    createdBy: stringValue(row.createdBy) ?? 'unknown',
+    updatedBy: stringValue(row.updatedBy),
+    createdAt: stringValue(row.createdAt) ?? '',
+    updatedAt: stringValue(row.updatedAt) ?? '',
+  }
+}
+
 async function readBody(request: Request): Promise<Record<string, unknown>> {
   const body = await request.json().catch(() => null)
   return recordValue(body) ?? {}
@@ -272,6 +355,8 @@ function collaborationCapabilities(hasAuth = false): CollaborationCapabilities {
     updateDiscussion: write,
     createRelease: write,
     publishRelease: write,
+    createProject: write,
+    updateProject: write,
   }
 }
 
@@ -287,6 +372,7 @@ function workItemsError(codebaseId: string, code: string, message: string, statu
     issues: [],
     discussions: [],
     releases: [],
+    projects: [],
     error: {
       code,
       message,
@@ -329,6 +415,10 @@ function numberValue(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+function optionalNumber(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined
+}
+
 function recordValue(value: unknown): Record<string, unknown> | null {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -339,6 +429,44 @@ function stringArray(value: unknown) {
   return Array.isArray(value)
     ? Array.from(new Set(value.filter((item): item is string => typeof item === 'string').map((item) => item.trim()).filter(Boolean)))
     : []
+}
+
+function projectColumns(value: unknown) {
+  if (!Array.isArray(value)) return []
+  return value
+    .map((column) => {
+      const record = recordValue(column)
+      const id = stringValue(record?.id)
+      const name = stringValue(record?.name)
+      return id && name ? { id, name } : null
+    })
+    .filter((column): column is { id: string; name: string } => Boolean(column))
+}
+
+function projectItem(value: unknown) {
+  const record = recordValue(value)
+  if (!record) throw new Error('project item is required.')
+  const type = projectItemType(record.type)
+  if (type === 'note') {
+    return {
+      type,
+      title: requireText(record.title, 'project item title'),
+      body: stringValue(record.body),
+    }
+  }
+  return {
+    type,
+    id: requireText(record.id, 'project item id'),
+  }
+}
+
+function projectItemType(value: unknown) {
+  if (value === 'issue' || value === 'discussion' || value === 'release' || value === 'note') return value
+  throw new Error('Project item type must be issue, discussion, release, or note.')
+}
+
+function projectItemTypeOrUndefined(value: unknown) {
+  return value === 'issue' || value === 'discussion' || value === 'release' || value === 'note' ? value : undefined
 }
 
 function optionalIssuePriority(value: unknown) {

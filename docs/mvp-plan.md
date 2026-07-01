@@ -227,7 +227,7 @@ Current spike:
 - The Next.js product shell now polls `/api/agent/status`, maps live local status/events/cloud data into the dashboard, and can read the Cloudflare D1 dashboard data when the D1 backend env is configured. Legacy Convex dashboard reads remain available while the old backend is being retired.
 - `/api/agent/command` exposes whitelisted local actions for sync, refresh, recover, review, and merge. Hosted D1-backed deployments can read status but still require the local agent for workspace commands.
 - `hop workspace` persists a root-level index keyed by codebase and concrete workspace path; configured-codebase discovery and metadata-only attach can bind a cloud codebase into the Workspace Root, and hydrate, refresh, and sync update the materialized revision cursor that status and remote-pull use.
-- `hop device` / `hop session` exposes local session status. Scoped session registration, listing, touch, and revocation now work on D1 and the legacy Convex fallback; full worker-level scoped-token enforcement remains to harden.
+- `hop device` / `hop session` exposes local session status. Scoped session registration, listing, touch, and revocation now work on D1 and the legacy Convex fallback; the D1 proxy can accept scoped session tokens for codebase-scoped reads/writes, while installer/setup UX and complete product write-path coverage remain to harden.
 
 Current next work:
 

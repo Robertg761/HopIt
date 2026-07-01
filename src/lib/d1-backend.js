@@ -16,17 +16,32 @@ export function d1ConfigFromOptions(options = {}, env = process.env) {
     apiToken: stringOrNull(options['d1-api-token']) ?? stringOrNull(env.HOPIT_D1_API_TOKEN) ?? stringOrNull(env.CLOUDFLARE_API_TOKEN),
     apiBaseUrl: stringOrNull(options['d1-api-base-url']) ?? stringOrNull(env.HOPIT_D1_API_BASE_URL) ?? defaultD1ApiBaseUrl,
     codebaseId: stringOrNull(options['codebase-id']) ?? stringOrNull(env.HOPIT_CODEBASE_ID) ?? defaultCodebaseId,
-    agentSessionToken: stringOrNull(options['session-token']) ?? stringOrNull(env.HOPIT_AGENT_SESSION_TOKEN),
+    agentSessionToken: stringOrNull(options['session-token']) ?? stringOrNull(options.agentSessionToken) ?? stringOrNull(env.HOPIT_AGENT_SESSION_TOKEN),
   }
 }
 
 export function isD1Configured(options = {}, env = process.env) {
   const config = d1ConfigFromOptions(options, env)
-  return Boolean(config.accountId && config.databaseId && config.apiToken)
+  if (usesCloudflareD1Api(config)) {
+    return Boolean(config.accountId && config.databaseId && config.apiToken)
+  }
+  return Boolean(d1AuthorizationToken(config))
 }
 
 export function createD1Backend(options = {}, env = process.env) {
   return new CloudflareD1HopBackend(d1ConfigFromOptions(options, env))
+}
+
+function usesCloudflareD1Api(config) {
+  return (config.apiBaseUrl ?? defaultD1ApiBaseUrl).replace(/\/+$/, '') === defaultD1ApiBaseUrl
+}
+
+function d1AuthorizationToken(config) {
+  return stringOrNull(config.apiToken) ?? stringOrNull(config.agentSessionToken)
+}
+
+function usesScopedD1SessionAuth(config) {
+  return !stringOrNull(config.apiToken) && Boolean(stringOrNull(config.agentSessionToken)) && !usesCloudflareD1Api(config)
 }
 
 export class CloudflareD1HopBackend {
@@ -40,6 +55,10 @@ export class CloudflareD1HopBackend {
 
   async ensureSchema() {
     if (this.schemaEnsured) return
+    if (usesScopedD1SessionAuth(this.config)) {
+      this.schemaEnsured = true
+      return
+    }
     for (const sql of d1SchemaStatements) {
       await this.query(sql)
     }
@@ -1004,15 +1023,24 @@ export class CloudflareD1HopBackend {
 
   async listWorkItems({ codebaseId, actor = {} }) {
     await this.requireGraphCapability(codebaseId, actor, 'read')
-    const [issues, discussions, releases] = await Promise.all([
+    const [issues, discussions, releases, projects, projectItems] = await Promise.all([
       this.query(`select * from issues where codebase_id = ? order by created_at desc, number desc`, [codebaseId]),
       this.query(`select * from discussions where codebase_id = ? order by created_at desc, number desc`, [codebaseId]),
       this.query(`select * from releases where codebase_id = ? order by created_at desc, number desc`, [codebaseId]),
+      this.query(`select * from projects where codebase_id = ? order by created_at desc, number desc`, [codebaseId]),
+      this.query(`select * from project_items where codebase_id = ? order by project_id asc, position asc, created_at asc`, [codebaseId]),
     ])
+    const itemsByProjectId = new Map()
+    for (const item of projectItems) {
+      const list = itemsByProjectId.get(item.project_id) ?? []
+      list.push(mapD1ProjectItem(item))
+      itemsByProjectId.set(item.project_id, list)
+    }
     return {
       issues: issues.map(mapD1Issue),
       discussions: discussions.map(mapD1Discussion),
       releases: releases.map(mapD1Release),
+      projects: projects.map((project) => mapD1Project(project, itemsByProjectId.get(project.project_id) ?? [])),
     }
   }
 
@@ -1021,7 +1049,9 @@ export class CloudflareD1HopBackend {
     if (input.type === 'issue') return this.createIssue({ ...input, actor })
     if (input.type === 'discussion') return this.createDiscussion({ ...input, actor })
     if (input.type === 'release') return this.createRelease({ ...input, actor })
-    throw new Error('Expected type to be issue, discussion, or release.')
+    if (input.type === 'project') return this.createProject({ ...input, actor })
+    if (input.type === 'projectItem') return this.addProjectItem({ ...input, actor })
+    throw new Error('Expected type to be issue, discussion, release, project, or projectItem.')
   }
 
   async updateWorkItem(input) {
@@ -1029,6 +1059,8 @@ export class CloudflareD1HopBackend {
     if (input.action === 'setIssueStatus') return this.setIssueStatus({ ...input, actor })
     if (input.action === 'setDiscussionStatus') return this.setDiscussionStatus({ ...input, actor })
     if (input.action === 'publishRelease') return this.publishRelease({ ...input, actor })
+    if (input.action === 'archiveProject') return this.archiveProject({ ...input, actor })
+    if (input.action === 'moveProjectItem') return this.moveProjectItem({ ...input, actor })
     throw new Error('Unknown collaboration update action.')
   }
 
@@ -1160,6 +1192,131 @@ export class CloudflareD1HopBackend {
       [actorAuditId(actor, updatedBy, 'Release publisher'), now, now, releaseId],
     )
     return mapD1Release(await this.first(`select * from releases where release_id = ?`, [releaseId]))
+  }
+
+  async createProject({ codebaseId, name, description, columns, createdBy, actor }) {
+    await this.requireGraphCapability(codebaseId, actor, 'write')
+    const now = new Date().toISOString()
+    const number = await this.allocateCollaborationNumber(codebaseId, 'project', now)
+    const projectId = `prj_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`
+    const normalizedColumns = normalizeProjectColumns(columns)
+    await this.query(
+      `insert into projects (
+        project_id, codebase_id, number, name, description, status, columns_json,
+        created_by, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
+      [
+        projectId,
+        codebaseId,
+        number,
+        requireTextValue(name, 'Project name'),
+        stringOrNull(description),
+        stringifyJson(normalizedColumns),
+        actorAuditId(actor, createdBy, 'Project creator'),
+        now,
+        now,
+      ],
+    )
+    return mapD1Project(await this.first(`select * from projects where project_id = ?`, [projectId]), [])
+  }
+
+  async archiveProject({ projectId, updatedBy, actor }) {
+    const project = await this.first(`select * from projects where project_id = ? limit 1`, [projectId])
+    if (!project) throw new Error('Project not found.')
+    await this.requireGraphCapability(project.codebase_id, actor, 'write')
+    const now = new Date().toISOString()
+    await this.query(
+      `update projects set status = 'archived', updated_by = ?, updated_at = ?, archived_at = ? where project_id = ?`,
+      [actorAuditId(actor, updatedBy, 'Project archiver'), now, now, projectId],
+    )
+    const items = await this.query(`select * from project_items where project_id = ? order by position asc, created_at asc`, [projectId])
+    return mapD1Project(await this.first(`select * from projects where project_id = ?`, [projectId]), items.map(mapD1ProjectItem))
+  }
+
+  async addProjectItem({ projectId, item, columnId, position, createdBy, actor }) {
+    const project = await this.first(`select * from projects where project_id = ? limit 1`, [projectId])
+    if (!project) throw new Error('Project not found.')
+    if (project.status !== 'active') throw new Error('Archived projects cannot accept new items.')
+    await this.requireGraphCapability(project.codebase_id, actor, 'write')
+    const columns = normalizeProjectColumns(parseJson(project.columns_json, []))
+    const targetColumnId = normalizeProjectColumnId(columnId, columns)
+    const normalizedItem = await this.normalizeProjectItem(project.codebase_id, item)
+    const nextPosition = normalizeProjectPosition(position) ?? await this.nextProjectItemPosition(projectId, targetColumnId)
+    const now = new Date().toISOString()
+    const projectItemId = `pitem_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`
+    await this.query(
+      `insert into project_items (
+        project_item_id, codebase_id, project_id, item_json, column_id, position,
+        created_by, updated_by, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        projectItemId,
+        project.codebase_id,
+        projectId,
+        stringifyJson(normalizedItem),
+        targetColumnId,
+        nextPosition,
+        actorAuditId(actor, createdBy, 'Project item creator'),
+        actorAuditId(actor, createdBy, 'Project item updater'),
+        now,
+        now,
+      ],
+    )
+    return mapD1ProjectItem(await this.first(`select * from project_items where project_item_id = ?`, [projectItemId]))
+  }
+
+  async moveProjectItem({ projectItemId, columnId, position, updatedBy, actor }) {
+    const existing = await this.first(`select * from project_items where project_item_id = ? limit 1`, [projectItemId])
+    if (!existing) throw new Error('Project item not found.')
+    const project = await this.first(`select * from projects where project_id = ? limit 1`, [existing.project_id])
+    if (!project) throw new Error('Project not found.')
+    if (project.status !== 'active') throw new Error('Archived project items cannot be moved.')
+    await this.requireGraphCapability(project.codebase_id, actor, 'write')
+    const columns = normalizeProjectColumns(parseJson(project.columns_json, []))
+    const targetColumnId = normalizeProjectColumnId(columnId ?? existing.column_id, columns)
+    const nextPosition = normalizeProjectPosition(position) ?? await this.nextProjectItemPosition(project.project_id, targetColumnId)
+    const now = new Date().toISOString()
+    await this.query(
+      `update project_items set column_id = ?, position = ?, updated_by = ?, updated_at = ? where project_item_id = ?`,
+      [targetColumnId, nextPosition, actorAuditId(actor, updatedBy, 'Project item updater'), now, projectItemId],
+    )
+    return mapD1ProjectItem(await this.first(`select * from project_items where project_item_id = ?`, [projectItemId]))
+  }
+
+  async nextProjectItemPosition(projectId, columnId) {
+    const row = await this.first(
+      `select max(position) as max_position from project_items where project_id = ? and column_id = ?`,
+      [projectId, columnId],
+    )
+    const current = typeof row?.max_position === 'number' && Number.isFinite(row.max_position) ? row.max_position : 0
+    return current + 1
+  }
+
+  async normalizeProjectItem(codebaseId, value) {
+    const item = typeof value === 'object' && value !== null && !Array.isArray(value) ? value : {}
+    const type = projectItemType(item.type)
+    if (type === 'note') {
+      return {
+        type,
+        title: requireTextValue(item.title, 'Project note title'),
+        body: stringOrNull(item.body),
+      }
+    }
+
+    const id = requireTextValue(item.id, 'Project item id')
+    if (type === 'issue') {
+      const row = await this.first(`select issue_id, title from issues where codebase_id = ? and issue_id = ? limit 1`, [codebaseId, id])
+      if (!row) throw new Error(`Issue ${id} was not found in ${codebaseId}.`)
+      return { type, id, title: row.title }
+    }
+    if (type === 'discussion') {
+      const row = await this.first(`select discussion_id, title from discussions where codebase_id = ? and discussion_id = ? limit 1`, [codebaseId, id])
+      if (!row) throw new Error(`Discussion ${id} was not found in ${codebaseId}.`)
+      return { type, id, title: row.title }
+    }
+    const row = await this.first(`select release_id, title, version from releases where codebase_id = ? and release_id = ? limit 1`, [codebaseId, id])
+    if (!row) throw new Error(`Release ${id} was not found in ${codebaseId}.`)
+    return { type, id, title: row.title, version: row.version }
   }
 
   async requireGraphCapability(codebaseId, actor = {}, capability = 'read') {
@@ -1662,7 +1819,7 @@ export class CloudflareD1HopBackend {
     if (requiredCapability && !hasCapability(access, requiredCapability)) {
       throw new Error(`Agent session user ${session.user_id} does not have ${requiredCapability} access to ${codebaseId}.`)
     }
-    if (behavior.touch) {
+    if (behavior.touch && !usesScopedD1SessionAuth(this.config)) {
       const now = new Date().toISOString()
       await this.query(
         `update agent_sessions set last_seen_at = ?, updated_at = ? where session_id = ?`,
@@ -1679,7 +1836,12 @@ export class CloudflareD1HopBackend {
 
   async requireActiveAgentSessionByToken(sessionToken, codebaseId, capability) {
     const tokenHash = hashAgentSessionToken(sessionToken)
-    const session = await this.first(`select * from agent_sessions where token_hash = ? limit 1`, [tokenHash])
+    const session = codebaseId
+      ? await this.first(
+          `select * from agent_sessions where codebase_id = ? and token_hash = ? limit 1`,
+          [codebaseId, tokenHash],
+        )
+      : await this.first(`select * from agent_sessions where token_hash = ? limit 1`, [tokenHash])
     if (!session) throw new Error('Agent session token was not found.')
     if (session.status !== 'active') throw new Error('Agent session is not active.')
     if (session.expires_at && isExpiredTimestamp(session.expires_at)) {
@@ -1905,11 +2067,13 @@ export class CloudflareD1HopBackend {
 
   async query(sql, params = []) {
     this.assertConfigured()
+    const authToken = d1AuthorizationToken(this.config)
     const response = await fetch(this.queryUrl(), {
       method: 'POST',
       headers: {
-        Authorization: `Bearer ${this.config.apiToken}`,
+        Authorization: `Bearer ${authToken}`,
         'Content-Type': 'application/json',
+        'X-HopIt-Codebase-Id': this.codebaseId ?? this.config.codebaseId ?? '',
       },
       body: JSON.stringify({ sql, params }),
     })
@@ -1933,14 +2097,21 @@ export class CloudflareD1HopBackend {
 
   queryUrl() {
     const base = this.config.apiBaseUrl.replace(/\/+$/, '')
+    if (!usesCloudflareD1Api(this.config) && (!this.config.accountId || !this.config.databaseId)) {
+      return `${base}/query`
+    }
     return `${base}/accounts/${encodeURIComponent(this.config.accountId)}/d1/database/${encodeURIComponent(this.config.databaseId)}/query`
   }
 
   assertConfigured() {
     const missing = []
-    if (!this.config.accountId) missing.push('HOPIT_D1_ACCOUNT_ID or CLOUDFLARE_ACCOUNT_ID')
-    if (!this.config.databaseId) missing.push('HOPIT_D1_DATABASE_ID')
-    if (!this.config.apiToken) missing.push('HOPIT_D1_API_TOKEN or CLOUDFLARE_API_TOKEN')
+    if (usesCloudflareD1Api(this.config)) {
+      if (!this.config.accountId) missing.push('HOPIT_D1_ACCOUNT_ID or CLOUDFLARE_ACCOUNT_ID')
+      if (!this.config.databaseId) missing.push('HOPIT_D1_DATABASE_ID')
+      if (!this.config.apiToken) missing.push('HOPIT_D1_API_TOKEN or CLOUDFLARE_API_TOKEN')
+    } else if (!d1AuthorizationToken(this.config)) {
+      missing.push('HOPIT_D1_API_TOKEN, CLOUDFLARE_API_TOKEN, or HOPIT_AGENT_SESSION_TOKEN')
+    }
     if (missing.length > 0) {
       throw new Error(`Cloudflare D1 is not configured. Missing: ${missing.join(', ')}.`)
     }
@@ -2446,6 +2617,44 @@ function mapD1Release(row) {
   }
 }
 
+function mapD1Project(row, items = []) {
+  if (!row) return null
+  return {
+    _id: row.project_id,
+    id: row.project_id,
+    codebaseId: row.codebase_id,
+    number: integerValue(row.number, 0),
+    name: stringOrNull(row.name) ?? 'Untitled project',
+    description: stringOrNull(row.description),
+    status: projectStatus(row.status),
+    columns: normalizeProjectColumns(parseJson(row.columns_json, [])),
+    items,
+    createdBy: stringOrNull(row.created_by) ?? 'unknown',
+    updatedBy: stringOrNull(row.updated_by),
+    createdAt: stringOrNull(row.created_at) ?? '',
+    updatedAt: stringOrNull(row.updated_at) ?? '',
+    archivedAt: stringOrNull(row.archived_at),
+  }
+}
+
+function mapD1ProjectItem(row) {
+  if (!row) return null
+  const item = parseJson(row.item_json, {})
+  return {
+    _id: row.project_item_id,
+    id: row.project_item_id,
+    codebaseId: row.codebase_id,
+    projectId: row.project_id,
+    item: typeof item === 'object' && item !== null && !Array.isArray(item) ? item : {},
+    columnId: row.column_id,
+    position: typeof row.position === 'number' && Number.isFinite(row.position) ? row.position : 0,
+    createdBy: stringOrNull(row.created_by) ?? 'unknown',
+    updatedBy: stringOrNull(row.updated_by),
+    createdAt: stringOrNull(row.created_at) ?? '',
+    updatedAt: stringOrNull(row.updated_at) ?? '',
+  }
+}
+
 function requireAuthenticatedActor(actor = {}, message = 'Product auth is required.') {
   const userId = stringOrNull(actor.userId)
   if (!userId) throw new Error(message)
@@ -2941,6 +3150,49 @@ function discussionStatus(value) {
 function releaseStatus(value) {
   if (value === 'published' || value === 'archived') return value
   return 'draft'
+}
+
+function projectStatus(value) {
+  return value === 'archived' ? 'archived' : 'active'
+}
+
+function normalizeProjectColumns(value) {
+  const source = Array.isArray(value) && value.length > 0
+    ? value
+    : [
+        { id: 'todo', name: 'Todo' },
+        { id: 'in-progress', name: 'In progress' },
+        { id: 'done', name: 'Done' },
+      ]
+  const columns = []
+  const seen = new Set()
+  for (const column of source) {
+    const id = stringOrNull(column?.id)
+    const name = stringOrNull(column?.name)
+    if (!id || !name || seen.has(id)) continue
+    if (!/^[a-z0-9](?:[a-z0-9_.:-]{0,62}[a-z0-9])?$/.test(id)) continue
+    columns.push({ id, name })
+    seen.add(id)
+  }
+  if (columns.length === 0) return normalizeProjectColumns(null)
+  return columns.slice(0, 12)
+}
+
+function normalizeProjectColumnId(value, columns) {
+  const id = stringOrNull(value) ?? columns[0]?.id
+  if (!id || !columns.some((column) => column.id === id)) {
+    throw new Error('Project column was not found.')
+  }
+  return id
+}
+
+function normalizeProjectPosition(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+}
+
+function projectItemType(value) {
+  if (value === 'issue' || value === 'discussion' || value === 'release' || value === 'note') return value
+  throw new Error('Project item type must be issue, discussion, release, or note.')
 }
 
 function normalizeReleaseTarget(value) {

@@ -1,13 +1,11 @@
 import { NextResponse } from 'next/server'
-import { auth } from '@clerk/nextjs/server'
 
-import { hasValidBasicAuthFallbackCredentials } from '@/lib/basic-auth-fallback'
 import {
   missingCloudBackendConfig,
   mutateCloudTextFile,
   readCloudTextFile,
-  type CloudActor,
 } from '@/lib/cloud-backend'
+import { cloudActorFromRequest } from '@/lib/request-cloud-actor'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -20,14 +18,19 @@ export async function GET(request: Request) {
     return fileError('cloud_backend_unavailable', `No HopIt cloud backend is configured for file reads. Missing: ${missing.join(', ')}.`, 503)
   }
 
-  const actor = await actorFromRequest(request, { allowBasicFallback: true })
-  if (!actor) {
-    return fileError('browser_auth_required', 'Reading codebase files requires product auth.', 401)
-  }
-
   try {
+    const codebaseId = requireText(url.searchParams.get('codebaseId'), 'codebaseId')
+    const actor = await cloudActorFromRequest(request, {
+      allowBasicFallback: true,
+      codebaseId,
+      agentCapability: 'read',
+    })
+    if (!actor) {
+      return fileError('browser_auth_required', 'Reading codebase files requires product auth.', 401)
+    }
+
     const result = await readCloudTextFile({
-      codebaseId: requireText(url.searchParams.get('codebaseId'), 'codebaseId'),
+      codebaseId,
       path: requireText(url.searchParams.get('path'), 'path'),
       actor,
     })
@@ -46,14 +49,18 @@ export async function PATCH(request: Request) {
     return fileError('cloud_backend_unavailable', `No HopIt cloud backend is configured for file edits. Missing: ${missing.join(', ')}.`, 503)
   }
 
-  const actor = await actorFromRequest(request)
-  if (!actor) {
-    return fileError('browser_auth_required', 'Editing codebase files requires product auth.', 401)
-  }
-
   try {
+    const codebaseId = requireText(body.codebaseId, 'codebaseId')
+    const actor = await cloudActorFromRequest(request, {
+      codebaseId,
+      agentCapability: 'write',
+    })
+    if (!actor) {
+      return fileError('browser_auth_required', 'Editing codebase files requires product auth.', 401)
+    }
+
     const result = await mutateCloudTextFile({
-      codebaseId: requireText(body.codebaseId, 'codebaseId'),
+      codebaseId,
       path: requireText(body.path, 'path'),
       content: requireString(body.content, 'content'),
       baseRevision: optionalRevision(body.baseRevision),
@@ -89,13 +96,6 @@ function optionalRevision(value: unknown) {
 
 function recordValue(value: unknown): Record<string, unknown> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
-}
-
-async function actorFromRequest(request: Request, { allowBasicFallback = false } = {}): Promise<CloudActor | null> {
-  if (allowBasicFallback && hasValidBasicAuthFallbackCredentials(request.headers)) return {}
-  if (hasValidBasicAuthFallbackCredentials(request.headers)) return null
-  const { userId } = await auth()
-  return userId ? { userId } : null
 }
 
 function responseInit() {

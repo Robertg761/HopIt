@@ -233,9 +233,9 @@ Register a scoped device session against the active D1 backend with:
 npm run hop -- session register --profile production --codebase-id "$HOPIT_CODEBASE_ID" --device-name "$HOPIT_DEVICE_NAME"
 ```
 
-Store the returned `sessionToken` as `HOPIT_AGENT_SESSION_TOKEN` on that device. The deployment-wide `HOPIT_AGENT_TOKEN` remains only the legacy Convex bootstrap/admin secret.
+Store the returned `sessionToken` as `HOPIT_AGENT_SESSION_TOKEN` on that device. When the device talks to the `hopit-d1-api` Worker, that scoped token can replace `HOPIT_D1_API_TOKEN` for codebase-scoped graph reads/writes. The deployment-wide `HOPIT_AGENT_TOKEN` remains only the legacy Convex bootstrap/admin secret.
 
-For current personal production hosting, deploy the Next.js app to Vercel and set `HOPIT_CODEBASE_ID`, `HOPIT_CLOUD_BACKEND=d1`, `HOPIT_D1_ACCOUNT_ID`, `HOPIT_D1_DATABASE_ID`, `HOPIT_D1_API_TOKEN`, `HOPIT_D1_API_BASE_URL`, `HOPIT_AUTH_PROVIDER=clerk`, Clerk live-key variables, and the object-storage variables beginning with `HOPIT_BLOB_`/`HOPIT_R2_` as environment variables. The hosted dashboard reads from D1 through `/api/agent/status`; local workspace commands still run through the local HopIt agent on your machine and are refused on Vercel. Google OAuth provider credentials live in Clerk/Google Cloud, not in Vercel env or repo files. Keep `HOPIT_ALLOW_BASIC_AUTH_FALLBACK` unset in production unless you are deliberately using the emergency fallback path.
+For current personal production hosting, deploy the Next.js app to Vercel and set `HOPIT_CODEBASE_ID`, `HOPIT_CLOUD_BACKEND=d1`, `HOPIT_D1_ACCOUNT_ID`, `HOPIT_D1_DATABASE_ID`, `HOPIT_D1_API_TOKEN`, `HOPIT_D1_API_BASE_URL`, `HOPIT_AUTH_PROVIDER=clerk`, Clerk live-key variables, and the object-storage variables beginning with `HOPIT_BLOB_`/`HOPIT_R2_` as environment variables. The hosted dashboard reads from D1 through `/api/agent/status`; local workspace commands still run through the local HopIt agent on your machine and are refused on Vercel. Installed devices should use scoped session tokens for normal D1 proxy access after registration. Google OAuth provider credentials live in Clerk/Google Cloud, not in Vercel env or repo files. Keep `HOPIT_ALLOW_BASIC_AUTH_FALLBACK` unset in production unless you are deliberately using the emergency fallback path.
 
 Validate production configuration with:
 

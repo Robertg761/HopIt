@@ -128,11 +128,12 @@ npm run hop -- import \
   --force
 ```
 
-Any command can use `--cloud-backend d1` plus `HOPIT_D1_ACCOUNT_ID`,
-`HOPIT_D1_DATABASE_ID`, and `HOPIT_D1_API_TOKEN`; when those are present, the
-selected cloud graph is read from and written to D1 instead of the local JSON
-file. Convex flags remain as a legacy fallback. Local journal and event files
-still exist as the device safety log.
+Any command can use `--cloud-backend d1` plus `HOPIT_D1_API_BASE_URL` and the
+D1 identity fields; server/bootstrap contexts use `HOPIT_D1_API_TOKEN`, while
+installed devices can use `HOPIT_AGENT_SESSION_TOKEN` against the D1 proxy after
+session registration. The selected cloud graph is then read from and written to
+D1 instead of the local JSON file. Convex flags remain as a legacy fallback.
+Local journal and event files still exist as the device safety log.
 
 Production file bytes should use the object-blob layer instead of D1/Convex document storage:
 

@@ -8,6 +8,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
+import d1ApiWorker from '../../../cloudflare/d1/api-worker.js'
 import { createD1Backend } from '../../../src/lib/d1-backend.js'
 
 const execFileAsync = promisify(execFile)
@@ -128,7 +129,7 @@ test('D1 backend supports members, invitations, and collaboration work items', a
   }
   await backend.claimCodebaseOwner({ codebaseId: 'collab-core', actor: owner })
 
-  await backend.createWorkItem({
+  const issue = await backend.createWorkItem({
     type: 'issue',
     codebaseId: 'collab-core',
     title: 'Track D1 collaboration',
@@ -136,7 +137,7 @@ test('D1 backend supports members, invitations, and collaboration work items', a
     labels: ['d1', 'migration', 'd1'],
     actor: owner,
   })
-  await backend.createWorkItem({
+  const discussion = await backend.createWorkItem({
     type: 'discussion',
     codebaseId: 'collab-core',
     title: 'Migration notes',
@@ -144,7 +145,7 @@ test('D1 backend supports members, invitations, and collaboration work items', a
     category: 'announcements',
     actor: owner,
   })
-  await backend.createWorkItem({
+  const release = await backend.createWorkItem({
     type: 'release',
     codebaseId: 'collab-core',
     version: 'v1.0.0-d1',
@@ -152,6 +153,48 @@ test('D1 backend supports members, invitations, and collaboration work items', a
     notes: 'First D1-backed collaboration release.',
     actor: owner,
   })
+  const project = await backend.createWorkItem({
+    type: 'project',
+    codebaseId: 'collab-core',
+    name: 'D1 migration board',
+    description: 'Track the D1 migration follow-through.',
+    actor: owner,
+  })
+  assert.equal(project.status, 'active')
+  assert.deepEqual(project.columns.map((column) => column.id), ['todo', 'in-progress', 'done'])
+
+  const projectItem = await backend.createWorkItem({
+    type: 'projectItem',
+    codebaseId: 'collab-core',
+    projectId: project.id,
+    item: { type: 'issue', id: issue.id },
+    columnId: 'todo',
+    actor: owner,
+  })
+  assert.equal(projectItem.item.id, issue.id)
+  assert.equal(projectItem.columnId, 'todo')
+
+  const movedProjectItem = await backend.updateWorkItem({
+    action: 'moveProjectItem',
+    codebaseId: 'collab-core',
+    projectItemId: projectItem.id,
+    columnId: 'in-progress',
+    position: 10,
+    actor: owner,
+  })
+  assert.equal(movedProjectItem.columnId, 'in-progress')
+  assert.equal(movedProjectItem.position, 10)
+
+  await assert.rejects(
+    () => backend.createWorkItem({
+      type: 'projectItem',
+      codebaseId: 'collab-core',
+      projectId: project.id,
+      item: { type: 'discussion', id: 'dis_missing_other_codebase' },
+      actor: owner,
+    }),
+    /Discussion dis_missing_other_codebase was not found in collab-core/,
+  )
 
   const items = await backend.listWorkItems({ codebaseId: 'collab-core', actor: owner })
   assert.equal(items.issues.length, 1)
@@ -159,6 +202,20 @@ test('D1 backend supports members, invitations, and collaboration work items', a
   assert.deepEqual(items.issues[0].labels, ['d1', 'migration'])
   assert.equal(items.discussions.length, 1)
   assert.equal(items.releases.length, 1)
+  assert.equal(items.projects.length, 1)
+  assert.equal(items.projects[0].items.length, 1)
+  assert.equal(items.projects[0].items[0].columnId, 'in-progress')
+
+  const archivedProject = await backend.updateWorkItem({
+    action: 'archiveProject',
+    codebaseId: 'collab-core',
+    projectId: project.id,
+    actor: owner,
+  })
+  assert.equal(archivedProject.status, 'archived')
+  assert.equal(issue.title, 'Track D1 collaboration')
+  assert.equal(discussion.title, 'Migration notes')
+  assert.equal(release.version, 'v1.0.0-d1')
 
   const invitation = await backend.createInvitation({
     codebaseId: 'collab-core',
@@ -274,6 +331,54 @@ test('D1 backend supports scoped sessions and trusted device key metadata', asyn
   assert.equal(wraps.length, 1)
   assert.equal(wraps[0].recipientId, keyring.keyring.deviceId)
 
+  const scopedBackend = createD1Backend({
+    'codebase-id': 'hopit-core',
+    'd1-api-base-url': server.baseUrl,
+    'session-token': registered.sessionToken,
+  })
+  const scopedGraph = await scopedBackend.readGraph('hopit-core')
+  assert.equal(scopedGraph.codebase.id, 'hopit-core')
+  const scopedAccess = await scopedBackend.requireD1AgentAccess(
+    'hopit-core',
+    { sessionToken: registered.sessionToken },
+    'write',
+    { touch: true },
+  )
+  assert.equal(scopedAccess.userId, 'user_demo_owner')
+  scopedGraph.revision += 1
+  scopedGraph.main.revision = scopedGraph.revision
+  scopedGraph.files['SESSION_ONLY.md'] = {
+    kind: 'file',
+    content: 'scoped session write',
+    encoding: 'utf8',
+    revision: scopedGraph.revision,
+    updatedAt: new Date().toISOString(),
+  }
+  await scopedBackend.writeGraph(scopedGraph)
+  const afterScopedWrite = await backend.readGraph('hopit-core')
+  assert.equal(afterScopedWrite.files['SESSION_ONLY.md'].content, 'scoped session write')
+
+  const readOnlySession = await backend.registerAgentSession({
+    codebaseId: 'hopit-core',
+    sessionId: 'session_read_only',
+    deviceName: 'Read Only Device',
+    capabilities: ['read'],
+  })
+  const readOnlyBackend = createD1Backend({
+    'codebase-id': 'hopit-core',
+    'd1-api-base-url': server.baseUrl,
+    'session-token': readOnlySession.sessionToken,
+  })
+  assert.equal((await readOnlyBackend.readGraph('hopit-core')).codebase.id, 'hopit-core')
+  await assert.rejects(
+    () => readOnlyBackend.requireD1AgentAccess('hopit-core', { sessionToken: readOnlySession.sessionToken }, 'write'),
+    /write capability/,
+  )
+  await assert.rejects(
+    () => readOnlyBackend.writeGraph(scopedGraph),
+    /write capability/,
+  )
+
   const revoked = JSON.parse((await runCli('session', [
     'revoke',
     ...args,
@@ -287,22 +392,21 @@ test('D1 backend supports scoped sessions and trusted device key metadata', asyn
 
 async function startD1ApiServer(t) {
   const db = new DatabaseSync(':memory:')
+  const env = {
+    HOPIT_D1_DB: d1Binding(db),
+    HOPIT_D1_PROXY_TOKEN: 'token_test',
+  }
   const server = createServer(async (request, response) => {
     try {
-      if (request.method !== 'POST' || !request.url?.includes('/query')) {
-        response.writeHead(404, { 'content-type': 'application/json' })
-        response.end(JSON.stringify({ success: false, errors: [{ message: 'not found' }] }))
-        return
-      }
-      const body = JSON.parse(await readRequestBody(request))
-      const sql = String(body.sql ?? '')
-      const params = Array.isArray(body.params) ? body.params : []
-      const statement = db.prepare(sql)
-      const rows = sql.trim().toLowerCase().startsWith('select')
-        ? statement.all(...params)
-        : (statement.run(...params), [])
-      response.writeHead(200, { 'content-type': 'application/json' })
-      response.end(JSON.stringify({ success: true, result: [{ success: true, results: rows, meta: {} }] }))
+      const body = request.method === 'GET' || request.method === 'HEAD' ? undefined : await readRequestBody(request)
+      const workerRequest = new Request(`http://127.0.0.1${request.url ?? '/query'}`, {
+        method: request.method,
+        headers: request.headers,
+        body,
+      })
+      const workerResponse = await d1ApiWorker.fetch(workerRequest, env)
+      response.writeHead(workerResponse.status, Object.fromEntries(workerResponse.headers.entries()))
+      response.end(await workerResponse.text())
     } catch (error) {
       response.writeHead(200, { 'content-type': 'application/json' })
       response.end(JSON.stringify({
@@ -323,6 +427,29 @@ async function startD1ApiServer(t) {
   const port = typeof address === 'object' && address ? address.port : null
   if (!port) throw new Error('D1 test server did not bind a port.')
   return { baseUrl: `http://127.0.0.1:${port}` }
+}
+
+function d1Binding(db) {
+  return {
+    prepare(sql) {
+      const statement = db.prepare(sql)
+      return {
+        bind(...params) {
+          return {
+            all() {
+              const rows = sql.trim().toLowerCase().startsWith('select')
+                ? statement.all(...params)
+                : (statement.run(...params), [])
+              return {
+                results: rows,
+                meta: {},
+              }
+            },
+          }
+        },
+      }
+    },
+  }
 }
 
 function readRequestBody(request) {

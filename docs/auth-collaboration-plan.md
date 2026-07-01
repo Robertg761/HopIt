@@ -165,7 +165,7 @@ Do not treat these as current blockers anymore:
 ## Risks And Blockers
 
 - The production deployment has Clerk/D1 wiring plus production Clerk DNS/env and Google OAuth configured and active; keep Basic Auth unset unless deliberate emergency recovery is needed.
-- The current agent can register D1 scoped sessions and key metadata, but D1 graph transport still uses the Cloudflare D1 proxy/API token. Retiring broad cloud tokens from installed devices requires installer/setup flow, worker-level scoped-token enforcement, rotation UX, and complete write-path coverage.
+- The current agent can register D1 scoped sessions and key metadata, and the D1 proxy now accepts scoped session tokens for codebase-scoped read/write SQL. Retiring broad cloud tokens from installed devices still requires installer/setup flow, rotation UX, and complete product write-path coverage.
 - Existing fixture identities such as `user_demo_owner` are not real auth subjects. Migration must map or claim those owners before production use.
 - Invitation emails are matched against HopIt `users.primaryEmail`, so duplicate-member rejection only works for accounts that have already signed in or otherwise been upserted.
 - The current permission model can hide content, and the first wrapped-key APIs

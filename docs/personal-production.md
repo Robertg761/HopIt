@@ -165,7 +165,7 @@ npm run d1:migrate:convex-export -- \
 
 The production import on 2026-06-30 wrote `58` files and the latest `500` events from `11,638` exported events into D1. Use `--dry-run` for future rehearsals. Use `--all-events` only if the daily D1 write budget can absorb the full event history.
 
-The D1 path currently covers agent graph reads/writes, graph-head status polling, hosted dashboard status, codebase list/create/update/delete, text file read/edit, account sync, hosted action jobs, member/invite routes, first issue/discussion/release collaboration tables, scoped device sessions, and trusted-device/key metadata. Complete project-board operations, full history reconstruction, retention policy, full private-repo key grants, and complete product write-path coverage still need work before removing the Convex code entirely.
+The D1 path currently covers agent graph reads/writes, graph-head status polling, hosted dashboard status, codebase list/create/update/delete, text file read/edit, account sync, hosted action jobs, member/invite routes, issue/discussion/release collaboration tables, project-board backend operations, scoped D1 proxy session auth, scoped device sessions, and trusted-device/key metadata. Full history reconstruction, retention policy, project-board UI, full private-repo key grants, and complete product write-path coverage still need work before removing the Convex code entirely.
 
 ## Legacy Convex Backend
 
@@ -578,4 +578,4 @@ their scoped session token for normal D1 operation.
 - The standalone artifact includes start-on-login support scripts, but it is not signed, notarized, or packaged as a native installer yet.
 - LaunchAgent health is currently verified with `launchctl print` plus the loopback `/status` endpoint. `hop service status` is still pid-file oriented and should be tightened so direct supervisor-owned `service run` installs report as running.
 - Token rotation is CLI/runbook driven; there is no dashboard UX for device credential recovery yet.
-- The dashboard now has a first read-only code browser plus issue, discussion, release, and member/invite surfaces. Real diffs, inline review comments, durable merge records, project boards, richer release artifacts, and push-style live updates remain future work.
+- The dashboard now has a first read-only code browser plus issue, discussion, release, and member/invite surfaces; D1 has backend project-board operations. Real diffs, inline review comments, durable merge records, visible project-board UI, richer release artifacts, and push-style live updates remain future work.

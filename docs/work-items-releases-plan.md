@@ -210,7 +210,7 @@ Scope:
 - Added permission-gated Convex functions for basic create/list/status/comment/asset operations.
 - Added codebase existence validation before creating issues, projects, discussions, and releases.
 - Added first hosted UI and API routes for issue, discussion, and release list/create/update flows.
-- Project-board UI, comment detail pages, and release artifact workflows remain future work.
+- D1 project-board backend operations now exist for create/archive boards plus add/move items. Project-board UI, comment detail pages, and release artifact workflows remain future work.
 
 Proof:
 

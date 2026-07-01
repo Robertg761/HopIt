@@ -97,6 +97,7 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
         issues: [],
         discussions: [],
         releases: [],
+        projects: [],
         error: {
           code: 'work_items_fetch_failed',
           message: error instanceof Error ? error.message : 'Collaboration request failed.',
@@ -1299,6 +1300,8 @@ function unavailableCapabilities(reason: string): WorkItemsResponse['capabilitie
     updateDiscussion: action,
     createRelease: action,
     publishRelease: action,
+    createProject: action,
+    updateProject: action,
   }
 }
 

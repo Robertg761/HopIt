@@ -14,6 +14,8 @@ export type CollaborationCapabilities = {
   updateDiscussion: CollaborationActionCapability
   createRelease: CollaborationActionCapability
   publishRelease: CollaborationActionCapability
+  createProject: CollaborationActionCapability
+  updateProject: CollaborationActionCapability
 }
 
 export type InvitationCapabilities = {
@@ -91,6 +93,44 @@ export type CollaborationRelease = {
   publishedAt: string | null
 }
 
+export type CollaborationProjectColumn = {
+  id: string
+  name: string
+}
+
+export type CollaborationProjectItem = {
+  id: string
+  projectId: string
+  item: {
+    type?: 'issue' | 'discussion' | 'release' | 'note'
+    id?: string
+    title?: string
+    body?: string | null
+    version?: string
+  }
+  columnId: string
+  position: number
+  createdBy: string
+  updatedBy: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type CollaborationProject = {
+  id: string
+  number: number
+  name: string
+  description: string | null
+  status: 'active' | 'archived'
+  columns: CollaborationProjectColumn[]
+  items: CollaborationProjectItem[]
+  createdBy: string
+  updatedBy: string | null
+  createdAt: string
+  updatedAt: string
+  archivedAt: string | null
+}
+
 export type PendingInvitation = {
   id: string
   email: string
@@ -124,6 +164,7 @@ export type WorkItemsResponse = {
   issues: CollaborationIssue[]
   discussions: CollaborationDiscussion[]
   releases: CollaborationRelease[]
+  projects: CollaborationProject[]
   error?: CollaborationError
 }
 
@@ -180,7 +221,31 @@ export type CreateReleaseInput = {
   createdBy: string
 }
 
-export type CreateCollaborationInput = CreateIssueInput | CreateDiscussionInput | CreateReleaseInput
+export type CreateProjectInput = {
+  type: 'project'
+  codebaseId: string
+  name: string
+  description?: string
+  columns?: CollaborationProjectColumn[]
+  createdBy: string
+}
+
+export type CreateProjectItemInput = {
+  type: 'projectItem'
+  codebaseId: string
+  projectId: string
+  item: CollaborationProjectItem['item']
+  columnId?: string
+  position?: number
+  createdBy: string
+}
+
+export type CreateCollaborationInput =
+  | CreateIssueInput
+  | CreateDiscussionInput
+  | CreateReleaseInput
+  | CreateProjectInput
+  | CreateProjectItemInput
 
 export type UpdateCollaborationInput =
   | {
@@ -201,6 +266,20 @@ export type UpdateCollaborationInput =
       action: 'publishRelease'
       codebaseId: string
       releaseId: string
+      updatedBy: string
+    }
+  | {
+      action: 'archiveProject'
+      codebaseId: string
+      projectId: string
+      updatedBy: string
+    }
+  | {
+      action: 'moveProjectItem'
+      codebaseId: string
+      projectItemId: string
+      columnId?: string
+      position?: number
       updatedBy: string
     }
 
@@ -371,10 +450,13 @@ function workItemsFallback(codebaseId: string): (response: Response) => WorkItem
         updateDiscussion: disabled(reason),
         createRelease: disabled(reason),
         publishRelease: disabled(reason),
+        createProject: disabled(reason),
+        updateProject: disabled(reason),
       },
       issues: [],
       discussions: [],
       releases: [],
+      projects: [],
       error: {
         code: `http_${response.status}`,
         message: reason,

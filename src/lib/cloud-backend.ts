@@ -3,10 +3,13 @@ import { anyApi } from 'convex/server'
 import { convexAuthToken, convexClient, convexUrl, isConvexConfigured } from '@/lib/convex-auth'
 import { createD1Backend, d1CloudServiceType, isD1Configured } from '@/lib/d1-backend.js'
 
+const defaultD1ApiBaseUrl = 'https://api.cloudflare.com/client/v4'
+
 export type CloudBackendKind = 'd1' | 'convex' | 'unavailable'
 
 export type CloudActor = {
   userId?: string | null
+  sessionId?: string | null
   primaryEmail?: string | null
   displayName?: string | null
   avatarUrl?: string | null
@@ -37,7 +40,14 @@ export function cloudBackendName() {
 export function missingCloudBackendConfig() {
   const backend = configuredCloudBackend()
   if (backend === 'd1') {
+    if (isD1Configured()) return []
     const missing: string[] = []
+    if (usesD1ProxyBaseUrl()) {
+      if (!process.env.HOPIT_D1_API_TOKEN && !process.env.CLOUDFLARE_API_TOKEN && !process.env.HOPIT_AGENT_SESSION_TOKEN) {
+        missing.push('HOPIT_D1_API_TOKEN, CLOUDFLARE_API_TOKEN, or HOPIT_AGENT_SESSION_TOKEN')
+      }
+      return missing
+    }
     if (!process.env.HOPIT_D1_ACCOUNT_ID && !process.env.CLOUDFLARE_ACCOUNT_ID) {
       missing.push('HOPIT_D1_ACCOUNT_ID or CLOUDFLARE_ACCOUNT_ID')
     }
@@ -54,6 +64,11 @@ export function missingCloudBackendConfig() {
     return missing
   }
   return ['HOPIT_CLOUD_BACKEND=d1 plus HOPIT_D1_* values']
+}
+
+function usesD1ProxyBaseUrl() {
+  const baseUrl = process.env.HOPIT_D1_API_BASE_URL?.trim().replace(/\/+$/, '')
+  return Boolean(baseUrl && baseUrl !== defaultD1ApiBaseUrl)
 }
 
 export async function readCloudAgentDashboard(requester: CloudRequester = {}, codebaseId = process.env.HOPIT_CODEBASE_ID ?? 'hopit') {
@@ -326,7 +341,7 @@ export async function listCloudWorkItems(input: { codebaseId: string; actor: Clo
       client.query(anyApi.collaboration.listDiscussions, args),
       client.query(anyApi.collaboration.listReleases, args),
     ])
-    return { issues, discussions, releases }
+    return { issues, discussions, releases, projects: [] }
   }
   throw new Error('No HopIt cloud backend is configured for collaboration.')
 }
@@ -347,7 +362,10 @@ export async function createCloudWorkItem(input: Record<string, unknown> & { cod
     if (input.type === 'release') {
       return client.mutation(anyApi.collaboration.createRelease, args)
     }
-    throw new Error('Expected type to be issue, discussion, or release.')
+    if (input.type === 'project' || input.type === 'projectItem') {
+      throw new Error('Project boards require the D1 backend.')
+    }
+    throw new Error('Expected type to be issue, discussion, release, project, or projectItem.')
   }
   throw new Error('No HopIt cloud backend is configured for collaboration.')
 }
@@ -362,6 +380,9 @@ export async function updateCloudWorkItem(input: Record<string, unknown> & { cod
     if (input.action === 'setIssueStatus') return client.mutation(anyApi.collaboration.setIssueStatus, args)
     if (input.action === 'setDiscussionStatus') return client.mutation(anyApi.collaboration.setDiscussionStatus, args)
     if (input.action === 'publishRelease') return client.mutation(anyApi.collaboration.publishRelease, args)
+    if (input.action === 'archiveProject' || input.action === 'moveProjectItem') {
+      throw new Error('Project boards require the D1 backend.')
+    }
     throw new Error('Unknown collaboration update action.')
   }
   throw new Error('No HopIt cloud backend is configured for collaboration.')
