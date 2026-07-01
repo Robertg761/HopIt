@@ -112,6 +112,112 @@ create table if not exists codebase_invitations (
 create index if not exists idx_codebase_invitations_codebase on codebase_invitations(codebase_id);
 create index if not exists idx_codebase_invitations_token on codebase_invitations(token_hash);
 
+create table if not exists agent_sessions (
+  session_id text primary key,
+  user_id text not null,
+  codebase_id text not null,
+  device_name text,
+  token_hash text,
+  token_prefix text,
+  capabilities_json text not null default '[]',
+  expires_at text,
+  status text not null,
+  created_at text not null,
+  last_seen_at text not null,
+  updated_at text not null,
+  revoked_by_user_id text,
+  revoked_at text
+);
+
+create index if not exists idx_agent_sessions_token_hash on agent_sessions(token_hash);
+create index if not exists idx_agent_sessions_user on agent_sessions(user_id);
+create index if not exists idx_agent_sessions_codebase on agent_sessions(codebase_id);
+
+create table if not exists device_keys (
+  device_id text primary key,
+  user_id text not null,
+  display_name text,
+  platform text,
+  encryption_public_key text not null,
+  encryption_public_key_algorithm text not null,
+  encryption_public_key_encoding text not null,
+  signing_public_key text,
+  signing_public_key_algorithm text,
+  signing_public_key_encoding text,
+  status text not null,
+  created_at text not null,
+  trusted_at text,
+  revoked_at text,
+  last_seen_at text
+);
+
+create index if not exists idx_device_keys_user on device_keys(user_id);
+create index if not exists idx_device_keys_user_status on device_keys(user_id, status);
+
+create table if not exists user_keyrings (
+  user_id text primary key,
+  vault_key_id text not null,
+  current_version integer not null,
+  status text not null,
+  recovery_configured integer not null default 0,
+  created_at text not null,
+  updated_at text not null
+);
+
+create table if not exists codebase_keyrings (
+  codebase_id text primary key,
+  repo_content_key_id text not null,
+  owner_private_key_id text not null,
+  git_internals_key_id text not null,
+  default_secret_key_id text not null,
+  rotation_state text,
+  created_at text not null,
+  updated_at text not null
+);
+
+create table if not exists wrapped_keys (
+  wrap_id text primary key,
+  wrapped_key_id text not null,
+  wrapped_key_type text not null,
+  key_version integer not null,
+  recipient_type text not null,
+  recipient_id text not null,
+  codebase_id text,
+  zone_id text,
+  wrapping_key_id text,
+  wrapping_public_key_id text,
+  algorithm text not null,
+  ciphertext text not null,
+  created_by_user_id text,
+  created_by_device_id text,
+  created_at text not null,
+  expires_at text,
+  revoked_at text,
+  status text not null
+);
+
+create index if not exists idx_wrapped_keys_wrapped_key on wrapped_keys(wrapped_key_id);
+create index if not exists idx_wrapped_keys_recipient on wrapped_keys(recipient_type, recipient_id);
+create index if not exists idx_wrapped_keys_codebase on wrapped_keys(codebase_id);
+create index if not exists idx_wrapped_keys_zone on wrapped_keys(zone_id);
+
+create table if not exists key_audit_events (
+  event_id text primary key,
+  codebase_id text,
+  actor_user_id text,
+  actor_device_id text,
+  event_type text not null,
+  target_user_id text,
+  target_device_id text,
+  zone_id text,
+  key_id text,
+  wrap_id text,
+  created_at text not null
+);
+
+create index if not exists idx_key_audit_events_codebase on key_audit_events(codebase_id, created_at);
+create index if not exists idx_key_audit_events_actor on key_audit_events(actor_user_id, created_at);
+
 create table if not exists action_jobs (
   job_id text primary key,
   codebase_id text not null,

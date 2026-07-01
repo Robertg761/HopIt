@@ -1,6 +1,6 @@
 # HopIt MVP Plan
 
-Last updated: 2026-06-24
+Last updated: 2026-07-01
 
 ## Goal
 
@@ -27,8 +27,8 @@ implementation plan is [HopIt Privacy And Encryption Plan](privacy-encryption-pl
 The current real-use setup is a private dogfood baseline, not the final public product:
 
 - Hosted dashboard: Vercel project `robertg761s-projects/hopit`, project id `prj_hO8U1QmyliQjGODz4R339UkgE86S`, at `https://hopit.dev`.
-- Domain and product auth: Porkbun-owned `hopit.dev` points at Vercel; Clerk production DNS, SSL, live Vercel env, Convex issuer, `HOPIT_AUTH_PROVIDER=clerk`, and production Google OAuth are active, while Basic Auth fallback remains temporarily enabled for recovery.
-- Cloud graph: Convex project `robertgordon761/hopit`, production URL `https://sincere-jaguar-17.convex.cloud`.
+- Domain and product auth: Porkbun-owned `hopit.dev` points at Vercel; Clerk production DNS, SSL, live Vercel env, legacy Convex issuer, `HOPIT_AUTH_PROVIDER=clerk`, production Google OAuth, owner sign-in, and D1 owner claim are active. Basic Auth fallback is no longer needed for normal production access.
+- Cloud graph: Cloudflare D1 database `hopit`, fronted for Vercel by the `hopit-d1-api` Worker. Legacy Convex project `robertgordon761/hopit` remains disabled and retained as an export/fallback source.
 - Object storage: Cloudflare R2 bucket `hopit-blobs`, private public-access-disabled bucket, free-only app budget enabled, 1-day lifecycle rule for current no-charge dogfooding.
 - Local device: packaged `hop-darwin-arm64` runtime installed under `/Users/robert/Library/Application Support/HopIt/Runtime`, supervised by LaunchAgent `com.hopit.agent.hopit`.
 - Local workspace root: `/Users/robert/HopIt Workspaces`, with current codebase folder `/Users/robert/HopIt Workspaces/hopit`.
@@ -36,7 +36,7 @@ The current real-use setup is a private dogfood baseline, not the final public p
 
 Temporary choices:
 
-- Clerk guards the hosted deployment; Basic Auth fallback remains until production owner sign-in and owner mapping are smoke-tested safely.
+- Clerk guards the hosted deployment; Basic Auth fallback should stay unset in production unless deliberately re-enabled for emergency recovery.
 - R2 is the first low-cost object storage provider and keeps the storage contract S3-compatible for a later Backblaze B2 or larger production-storage migration.
 - `.private/env/` remains local-only unless object storage and a local decrypt-capable key source are configured; when configured through either `HOPIT_CLIENT_ENCRYPTION_KEY` or `hop keys` user-vault bridging, routed secrets sync only as client-encrypted object blobs.
 - The current full-repo literal mirror path can copy `.git/`, binary files, symlinks, empty directories, and generated files, but a full cloud upload of the current repository should not be treated as complete or safe by default.
@@ -182,12 +182,12 @@ the current v1 proof gate.
 ## Current Architecture
 
 - Web app: Next.js product shell on Vercel for codebases, files, live sync state, active change sets, connected devices, recent activity, collaborators, review/merge state, and snapshots.
-- API: Next.js routes for hosted/local status and whitelisted local commands. Hosted deployments read Convex status and refuse local workspace commands.
-- Convex backend: production graph service for codebase metadata, file metadata, object-blob references, per-file agent mutations, agent events, graph validation, scoped session-token authorization, and dashboard reads.
+- API: Next.js routes for hosted/local status and whitelisted local commands. Hosted deployments read D1 status and refuse local workspace commands.
+- D1 backend: production graph service for codebase metadata, file metadata, object-blob references, agent events, dashboard reads, memberships, invitations, first work items/releases, scoped sessions, and trusted-device/key metadata. Legacy Convex backend remains as disabled fallback/migration code.
 - Object storage: S3-compatible file-byte layer. Cloudflare R2 is the first personal-use provider with free-only budget guards enabled; Backblaze B2 can use the same adapter later by switching provider/env configuration when HopIt is ready for broader release.
 - Local agent: managed-folder process with service/session token support, workspace-root index, hydration cursor, local cache, safety journal, retry queue, service wrapper, and `.private/` visibility handling.
 - Installer/daemon: standalone package with embedded runtime, production env example, user-level launchd/systemd support scripts, manual service controls, supervised `service run`, backup/export runbook, token-rotation runbook, and stricter production config checks.
-- Storage today: Convex separates graph/file metadata from file bytes. The agent can upload regular file bytes to S3-compatible object storage, store only `contentStorage`, provider, key, hash, and size metadata in Convex, and hydrate/refresh/export by downloading and verifying the object hash. Routed secrets can be client-encrypted with the legacy local key or the `hop keys` user-vault bridge. Durable history reconstruction, full private-repo encryption, repo/zone key use, private metadata, and all product write paths still need to move onto the same model.
+- Storage today: D1 separates graph/file metadata from file bytes. The agent can upload regular file bytes to S3-compatible object storage, store only `contentStorage`, provider, key, hash, and size metadata in D1 or the legacy Convex fallback, and hydrate/refresh/export by downloading and verifying the object hash. Routed secrets can be client-encrypted with the legacy local key or the `hop keys` user-vault bridge. Durable history reconstruction, full private-repo encryption, repo/zone key use, private metadata, and all product write paths still need to move onto the same model.
 - Realtime today: polling through `/api/agent/status`, `remote-update` events emitted by explicit safe refresh, a per-workspace materialization cursor, and an opt-in `--remote-pull` polling loop for personal dogfooding. Solid v1 still needs production-grade automatic remote-update delivery for file changes, collaborator presence, sync status, visibility changes, review events, merge events, and device handoff.
 - Git interoperability: import/export/publish stays as snapshot interoperability, not the everyday sync model.
 
@@ -227,7 +227,7 @@ Current spike:
 - The Next.js product shell now polls `/api/agent/status`, maps live local status/events/cloud data into the dashboard, and can read the Cloudflare D1 dashboard data when the D1 backend env is configured. Legacy Convex dashboard reads remain available while the old backend is being retired.
 - `/api/agent/command` exposes whitelisted local actions for sync, refresh, recover, review, and merge. Hosted D1-backed deployments can read status but still require the local agent for workspace commands.
 - `hop workspace` persists a root-level index keyed by codebase and concrete workspace path; configured-codebase discovery and metadata-only attach can bind a cloud codebase into the Workspace Root, and hydrate, refresh, and sync update the materialized revision cursor that status and remote-pull use.
-- `hop device` / `hop session` exposes local session status. Scoped session registration, listing, touch, and revocation are still on the legacy Convex path and need a D1 port before free-first production can use them.
+- `hop device` / `hop session` exposes local session status. Scoped session registration, listing, touch, and revocation now work on D1 and the legacy Convex fallback; full worker-level scoped-token enforcement remains to harden.
 
 Current next work:
 
@@ -237,7 +237,7 @@ Current next work:
    repo/private/secret zone keys, encrypted blobs, key grants, invite-time key
    wrapping, revocation, recovery, and path-metadata privacy.
 4. Promote the opt-in remote-pull proof into production-grade automatic remote-update delivery so same-owner devices refresh safely without a manual command when the local journal is clean.
-5. Finish scoped device/session auth coverage and continue membership, invitation, and permission work behind Clerk auth while Basic Auth fallback remains available until the owner handoff is proven.
+5. Harden scoped device/session auth coverage, membership, invitation, and permission work behind Clerk auth now that owner handoff is proven and production uses Clerk/D1 without Basic Auth.
 6. Deepen the hosted code browser, diff/review/comment/history surface, issue/detail and discussion thread flows, releases, and project boards beyond the first dashboard slices.
 
 ### Milestone 3: Recovery And Watch Loop

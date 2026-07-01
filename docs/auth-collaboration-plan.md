@@ -9,9 +9,9 @@ lives in [HopIt Privacy And Encryption Plan](privacy-encryption-plan.md); this
 auth plan owns the identity, membership, invite, and permission checks that gate
 those key grants.
 
-Last updated: 2026-06-24
+Last updated: 2026-07-01
 
-Current live status: the repo contains Clerk/provider-auth wiring, Convex auth config, `/api/me`, durable users, memberships, invitations, owner claim, and member/invite UI. `hopit.dev` is live, Clerk production DNS/SSL are verified, Vercel has the redacted live Clerk env vars, Convex production trusts `https://clerk.hopit.dev`, the live personal deployment now uses Clerk as the primary hosted auth provider, and production Google OAuth is enabled for the owner test user while the Google app remains in Testing mode. Basic Auth fallback remains enabled only until owner sign-in and owner mapping are smoke-tested. The active setup details and config locations are recorded in [Personal Production Runbook](personal-production.md).
+Current live status: the repo contains Clerk/provider-auth wiring, legacy Convex auth config, `/api/me`, durable users, memberships, invitations, owner claim, member/invite UI, and D1-backed scoped session/key metadata. `hopit.dev` is live, Clerk production DNS/SSL are verified, Vercel has the redacted live Clerk env vars, legacy Convex production trusts `https://clerk.hopit.dev`, the live personal deployment uses Clerk as the primary hosted auth provider, production Google OAuth is enabled for the owner test user while the Google app remains in Testing mode, and the real owner account has claimed the seeded D1 codebase. Basic Auth fallback is no longer needed for normal production access. The active setup details and config locations are recorded in [Personal Production Runbook](personal-production.md).
 
 ## Goals
 
@@ -35,7 +35,7 @@ Current live status: the repo contains Clerk/provider-auth wiring, Convex auth c
 
 `authIdentities` links provider identities to HopIt users. The first implementation can map a Convex auth `tokenIdentifier` to a single user, while leaving room for later account linking.
 
-`/api/me` is the hosted account bridge. When Clerk auth and Convex are configured, it derives the Convex JWT from the server-side Clerk session, upserts the HopIt user through `agent.upsertViewer`, and returns a sanitized account summary. It does not accept caller-supplied bearer tokens for product account sync.
+`/api/me` is the hosted account bridge. With D1 configured, it upserts the HopIt user through the D1 backend selector; with the legacy Convex fallback, it derives the Convex JWT from the server-side Clerk session and upserts through `agent.upsertViewer`. It returns a sanitized account summary and does not accept caller-supplied bearer tokens for product account sync.
 
 ### Codebase Access
 
@@ -76,7 +76,7 @@ The first access-model foundation now exists:
 - `keyAuditEvents` records grant, revoke, rotate, recovery, and device approval
   actions.
 
-Convex now exposes agent-facing device/key APIs for registering trusted device
+The D1 backend and legacy Convex fallback expose agent-facing device/key APIs for registering trusted device
 public keys, listing device keys, ensuring user/codebase keyrings, creating and
 listing wrapped-key grants, and revoking wrapped keys. The local agent exposes
 `hop keys init-device`, `hop keys status`, and `hop keys export-recovery`; it
@@ -133,7 +133,7 @@ Status: backend plus first hosted UI/API slice landed.
 
 ## Production Auth Rollout
 
-The provider-auth code is now active against the production Clerk domain. Current personal production uses `HOPIT_AUTH_PROVIDER=clerk`, has Google OAuth enabled in Clerk production, and keeps `HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1` only as an emergency recovery path until owner sign-in and owner mapping have been proven on `https://hopit.dev`.
+The provider-auth code is now active against the production Clerk domain. Current personal production uses `HOPIT_AUTH_PROVIDER=clerk`, has Google OAuth enabled in Clerk production, and has verified owner sign-in plus D1 owner mapping on `https://hopit.dev`. `HOPIT_ALLOW_BASIC_AUTH_FALLBACK` should stay unset in normal production and be used only as an intentional emergency recovery switch.
 
 Already completed for production setup:
 
@@ -146,7 +146,7 @@ Already completed for production setup:
 - Google Cloud project `hopit-auth-prod-rg` owns the production Google OAuth client for Clerk, with `https://hopit.dev` and `https://www.hopit.dev` as authorized JavaScript origins and `https://clerk.hopit.dev/v1/oauth_callback` as the authorized redirect URI.
 - Google Auth Platform is still in Testing mode with `robertgordon761@gmail.com` as the current test user.
 - The Google OAuth client id and secret are stored in macOS Keychain, not in repo files or docs, under services `HopIt Google OAuth Client ID` and `HopIt Google OAuth Client Secret`.
-- Valid Basic Auth fallback credentials still return the dashboard for emergency access.
+- Owner Google sign-in and D1 owner claim have been smoke-tested on the live domain.
 
 Continue building and hardening:
 
@@ -154,10 +154,7 @@ Continue building and hardening:
 - Membership and invitation lifecycle behavior.
 - Requester-aware dashboard filtering.
 - Complete permission coverage for every browser and agent write path.
-- Production sign-in/sign-up smoke tests with the owner account.
-- Production OAuth callback verification by completing a real owner Google sign-in.
-- Owner claim/migration from seeded fixture identities into the real HopIt user.
-- Retiring product-level Basic Auth from the live deployment.
+- Keeping product-level Basic Auth disabled in live production unless deliberate emergency recovery is needed.
 
 Do not treat these as current blockers anymore:
 
@@ -167,8 +164,8 @@ Do not treat these as current blockers anymore:
 
 ## Risks And Blockers
 
-- The production deployment has Clerk/Convex wiring plus production Clerk DNS/env and Google OAuth configured and active, but Basic Auth fallback remains enabled until the first owner account can sign in and be mapped safely.
-- The current agent can read graphs through scoped session tokens, but bootstrap/admin graph replacement still uses the shared service token. Retiring the shared token requires installer/setup flow, rotation UX, and complete write-path coverage.
+- The production deployment has Clerk/D1 wiring plus production Clerk DNS/env and Google OAuth configured and active; keep Basic Auth unset unless deliberate emergency recovery is needed.
+- The current agent can register D1 scoped sessions and key metadata, but D1 graph transport still uses the Cloudflare D1 proxy/API token. Retiring broad cloud tokens from installed devices requires installer/setup flow, worker-level scoped-token enforcement, rotation UX, and complete write-path coverage.
 - Existing fixture identities such as `user_demo_owner` are not real auth subjects. Migration must map or claim those owners before production use.
 - Invitation emails are matched against HopIt `users.primaryEmail`, so duplicate-member rejection only works for accounts that have already signed in or otherwise been upserted.
 - The current permission model can hide content, and the first wrapped-key APIs

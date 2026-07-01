@@ -3693,8 +3693,8 @@ async function runSessionCommand(action, options) {
   }
 
   const cloudService = createCloudGraphService(options)
-  if (!(cloudService instanceof ConvexCloudGraphService)) {
-    throw new Error(`Session ${action} requires Convex. Configure --convex-url or HOPIT_CONVEX_URL.`)
+  if (!supportsAgentSessions(cloudService)) {
+    throw new Error(`Session ${action} requires a cloud backend with scoped session support. Configure Cloudflare D1 or legacy Convex.`)
   }
 
   if (action === 'register') {
@@ -4001,12 +4001,9 @@ async function registerLocalDeviceKeyringWithCloud(options, keyring) {
   if (!agentSessionTokenFromOptions(cloudOptions) && keyring.credentials?.agentSessionToken) {
     cloudOptions['session-token'] = keyring.credentials.agentSessionToken
   }
-  if (!convexUrlFromOptions(cloudOptions)) {
-    return { registered: false, reason: 'convex_not_configured' }
-  }
   const cloudService = createCloudGraphService(cloudOptions)
-  if (!(cloudService instanceof ConvexCloudGraphService)) {
-    return { registered: false, reason: 'convex_not_configured' }
+  if (!supportsKeyRegistration(cloudService)) {
+    return { registered: false, reason: 'cloud_key_registration_not_configured' }
   }
 
   const registeredAt = new Date().toISOString()
@@ -4799,7 +4796,7 @@ HOPIT_WORKSPACE_ROOT=${JSON.stringify(path.resolve(workspaceRootFromOptions(opti
 HOPIT_WORKSPACE_INDEX=${JSON.stringify(path.resolve(workspaceIndexPath(options)))}
 HOPIT_SESSION_ID=${options['session-id'] ?? `session_${codebaseId}_${os.hostname().replace(/[^a-zA-Z0-9]+/g, '_')}`}
 HOPIT_DEVICE_NAME=${JSON.stringify(options['device-name'] ?? os.hostname() ?? 'local-device')}
-HOPIT_AGENT_SESSION_TOKEN=replace-with-hop-device-register-token
+HOPIT_AGENT_SESSION_TOKEN=replace-after-hop-session-register
 HOPIT_REMOTE_PULL=1
 HOPIT_REMOTE_REFRESH_INTERVAL_MS=${options['remote-refresh-interval-ms'] ?? '5000'}
 `
@@ -8195,6 +8192,25 @@ function sessionCapabilitiesFromOptions(options) {
     .split(',')
     .map((capability) => capability.trim())
     .filter(Boolean)
+}
+
+function supportsAgentSessions(cloudService) {
+  return Boolean(
+    cloudService &&
+    typeof cloudService.registerAgentSession === 'function' &&
+    typeof cloudService.listAgentSessions === 'function' &&
+    typeof cloudService.touchAgentSession === 'function' &&
+    typeof cloudService.revokeAgentSession === 'function',
+  )
+}
+
+function supportsKeyRegistration(cloudService) {
+  return Boolean(
+    cloudService &&
+    typeof cloudService.registerDeviceKey === 'function' &&
+    typeof cloudService.ensureUserKeyring === 'function' &&
+    typeof cloudService.createWrappedKey === 'function',
+  )
 }
 
 function requireConvexCodebaseId(codebaseId) {

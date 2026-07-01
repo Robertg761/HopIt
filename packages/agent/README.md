@@ -114,7 +114,8 @@ encrypts the user vault key with a passphrase; set the passphrase only for that
 one command through `--recovery-passphrase` or `HOPIT_RECOVERY_PASSPHRASE`, and
 do not leave it in persistent env files. Use `--skip-cloud-registration` only
 for local fixture tests or offline setup; production device cloud registration
-is still legacy Convex-only and needs a D1 port.
+now works with the D1 backend and remains available through the legacy Convex
+fallback.
 
 Point the same import at the real D1 backend with:
 
@@ -187,8 +188,8 @@ npm run hop -- workspace hydrate-file --path README.md
 npm run hop -- workspace dehydrate --force
 npm run hop -- remote-pull --profile production --codebase-id hopit
 npm run hop -- device status
-npm run hop -- device register --profile production --codebase-id hopit
-npm run hop -- device list --profile production --codebase-id hopit
+npm run hop -- session register --profile production --codebase-id hopit
+npm run hop -- session list --profile production --codebase-id hopit
 npm run hop -- export --output /path/to/git-export
 npm run hop -- publish --output /path/to/git-publish
 npm run hop -- service start --profile production --codebase-id hopit
@@ -325,15 +326,13 @@ file bodies, so status and remote-pull can detect unjournaled local drift withou
 duplicating workspace content.
 
 `hop device` is an alias for `hop session`. `device status` reports the local
-session id, device name, and whether the command is using the bootstrap service
-token or a scoped per-device session token. `device register` is still a legacy
-Convex-backed flow that needs a D1 port before it can be used on the free-first
-production backend.
+session id, device name, and whether the command is using a scoped per-device
+session token. Session register/list/touch/revoke work on the D1 backend and
+the legacy Convex fallback.
 
-When both `HOPIT_AGENT_TOKEN` and `HOPIT_AGENT_SESSION_TOKEN` are present,
-normal legacy Convex-backed commands prefer the scoped session token. Pass
-`--agent-token` explicitly for bootstrap/admin work such as import, graph
-replacement, or admin session listing.
+When both a legacy bootstrap token and `HOPIT_AGENT_SESSION_TOKEN` are present,
+normal cloud commands prefer the scoped session token. Pass the bootstrap token
+explicitly only for legacy Convex bootstrap/admin work.
 
 `hop backup` writes a restorable diagnostic folder with cloud/status/event
 state. `hop export` and `hop publish` are the current Git escape hatch. They create a

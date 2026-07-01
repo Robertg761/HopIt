@@ -1,6 +1,6 @@
 # GitHub-Lite Collaboration Plan
 
-Last updated: 2026-06-30
+Last updated: 2026-07-01
 
 This is the collaboration sub-plan under the solid v1 dogfood track. HopIt is moving toward a production-shaped Workspace Root first, while also turning the deployed personal dogfood system into a private GitHub-lite collaboration surface. The current foundation is a Vercel-hosted dashboard, a D1 graph migration target with legacy Convex export source, a production-profile local agent, a seeded `hopit` codebase, and a managed workspace hydrated outside the source checkout.
 
@@ -24,7 +24,7 @@ devices can decrypt private repo content, `.private/`, and secrets.
 - Current workspace: `/Users/robert/HopIt Workspaces/hopit`
 - Current local service: LaunchAgent `com.hopit.agent.hopit` is installed and running for the packaged `hop-darwin-arm64` runtime, with D1 cloud status verified locally
 - Current config locations: `.env.local` for this checkout and `/Users/robert/.config/hopit/production.env` for the installed local agent
-- Hosted dashboard: Clerk production auth and Google OAuth are active for `hopit.dev`; Basic Auth fallback remains enabled until owner sign-in and owner mapping are complete; read-only for workspace commands
+- Hosted dashboard: Clerk production auth and Google OAuth are active for `hopit.dev`; owner sign-in and D1 owner claim are verified; read-only for workspace commands
 - Local agent: can import, hydrate, sync, refresh, recover, open review, merge, export, publish, validate, and report status
 - Git compatibility: export/publish exists as a local escape hatch; history import, ancestry preservation, and remote publish are still future work
 
@@ -34,19 +34,19 @@ The current setup details live in [Personal Production Runbook](personal-product
 
 The first collaboration slice is now started in the repo:
 
-- D1 now covers the graph/status/account/codebase/file/action-job slice plus members, invitations, and first issue/discussion/release work-item tables. Convex still has the richer agent-session and key-management tables that need D1 ports.
+- D1 now covers the graph/status/account/codebase/file/action-job slice plus members, invitations, first issue/discussion/release work-item tables, scoped agent sessions, trusted device keys, user keyrings, and wrapped-key metadata. Convex retains legacy fallback implementations and the saved migration source.
 - D1 exposes authenticated viewer/upsert entrypoints plus owner-claim, member list/manage, and invitation create/accept/revoke operations, with Convex retained as a legacy fallback.
 - The dashboard query can filter graph files by requester role and `.private/` ownership through D1 or legacy Convex.
 - The status mapper carries capped shared-file content previews.
 - The dashboard includes a read-only code-review browser section.
 - The dashboard includes member/invite management plus first issue, discussion, and release workflows.
 - D1 has initial permission-gated tables/functions for issues, projects, discussions, releases, release assets, and per-codebase counters; project-board operations and richer release assets remain to be completed.
-- Convex has scoped agent-session token registration/list/touch/revoke plus token authorization for graph reads, per-file agent writes, and event sync; D1 device/session auth remains to be ported.
+- D1 and legacy Convex both have scoped agent-session token registration/list/touch/revoke plus first trusted-device/key metadata APIs; complete write-path enforcement and public setup UX remain to harden.
 - Secret-only client encryption exists for routed `.private/env/` object blobs,
   but full private-repo encryption, invite-time key grants, independent secret
   sharing, path encryption, and revocation/rekey flows are still pending.
 
-This is still a foundation layer, but it is no longer only backend scaffolding. The repo has Clerk-backed sign-in routes, auth middleware, D1 backend selection, legacy Convex auth config, D1-backed member/invite UI, D1-backed work-item UI, owner email config, scoped agent-session token groundwork, and a Convex JWT template for the legacy path. Clerk production DNS, SSL, live Vercel env, `HOPIT_AUTH_PROVIDER=clerk`, and production Google OAuth are active for `hopit.dev`; retiring Basic Auth fallback is intentionally deferred until owner sign-in and owner mapping are verified. Real diffs, inline review comments, routeable history, project-board UI, immutable release publishing, complete permission coverage, D1 device-session auth, and D1 key-management parity remain pending.
+This is still a foundation layer, but it is no longer only backend scaffolding. The repo has Clerk-backed sign-in routes, auth middleware, D1 backend selection, legacy Convex auth config, D1-backed member/invite UI, D1-backed work-item UI, owner email config, D1-backed scoped agent-session/key metadata, and a Convex JWT template for the legacy path. Clerk production DNS, SSL, live Vercel env, `HOPIT_AUTH_PROVIDER=clerk`, production Google OAuth, owner sign-in, and D1 owner claim are active for `hopit.dev`; Basic Auth fallback env vars are removed from Vercel Production. Real diffs, inline review comments, routeable history, project-board UI, immutable release publishing, complete permission coverage, full write-path session enforcement, and full private-repo key grants remain pending.
 
 ## Phase Principle
 
@@ -56,7 +56,7 @@ For private repos, permission checks must be paired with encryption grants.
 Membership can make a user eligible to read something, but only wrapped keys
 should make that content decryptable on a trusted device.
 
-Until the owner handoff is proven, keep Basic Auth fallback available and continue product work behind Clerk: permissions, role checks, code browsing, reviews, issues, discussions, releases, and local-agent/service-token hardening.
+With owner handoff proven, keep product work behind Clerk and D1: permissions, role checks, code browsing, reviews, issues, discussions, releases, and local-agent/session-token hardening. Basic Auth should stay unset in production unless deliberately re-enabled for emergency recovery.
 
 ## Goal 1: Real Accounts And Auth
 
@@ -64,7 +64,7 @@ Until the owner handoff is proven, keep Basic Auth fallback available and contin
 
 Users sign in as real HopIt users. The hosted dashboard no longer depends on shared Basic Auth as the product identity layer. Every server read/write can resolve the requester to a durable user id.
 
-Current status: code support, production Clerk infrastructure, and production Google OAuth are active, but Basic Auth fallback remains enabled until owner sign-in and owner mapping are smoke-tested.
+Current status: code support, production Clerk infrastructure, production Google OAuth, owner sign-in, and D1 owner mapping are active. Basic Auth fallback is no longer needed for normal production access.
 
 ### Implementation Plan
 
@@ -128,7 +128,7 @@ grants, and revoke/rotate flows are not implemented yet.
 1. Add privacy zones for repo content, owner-private content, secrets, Git
    internals, and public snapshots.
 2. Add trusted device public keys, user vault keys, codebase keyrings, and
-   wrapped key grants. First local/Convex foundations exist; repo/zone key use
+   wrapped key grants. First local/D1/legacy Convex foundations exist; repo/zone key use
    and product sharing flows remain.
 3. Extend the object-blob pipeline so all private repo file bytes are encrypted
    locally before upload.
@@ -253,7 +253,7 @@ HopIt can name accepted Main states as releases and attach notes/artifacts later
 ## Verification Strategy
 
 - Unit tests for permission helpers and schema validators.
-- D1 migration/CLI smoke checks for seeded graph data and collaboration routes, plus legacy Convex checks only for fallback and still-unported device/session/key paths.
+- D1 migration/CLI smoke checks for seeded graph data, collaboration routes, scoped sessions, and trusted-device/key metadata, plus legacy Convex checks only for fallback paths.
 - Browser smoke for auth redirect, code browsing, invite acceptance, review open/comment/merge, issue creation, and release creation.
 - Production smoke on `https://hopit.dev` after each deployment.
 - Explicit negative tests for non-member reads, viewer write attempts, expired invites, `.private/` access, and merge without permission.

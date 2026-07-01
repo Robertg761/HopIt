@@ -230,11 +230,11 @@ HOPIT_D1_DATABASE_ID=replace-with-cloudflare-d1-database-id
 HOPIT_D1_API_TOKEN=replace-with-cloudflare-d1-api-token-or-hopit-d1-proxy-token
 HOPIT_D1_API_BASE_URL=https://hopit-d1-api.<account-subdomain>.workers.dev
 HOPIT_AUTH_PROVIDER=clerk
-HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1
-HOPIT_DASHBOARD_USERNAME=hopit
-HOPIT_DASHBOARD_PASSWORD=replace-with-a-long-random-dashboard-password
-# Clerk production auth for hopit.dev. Keep HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1
-# until production sign-in/OAuth and owner mapping are verified.
+# Emergency recovery only. Leave commented out for normal Clerk/D1 production access.
+# HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1
+# HOPIT_DASHBOARD_USERNAME=hopit
+# HOPIT_DASHBOARD_PASSWORD=replace-with-a-long-random-dashboard-password
+# Clerk production auth for hopit.dev.
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_live_replace-with-your-clerk-publishable-key
 CLERK_SECRET_KEY=sk_live_replace-with-your-clerk-secret-key
 CLERK_JWT_ISSUER_DOMAIN=https://clerk.hopit.dev
@@ -244,7 +244,7 @@ HOPIT_WORKSPACE_ROOT="${envDefaults.workspaceRoot}"
 HOPIT_WORKSPACE_INDEX="${envDefaults.workspaceIndex}"
 HOPIT_SESSION_ID=replace-with-this-device-session-id
 HOPIT_DEVICE_NAME="Your Mac"
-HOPIT_AGENT_SESSION_TOKEN=replace-after-hop-device-register
+HOPIT_AGENT_SESSION_TOKEN=replace-after-hop-session-register
 HOPIT_AGENT_SESSION_CAPABILITIES=read,write,sync,watch
 HOPIT_REMOTE_PULL=1
 HOPIT_REMOTE_REFRESH_INTERVAL_MS=5000

@@ -186,6 +186,105 @@ test('D1 backend supports members, invitations, and collaboration work items', a
   assert.equal(memberRead.content, 'hello')
 })
 
+test('D1 backend supports scoped sessions and trusted device key metadata', async (t) => {
+  const server = await startD1ApiServer(t)
+  const state = await makeState()
+  const args = [
+    ...stateArgs(state),
+    '--cloud-backend',
+    'd1',
+    '--codebase-id',
+    'hopit-core',
+    '--d1-api-base-url',
+    server.baseUrl,
+    '--d1-account-id',
+    'account_test',
+    '--d1-database-id',
+    'database_test',
+    '--d1-api-token',
+    'token_test',
+  ]
+
+  await runCli('init', [...args, '--force'])
+
+  const registered = JSON.parse((await runCli('session', [
+    'register',
+    ...args,
+    '--session-id',
+    'session_device_core',
+    '--device-name',
+    'D1 Test Device',
+    '--capabilities',
+    'read,write,sync,watch,admin',
+  ])).stdout)
+  assert.equal(registered.ok, true)
+  assert.equal(registered.session.sessionId, 'session_device_core')
+  assert.equal(registered.session.userId, 'user_demo_owner')
+  assert.equal(registered.session.status, 'active')
+  assert.match(registered.sessionToken, /^hst_/)
+
+  const listed = JSON.parse((await runCli('session', ['list', ...args])).stdout)
+  assert.equal(listed.sessions.length, 1)
+  assert.equal(listed.sessions[0].sessionId, 'session_device_core')
+  assert.equal(JSON.stringify(listed).includes(registered.sessionToken), false)
+
+  const touched = JSON.parse((await runCli('session', [
+    'touch',
+    ...args,
+    '--session-id',
+    'session_device_core',
+    '--session-token',
+    registered.sessionToken,
+  ])).stdout)
+  assert.equal(touched.session.sessionId, 'session_device_core')
+  assert.equal(touched.session.status, 'active')
+
+  const keyring = JSON.parse((await runCli('keys', [
+    'init-device',
+    ...args,
+    '--session-id',
+    'session_device_core',
+    '--device-name',
+    'D1 Test Device',
+    '--session-token',
+    registered.sessionToken,
+  ])).stdout)
+  assert.equal(keyring.ok, true)
+  assert.equal(keyring.cloudRegistration.registered, true)
+  assert.equal(keyring.cloudRegistration.deviceKey.userId, 'user_demo_owner')
+  assert.equal(keyring.cloudRegistration.deviceKey.status, 'trusted')
+  assert.equal(keyring.cloudRegistration.userKeyring.status, 'active')
+  assert.equal(keyring.cloudRegistration.userVaultWrap.status, 'active')
+  assert.equal(JSON.stringify(keyring).includes(registered.sessionToken), false)
+  assert.equal(JSON.stringify(keyring).includes('PRIVATE KEY'), false)
+  assert.equal(JSON.stringify(keyring).includes('ciphertext'), false)
+
+  const backend = createD1Backend({
+    'codebase-id': 'hopit-core',
+    'd1-api-base-url': server.baseUrl,
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_test',
+    'd1-api-token': 'token_test',
+  })
+  const devices = await backend.listDeviceKeys({ codebaseId: 'hopit-core' })
+  assert.equal(devices.length, 1)
+  assert.equal(devices[0].deviceId, keyring.keyring.deviceId)
+
+  const wraps = await backend.listWrappedKeys({ codebaseId: 'hopit-core' })
+  assert.equal(wraps.length, 1)
+  assert.equal(wraps[0].recipientId, keyring.keyring.deviceId)
+
+  const revoked = JSON.parse((await runCli('session', [
+    'revoke',
+    ...args,
+    '--session-id',
+    'session_device_core',
+    '--session-token',
+    registered.sessionToken,
+  ])).stdout)
+  assert.equal(revoked.session.status, 'revoked')
+})
+
 async function startD1ApiServer(t) {
   const db = new DatabaseSync(':memory:')
   const server = createServer(async (request, response) => {

@@ -29,12 +29,12 @@ Already available in this repo:
 - Main and selected active change-set identities exist in the fixture graph.
 - Review and merge commands exist for the selected active change set.
 - Conflict state is persisted on the selected active change set.
-- `/api/agent/status` can read local agent `status`, `events`, and `cloud` endpoints, or a Convex dashboard query when configured.
+- `/api/agent/status` can read local agent `status`, `events`, and `cloud` endpoints, or the D1/legacy Convex dashboard backend when configured.
 - The web UI maps visible file metadata, capped shared-file content previews, review state, merge state, conflict state, remote-update state, and recent events.
 - The dashboard has a read-only `CodeReviewSection` that lists visible files, supports path search and scope/status filters, renders capped content previews with line anchors, and groups review readiness/history signals.
-- Convex can persist the current graph, files, and agent events.
+- D1 can persist the current graph, files, and agent events; legacy Convex remains a fallback/export source.
 
-Current live setup note: this browser/review work runs inside the Clerk-protected Vercel deployment at `https://hopit.dev` against Convex `https://sincere-jaguar-17.convex.cloud`. Production Google OAuth is configured for the owner test user, and Basic Auth fallback remains enabled until owner sign-in and owner mapping are verified. Routeable tree APIs, durable diffs, and review comments are still future work. Operational setup details are centralized in [Personal Production Runbook](personal-production.md).
+Current live setup note: this browser/review work runs inside the Clerk-protected Vercel deployment at `https://hopit.dev` against Cloudflare D1 through the `hopit-d1-api` Worker. Production Google OAuth is configured for the owner test user, and D1 owner claim is verified. Routeable tree APIs, durable diffs, and review comments are still future work. Operational setup details are centralized in [Personal Production Runbook](personal-production.md).
 
 Not yet available:
 

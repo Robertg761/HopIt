@@ -16,6 +16,7 @@ export function d1ConfigFromOptions(options = {}, env = process.env) {
     apiToken: stringOrNull(options['d1-api-token']) ?? stringOrNull(env.HOPIT_D1_API_TOKEN) ?? stringOrNull(env.CLOUDFLARE_API_TOKEN),
     apiBaseUrl: stringOrNull(options['d1-api-base-url']) ?? stringOrNull(env.HOPIT_D1_API_BASE_URL) ?? defaultD1ApiBaseUrl,
     codebaseId: stringOrNull(options['codebase-id']) ?? stringOrNull(env.HOPIT_CODEBASE_ID) ?? defaultCodebaseId,
+    agentSessionToken: stringOrNull(options['session-token']) ?? stringOrNull(env.HOPIT_AGENT_SESSION_TOKEN),
   }
 }
 
@@ -547,6 +548,10 @@ export class CloudflareD1HopBackend {
     await this.query(`delete from release_assets where codebase_id = ?`, [codebaseId])
     await this.query(`delete from projects where codebase_id = ?`, [codebaseId])
     await this.query(`delete from project_items where codebase_id = ?`, [codebaseId])
+    await this.query(`delete from agent_sessions where codebase_id = ?`, [codebaseId])
+    await this.query(`delete from codebase_keyrings where codebase_id = ?`, [codebaseId])
+    await this.query(`delete from wrapped_keys where codebase_id = ?`, [codebaseId])
+    await this.query(`delete from key_audit_events where codebase_id = ?`, [codebaseId])
     await this.query(`delete from codebases where codebase_id = ?`, [codebaseId])
     return { ok: true, codebaseId, deletedBy: actor.userId ?? null }
   }
@@ -1219,6 +1224,585 @@ export class CloudflareD1HopBackend {
     throw new Error('Could not allocate a unique invitation token.')
   }
 
+  async registerAgentSession(options = {}) {
+    await this.ensureSchema()
+    const codebaseId = stringOrNull(options.codebaseId) ?? this.codebaseId
+    const userId = await this.resolveAgentSessionRegistrationUser(codebaseId, options)
+    const sessionId = normalizeAgentSessionId(options.sessionId ?? createAgentSessionId())
+    const existing = await this.first(
+      `select * from agent_sessions where session_id = ? limit 1`,
+      [sessionId],
+    )
+    if (existing?.status === 'revoked') {
+      throw new Error(`Agent session ${sessionId} is revoked and cannot be reused.`)
+    }
+    if (existing) assertReusableAgentSession(existing, { codebaseId, userId })
+
+    const now = new Date().toISOString()
+    const sessionToken = createAgentSessionToken()
+    const capabilities = normalizeAgentSessionCapabilities(options.capabilities)
+    const expiresAt = normalizeFutureTimestamp(options.expiresAt, 'Agent session expiry')
+    if (existing) {
+      await this.query(
+        `update agent_sessions set
+          user_id = ?, codebase_id = ?, device_name = ?, token_hash = ?, token_prefix = ?,
+          capabilities_json = ?, expires_at = ?, status = 'active', last_seen_at = ?, updated_at = ?
+         where session_id = ?`,
+        [
+          userId,
+          codebaseId,
+          stringOrNull(options.deviceName),
+          sessionToken.tokenHash,
+          sessionToken.tokenPrefix,
+          stringifyJson(capabilities),
+          expiresAt,
+          now,
+          now,
+          sessionId,
+        ],
+      )
+    } else {
+      await this.query(
+        `insert into agent_sessions (
+          session_id, user_id, codebase_id, device_name, token_hash, token_prefix,
+          capabilities_json, expires_at, status, created_at, last_seen_at, updated_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)`,
+        [
+          sessionId,
+          userId,
+          codebaseId,
+          stringOrNull(options.deviceName),
+          sessionToken.tokenHash,
+          sessionToken.tokenPrefix,
+          stringifyJson(capabilities),
+          expiresAt,
+          now,
+          now,
+          now,
+        ],
+      )
+    }
+
+    const session = await this.first(`select * from agent_sessions where session_id = ?`, [sessionId])
+    return {
+      session: summarizeAgentSession(session),
+      sessionToken: sessionToken.token,
+    }
+  }
+
+  async listAgentSessions(options = {}) {
+    await this.ensureSchema()
+    const codebaseId = stringOrNull(options.codebaseId) ?? this.codebaseId
+    await this.requireD1AgentAccess(codebaseId, options, 'admin')
+    const normalizedStatus = agentSessionStatusOrNull(options.status)
+    const rows = normalizedStatus
+      ? await this.query(
+          `select * from agent_sessions where codebase_id = ? and status = ? order by last_seen_at desc, created_at desc`,
+          [codebaseId, normalizedStatus],
+        )
+      : await this.query(
+          `select * from agent_sessions where codebase_id = ? order by last_seen_at desc, created_at desc`,
+          [codebaseId],
+        )
+    return rows.map(summarizeAgentSession)
+  }
+
+  async touchAgentSession(options = {}) {
+    const sessionId = normalizeAgentSessionId(options.sessionId)
+    const session = await this.requireMutableAgentSession(sessionId, options)
+    if (session.status !== 'active') throw new Error('Only active agent sessions can be touched.')
+    const now = new Date().toISOString()
+    await this.query(
+      `update agent_sessions set last_seen_at = ?, updated_at = ? where session_id = ?`,
+      [now, now, sessionId],
+    )
+    return summarizeAgentSession(await this.first(`select * from agent_sessions where session_id = ?`, [sessionId]))
+  }
+
+  async revokeAgentSession(options = {}) {
+    const sessionId = normalizeAgentSessionId(options.sessionId)
+    const session = await this.requireMutableAgentSession(sessionId, options)
+    const now = new Date().toISOString()
+    const revokedBy = await this.revokedByUserId(session, options)
+    await this.query(
+      `update agent_sessions set status = 'revoked', revoked_by_user_id = ?, revoked_at = ?, updated_at = ?
+       where session_id = ?`,
+      [revokedBy, now, now, sessionId],
+    )
+    return summarizeAgentSession(await this.first(`select * from agent_sessions where session_id = ?`, [sessionId]))
+  }
+
+  async registerDeviceKey(options = {}) {
+    await this.ensureSchema()
+    const codebaseId = stringOrNull(options.codebaseId) ?? this.codebaseId
+    const actor = await this.resolveKeyActor(codebaseId, options, 'read')
+    const now = new Date().toISOString()
+    const deviceId = normalizeKeyEntityId(options.deviceId, 'Device id')
+    assertDevicePublicKeyDescriptor(options)
+    const existing = await this.first(`select * from device_keys where device_id = ? limit 1`, [deviceId])
+    if (existing) {
+      if (existing.user_id !== actor.userId) {
+        throw new Error(`Device key ${deviceId} already belongs to another user.`)
+      }
+      if (existing.status === 'revoked' || existing.status === 'lost') {
+        throw new Error(`Device key ${deviceId} is ${existing.status} and cannot be reused.`)
+      }
+      assertSameDevicePublicKeys(existing, options)
+      await this.query(
+        `update device_keys set display_name = ?, platform = ?, status = 'trusted',
+          trusted_at = coalesce(trusted_at, ?), last_seen_at = ?
+         where device_id = ?`,
+        [
+          stringOrNull(options.displayName) ?? existing.display_name,
+          stringOrNull(options.platform) ?? existing.platform,
+          now,
+          now,
+          deviceId,
+        ],
+      )
+      return summarizeDeviceKey(await this.first(`select * from device_keys where device_id = ?`, [deviceId]))
+    }
+
+    await this.query(
+      `insert into device_keys (
+        device_id, user_id, display_name, platform, encryption_public_key,
+        encryption_public_key_algorithm, encryption_public_key_encoding,
+        signing_public_key, signing_public_key_algorithm, signing_public_key_encoding,
+        status, created_at, trusted_at, last_seen_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'trusted', ?, ?, ?)`,
+      [
+        deviceId,
+        actor.userId,
+        stringOrNull(options.displayName),
+        stringOrNull(options.platform),
+        options.encryptionPublicKey,
+        options.encryptionPublicKeyAlgorithm,
+        options.encryptionPublicKeyEncoding,
+        stringOrNull(options.signingPublicKey),
+        stringOrNull(options.signingPublicKeyAlgorithm),
+        stringOrNull(options.signingPublicKeyEncoding),
+        now,
+        now,
+        now,
+      ],
+    )
+    await this.appendKeyAuditEvent({
+      codebaseId,
+      actorUserId: actor.userId,
+      actorDeviceId: actor.deviceId,
+      eventType: 'device_key.trusted',
+      targetUserId: actor.userId,
+      targetDeviceId: deviceId,
+    })
+    return summarizeDeviceKey(await this.first(`select * from device_keys where device_id = ?`, [deviceId]))
+  }
+
+  async listDeviceKeys(options = {}) {
+    const codebaseId = stringOrNull(options.codebaseId) ?? this.codebaseId
+    const actor = await this.resolveKeyActor(codebaseId, options, 'read')
+    const targetUserId = stringOrNull(options.userId) ?? actor.userId
+    if (targetUserId !== actor.userId && actor.kind !== 'service') {
+      await this.requireKeyActorCapability(codebaseId, actor, 'manage_members')
+    }
+    const status = deviceKeyStatusOrNull(options.status)
+    const rows = status
+      ? await this.query(
+          `select * from device_keys where user_id = ? and status = ? order by coalesce(last_seen_at, created_at) desc`,
+          [targetUserId, status],
+        )
+      : await this.query(
+          `select * from device_keys where user_id = ? order by coalesce(last_seen_at, created_at) desc`,
+          [targetUserId],
+        )
+    return rows.map(summarizeDeviceKey)
+  }
+
+  async ensureUserKeyring(options = {}) {
+    await this.ensureSchema()
+    const codebaseId = stringOrNull(options.codebaseId) ?? this.codebaseId
+    const actor = await this.resolveKeyActor(codebaseId, options, 'read')
+    const now = new Date().toISOString()
+    const vaultKeyId = normalizeKeyEntityId(options.vaultKeyId, 'User vault key id')
+    const currentVersion = normalizePositiveInteger(options.currentVersion ?? 1, 'User vault key version')
+    const existing = await this.first(`select * from user_keyrings where user_id = ? limit 1`, [actor.userId])
+    if (existing) {
+      if (existing.vault_key_id !== vaultKeyId) {
+        throw new Error(`User ${actor.userId} already has a different vault key.`)
+      }
+      await this.query(
+        `update user_keyrings set current_version = ?, recovery_configured = ?, status = 'active', updated_at = ?
+         where user_id = ?`,
+        [
+          Math.max(integerValue(existing.current_version, 1), currentVersion),
+          existing.recovery_configured === 1 || options.recoveryConfigured === true ? 1 : 0,
+          now,
+          actor.userId,
+        ],
+      )
+      return summarizeUserKeyring(await this.first(`select * from user_keyrings where user_id = ?`, [actor.userId]))
+    }
+
+    await this.query(
+      `insert into user_keyrings (
+        user_id, vault_key_id, current_version, status, recovery_configured, created_at, updated_at
+      ) values (?, ?, ?, 'active', ?, ?, ?)`,
+      [actor.userId, vaultKeyId, currentVersion, options.recoveryConfigured === true ? 1 : 0, now, now],
+    )
+    await this.appendKeyAuditEvent({
+      codebaseId,
+      actorUserId: actor.userId,
+      actorDeviceId: actor.deviceId,
+      eventType: 'user_keyring.created',
+      targetUserId: actor.userId,
+      keyId: vaultKeyId,
+    })
+    return summarizeUserKeyring(await this.first(`select * from user_keyrings where user_id = ?`, [actor.userId]))
+  }
+
+  async ensureCodebaseKeyring(options = {}) {
+    await this.ensureSchema()
+    const codebaseId = stringOrNull(options.codebaseId) ?? this.codebaseId
+    const actor = await this.resolveKeyActor(codebaseId, options, 'manage_members')
+    const now = new Date().toISOString()
+    const next = {
+      repoContentKeyId: normalizeKeyEntityId(options.repoContentKeyId, 'Repo content key id'),
+      ownerPrivateKeyId: normalizeKeyEntityId(options.ownerPrivateKeyId, 'Owner private key id'),
+      gitInternalsKeyId: normalizeKeyEntityId(options.gitInternalsKeyId, 'Git internals key id'),
+      defaultSecretKeyId: normalizeKeyEntityId(options.defaultSecretKeyId, 'Default secret key id'),
+    }
+    const existing = await this.first(`select * from codebase_keyrings where codebase_id = ? limit 1`, [codebaseId])
+    if (existing) {
+      assertSameCodebaseKeyring(existing, next)
+      await this.query(`update codebase_keyrings set updated_at = ? where codebase_id = ?`, [now, codebaseId])
+      return summarizeCodebaseKeyring(await this.first(`select * from codebase_keyrings where codebase_id = ?`, [codebaseId]))
+    }
+    await this.query(
+      `insert into codebase_keyrings (
+        codebase_id, repo_content_key_id, owner_private_key_id, git_internals_key_id,
+        default_secret_key_id, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        codebaseId,
+        next.repoContentKeyId,
+        next.ownerPrivateKeyId,
+        next.gitInternalsKeyId,
+        next.defaultSecretKeyId,
+        now,
+        now,
+      ],
+    )
+    await this.appendKeyAuditEvent({
+      codebaseId,
+      actorUserId: actor.userId,
+      actorDeviceId: actor.deviceId,
+      eventType: 'codebase_keyring.created',
+    })
+    return summarizeCodebaseKeyring(await this.first(`select * from codebase_keyrings where codebase_id = ?`, [codebaseId]))
+  }
+
+  async createWrappedKey(options = {}) {
+    await this.ensureSchema()
+    const codebaseId = stringOrNull(options.codebaseId) ?? this.codebaseId
+    const actor = await this.resolveKeyActor(codebaseId, options, capabilityForWrappedKey(options))
+    const now = new Date().toISOString()
+    const wrapId = normalizeKeyEntityId(options.wrapId ?? createWrappedKeyId(), 'Wrapped key id')
+    const wrappedKeyId = normalizeKeyEntityId(options.wrappedKeyId, 'Wrapped key id')
+    const keyVersion = normalizePositiveInteger(options.keyVersion, 'Wrapped key version')
+    const recipientType = wrappedKeyRecipientType(options.recipientType)
+    const recipientId = normalizeKeyEntityId(options.recipientId, 'Wrapped key recipient id')
+    const expiresAt = normalizeFutureTimestamp(options.expiresAt, 'Wrapped key expiry')
+    assertWrappedKeyEnvelope({ ...options, wrappedKeyId, recipientId })
+    const recipientDevice = await this.requireTrustedRecipientDevice({ recipientType, recipientId })
+    if (options.wrappedKeyType === 'user-vault' && recipientDevice?.user_id !== actor.userId) {
+      throw new Error("User vault keys can only be wrapped to the owner's trusted devices.")
+    }
+    if (recipientDevice && recipientDevice.user_id !== actor.userId && actor.kind !== 'service') {
+      await this.requireKeyActorCapability(codebaseId, actor, 'manage_members')
+    }
+
+    const existing = await this.first(`select * from wrapped_keys where wrap_id = ? limit 1`, [wrapId])
+    const value = {
+      wrapId,
+      wrappedKeyId,
+      wrappedKeyType: wrappedKeyType(options.wrappedKeyType),
+      keyVersion,
+      recipientType,
+      recipientId,
+      codebaseId,
+      zoneId: stringOrNull(options.zoneId),
+      wrappingKeyId: stringOrNull(options.wrappingKeyId),
+      wrappingPublicKeyId: stringOrNull(options.wrappingPublicKeyId),
+      algorithm: requireTextValue(options.algorithm, 'Wrapped key algorithm'),
+      ciphertext: requireTextValue(options.ciphertext, 'Wrapped key ciphertext'),
+      createdByUserId: actor.userId,
+      createdByDeviceId: stringOrNull(options.createdByDeviceId) ?? actor.deviceId ?? null,
+      createdAt: now,
+      expiresAt,
+      status: 'active',
+    }
+    if (existing) {
+      assertSameWrappedKey(existing, value)
+      return summarizeWrappedKey(existing)
+    }
+    await this.assertNoDuplicateActiveWrappedKey(value)
+    await this.query(
+      `insert into wrapped_keys (
+        wrap_id, wrapped_key_id, wrapped_key_type, key_version, recipient_type, recipient_id,
+        codebase_id, zone_id, wrapping_key_id, wrapping_public_key_id, algorithm, ciphertext,
+        created_by_user_id, created_by_device_id, created_at, expires_at, status
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')`,
+      [
+        value.wrapId,
+        value.wrappedKeyId,
+        value.wrappedKeyType,
+        value.keyVersion,
+        value.recipientType,
+        value.recipientId,
+        value.codebaseId,
+        value.zoneId,
+        value.wrappingKeyId,
+        value.wrappingPublicKeyId,
+        value.algorithm,
+        value.ciphertext,
+        value.createdByUserId,
+        value.createdByDeviceId,
+        value.createdAt,
+        value.expiresAt,
+      ],
+    )
+    await this.appendKeyAuditEvent({
+      codebaseId,
+      actorUserId: actor.userId,
+      actorDeviceId: actor.deviceId,
+      eventType: 'wrapped_key.created',
+      targetUserId: recipientDevice?.user_id,
+      targetDeviceId: recipientDevice?.device_id,
+      zoneId: value.zoneId,
+      keyId: wrappedKeyId,
+      wrapId,
+    })
+    return summarizeWrappedKey(await this.first(`select * from wrapped_keys where wrap_id = ?`, [wrapId]))
+  }
+
+  async listWrappedKeys(options = {}) {
+    const codebaseId = stringOrNull(options.codebaseId) ?? this.codebaseId
+    const actor = await this.resolveKeyActor(codebaseId, options, 'read')
+    const actorDevices = actor.kind === 'service'
+      ? new Set()
+      : new Set((await this.query(`select device_id from device_keys where user_id = ?`, [actor.userId])).map((row) => row.device_id))
+    const rows = await this.query(
+      `select * from wrapped_keys where codebase_id = ? order by created_at desc`,
+      [codebaseId],
+    )
+    const now = Date.now()
+    return rows
+      .filter((row) => !options.recipientType || row.recipient_type === options.recipientType)
+      .filter((row) => !options.recipientId || row.recipient_id === options.recipientId)
+      .filter((row) => !options.wrappedKeyId || row.wrapped_key_id === options.wrappedKeyId)
+      .filter((row) => !options.zoneId || row.zone_id === options.zoneId)
+      .map((row) => ({ ...row, status: effectiveWrappedKeyStatus(row, now) }))
+      .filter((row) => !options.status || row.status === options.status)
+      .filter((row) => options.includeExpired || row.status !== 'expired')
+      .filter((row) => canActorReadWrappedKey(row, actor, actorDevices))
+      .map(summarizeWrappedKey)
+  }
+
+  async revokeWrappedKey(options = {}) {
+    const codebaseId = stringOrNull(options.codebaseId) ?? this.codebaseId
+    const actor = await this.resolveKeyActor(codebaseId, options, 'manage_members')
+    const wrapId = normalizeKeyEntityId(options.wrapId, 'Wrapped key id')
+    const existing = await this.first(`select * from wrapped_keys where wrap_id = ? limit 1`, [wrapId])
+    if (!existing || existing.codebase_id !== codebaseId) {
+      throw new Error(`Wrapped key ${wrapId} was not found.`)
+    }
+    const now = new Date().toISOString()
+    await this.query(
+      `update wrapped_keys set status = 'revoked', revoked_at = ? where wrap_id = ?`,
+      [now, wrapId],
+    )
+    await this.appendKeyAuditEvent({
+      codebaseId,
+      actorUserId: actor.userId,
+      actorDeviceId: actor.deviceId,
+      eventType: 'wrapped_key.revoked',
+      targetDeviceId: existing.recipient_type === 'device' ? existing.recipient_id : undefined,
+      zoneId: existing.zone_id,
+      keyId: existing.wrapped_key_id,
+      wrapId,
+    })
+    return summarizeWrappedKey(await this.first(`select * from wrapped_keys where wrap_id = ?`, [wrapId]))
+  }
+
+  async resolveAgentSessionRegistrationUser(codebaseId, options = {}) {
+    const sessionToken = stringOrNull(options.sessionToken) ?? this.config.agentSessionToken
+    if (sessionToken) {
+      const access = await this.requireD1AgentAccess(codebaseId, { sessionToken }, 'admin', { touch: true })
+      return access.userId
+    }
+    const graph = await this.readGraph(codebaseId)
+    return stringOrNull(graph.codebase?.ownerId) ?? stringOrNull(graph.owner?.id) ?? 'local-owner'
+  }
+
+  async requireD1AgentAccess(codebaseId, options = {}, capability = 'read', behavior = {}) {
+    const sessionToken = stringOrNull(options.sessionToken) ?? this.config.agentSessionToken
+    if (!sessionToken) {
+      const graph = await this.readGraph(codebaseId)
+      return {
+        kind: 'service',
+        userId: stringOrNull(graph.codebase?.ownerId) ?? 'service:hopit-agent',
+      }
+    }
+    const session = await this.requireActiveAgentSessionByToken(sessionToken, codebaseId, capability)
+    const graph = await this.readGraph(codebaseId)
+    const access = await this.readAccessContext(graph, {
+      userId: session.user_id,
+      sessionId: session.session_id,
+    })
+    const requiredCapability = codebaseCapabilityForAgentCapability(capability)
+    if (requiredCapability && !hasCapability(access, requiredCapability)) {
+      throw new Error(`Agent session user ${session.user_id} does not have ${requiredCapability} access to ${codebaseId}.`)
+    }
+    if (behavior.touch) {
+      const now = new Date().toISOString()
+      await this.query(
+        `update agent_sessions set last_seen_at = ?, updated_at = ? where session_id = ?`,
+        [now, now, session.session_id],
+      )
+    }
+    return {
+      kind: 'agent-session',
+      userId: session.user_id,
+      session,
+      access,
+    }
+  }
+
+  async requireActiveAgentSessionByToken(sessionToken, codebaseId, capability) {
+    const tokenHash = hashAgentSessionToken(sessionToken)
+    const session = await this.first(`select * from agent_sessions where token_hash = ? limit 1`, [tokenHash])
+    if (!session) throw new Error('Agent session token was not found.')
+    if (session.status !== 'active') throw new Error('Agent session is not active.')
+    if (session.expires_at && isExpiredTimestamp(session.expires_at)) {
+      throw new Error('Agent session token has expired.')
+    }
+    if (codebaseId && session.codebase_id !== codebaseId) {
+      throw new Error(`Agent session is not scoped to codebase ${codebaseId}.`)
+    }
+    if (!agentSessionHasCapability(session, capability)) {
+      throw new Error(`Agent session does not have ${capability} capability.`)
+    }
+    return session
+  }
+
+  async requireMutableAgentSession(sessionId, options = {}) {
+    const session = await this.first(`select * from agent_sessions where session_id = ? limit 1`, [sessionId])
+    if (!session) throw new Error(`Agent session ${sessionId} was not found.`)
+    const sessionToken = stringOrNull(options.sessionToken) ?? this.config.agentSessionToken
+    if (sessionToken) {
+      const tokenSession = await this.requireActiveAgentSessionByToken(sessionToken, session.codebase_id, 'read')
+      if (tokenSession.session_id === session.session_id) return session
+      if (!agentSessionHasCapability(tokenSession, 'admin')) {
+        throw new Error('Agent session token can only modify itself unless it has admin capability.')
+      }
+      await this.requireD1AgentAccess(session.codebase_id, { sessionToken }, 'admin')
+    }
+    return session
+  }
+
+  async revokedByUserId(session, options = {}) {
+    const sessionToken = stringOrNull(options.sessionToken) ?? this.config.agentSessionToken
+    if (sessionToken) {
+      const tokenSession = await this.requireActiveAgentSessionByToken(sessionToken, session.codebase_id, 'read')
+      return tokenSession.user_id
+    }
+    const graph = await this.readGraph(session.codebase_id)
+    return stringOrNull(graph.codebase?.ownerId) ?? 'service:hopit-agent'
+  }
+
+  async resolveKeyActor(codebaseId, options = {}, capability = 'read') {
+    const sessionToken = stringOrNull(options.sessionToken) ?? this.config.agentSessionToken
+    if (sessionToken) {
+      const access = await this.requireD1AgentAccess(
+        codebaseId,
+        { sessionToken },
+        agentCapabilityForCodebaseCapability(capability),
+        { touch: true },
+      )
+      return {
+        kind: 'agent-session',
+        userId: access.userId,
+        deviceId: access.session?.session_id ?? null,
+        sessionToken,
+      }
+    }
+    const graph = await this.readGraph(codebaseId)
+    return {
+      kind: 'service',
+      userId: stringOrNull(graph.codebase?.ownerId) ?? 'service:hopit-agent',
+      deviceId: null,
+    }
+  }
+
+  async requireKeyActorCapability(codebaseId, actor, capability) {
+    if (actor.kind === 'agent-session') {
+      await this.requireD1AgentAccess(
+        codebaseId,
+        { sessionToken: actor.sessionToken },
+        agentCapabilityForCodebaseCapability(capability),
+        { touch: true },
+      )
+      return
+    }
+    const { access } = await this.requireGraphCapability(codebaseId, { userId: actor.userId }, capability)
+    return access
+  }
+
+  async requireTrustedRecipientDevice({ recipientType, recipientId }) {
+    if (recipientType !== 'device') return null
+    const device = await this.first(`select * from device_keys where device_id = ? limit 1`, [recipientId])
+    if (!device) throw new Error(`Recipient device ${recipientId} was not found.`)
+    if (device.status !== 'trusted') throw new Error(`Recipient device ${recipientId} is not trusted.`)
+    return device
+  }
+
+  async assertNoDuplicateActiveWrappedKey(value) {
+    const rows = await this.query(`select * from wrapped_keys where wrapped_key_id = ?`, [value.wrappedKeyId])
+    const duplicate = rows.find((row) => (
+      row.codebase_id === value.codebaseId &&
+      row.wrapped_key_type === value.wrappedKeyType &&
+      integerValue(row.key_version, 1) === value.keyVersion &&
+      row.recipient_type === value.recipientType &&
+      row.recipient_id === value.recipientId &&
+      effectiveWrappedKeyStatus(row, Date.now()) === 'active'
+    ))
+    if (duplicate) {
+      throw new Error(`An active wrapped key already exists for ${value.wrappedKeyId} and recipient ${value.recipientId}.`)
+    }
+  }
+
+  async appendKeyAuditEvent(event) {
+    await this.ensureSchema()
+    await this.query(
+      `insert into key_audit_events (
+        event_id, codebase_id, actor_user_id, actor_device_id, event_type,
+        target_user_id, target_device_id, zone_id, key_id, wrap_id, created_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        `kae_${randomBytes(12).toString('base64url')}`,
+        stringOrNull(event.codebaseId),
+        stringOrNull(event.actorUserId),
+        stringOrNull(event.actorDeviceId),
+        requireTextValue(event.eventType, 'Key audit event type'),
+        stringOrNull(event.targetUserId),
+        stringOrNull(event.targetDeviceId),
+        stringOrNull(event.zoneId),
+        stringOrNull(event.keyId),
+        stringOrNull(event.wrapId),
+        new Date().toISOString(),
+      ],
+    )
+  }
+
   async allocateCollaborationNumber(codebaseId, scope, now = new Date().toISOString()) {
     const normalizedScope = collaborationScope(scope)
     const existing = await this.first(
@@ -1466,6 +2050,102 @@ export const d1SchemaStatements = [
   )`,
   `create index if not exists idx_codebase_invitations_codebase on codebase_invitations(codebase_id)`,
   `create index if not exists idx_codebase_invitations_token on codebase_invitations(token_hash)`,
+  `create table if not exists agent_sessions (
+    session_id text primary key,
+    user_id text not null,
+    codebase_id text not null,
+    device_name text,
+    token_hash text,
+    token_prefix text,
+    capabilities_json text not null default '[]',
+    expires_at text,
+    status text not null,
+    created_at text not null,
+    last_seen_at text not null,
+    updated_at text not null,
+    revoked_by_user_id text,
+    revoked_at text
+  )`,
+  `create index if not exists idx_agent_sessions_token_hash on agent_sessions(token_hash)`,
+  `create index if not exists idx_agent_sessions_user on agent_sessions(user_id)`,
+  `create index if not exists idx_agent_sessions_codebase on agent_sessions(codebase_id)`,
+  `create table if not exists device_keys (
+    device_id text primary key,
+    user_id text not null,
+    display_name text,
+    platform text,
+    encryption_public_key text not null,
+    encryption_public_key_algorithm text not null,
+    encryption_public_key_encoding text not null,
+    signing_public_key text,
+    signing_public_key_algorithm text,
+    signing_public_key_encoding text,
+    status text not null,
+    created_at text not null,
+    trusted_at text,
+    revoked_at text,
+    last_seen_at text
+  )`,
+  `create index if not exists idx_device_keys_user on device_keys(user_id)`,
+  `create index if not exists idx_device_keys_user_status on device_keys(user_id, status)`,
+  `create table if not exists user_keyrings (
+    user_id text primary key,
+    vault_key_id text not null,
+    current_version integer not null,
+    status text not null,
+    recovery_configured integer not null default 0,
+    created_at text not null,
+    updated_at text not null
+  )`,
+  `create table if not exists codebase_keyrings (
+    codebase_id text primary key,
+    repo_content_key_id text not null,
+    owner_private_key_id text not null,
+    git_internals_key_id text not null,
+    default_secret_key_id text not null,
+    rotation_state text,
+    created_at text not null,
+    updated_at text not null
+  )`,
+  `create table if not exists wrapped_keys (
+    wrap_id text primary key,
+    wrapped_key_id text not null,
+    wrapped_key_type text not null,
+    key_version integer not null,
+    recipient_type text not null,
+    recipient_id text not null,
+    codebase_id text,
+    zone_id text,
+    wrapping_key_id text,
+    wrapping_public_key_id text,
+    algorithm text not null,
+    ciphertext text not null,
+    created_by_user_id text,
+    created_by_device_id text,
+    created_at text not null,
+    expires_at text,
+    revoked_at text,
+    status text not null
+  )`,
+  `create index if not exists idx_wrapped_keys_wrapped_key on wrapped_keys(wrapped_key_id)`,
+  `create index if not exists idx_wrapped_keys_recipient on wrapped_keys(recipient_type, recipient_id)`,
+  `create index if not exists idx_wrapped_keys_codebase on wrapped_keys(codebase_id)`,
+  `create index if not exists idx_wrapped_keys_zone on wrapped_keys(zone_id)`,
+  `create table if not exists key_audit_events (
+    event_id text primary key,
+    codebase_id text,
+    actor_user_id text,
+    actor_device_id text,
+    event_type text not null,
+    target_user_id text,
+    target_device_id text,
+    zone_id text,
+    key_id text,
+    wrap_id text,
+    created_at text not null
+  )`,
+  `create index if not exists idx_key_audit_events_codebase on key_audit_events(codebase_id, created_at)`,
+  `create index if not exists idx_key_audit_events_actor on key_audit_events(actor_user_id, created_at)`,
   `create table if not exists action_jobs (
     job_id text primary key,
     codebase_id text not null,
@@ -1864,6 +2544,357 @@ function hashInvitationToken(token) {
   const normalized = stringOrNull(token)
   if (!normalized) throw new Error('Invitation token is required.')
   return `sha256:${createHash('sha256').update(`hopit.invite.v1:${normalized}`).digest('hex')}`
+}
+
+function createAgentSessionId() {
+  return `as_${randomBytes(12).toString('base64url')}`
+}
+
+function createAgentSessionToken() {
+  const token = `hst_${randomBytes(32).toString('base64url')}`
+  return {
+    token,
+    tokenHash: hashAgentSessionToken(token),
+    tokenPrefix: token.slice(0, 12),
+  }
+}
+
+function hashAgentSessionToken(token) {
+  const normalized = stringOrNull(token)
+  if (!normalized) throw new Error('Agent session token is required.')
+  if (!normalized.startsWith('hst_')) throw new Error('Agent session token has an invalid format.')
+  return `sha256:${createHash('sha256').update(`hopit.agent-session.v1:${normalized}`).digest('hex')}`
+}
+
+function normalizeAgentSessionId(value) {
+  const sessionId = stringOrNull(value)
+  if (!sessionId) throw new Error('Agent session id is required.')
+  if (!/^[A-Za-z0-9_.:-]{3,160}$/.test(sessionId)) {
+    throw new Error('Agent session id may only contain letters, numbers, dots, underscores, colons, and dashes.')
+  }
+  return sessionId
+}
+
+function assertReusableAgentSession(existing, registration) {
+  if (existing.user_id !== registration.userId) {
+    throw new Error(`Agent session ${existing.session_id} belongs to a different user.`)
+  }
+  if (existing.codebase_id !== registration.codebaseId) {
+    throw new Error(`Agent session ${existing.session_id} is scoped to a different codebase.`)
+  }
+}
+
+function normalizeAgentSessionCapabilities(capabilities) {
+  const values = Array.isArray(capabilities) && capabilities.length > 0
+    ? capabilities
+    : ['read', 'write', 'sync', 'watch']
+  return uniqueStrings(values)
+}
+
+function agentSessionStatusOrNull(value) {
+  if (value === 'active' || value === 'revoked') return value
+  return null
+}
+
+function agentSessionHasCapability(session, capability) {
+  const capabilities = parseJson(session.capabilities_json, [])
+  return capabilities.includes('admin') || capabilities.includes(capability)
+}
+
+function codebaseCapabilityForAgentCapability(capability) {
+  if (capability === 'sync' || capability === 'watch') return 'read'
+  if (capability === 'admin') return 'manage_members'
+  if (
+    capability === 'read' ||
+    capability === 'write' ||
+    capability === 'invite' ||
+    capability === 'review' ||
+    capability === 'merge' ||
+    capability === 'release'
+  ) {
+    return capability
+  }
+  return null
+}
+
+function agentCapabilityForCodebaseCapability(capability) {
+  if (capability === 'manage_members') return 'admin'
+  return capability
+}
+
+function normalizeKeyEntityId(value, label) {
+  const id = stringOrNull(value)
+  if (!id) throw new Error(`${label} is required.`)
+  if (!/^[A-Za-z0-9_.:-]{3,180}$/.test(id)) {
+    throw new Error(`${label} may only contain letters, numbers, dots, underscores, colons, and dashes.`)
+  }
+  return id
+}
+
+function normalizePositiveInteger(value, label) {
+  if (!Number.isInteger(value) || value <= 0) throw new Error(`${label} must be a positive integer.`)
+  return value
+}
+
+function assertDevicePublicKeyDescriptor(value) {
+  if (value.encryptionPublicKeyAlgorithm !== 'x25519') {
+    throw new Error('Device encryption public key algorithm must be x25519.')
+  }
+  if (value.encryptionPublicKeyEncoding !== 'spki-pem') {
+    throw new Error('Device encryption public key encoding must be spki-pem.')
+  }
+  if (!looksLikePem(value.encryptionPublicKey, 'PUBLIC KEY')) {
+    throw new Error('Device encryption public key must be a PEM public key.')
+  }
+  if (value.signingPublicKey !== undefined && value.signingPublicKey !== null) {
+    if (value.signingPublicKeyAlgorithm !== 'ed25519') {
+      throw new Error('Device signing public key algorithm must be ed25519.')
+    }
+    if (value.signingPublicKeyEncoding !== 'spki-pem') {
+      throw new Error('Device signing public key encoding must be spki-pem.')
+    }
+    if (!looksLikePem(value.signingPublicKey, 'PUBLIC KEY')) {
+      throw new Error('Device signing public key must be a PEM public key.')
+    }
+  }
+}
+
+function looksLikePem(value, block) {
+  const text = stringOrNull(value)
+  return Boolean(text && text.includes(`-----BEGIN ${block}-----`) && text.includes(`-----END ${block}-----`))
+}
+
+function assertSameDevicePublicKeys(existing, next) {
+  const checks = [
+    ['encryption_public_key', next.encryptionPublicKey],
+    ['encryption_public_key_algorithm', next.encryptionPublicKeyAlgorithm],
+    ['encryption_public_key_encoding', next.encryptionPublicKeyEncoding],
+    ['signing_public_key', stringOrNull(next.signingPublicKey)],
+    ['signing_public_key_algorithm', stringOrNull(next.signingPublicKeyAlgorithm)],
+    ['signing_public_key_encoding', stringOrNull(next.signingPublicKeyEncoding)],
+  ]
+  for (const [field, value] of checks) {
+    if ((existing[field] ?? null) !== (value ?? null)) {
+      throw new Error(`Device key ${existing.device_id} already exists with different public key material.`)
+    }
+  }
+}
+
+function assertSameCodebaseKeyring(existing, next) {
+  const checks = [
+    ['repo_content_key_id', next.repoContentKeyId],
+    ['owner_private_key_id', next.ownerPrivateKeyId],
+    ['git_internals_key_id', next.gitInternalsKeyId],
+    ['default_secret_key_id', next.defaultSecretKeyId],
+  ]
+  for (const [field, value] of checks) {
+    if (existing[field] !== value) {
+      throw new Error('Codebase keyring already exists with different key ids. Use a rotation flow instead.')
+    }
+  }
+}
+
+function wrappedKeyType(value) {
+  if (value === 'repo-content' || value === 'owner-private' || value === 'secret-group' || value === 'file-dek' || value === 'user-vault') {
+    return value
+  }
+  throw new Error('Wrapped key type is not supported.')
+}
+
+function wrappedKeyRecipientType(value) {
+  if (value === 'user' || value === 'device' || value === 'member-group') return value
+  throw new Error('Wrapped key recipient type is not supported.')
+}
+
+function capabilityForWrappedKey(args) {
+  if (args.wrappedKeyType === 'user-vault') return 'read'
+  if (args.wrappedKeyType === 'repo-content') return 'write'
+  if (args.wrappedKeyType === 'file-dek' && isPrivateZoneId(stringOrNull(args.zoneId))) return 'manage_members'
+  if (args.wrappedKeyType === 'file-dek') return 'write'
+  return 'manage_members'
+}
+
+function isPrivateZoneId(zoneId) {
+  if (!zoneId) return false
+  return (
+    zoneId.endsWith(':owner-private') ||
+    zoneId.endsWith(':secrets') ||
+    zoneId.endsWith(':git-internals') ||
+    zoneId.includes('owner-private') ||
+    zoneId.includes('secrets') ||
+    zoneId.includes('git-internals')
+  )
+}
+
+function assertWrappedKeyEnvelope(args) {
+  if (args.algorithm !== 'x25519-aes-256-gcm' && args.algorithm !== 'pbkdf2-sha256-aes-256-gcm') {
+    throw new Error('Wrapped key algorithm is not supported.')
+  }
+  const ciphertext = stringOrNull(args.ciphertext)
+  if (!ciphertext || ciphertext.length > 256_000) {
+    throw new Error('Wrapped key ciphertext must be a non-empty bounded string.')
+  }
+  let envelope = null
+  try {
+    envelope = JSON.parse(ciphertext)
+  } catch {
+    throw new Error('Wrapped key ciphertext must be a serialized JSON envelope.')
+  }
+  if (!envelope || typeof envelope !== 'object' || Array.isArray(envelope)) {
+    throw new Error('Wrapped key envelope must be an object.')
+  }
+  if (envelope.algorithm !== args.algorithm) {
+    throw new Error('Wrapped key envelope algorithm must match the stored algorithm.')
+  }
+  if (typeof envelope.context === 'string') {
+    if (!envelope.context.includes(args.wrappedKeyId) || !envelope.context.includes(args.recipientId)) {
+      throw new Error('Wrapped key envelope context must bind the wrapped key and recipient.')
+    }
+  }
+}
+
+function assertSameWrappedKey(existing, next) {
+  if (effectiveWrappedKeyStatus(existing, Date.now()) !== 'active') {
+    throw new Error(`Wrapped key ${existing.wrap_id} is not active and cannot be reused.`)
+  }
+  const checks = [
+    ['wrapped_key_id', next.wrappedKeyId],
+    ['wrapped_key_type', next.wrappedKeyType],
+    ['key_version', next.keyVersion],
+    ['recipient_type', next.recipientType],
+    ['recipient_id', next.recipientId],
+    ['codebase_id', next.codebaseId],
+    ['zone_id', next.zoneId],
+    ['wrapping_key_id', next.wrappingKeyId],
+    ['wrapping_public_key_id', next.wrappingPublicKeyId],
+    ['algorithm', next.algorithm],
+    ['ciphertext', next.ciphertext],
+  ]
+  for (const [field, value] of checks) {
+    const actual = field === 'key_version' ? integerValue(existing[field], null) : (existing[field] ?? null)
+    if (actual !== (value ?? null)) {
+      throw new Error(`Wrapped key ${existing.wrap_id} already exists with different metadata.`)
+    }
+  }
+}
+
+function effectiveWrappedKeyStatus(row, now) {
+  const status = row.status ?? 'active'
+  if (status !== 'active') return status
+  const expiresAt = stringOrNull(row.expires_at ?? row.expiresAt)
+  if (expiresAt && Date.parse(expiresAt) <= now) return 'expired'
+  return 'active'
+}
+
+function canActorReadWrappedKey(row, actor, actorDeviceIds) {
+  if (actor.kind === 'service') return true
+  if (row.created_by_user_id === actor.userId) return true
+  if (row.recipient_type === 'user' && row.recipient_id === actor.userId) return true
+  if (row.recipient_type === 'device' && actorDeviceIds.has(row.recipient_id)) return true
+  return false
+}
+
+function createWrappedKeyId() {
+  return `wrap_${randomBytes(18).toString('base64url')}`
+}
+
+function summarizeAgentSession(row) {
+  if (!row) return null
+  return {
+    userId: row.user_id,
+    sessionId: row.session_id,
+    codebaseId: row.codebase_id ?? null,
+    deviceName: row.device_name ?? null,
+    tokenPrefix: row.token_prefix ?? null,
+    capabilities: parseJson(row.capabilities_json, []),
+    expiresAt: row.expires_at ?? null,
+    status: row.status,
+    createdAt: row.created_at,
+    lastSeenAt: row.last_seen_at,
+    updatedAt: row.updated_at ?? null,
+    revokedByUserId: row.revoked_by_user_id ?? null,
+    revokedAt: row.revoked_at ?? null,
+  }
+}
+
+function summarizeDeviceKey(row) {
+  if (!row) return null
+  return {
+    deviceId: row.device_id,
+    userId: row.user_id,
+    displayName: row.display_name ?? null,
+    platform: row.platform ?? null,
+    encryptionPublicKeyAlgorithm: row.encryption_public_key_algorithm,
+    encryptionPublicKeyEncoding: row.encryption_public_key_encoding,
+    signingPublicKeyAlgorithm: row.signing_public_key_algorithm ?? null,
+    signingPublicKeyEncoding: row.signing_public_key_encoding ?? null,
+    status: row.status,
+    createdAt: row.created_at,
+    trustedAt: row.trusted_at ?? null,
+    revokedAt: row.revoked_at ?? null,
+    lastSeenAt: row.last_seen_at ?? null,
+  }
+}
+
+function summarizeUserKeyring(row) {
+  if (!row) return null
+  return {
+    userId: row.user_id,
+    vaultKeyId: row.vault_key_id,
+    currentVersion: integerValue(row.current_version, 1),
+    status: row.status,
+    recoveryConfigured: row.recovery_configured === 1,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function summarizeCodebaseKeyring(row) {
+  if (!row) return null
+  return {
+    codebaseId: row.codebase_id,
+    repoContentKeyId: row.repo_content_key_id,
+    ownerPrivateKeyId: row.owner_private_key_id,
+    gitInternalsKeyId: row.git_internals_key_id,
+    defaultSecretKeyId: row.default_secret_key_id,
+    rotationState: row.rotation_state ?? null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }
+}
+
+function summarizeWrappedKey(row) {
+  if (!row) return null
+  return {
+    wrapId: row.wrap_id,
+    wrappedKeyId: row.wrapped_key_id,
+    wrappedKeyType: row.wrapped_key_type,
+    keyVersion: integerValue(row.key_version, 1),
+    recipientType: row.recipient_type,
+    recipientId: row.recipient_id,
+    codebaseId: row.codebase_id ?? null,
+    zoneId: row.zone_id ?? null,
+    wrappingKeyId: row.wrapping_key_id ?? null,
+    wrappingPublicKeyId: row.wrapping_public_key_id ?? null,
+    algorithm: row.algorithm,
+    ciphertext: row.ciphertext,
+    createdByUserId: row.created_by_user_id ?? null,
+    createdByDeviceId: row.created_by_device_id ?? null,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at ?? null,
+    revokedAt: row.revoked_at ?? null,
+    status: row.status,
+  }
+}
+
+function deviceKeyStatusOrNull(value) {
+  if (value === 'trusted' || value === 'revoked' || value === 'lost') return value
+  return null
+}
+
+function isExpiredTimestamp(value) {
+  const time = Date.parse(value)
+  return !Number.isFinite(time) || time <= Date.now()
 }
 
 function actorAuditId(actor, override, label) {
