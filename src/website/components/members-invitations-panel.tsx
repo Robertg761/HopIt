@@ -177,7 +177,11 @@ export function MembersInvitationsPanel({ status, loading, onRefreshStatus }: Me
     const result = await claimCodebaseOwner({ codebaseId })
     setMembers(result)
     setActionMessage(result.ok ? 'Owner claim accepted.' : (result.error?.message ?? 'Owner claim failed.'))
-    if (result.ok) await onRefreshStatus?.()
+    if (result.ok) {
+      const nextInvitations = await fetchInvitations(codebaseId)
+      setInvitations(nextInvitations)
+      await onRefreshStatus?.()
+    }
     setSubmitting(null)
   }
 
