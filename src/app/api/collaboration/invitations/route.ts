@@ -1,34 +1,31 @@
 import { NextResponse } from 'next/server'
-import { anyApi } from 'convex/server'
 
-import { convexAuthToken, convexClient, convexUrl } from '@/lib/convex-auth'
+import {
+  acceptCloudInvitation,
+  configuredCloudBackend,
+  createCloudInvitation,
+  listCloudInvitations,
+  missingCloudBackendConfig,
+  revokeCloudInvitation,
+} from '@/lib/cloud-backend'
 import type { InvitationsResponse, PendingInvitation } from '@/lib/collaboration'
+import { cloudActorFromRequest } from '@/lib/request-cloud-actor'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
 export async function GET(request: Request) {
   const codebaseId = codebaseIdFromRequest(request)
-  const authToken = await convexAuthToken()
+  const unavailable = cloudUnavailable('invitations')
+  if (unavailable) return invitationError(codebaseId, unavailable.code, unavailable.message, unavailable.status)
 
-  if (!convexUrl()) {
-    return invitationError(codebaseId, 'convex_unavailable', 'Convex is not configured for invitations.', 503)
-  }
-
-  if (!authToken) {
-    return invitationError(
-      codebaseId,
-      'browser_auth_required',
-      'Listing invitations requires product auth, not Basic Auth.',
-      401,
-    )
+  const actor = await cloudActorFromRequest(request)
+  if (!actor) {
+    return invitationError(codebaseId, 'browser_auth_required', 'Listing invitations requires product auth, not Basic Auth.', 401)
   }
 
   try {
-    const invitations = await convexClient(authToken).query(anyApi.agent.listCodebaseInvitations, {
-      codebaseId,
-      status: 'pending',
-    })
+    const invitations = await listCloudInvitations({ codebaseId, status: 'pending', actor })
     return NextResponse.json(invitationState(codebaseId, {
       authenticated: true,
       pendingInvitations: Array.isArray(invitations) ? invitations.map(mapInvitation) : [],
@@ -41,34 +38,23 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const body = await readBody(request)
   const codebaseId = stringValue(body.codebaseId) ?? defaultCodebaseId()
-  const authToken = await convexAuthToken()
+  const unavailable = cloudUnavailable('invitations')
+  if (unavailable) return invitationError(codebaseId, unavailable.code, unavailable.message, unavailable.status)
 
-  if (!authToken) {
-    return invitationError(
-      codebaseId,
-      'browser_auth_required',
-      'Creating invitations requires product auth, not Basic Auth.',
-      401,
-    )
-  }
-
-  if (!convexUrl()) {
-    return invitationError(codebaseId, 'convex_unavailable', 'Convex is not configured for invitations.', 503)
+  const actor = await cloudActorFromRequest(request)
+  if (!actor) {
+    return invitationError(codebaseId, 'browser_auth_required', 'Creating invitations requires product auth, not Basic Auth.', 401)
   }
 
   try {
-    const client = convexClient(authToken)
-    const invitation = await client.mutation(anyApi.agent.createCodebaseInvitation, {
+    const invitation = await createCloudInvitation({
       codebaseId,
       email: requireText(body.email, 'email'),
       role: invitationRole(body.role),
       expiresAt: optionalText(body.expiresAt),
+      actor,
     })
-
-    const invitations = await client.query(anyApi.agent.listCodebaseInvitations, {
-      codebaseId,
-      status: 'pending',
-    })
+    const invitations = await listCloudInvitations({ codebaseId, status: 'pending', actor })
 
     return NextResponse.json(
       {
@@ -90,69 +76,49 @@ export async function PATCH(request: Request) {
   const body = await readBody(request)
   const codebaseId = stringValue(body.codebaseId) ?? defaultCodebaseId()
 
-  if (body.action === 'accept') {
-    return acceptInvitation(body, codebaseId)
-  }
-  if (body.action === 'revoke') {
-    return revokeInvitation(body, codebaseId)
-  }
+  if (body.action === 'accept') return acceptInvitation(body, codebaseId, request)
+  if (body.action === 'revoke') return revokeInvitation(body, codebaseId, request)
 
   return invitationError(codebaseId, 'unsupported_invitation_action', 'Expected invitation action to be accept or revoke.', 400)
 }
 
-async function acceptInvitation(body: Record<string, unknown>, codebaseId: string) {
-  const authToken = await convexAuthToken()
+async function acceptInvitation(body: Record<string, unknown>, codebaseId: string, request: Request) {
+  const unavailable = cloudUnavailable('invitations')
+  if (unavailable) return invitationError(codebaseId, unavailable.code, unavailable.message, unavailable.status)
 
-  if (!authToken) {
-    return invitationError(
-      codebaseId,
-      'browser_auth_required',
-      'Accepting invitations requires product auth, not Basic Auth.',
-      401,
-    )
-  }
-
-  if (!convexUrl()) {
-    return invitationError(codebaseId, 'convex_unavailable', 'Convex is not configured for invitations.', 503)
+  const actor = await cloudActorFromRequest(request)
+  if (!actor) {
+    return invitationError(codebaseId, 'browser_auth_required', 'Accepting invitations requires product auth, not Basic Auth.', 401)
   }
 
   try {
-    const client = convexClient(authToken)
-    await client.mutation(anyApi.agent.acceptCodebaseInvitation, {
+    const result = await acceptCloudInvitation({
       token: requireText(body.token, 'token'),
+      actor,
     })
-
-    return NextResponse.json(invitationState(codebaseId, { authenticated: true }), responseInit())
+    const acceptedCodebaseId = stringValue(recordValue(result)?.codebaseId) ?? codebaseId
+    return NextResponse.json(invitationState(acceptedCodebaseId, { authenticated: true }), responseInit())
   } catch (error) {
     return invitationError(codebaseId, 'invitation_accept_failed', errorMessage(error), 400)
   }
 }
 
-async function revokeInvitation(body: Record<string, unknown>, codebaseId: string) {
-  const authToken = await convexAuthToken()
+async function revokeInvitation(body: Record<string, unknown>, codebaseId: string, request: Request) {
+  const unavailable = cloudUnavailable('invitations')
+  if (unavailable) return invitationError(codebaseId, unavailable.code, unavailable.message, unavailable.status)
 
-  if (!authToken) {
-    return invitationError(
-      codebaseId,
-      'browser_auth_required',
-      'Revoking invitations requires product auth, not Basic Auth.',
-      401,
-    )
-  }
-
-  if (!convexUrl()) {
-    return invitationError(codebaseId, 'convex_unavailable', 'Convex is not configured for invitations.', 503)
+  const actor = await cloudActorFromRequest(request)
+  if (!actor) {
+    return invitationError(codebaseId, 'browser_auth_required', 'Revoking invitations requires product auth, not Basic Auth.', 401)
   }
 
   try {
-    const client = convexClient(authToken)
-    await client.mutation(anyApi.agent.revokeCodebaseInvitation, {
-      invitationId: requireText(body.invitationId, 'invitationId'),
-    })
-    const invitations = await client.query(anyApi.agent.listCodebaseInvitations, {
+    await revokeCloudInvitation({
       codebaseId,
-      status: 'pending',
+      invitationId: requireText(body.invitationId, 'invitationId'),
+      actor,
     })
+    const invitations = await listCloudInvitations({ codebaseId, status: 'pending', actor })
 
     return NextResponse.json(invitationState(codebaseId, {
       authenticated: true,
@@ -167,34 +133,36 @@ function invitationState(
   codebaseId: string,
   options: { authenticated?: boolean; pendingInvitations?: PendingInvitation[] } = {},
 ): InvitationsResponse {
-  const hasConvex = Boolean(convexUrl())
+  const backend = configuredCloudBackend()
+  const hasBackend = backend !== 'unavailable'
   const authReason = options.authenticated ? undefined : 'Product auth is required for invitations.'
-  const enabled = Boolean(hasConvex && options.authenticated)
+  const backendReason = hasBackend ? undefined : 'HopIt cloud backend is not configured for invitations.'
+  const enabled = Boolean(hasBackend && options.authenticated)
 
   return {
     ok: true,
     codebaseId,
     capabilities: {
-      backend: hasConvex ? 'convex' : 'unavailable',
+      backend,
       list: {
         enabled,
-        reason: enabled ? undefined : authReason ?? 'Convex is not configured for invitations.',
+        reason: enabled ? undefined : authReason ?? backendReason,
       },
       create: {
         enabled,
-        reason: enabled ? undefined : authReason ?? 'Convex is not configured for invitations.',
+        reason: enabled ? undefined : authReason ?? backendReason,
       },
       accept: {
         enabled,
-        reason: enabled ? undefined : authReason ?? 'Convex is not configured for invitations.',
+        reason: enabled ? undefined : authReason ?? backendReason,
       },
       revoke: {
         enabled,
-        reason: enabled ? undefined : authReason ?? 'Convex is not configured for invitations.',
+        reason: enabled ? undefined : authReason ?? backendReason,
       },
     },
     pendingInvitations: options.pendingInvitations ?? [],
-    unavailableReason: enabled ? undefined : authReason,
+    unavailableReason: enabled ? undefined : authReason ?? backendReason,
   }
 }
 
@@ -212,6 +180,16 @@ function invitationError(codebaseId: string, code: string, message: string, stat
     status,
     ...responseInit(),
   })
+}
+
+function cloudUnavailable(feature: string) {
+  const missing = missingCloudBackendConfig()
+  if (missing.length === 0) return null
+  return {
+    code: 'cloud_backend_unavailable',
+    message: `No HopIt cloud backend is configured for ${feature}. Missing: ${missing.join(', ')}.`,
+    status: 503,
+  }
 }
 
 async function readBody(request: Request): Promise<Record<string, unknown>> {

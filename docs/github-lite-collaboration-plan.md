@@ -34,19 +34,19 @@ The current setup details live in [Personal Production Runbook](personal-product
 
 The first collaboration slice is now started in the repo:
 
-- D1 now covers the graph/status/account/codebase/file/action-job slice; Convex still has the richer user/auth identity, codebase member, invitation, work-item, and agent-session tables that need D1 ports.
-- Convex exposes authenticated viewer/upsert entrypoints plus owner-claim, member list/manage, and invitation create/accept/revoke mutations.
+- D1 now covers the graph/status/account/codebase/file/action-job slice plus members, invitations, and first issue/discussion/release work-item tables. Convex still has the richer agent-session and key-management tables that need D1 ports.
+- D1 exposes authenticated viewer/upsert entrypoints plus owner-claim, member list/manage, and invitation create/accept/revoke operations, with Convex retained as a legacy fallback.
 - The dashboard query can filter graph files by requester role and `.private/` ownership through D1 or legacy Convex.
 - The status mapper carries capped shared-file content previews.
 - The dashboard includes a read-only code-review browser section.
 - The dashboard includes member/invite management plus first issue, discussion, and release workflows.
-- Convex has initial permission-gated tables/functions for issues, projects, discussions, releases, release assets, and per-codebase counters; these are now migration targets rather than the intended production store.
+- D1 has initial permission-gated tables/functions for issues, projects, discussions, releases, release assets, and per-codebase counters; project-board operations and richer release assets remain to be completed.
 - Convex has scoped agent-session token registration/list/touch/revoke plus token authorization for graph reads, per-file agent writes, and event sync; D1 device/session auth remains to be ported.
 - Secret-only client encryption exists for routed `.private/env/` object blobs,
   but full private-repo encryption, invite-time key grants, independent secret
   sharing, path encryption, and revocation/rekey flows are still pending.
 
-This is still a foundation layer, but it is no longer only backend scaffolding. The repo has Clerk-backed sign-in routes, auth middleware, D1 backend selection, legacy Convex auth config, member/invite UI, work-item UI, owner email config, scoped agent-session token groundwork, and a Convex JWT template for the legacy path. Clerk production DNS, SSL, live Vercel env, `HOPIT_AUTH_PROVIDER=clerk`, and production Google OAuth are active for `hopit.dev`; retiring Basic Auth fallback is intentionally deferred until owner sign-in and owner mapping are verified. Real diffs, inline review comments, routeable history, project-board UI, immutable release publishing, complete permission coverage, and full D1 collaboration-table parity remain pending.
+This is still a foundation layer, but it is no longer only backend scaffolding. The repo has Clerk-backed sign-in routes, auth middleware, D1 backend selection, legacy Convex auth config, D1-backed member/invite UI, D1-backed work-item UI, owner email config, scoped agent-session token groundwork, and a Convex JWT template for the legacy path. Clerk production DNS, SSL, live Vercel env, `HOPIT_AUTH_PROVIDER=clerk`, and production Google OAuth are active for `hopit.dev`; retiring Basic Auth fallback is intentionally deferred until owner sign-in and owner mapping are verified. Real diffs, inline review comments, routeable history, project-board UI, immutable release publishing, complete permission coverage, D1 device-session auth, and D1 key-management parity remain pending.
 
 ## Phase Principle
 
@@ -253,7 +253,7 @@ HopIt can name accepted Main states as releases and attach notes/artifacts later
 ## Verification Strategy
 
 - Unit tests for permission helpers and schema validators.
-- D1 migration/CLI smoke checks for seeded graph data, plus legacy Convex function checks while those routes remain unported.
+- D1 migration/CLI smoke checks for seeded graph data and collaboration routes, plus legacy Convex checks only for fallback and still-unported device/session/key paths.
 - Browser smoke for auth redirect, code browsing, invite acceptance, review open/comment/merge, issue creation, and release creation.
 - Production smoke on `https://hopit.dev` after each deployment.
 - Explicit negative tests for non-member reads, viewer write attempts, expired invites, `.private/` access, and merge without permission.

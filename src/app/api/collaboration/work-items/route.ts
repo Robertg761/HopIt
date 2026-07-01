@@ -1,7 +1,13 @@
 import { NextResponse } from 'next/server'
-import { anyApi } from 'convex/server'
 
-import { convexAuthToken, convexClient, convexUrl } from '@/lib/convex-auth'
+import {
+  configuredCloudBackend,
+  createCloudWorkItem,
+  listCloudWorkItems,
+  missingCloudBackendConfig,
+  updateCloudWorkItem,
+  type CloudActor,
+} from '@/lib/cloud-backend'
 import type {
   CollaborationCapabilities,
   CollaborationDiscussion,
@@ -9,159 +15,157 @@ import type {
   CollaborationRelease,
   WorkItemsResponse,
 } from '@/lib/collaboration'
+import { cloudActorFromRequest } from '@/lib/request-cloud-actor'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
 export async function GET(request: Request) {
   const codebaseId = codebaseIdFromRequest(request)
-  const authToken = await convexAuthToken()
-  const unavailable = unavailableReason('read', Boolean(authToken))
-  if (unavailable) return workItemsUnavailable(codebaseId, unavailable)
+  const unavailable = cloudUnavailable('collaboration reads')
+  if (unavailable) return workItemsUnavailable(codebaseId, unavailable.message)
+
+  const actor = await readActor(request)
+  if (!actor) {
+    return workItemsError(codebaseId, 'browser_auth_required', 'Reading collaboration items requires product auth or Basic Auth fallback.', 401)
+  }
 
   try {
-    return NextResponse.json(await readWorkItems(codebaseId, authToken), responseInit())
+    return NextResponse.json(await readWorkItems(codebaseId, actor), responseInit())
   } catch (error) {
     return workItemsError(codebaseId, 'collaboration_read_failed', errorMessage(error), 502)
   }
 }
 
 export async function POST(request: Request) {
-  const unavailable = unavailableReason('write')
   const body = await readBody(request)
   const codebaseId = stringValue(body.codebaseId) ?? defaultCodebaseId()
+  const unavailable = cloudUnavailable('collaboration writes')
+  if (unavailable) return workItemsUnavailable(codebaseId, unavailable.message)
 
-  if (unavailable) return workItemsUnavailable(codebaseId, unavailable)
+  const actor = await cloudActorFromRequest(request)
+  if (!actor?.userId) {
+    return workItemsError(codebaseId, 'browser_auth_required', 'Creating collaboration items requires product auth.', 401)
+  }
 
   try {
-    const authToken = await convexAuthToken()
-    if (!authToken) {
-      return workItemsError(codebaseId, 'browser_auth_required', 'Creating collaboration items requires product auth.', 401)
-    }
-    const client = convexClient(authToken)
     const createdBy = optionalText(body.createdBy)
 
     if (body.type === 'issue') {
-      await client.mutation(
-        anyApi.collaboration.createIssue,
-        {
-          codebaseId,
-          title: requireText(body.title, 'title'),
-          body: optionalText(body.body),
-          priority: optionalIssuePriority(body.priority),
-          labels: stringArray(body.labels),
-          linkedChangeSetId: optionalText(body.linkedChangeSetId),
-          linkedReleaseId: optionalText(body.linkedReleaseId),
-          createdBy,
-        },
-      )
+      await createCloudWorkItem({
+        type: 'issue',
+        codebaseId,
+        title: requireText(body.title, 'title'),
+        body: optionalText(body.body),
+        priority: optionalIssuePriority(body.priority),
+        labels: stringArray(body.labels),
+        linkedChangeSetId: optionalText(body.linkedChangeSetId),
+        linkedReleaseId: optionalText(body.linkedReleaseId),
+        createdBy,
+        actor,
+      })
     } else if (body.type === 'discussion') {
-      await client.mutation(
-        anyApi.collaboration.createDiscussion,
-        {
-          codebaseId,
-          title: requireText(body.title, 'title'),
-          body: requireText(body.body, 'body'),
-          category: optionalDiscussionCategory(body.category),
-          labels: stringArray(body.labels),
-          linkedChangeSetId: optionalText(body.linkedChangeSetId),
-          createdBy,
-        },
-      )
+      await createCloudWorkItem({
+        type: 'discussion',
+        codebaseId,
+        title: requireText(body.title, 'title'),
+        body: requireText(body.body, 'body'),
+        category: optionalDiscussionCategory(body.category),
+        labels: stringArray(body.labels),
+        linkedChangeSetId: optionalText(body.linkedChangeSetId),
+        createdBy,
+        actor,
+      })
     } else if (body.type === 'release') {
-      await client.mutation(
-        anyApi.collaboration.createRelease,
-        {
-          codebaseId,
-          version: requireText(body.version, 'version'),
-          title: requireText(body.title, 'title'),
-          notes: requireText(body.notes, 'notes'),
-          status: optionalReleaseStatus(body.status),
-          target: releaseTarget(body.target),
-          createdBy,
-        },
-      )
+      await createCloudWorkItem({
+        type: 'release',
+        codebaseId,
+        version: requireText(body.version, 'version'),
+        title: requireText(body.title, 'title'),
+        notes: requireText(body.notes, 'notes'),
+        status: optionalReleaseStatus(body.status),
+        target: releaseTarget(body.target),
+        createdBy,
+        actor,
+      })
     } else {
       return workItemsError(codebaseId, 'invalid_type', 'Expected type to be issue, discussion, or release.', 400)
     }
 
-    return NextResponse.json(await readWorkItems(codebaseId, authToken), responseInit())
+    return NextResponse.json(await readWorkItems(codebaseId, actor), responseInit())
   } catch (error) {
     return workItemsError(codebaseId, 'collaboration_create_failed', errorMessage(error), 400)
   }
 }
 
 export async function PATCH(request: Request) {
-  const unavailable = unavailableReason('write')
   const body = await readBody(request)
   const codebaseId = stringValue(body.codebaseId) ?? defaultCodebaseId()
+  const unavailable = cloudUnavailable('collaboration writes')
+  if (unavailable) return workItemsUnavailable(codebaseId, unavailable.message)
 
-  if (unavailable) return workItemsUnavailable(codebaseId, unavailable)
+  const actor = await cloudActorFromRequest(request)
+  if (!actor?.userId) {
+    return workItemsError(codebaseId, 'browser_auth_required', 'Updating collaboration items requires product auth.', 401)
+  }
 
   try {
-    const authToken = await convexAuthToken()
-    if (!authToken) {
-      return workItemsError(codebaseId, 'browser_auth_required', 'Updating collaboration items requires product auth.', 401)
-    }
-    const client = convexClient(authToken)
     const updatedBy = optionalText(body.updatedBy)
 
     if (body.action === 'setIssueStatus') {
-      await client.mutation(
-        anyApi.collaboration.setIssueStatus,
-        {
-          issueId: requireText(body.issueId, 'issueId'),
-          status: issueStatus(body.status),
-          updatedBy,
-        },
-      )
+      await updateCloudWorkItem({
+        action: 'setIssueStatus',
+        codebaseId,
+        issueId: requireText(body.issueId, 'issueId'),
+        status: issueStatus(body.status),
+        updatedBy,
+        actor,
+      })
     } else if (body.action === 'setDiscussionStatus') {
-      await client.mutation(
-        anyApi.collaboration.setDiscussionStatus,
-        {
-          discussionId: requireText(body.discussionId, 'discussionId'),
-          status: discussionStatus(body.status),
-          updatedBy,
-        },
-      )
+      await updateCloudWorkItem({
+        action: 'setDiscussionStatus',
+        codebaseId,
+        discussionId: requireText(body.discussionId, 'discussionId'),
+        status: discussionStatus(body.status),
+        updatedBy,
+        actor,
+      })
     } else if (body.action === 'publishRelease') {
-      await client.mutation(
-        anyApi.collaboration.publishRelease,
-        {
-          releaseId: requireText(body.releaseId, 'releaseId'),
-          updatedBy,
-        },
-      )
+      await updateCloudWorkItem({
+        action: 'publishRelease',
+        codebaseId,
+        releaseId: requireText(body.releaseId, 'releaseId'),
+        updatedBy,
+        actor,
+      })
     } else {
       return workItemsError(codebaseId, 'invalid_action', 'Unknown collaboration update action.', 400)
     }
 
-    return NextResponse.json(await readWorkItems(codebaseId, authToken), responseInit())
+    return NextResponse.json(await readWorkItems(codebaseId, actor), responseInit())
   } catch (error) {
     return workItemsError(codebaseId, 'collaboration_update_failed', errorMessage(error), 400)
   }
 }
 
-async function readWorkItems(
-  codebaseId: string,
-  providedAuthToken?: string | null,
-): Promise<WorkItemsResponse> {
-  const authToken = providedAuthToken ?? await convexAuthToken()
-  const client = convexClient(authToken)
-  const args = readArgs({ codebaseId }, authToken)
-  const [issues, discussions, releases] = await Promise.all([
-    client.query(anyApi.collaboration.listIssues, args),
-    client.query(anyApi.collaboration.listDiscussions, args),
-    client.query(anyApi.collaboration.listReleases, args),
-  ])
+async function readActor(request: Request): Promise<CloudActor | null> {
+  const actor = await cloudActorFromRequest(request, { allowBasicFallback: true })
+  if (actor) return actor
+  if (configuredCloudBackend() === 'convex' && process.env.HOPIT_AGENT_TOKEN) return {}
+  return null
+}
+
+async function readWorkItems(codebaseId: string, actor: CloudActor): Promise<WorkItemsResponse> {
+  const items = await listCloudWorkItems({ codebaseId, actor })
+  const itemRows = recordValue(items) ?? {}
 
   return {
     ok: true,
     codebaseId,
-    capabilities: collaborationCapabilities(Boolean(authToken)),
-    issues: Array.isArray(issues) ? issues.map(mapIssue) : [],
-    discussions: Array.isArray(discussions) ? discussions.map(mapDiscussion) : [],
-    releases: Array.isArray(releases) ? releases.map(mapRelease) : [],
+    capabilities: collaborationCapabilities(Boolean(actor.userId)),
+    issues: Array.isArray(itemRows.issues) ? itemRows.issues.map(mapIssue) : [],
+    discussions: Array.isArray(itemRows.discussions) ? itemRows.discussions.map(mapDiscussion) : [],
+    releases: Array.isArray(itemRows.releases) ? itemRows.releases.map(mapRelease) : [],
   }
 }
 
@@ -241,23 +245,26 @@ function defaultCodebaseId() {
   return process.env.HOPIT_CODEBASE_ID ?? 'hopit'
 }
 
-function unavailableReason(mode: 'read' | 'write', hasAuth = false) {
-  if (!convexUrl()) return 'Convex is not configured for collaboration reads.'
-  if (mode === 'read' && !hasAuth && !process.env.HOPIT_AGENT_TOKEN && process.env.HOPIT_ALLOW_UNAUTHENTICATED_AGENT !== '1') {
-    return 'HOPIT_AGENT_TOKEN is required for unauthenticated server-side collaboration reads.'
+function cloudUnavailable(feature: string) {
+  const missing = missingCloudBackendConfig()
+  if (missing.length === 0) return null
+  return {
+    message: `No HopIt cloud backend is configured for ${feature}. Missing: ${missing.join(', ')}.`,
   }
-  return null
 }
 
 function collaborationCapabilities(hasAuth = false): CollaborationCapabilities {
-  const readUnavailable = unavailableReason('read', hasAuth)
-  const read = readUnavailable ? { enabled: false, reason: readUnavailable } : { enabled: true }
-  const write = hasAuth
+  const backend = configuredCloudBackend()
+  const hasBackend = backend !== 'unavailable'
+  const read = hasBackend
     ? { enabled: true }
-    : { enabled: false, reason: 'Product auth is required for collaboration writes.' }
+    : { enabled: false, reason: 'HopIt cloud backend is not configured for collaboration reads.' }
+  const write = hasAuth && hasBackend
+    ? { enabled: true }
+    : { enabled: false, reason: hasBackend ? 'Product auth is required for collaboration writes.' : 'HopIt cloud backend is not configured for collaboration writes.' }
 
   return {
-    backend: readUnavailable ? 'unavailable' : 'convex',
+    backend,
     read,
     createIssue: write,
     updateIssue: write,
@@ -298,12 +305,6 @@ function responseInit() {
       'Cache-Control': 'no-store',
     },
   }
-}
-
-function readArgs<T extends Record<string, unknown>>(value: T, authToken: string | null) {
-  if (authToken) return value
-  const token = process.env.HOPIT_AGENT_TOKEN
-  return token ? { ...value, token } : value
 }
 
 function documentId(row: Record<string, unknown>) {

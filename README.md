@@ -28,7 +28,7 @@ The current setup source of truth is [docs/personal-production.md](docs/personal
 - Active change sets that receive live synced edits before review or merge into Main.
 - Change-set visibility controls with global defaults, per-codebase overrides, and per-change-set overrides.
 - Automatic remote-update delivery so same-owner devices can receive current active change-set state without a manual refresh ritual.
-- Production storage based on Cloudflare D1 graph metadata, S3-compatible object blobs, content hashes, and per-file revision guards rather than whole-graph overwrites. Convex remains a legacy backend while the D1 migration finishes.
+- Production storage based on Cloudflare D1 graph metadata, S3-compatible object blobs, content hashes, and per-file revision guards rather than whole-graph overwrites. Convex remains a legacy fallback while the remaining device/session and key-management D1 ports finish.
 - Scoped device/session auth separate from human product auth.
 - Client-side encryption, device trust, and wrapped key grants so private repos,
   `.private/`, and secrets are decrypted only by intended users/devices.
@@ -54,7 +54,7 @@ HopIt has moved past a local-only spike. The current dogfood baseline is a deplo
 - `hop workspace` persists a root-level `workspaces.json` index with per-workspace hydration/cursor state, can discover the configured cloud codebase, attach it into the Workspace Root as metadata-only, list visible cloud files, hydrate one file, and dehydrate clean workspaces back to metadata-only state.
 - `hop device` / `hop session` can report local device identity. Scoped device-session issuance is still legacy Convex-only and needs a D1 port after the graph/status migration.
 - `hop keys` can initialize a local per-codebase device keyring, report redacted key status, and export a passphrase-encrypted recovery file. The keyring stores device private keys locally and stores the user vault key only as a self-wrapped payload.
-- The dashboard now includes provider sign-in routes, owner claim, member/invite management, a read-only code browser, and first issue/discussion/release workflows. Codebase listing, file reads/edits, status, account sync, and hosted action jobs now use the D1 backend selector; member/invite/work-item collaboration routes are still legacy Convex until ported.
+- The dashboard now includes provider sign-in routes, owner claim, member/invite management, a read-only code browser, and first issue/discussion/release workflows. Codebase listing, file reads/edits, status, account sync, hosted action jobs, member/invite routes, and work-item collaboration routes now use the D1 backend selector, with Convex retained as a legacy fallback.
 - The literal mirror path supports binary files, symlinks, empty directories, `.git/`, root `.env.local` routing into `.private/env/repo-root/.env.local`, production-safe `import-git`, client-encrypted routed-secret sync, and dry-run object GC. The full repository still should not be treated as safely uploaded until the production-safe conversion flow has been run and verified.
 - Client-side encryption currently covers routed secrets only. Device keyrings,
   user vault keys, recovery export, and first legacy Convex device/wrapped-key APIs now

@@ -1,31 +1,35 @@
 import { NextResponse } from 'next/server'
-import { anyApi } from 'convex/server'
 
-import { convexAuthToken, convexClient, convexUrl } from '@/lib/convex-auth'
+import {
+  claimCloudCodebaseOwner,
+  configuredCloudBackend,
+  listCloudMembers,
+  missingCloudBackendConfig,
+  removeCloudMember,
+  suspendCloudMember,
+} from '@/lib/cloud-backend'
 import type { CodebaseMember, MembersResponse } from '@/lib/collaboration'
+import { cloudActorFromRequest } from '@/lib/request-cloud-actor'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
 export async function GET(request: Request) {
   const codebaseId = codebaseIdFromRequest(request)
-  const authToken = await convexAuthToken()
+  const unavailable = cloudUnavailable('members')
+  if (unavailable) return memberError(codebaseId, unavailable.code, unavailable.message, unavailable.status)
 
-  if (!convexUrl()) {
-    return memberError(codebaseId, 'convex_unavailable', 'Convex is not configured for members.', 503)
-  }
-
-  if (!authToken) {
-    return memberError(
-      codebaseId,
-      'browser_auth_required',
-      'Listing members requires product auth, not Basic Auth.',
-      401,
-    )
+  const actor = await cloudActorFromRequest(request)
+  if (!actor) {
+    return memberError(codebaseId, 'browser_auth_required', 'Listing members requires product auth, not Basic Auth.', 401)
   }
 
   try {
-    return NextResponse.json(await readMembers(codebaseId, authToken), responseInit())
+    const rows = await listCloudMembers({ codebaseId, actor })
+    return NextResponse.json(memberState(codebaseId, {
+      authenticated: true,
+      members: Array.isArray(rows) ? rows.map(mapMember) : [],
+    }), responseInit())
   } catch (error) {
     return memberError(codebaseId, 'member_list_failed', errorMessage(error), 400)
   }
@@ -34,29 +38,24 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   const body = await readBody(request)
   const codebaseId = stringValue(body.codebaseId) ?? defaultCodebaseId()
-  const authToken = await convexAuthToken()
+  const unavailable = cloudUnavailable('members')
+  if (unavailable) return memberError(codebaseId, unavailable.code, unavailable.message, unavailable.status)
 
-  if (!convexUrl()) {
-    return memberError(codebaseId, 'convex_unavailable', 'Convex is not configured for members.', 503)
+  const actor = await cloudActorFromRequest(request)
+  if (!actor) {
+    return memberError(codebaseId, 'browser_auth_required', 'Claiming ownership requires product auth, not Basic Auth.', 401)
   }
-
-  if (!authToken) {
-    return memberError(
-      codebaseId,
-      'browser_auth_required',
-      'Claiming ownership requires product auth, not Basic Auth.',
-      401,
-    )
-  }
-
   if (body.action !== 'claimOwner') {
     return memberError(codebaseId, 'unsupported_member_action', 'Expected member action to be claimOwner.', 400)
   }
 
   try {
-    const client = convexClient(authToken)
-    await client.mutation(anyApi.agent.claimCodebaseOwner, { codebaseId })
-    return NextResponse.json(await readMembers(codebaseId, authToken), responseInit())
+    await claimCloudCodebaseOwner({ codebaseId, actor })
+    const rows = await listCloudMembers({ codebaseId, actor })
+    return NextResponse.json(memberState(codebaseId, {
+      authenticated: true,
+      members: Array.isArray(rows) ? rows.map(mapMember) : [],
+    }), responseInit())
   } catch (error) {
     return memberError(codebaseId, 'owner_claim_failed', errorMessage(error), 400)
   }
@@ -65,80 +64,69 @@ export async function POST(request: Request) {
 export async function PATCH(request: Request) {
   const body = await readBody(request)
   const codebaseId = stringValue(body.codebaseId) ?? defaultCodebaseId()
-  const authToken = await convexAuthToken()
+  const unavailable = cloudUnavailable('members')
+  if (unavailable) return memberError(codebaseId, unavailable.code, unavailable.message, unavailable.status)
 
-  if (!convexUrl()) {
-    return memberError(codebaseId, 'convex_unavailable', 'Convex is not configured for members.', 503)
-  }
-
-  if (!authToken) {
-    return memberError(
-      codebaseId,
-      'browser_auth_required',
-      'Managing members requires product auth, not Basic Auth.',
-      401,
-    )
+  const actor = await cloudActorFromRequest(request)
+  if (!actor) {
+    return memberError(codebaseId, 'browser_auth_required', 'Managing members requires product auth, not Basic Auth.', 401)
   }
 
   try {
-    const client = convexClient(authToken)
     const userId = requireText(body.userId, 'userId')
 
     if (body.action === 'suspend') {
-      await client.mutation(anyApi.agent.suspendCodebaseMember, { codebaseId, userId })
+      await suspendCloudMember({ codebaseId, userId, actor })
     } else if (body.action === 'remove') {
-      await client.mutation(anyApi.agent.removeCodebaseMember, { codebaseId, userId })
+      await removeCloudMember({ codebaseId, userId, actor })
     } else {
       return memberError(codebaseId, 'unsupported_member_action', 'Expected member action to be suspend or remove.', 400)
     }
 
-    return NextResponse.json(await readMembers(codebaseId, authToken), responseInit())
+    const rows = await listCloudMembers({ codebaseId, actor })
+    return NextResponse.json(memberState(codebaseId, {
+      authenticated: true,
+      members: Array.isArray(rows) ? rows.map(mapMember) : [],
+    }), responseInit())
   } catch (error) {
     return memberError(codebaseId, 'member_manage_failed', errorMessage(error), 400)
   }
-}
-
-async function readMembers(codebaseId: string, authToken: string): Promise<MembersResponse> {
-  const rows = await convexClient(authToken).query(anyApi.agent.listCodebaseMembers, { codebaseId })
-
-  return memberState(codebaseId, {
-    authenticated: true,
-    members: Array.isArray(rows) ? rows.map(mapMember) : [],
-  })
 }
 
 function memberState(
   codebaseId: string,
   options: { authenticated?: boolean; members?: CodebaseMember[] } = {},
 ): MembersResponse {
-  const hasConvex = Boolean(convexUrl())
+  const backend = configuredCloudBackend()
+  const hasBackend = backend !== 'unavailable'
   const authReason = options.authenticated ? undefined : 'Product auth is required for member management.'
-  const enabled = Boolean(hasConvex && options.authenticated)
+  const backendReason = hasBackend ? undefined : 'HopIt cloud backend is not configured for members.'
+  const enabled = Boolean(hasBackend && options.authenticated)
 
   return {
     ok: true,
     codebaseId,
     capabilities: {
-      backend: hasConvex ? 'convex' : 'unavailable',
+      backend,
       list: {
         enabled,
-        reason: enabled ? undefined : authReason ?? 'Convex is not configured for members.',
+        reason: enabled ? undefined : authReason ?? backendReason,
       },
       claimOwner: {
         enabled,
-        reason: enabled ? undefined : authReason ?? 'Convex is not configured for members.',
+        reason: enabled ? undefined : authReason ?? backendReason,
       },
       suspend: {
         enabled,
-        reason: enabled ? undefined : authReason ?? 'Convex is not configured for members.',
+        reason: enabled ? undefined : authReason ?? backendReason,
       },
       remove: {
         enabled,
-        reason: enabled ? undefined : authReason ?? 'Convex is not configured for members.',
+        reason: enabled ? undefined : authReason ?? backendReason,
       },
     },
     members: options.members ?? [],
-    unavailableReason: enabled ? undefined : authReason,
+    unavailableReason: enabled ? undefined : authReason ?? backendReason,
   }
 }
 
@@ -156,6 +144,16 @@ function memberError(codebaseId: string, code: string, message: string, status: 
     status,
     ...responseInit(),
   })
+}
+
+function cloudUnavailable(feature: string) {
+  const missing = missingCloudBackendConfig()
+  if (missing.length === 0) return null
+  return {
+    code: 'cloud_backend_unavailable',
+    message: `No HopIt cloud backend is configured for ${feature}. Missing: ${missing.join(', ')}.`,
+    status: 503,
+  }
 }
 
 async function readBody(request: Request): Promise<Record<string, unknown>> {
@@ -225,5 +223,5 @@ function recordValue(value: unknown): Record<string, unknown> | null {
 }
 
 function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : 'Unknown member error.'
+  return error instanceof Error ? error.message : 'Member request failed.'
 }

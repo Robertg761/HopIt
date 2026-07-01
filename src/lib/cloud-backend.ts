@@ -9,6 +9,9 @@ export type CloudActor = {
   userId?: string | null
   primaryEmail?: string | null
   displayName?: string | null
+  avatarUrl?: string | null
+  currentAuthEmailVerified?: boolean
+  emailVerified?: boolean
 }
 
 export type CloudRequester = {
@@ -196,6 +199,174 @@ export async function createCloudActionJob(input: {
   throw new Error('No HopIt cloud backend is configured for actions.')
 }
 
+export async function listCloudMembers(input: {
+  codebaseId: string
+  status?: 'active' | 'suspended'
+  actor: CloudActor
+}) {
+  const backend = configuredCloudBackend()
+  if (backend === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).listMembers(input)
+  if (backend === 'convex') {
+    const authToken = await convexAuthToken()
+    return convexClient(authToken).query(anyApi.agent.listCodebaseMembers, {
+      codebaseId: input.codebaseId,
+      status: input.status,
+    })
+  }
+  throw new Error('No HopIt cloud backend is configured for members.')
+}
+
+export async function claimCloudCodebaseOwner(input: { codebaseId: string; actor: CloudActor }) {
+  const backend = configuredCloudBackend()
+  if (backend === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).claimCodebaseOwner(input)
+  if (backend === 'convex') {
+    const authToken = await convexAuthToken()
+    return convexClient(authToken).mutation(anyApi.agent.claimCodebaseOwner, { codebaseId: input.codebaseId })
+  }
+  throw new Error('No HopIt cloud backend is configured for members.')
+}
+
+export async function suspendCloudMember(input: { codebaseId: string; userId: string; actor: CloudActor }) {
+  const backend = configuredCloudBackend()
+  if (backend === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).suspendMember(input)
+  if (backend === 'convex') {
+    const authToken = await convexAuthToken()
+    return convexClient(authToken).mutation(anyApi.agent.suspendCodebaseMember, {
+      codebaseId: input.codebaseId,
+      userId: input.userId,
+    })
+  }
+  throw new Error('No HopIt cloud backend is configured for members.')
+}
+
+export async function removeCloudMember(input: { codebaseId: string; userId: string; actor: CloudActor }) {
+  const backend = configuredCloudBackend()
+  if (backend === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).removeMember(input)
+  if (backend === 'convex') {
+    const authToken = await convexAuthToken()
+    return convexClient(authToken).mutation(anyApi.agent.removeCodebaseMember, {
+      codebaseId: input.codebaseId,
+      userId: input.userId,
+    })
+  }
+  throw new Error('No HopIt cloud backend is configured for members.')
+}
+
+export async function listCloudInvitations(input: {
+  codebaseId: string
+  status?: 'pending' | 'accepted' | 'revoked' | 'expired'
+  actor: CloudActor
+}) {
+  const backend = configuredCloudBackend()
+  if (backend === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).listInvitations(input)
+  if (backend === 'convex') {
+    const authToken = await convexAuthToken()
+    return convexClient(authToken).query(anyApi.agent.listCodebaseInvitations, {
+      codebaseId: input.codebaseId,
+      status: input.status,
+    })
+  }
+  throw new Error('No HopIt cloud backend is configured for invitations.')
+}
+
+export async function createCloudInvitation(input: {
+  codebaseId: string
+  email: string
+  role: 'maintainer' | 'member' | 'viewer'
+  expiresAt?: string
+  actor: CloudActor
+}) {
+  const backend = configuredCloudBackend()
+  if (backend === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).createInvitation(input)
+  if (backend === 'convex') {
+    const authToken = await convexAuthToken()
+    return convexClient(authToken).mutation(anyApi.agent.createCodebaseInvitation, {
+      codebaseId: input.codebaseId,
+      email: input.email,
+      role: input.role,
+      expiresAt: input.expiresAt,
+    })
+  }
+  throw new Error('No HopIt cloud backend is configured for invitations.')
+}
+
+export async function acceptCloudInvitation(input: { token: string; actor: CloudActor }) {
+  const backend = configuredCloudBackend()
+  if (backend === 'd1') return d1Backend().acceptInvitation(input)
+  if (backend === 'convex') {
+    const authToken = await convexAuthToken()
+    return convexClient(authToken).mutation(anyApi.agent.acceptCodebaseInvitation, {
+      token: input.token,
+    })
+  }
+  throw new Error('No HopIt cloud backend is configured for invitations.')
+}
+
+export async function revokeCloudInvitation(input: { codebaseId: string; invitationId: string; actor: CloudActor }) {
+  const backend = configuredCloudBackend()
+  if (backend === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).revokeInvitation(input)
+  if (backend === 'convex') {
+    const authToken = await convexAuthToken()
+    return convexClient(authToken).mutation(anyApi.agent.revokeCodebaseInvitation, {
+      invitationId: input.invitationId,
+    })
+  }
+  throw new Error('No HopIt cloud backend is configured for invitations.')
+}
+
+export async function listCloudWorkItems(input: { codebaseId: string; actor: CloudActor }) {
+  const backend = configuredCloudBackend()
+  if (backend === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).listWorkItems(input)
+  if (backend === 'convex') {
+    const authToken = await convexAuthToken()
+    const args = convexReadArgs({ codebaseId: input.codebaseId }, authToken)
+    const client = convexClient(authToken)
+    const [issues, discussions, releases] = await Promise.all([
+      client.query(anyApi.collaboration.listIssues, args),
+      client.query(anyApi.collaboration.listDiscussions, args),
+      client.query(anyApi.collaboration.listReleases, args),
+    ])
+    return { issues, discussions, releases }
+  }
+  throw new Error('No HopIt cloud backend is configured for collaboration.')
+}
+
+export async function createCloudWorkItem(input: Record<string, unknown> & { codebaseId: string; actor: CloudActor }) {
+  const backend = configuredCloudBackend()
+  if (backend === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).createWorkItem(input)
+  if (backend === 'convex') {
+    const authToken = await convexAuthToken()
+    const client = convexClient(authToken)
+    const { actor: _actor, type: _type, ...args } = input
+    if (input.type === 'issue') {
+      return client.mutation(anyApi.collaboration.createIssue, args)
+    }
+    if (input.type === 'discussion') {
+      return client.mutation(anyApi.collaboration.createDiscussion, args)
+    }
+    if (input.type === 'release') {
+      return client.mutation(anyApi.collaboration.createRelease, args)
+    }
+    throw new Error('Expected type to be issue, discussion, or release.')
+  }
+  throw new Error('No HopIt cloud backend is configured for collaboration.')
+}
+
+export async function updateCloudWorkItem(input: Record<string, unknown> & { codebaseId: string; actor: CloudActor }) {
+  const backend = configuredCloudBackend()
+  if (backend === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).updateWorkItem(input)
+  if (backend === 'convex') {
+    const authToken = await convexAuthToken()
+    const client = convexClient(authToken)
+    const { action: _action, codebaseId: _codebaseId, actor: _actor, ...args } = input
+    if (input.action === 'setIssueStatus') return client.mutation(anyApi.collaboration.setIssueStatus, args)
+    if (input.action === 'setDiscussionStatus') return client.mutation(anyApi.collaboration.setDiscussionStatus, args)
+    if (input.action === 'publishRelease') return client.mutation(anyApi.collaboration.publishRelease, args)
+    throw new Error('Unknown collaboration update action.')
+  }
+  throw new Error('No HopIt cloud backend is configured for collaboration.')
+}
+
 export async function upsertCloudUser(input: CloudActor & {
   avatarUrl?: string | null
   emailVerified?: boolean
@@ -220,4 +391,10 @@ export async function upsertCloudUser(input: CloudActor & {
 
 function d1Backend(options: Record<string, unknown> = {}): any {
   return createD1Backend(options)
+}
+
+function convexReadArgs<T extends Record<string, unknown>>(value: T, authToken: string | null) {
+  if (authToken) return value
+  const token = process.env.HOPIT_AGENT_TOKEN
+  return token ? { ...value, token } : value
 }

@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from 'node:crypto'
+import { createHash, randomBytes, randomUUID } from 'node:crypto'
 
 export const d1CloudServiceType = 'cloudflare-d1-graph'
 
@@ -92,12 +92,39 @@ export class CloudflareD1HopBackend {
   }
 
   async readVisibleGraph(request = {}, codebaseId = this.codebaseId) {
-    return filterVisibleGraphForRequester(await this.readGraph(codebaseId), request)
+    const graph = await this.readGraph(codebaseId)
+    const access = await this.readAccessContext(graph, {
+      userId: request.requesterId,
+      sessionId: request.sessionId,
+    })
+    return filterVisibleGraphForAccess(graph, access)
   }
 
   async readOptionalVisibleGraph(request = {}, codebaseId = this.codebaseId) {
     const graph = await this.readOptionalGraph(codebaseId)
-    return graph ? filterVisibleGraphForRequester(graph, request) : null
+    if (!graph) return null
+    const access = await this.readAccessContext(graph, {
+      userId: request.requesterId,
+      sessionId: request.sessionId,
+    })
+    return filterVisibleGraphForAccess(graph, access)
+  }
+
+  async readAccessContext(graph, actor = {}) {
+    await this.ensureGraphMembers(graph)
+    const userId = stringOrNull(actor.userId)
+    let membership = null
+    if (userId) {
+      membership = await this.first(
+        `select * from codebase_members where codebase_id = ? and user_id = ? limit 1`,
+        [graph.codebase.id, userId],
+      )
+    }
+    return visibilityContextForGraph(graph, {
+      requesterId: userId,
+      sessionId: actor.sessionId,
+      membership,
+    })
   }
 
   async writeGraph(graph) {
@@ -150,6 +177,7 @@ export class CloudflareD1HopBackend {
         now,
       ],
     )
+    await this.ensureGraphMembers(normalized, now)
 
     const seenPaths = []
     for (const [filePath, file] of files) {
@@ -175,6 +203,46 @@ export class CloudflareD1HopBackend {
     }
 
     return { ok: true, codebaseId, revision: normalized.revision, fileCount }
+  }
+
+  async ensureGraphMembers(graph, now = new Date().toISOString()) {
+    const codebaseId = graph.codebase.id
+    const ownerId = stringOrNull(graph.owner?.id) ?? stringOrNull(graph.codebase?.ownerId)
+    if (ownerId) {
+      await this.insertMemberIfMissing({
+        codebaseId,
+        userId: ownerId,
+        role: 'owner',
+        status: 'active',
+        source: 'graph-owner',
+        joinedAt: stringOrNull(graph.owner?.joinedAt) ?? now,
+        createdAt: now,
+        updatedAt: now,
+      })
+    }
+    for (const collaborator of graph.collaborators ?? []) {
+      const userId = stringOrNull(collaborator?.id) ?? stringOrNull(collaborator?.userId)
+      if (!userId) continue
+      await this.insertMemberIfMissing({
+        codebaseId,
+        userId,
+        role: normalizeRole(collaborator?.role),
+        status: collaborator?.status === 'suspended' ? 'suspended' : 'active',
+        source: 'graph-collaborator',
+        joinedAt: stringOrNull(collaborator?.joinedAt) ?? now,
+        createdAt: now,
+        updatedAt: now,
+      })
+    }
+  }
+
+  async insertMemberIfMissing(member) {
+    const existing = await this.first(
+      `select user_id from codebase_members where codebase_id = ? and user_id = ? limit 1`,
+      [member.codebaseId, member.userId],
+    )
+    if (existing) return
+    await this.upsertMember(member)
   }
 
   applyJournalEntry(cloud, entry, options = {}) {
@@ -213,11 +281,12 @@ export class CloudflareD1HopBackend {
       }
     }
 
-    const visibleGraph = filterVisibleGraphForRequester(graph, {
-      requesterId: requesterUserId,
+    const access = await this.readAccessContext(graph, {
+      userId: requesterUserId,
       sessionId: requesterSessionId,
     })
-    const access = visibleGraph.visibilityContext
+    const visibleGraph = filterVisibleGraphForAccess(graph, access)
+    const visibleAccess = visibleGraph.visibilityContext
     const recentRows = await this.query(
       `select id, event, detail_json, at, source from agent_events where codebase_id = ? order by at desc, id desc limit 20`,
       [codebaseId],
@@ -275,7 +344,7 @@ export class CloudflareD1HopBackend {
         service: d1CloudServiceType,
         exists: true,
         graph: visibleGraph,
-        access: summarizeAccessContext(access),
+        access: summarizeAccessContext(visibleAccess),
       },
     }
   }
@@ -432,7 +501,7 @@ export class CloudflareD1HopBackend {
 
   async updateCodebase({ codebaseId, name, visibility, actor = {} }) {
     const graph = await this.readGraph(codebaseId)
-    const access = visibilityContextForGraph(graph, { requesterId: actor.userId })
+    const access = await this.readAccessContext(graph, actor)
     if (!canWrite(access)) throw new Error(`User cannot update ${codebaseId}.`)
     if (name !== undefined) graph.codebase.name = normalizeCodebaseName(name)
     if (visibility !== undefined) {
@@ -461,7 +530,7 @@ export class CloudflareD1HopBackend {
 
   async deleteCodebase({ codebaseId, actor = {} }) {
     const graph = await this.readGraph(codebaseId)
-    const access = visibilityContextForGraph(graph, { requesterId: actor.userId })
+    const access = await this.readAccessContext(graph, actor)
     if (!access.isOwner) throw new Error('Only the codebase owner can delete a codebase.')
     await this.query(`delete from files where codebase_id = ?`, [codebaseId])
     await this.query(`delete from file_blobs where codebase_id = ?`, [codebaseId])
@@ -469,6 +538,15 @@ export class CloudflareD1HopBackend {
     await this.query(`delete from codebase_members where codebase_id = ?`, [codebaseId])
     await this.query(`delete from codebase_invitations where codebase_id = ?`, [codebaseId])
     await this.query(`delete from action_jobs where codebase_id = ?`, [codebaseId])
+    await this.query(`delete from collaboration_counters where codebase_id = ?`, [codebaseId])
+    await this.query(`delete from issues where codebase_id = ?`, [codebaseId])
+    await this.query(`delete from issue_comments where codebase_id = ?`, [codebaseId])
+    await this.query(`delete from discussions where codebase_id = ?`, [codebaseId])
+    await this.query(`delete from discussion_comments where codebase_id = ?`, [codebaseId])
+    await this.query(`delete from releases where codebase_id = ?`, [codebaseId])
+    await this.query(`delete from release_assets where codebase_id = ?`, [codebaseId])
+    await this.query(`delete from projects where codebase_id = ?`, [codebaseId])
+    await this.query(`delete from project_items where codebase_id = ?`, [codebaseId])
     await this.query(`delete from codebases where codebase_id = ?`, [codebaseId])
     return { ok: true, codebaseId, deletedBy: actor.userId ?? null }
   }
@@ -495,7 +573,7 @@ export class CloudflareD1HopBackend {
   async mutateTextFile({ codebaseId, path, content, baseRevision, actor = {} }) {
     assertSafeGraphPath(path)
     const graph = await this.readGraph(codebaseId)
-    const access = visibilityContextForGraph(graph, { requesterId: actor.userId })
+    const access = await this.readAccessContext(graph, actor)
     if (!canWrite(access)) throw new Error(`User cannot edit ${codebaseId}.`)
     if (!canRequesterSeePath(access, path)) throw new Error(`File ${path} is not visible.`)
     const existing = graph.files[path] ?? null
@@ -535,7 +613,7 @@ export class CloudflareD1HopBackend {
 
   async listActionJobs({ codebaseId, limit = 20, actor = {} }) {
     const graph = await this.readGraph(codebaseId)
-    const access = visibilityContextForGraph(graph, { requesterId: actor.userId })
+    const access = await this.readAccessContext(graph, actor)
     if (!canRead(access)) throw new Error(`User cannot read ${codebaseId}.`)
     const rows = await this.query(
       `select * from action_jobs where codebase_id = ? order by created_at desc limit ?`,
@@ -546,7 +624,7 @@ export class CloudflareD1HopBackend {
 
   async createActionJob({ codebaseId, kind, actor = {} }) {
     const graph = await this.readGraph(codebaseId)
-    const access = visibilityContextForGraph(graph, { requesterId: actor.userId })
+    const access = await this.readAccessContext(graph, actor)
     if (!access.isOwner) throw new Error('Hosted actions are owner-only until sandboxed runners are available.')
     const command = actionCommandForKind(kind)
     const now = new Date().toISOString()
@@ -644,6 +722,522 @@ export class CloudflareD1HopBackend {
     })
     const updated = await this.first(`select * from action_jobs where job_id = ?`, [jobId])
     return summarizeActionJob(updated)
+  }
+
+  async listMembers({ codebaseId, status, actor = {} }) {
+    const { graph, access } = await this.requireGraphCapability(codebaseId, actor, 'read')
+    const normalizedStatus = status === 'active' || status === 'suspended' ? status : null
+    const rows = normalizedStatus
+      ? await this.query(memberSelectSql(`where m.codebase_id = ? and m.status = ?`), [codebaseId, normalizedStatus])
+      : await this.query(memberSelectSql(`where m.codebase_id = ?`), [codebaseId])
+    return rows.map((row) => mapD1Member(row, graph, access))
+  }
+
+  async claimCodebaseOwner({ codebaseId, actor = {} }) {
+    const ownerActor = requireOwnerClaimActor(actor)
+    await this.upsertUser({
+      userId: ownerActor.userId,
+      primaryEmail: ownerActor.primaryEmail,
+      displayName: ownerActor.displayName,
+      avatarUrl: ownerActor.avatarUrl,
+      emailVerified: ownerActor.currentAuthEmailVerified,
+    })
+    const graph = await this.readGraph(codebaseId)
+    await this.ensureGraphMembers(graph)
+    const members = await this.query(`select * from codebase_members where codebase_id = ?`, [codebaseId])
+    const conflictingOwner = members.find((member) =>
+      member.role === 'owner' &&
+      member.status === 'active' &&
+      member.user_id !== ownerActor.userId &&
+      !isBootstrapOwnerMember(member, graph),
+    )
+    if (conflictingOwner) {
+      throw new Error(`Codebase ${codebaseId} already has an active owner.`)
+    }
+
+    const now = new Date().toISOString()
+    for (const member of members) {
+      if (member.role === 'owner' && member.status === 'active' && member.user_id !== ownerActor.userId) {
+        await this.query(
+          `update codebase_members set status = 'suspended', updated_at = ? where codebase_id = ? and user_id = ?`,
+          [now, codebaseId, member.user_id],
+        )
+      }
+    }
+
+    await this.upsertMember({
+      codebaseId,
+      userId: ownerActor.userId,
+      role: 'owner',
+      status: 'active',
+      source: 'owner-claim',
+      joinedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    })
+
+    graph.codebase.ownerId = ownerActor.userId
+    graph.owner = claimedOwnerValue(graph.owner, ownerActor)
+    graph.collaborators = (graph.collaborators ?? []).filter((entry) => {
+      const userId = stringOrNull(entry?.id) ?? stringOrNull(entry?.userId)
+      return userId && userId !== ownerActor.userId
+    })
+    graph.revision += 1
+    graph.main.revision = graph.revision
+    graph.main.updatedAt = now
+    await this.writeGraph(graph)
+    await this.refreshCodebaseMemberCount(codebaseId, now)
+    await this.appendEvent({
+      codebaseId,
+      event: 'codebase.owner_claimed',
+      detail: { ownerId: ownerActor.userId },
+      at: now,
+      source: 'browser',
+    })
+
+    return { ok: true, codebaseId, ownerId: ownerActor.userId }
+  }
+
+  async suspendMember({ codebaseId, userId, actor = {} }) {
+    return this.mutateMemberStatus({ codebaseId, userId, actor, action: 'suspend' })
+  }
+
+  async removeMember({ codebaseId, userId, actor = {} }) {
+    return this.mutateMemberStatus({ codebaseId, userId, actor, action: 'remove' })
+  }
+
+  async mutateMemberStatus({ codebaseId, userId, actor, action }) {
+    requireAuthenticatedActor(actor, 'Managing members requires product auth.')
+    const { graph } = await this.requireGraphCapability(codebaseId, actor, 'manage_members')
+    const member = await this.first(
+      `select * from codebase_members where codebase_id = ? and user_id = ? limit 1`,
+      [codebaseId, userId],
+    )
+    if (!member) throw new Error(`Member ${userId} was not found for ${codebaseId}.`)
+    if (member.role === 'owner' || member.user_id === graph.codebase.ownerId) {
+      throw new Error(`Codebase owners cannot be ${action}d through member management.`)
+    }
+    const now = new Date().toISOString()
+    const source = action === 'remove' ? 'removed' : member.source
+    await this.query(
+      `update codebase_members set status = 'suspended', source = ?, updated_at = ? where codebase_id = ? and user_id = ?`,
+      [source ?? null, now, codebaseId, userId],
+    )
+    await this.refreshCodebaseMemberCount(codebaseId, now)
+    await this.appendEvent({
+      codebaseId,
+      event: action === 'remove' ? 'member.removed' : 'member.suspended',
+      detail: { userId, updatedBy: actor.userId },
+      at: now,
+      source: 'browser',
+    })
+    const updated = await this.first(memberSelectSql(`where m.codebase_id = ? and m.user_id = ?`), [codebaseId, userId])
+    return updated ? mapD1Member(updated, graph) : { ok: true, codebaseId, userId }
+  }
+
+  async listInvitations({ codebaseId, status = 'pending', actor = {} }) {
+    await this.requireGraphCapability(codebaseId, actor, 'invite')
+    await this.expireInvitationsForCodebase(codebaseId)
+    const normalizedStatus = invitationStatusOrNull(status)
+    const rows = normalizedStatus
+      ? await this.query(
+          `select * from codebase_invitations where codebase_id = ? and status = ? order by created_at desc`,
+          [codebaseId, normalizedStatus],
+        )
+      : await this.query(
+          `select * from codebase_invitations where codebase_id = ? order by created_at desc`,
+          [codebaseId],
+        )
+    return rows.map(mapD1Invitation)
+  }
+
+  async createInvitation({ codebaseId, email, role, expiresAt, actor = {} }) {
+    const inviteActor = requireAuthenticatedActor(actor, 'Creating invitations requires product auth.')
+    await this.requireGraphCapability(codebaseId, inviteActor, 'invite')
+    const normalizedEmail = normalizeEmail(email)
+    if (!normalizedEmail) throw new Error('Invitation email is required.')
+    const existingMember = await this.readActiveMemberByEmail(codebaseId, normalizedEmail)
+    if (existingMember) {
+      throw new Error(`${normalizedEmail} already has active access to ${codebaseId}.`)
+    }
+
+    await this.expireInvitationsForCodebase(codebaseId, normalizedEmail)
+    const pending = await this.first(
+      `select * from codebase_invitations where codebase_id = ? and normalized_email = ? and status = 'pending' limit 1`,
+      [codebaseId, normalizedEmail],
+    )
+    if (pending) throw new Error(`A pending invitation already exists for ${normalizedEmail}.`)
+
+    const now = new Date().toISOString()
+    const token = await this.createUniqueInvitationToken()
+    const invitationId = `inv_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`
+    await this.query(
+      `insert into codebase_invitations (
+        invitation_id, codebase_id, normalized_email, role, token_hash, status,
+        invited_by_user_id, expires_at, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)`,
+      [
+        invitationId,
+        codebaseId,
+        normalizedEmail,
+        invitationRole(role),
+        token.tokenHash,
+        inviteActor.userId,
+        normalizeFutureTimestamp(expiresAt, 'Invitation expiry'),
+        now,
+        now,
+      ],
+    )
+    await this.appendEvent({
+      codebaseId,
+      event: 'invitation.created',
+      detail: { invitationId, email: normalizedEmail, role: invitationRole(role), invitedBy: inviteActor.userId },
+      at: now,
+      source: 'browser',
+    })
+    return {
+      invitationId,
+      codebaseId,
+      normalizedEmail,
+      role: invitationRole(role),
+      status: 'pending',
+      token: token.token,
+    }
+  }
+
+  async acceptInvitation({ token, actor = {} }) {
+    const acceptingActor = requireVerifiedEmailActor(actor, 'A verified account email is required to accept an invitation.')
+    await this.upsertUser({
+      userId: acceptingActor.userId,
+      primaryEmail: acceptingActor.primaryEmail,
+      displayName: acceptingActor.displayName,
+      avatarUrl: acceptingActor.avatarUrl,
+      emailVerified: acceptingActor.currentAuthEmailVerified,
+    })
+    const tokenHash = hashInvitationToken(token)
+    const invitation = await this.first(
+      `select * from codebase_invitations where token_hash = ? limit 1`,
+      [tokenHash],
+    )
+    if (!invitation) throw new Error('Invitation not found.')
+    if (invitation.status !== 'pending') throw new Error('Invitation is no longer pending.')
+    if (isInvitationExpired(invitation)) {
+      const now = new Date().toISOString()
+      await this.query(
+        `update codebase_invitations set status = 'expired', updated_at = ? where invitation_id = ?`,
+        [now, invitation.invitation_id],
+      )
+      throw new Error('Invitation has expired.')
+    }
+    if (normalizeEmail(acceptingActor.primaryEmail) !== invitation.normalized_email) {
+      throw new Error('Authenticated account email does not match this invitation.')
+    }
+
+    const now = new Date().toISOString()
+    await this.upsertMember({
+      codebaseId: invitation.codebase_id,
+      userId: acceptingActor.userId,
+      role: invitationRole(invitation.role),
+      status: 'active',
+      source: 'invitation',
+      invitedByUserId: invitation.invited_by_user_id,
+      joinedAt: now,
+      createdAt: now,
+      updatedAt: now,
+    })
+    await this.query(
+      `update codebase_invitations set
+        status = 'accepted', accepted_by_user_id = ?, accepted_at = ?, updated_at = ?
+       where invitation_id = ?`,
+      [acceptingActor.userId, now, now, invitation.invitation_id],
+    )
+    await this.refreshCodebaseMemberCount(invitation.codebase_id, now)
+    await this.appendEvent({
+      codebaseId: invitation.codebase_id,
+      event: 'invitation.accepted',
+      detail: { invitationId: invitation.invitation_id, acceptedBy: acceptingActor.userId },
+      at: now,
+      source: 'browser',
+    })
+    return {
+      codebaseId: invitation.codebase_id,
+      userId: acceptingActor.userId,
+      role: invitationRole(invitation.role),
+      status: 'accepted',
+    }
+  }
+
+  async revokeInvitation({ codebaseId, invitationId, actor = {} }) {
+    const revokeActor = requireAuthenticatedActor(actor, 'Revoking invitations requires product auth.')
+    const invitation = await this.first(
+      `select * from codebase_invitations where invitation_id = ? limit 1`,
+      [invitationId],
+    )
+    if (!invitation) throw new Error('Invitation not found.')
+    await this.requireGraphCapability(invitation.codebase_id, revokeActor, 'invite')
+    if (invitation.status !== 'pending') throw new Error('Only pending invitations can be revoked.')
+    if (codebaseId && codebaseId !== invitation.codebase_id) {
+      throw new Error(`Invitation ${invitationId} does not belong to ${codebaseId}.`)
+    }
+    const now = new Date().toISOString()
+    await this.query(
+      `update codebase_invitations set
+        status = 'revoked', revoked_by_user_id = ?, revoked_at = ?, updated_at = ?
+       where invitation_id = ?`,
+      [revokeActor.userId, now, now, invitationId],
+    )
+    const updated = await this.first(`select * from codebase_invitations where invitation_id = ?`, [invitationId])
+    await this.appendEvent({
+      codebaseId: invitation.codebase_id,
+      event: 'invitation.revoked',
+      detail: { invitationId, revokedBy: revokeActor.userId },
+      at: now,
+      source: 'browser',
+    })
+    return mapD1Invitation(updated)
+  }
+
+  async listWorkItems({ codebaseId, actor = {} }) {
+    await this.requireGraphCapability(codebaseId, actor, 'read')
+    const [issues, discussions, releases] = await Promise.all([
+      this.query(`select * from issues where codebase_id = ? order by created_at desc, number desc`, [codebaseId]),
+      this.query(`select * from discussions where codebase_id = ? order by created_at desc, number desc`, [codebaseId]),
+      this.query(`select * from releases where codebase_id = ? order by created_at desc, number desc`, [codebaseId]),
+    ])
+    return {
+      issues: issues.map(mapD1Issue),
+      discussions: discussions.map(mapD1Discussion),
+      releases: releases.map(mapD1Release),
+    }
+  }
+
+  async createWorkItem(input) {
+    const actor = requireAuthenticatedActor(input.actor, 'Creating collaboration items requires product auth.')
+    if (input.type === 'issue') return this.createIssue({ ...input, actor })
+    if (input.type === 'discussion') return this.createDiscussion({ ...input, actor })
+    if (input.type === 'release') return this.createRelease({ ...input, actor })
+    throw new Error('Expected type to be issue, discussion, or release.')
+  }
+
+  async updateWorkItem(input) {
+    const actor = requireAuthenticatedActor(input.actor, 'Updating collaboration items requires product auth.')
+    if (input.action === 'setIssueStatus') return this.setIssueStatus({ ...input, actor })
+    if (input.action === 'setDiscussionStatus') return this.setDiscussionStatus({ ...input, actor })
+    if (input.action === 'publishRelease') return this.publishRelease({ ...input, actor })
+    throw new Error('Unknown collaboration update action.')
+  }
+
+  async createIssue({ codebaseId, title, body, priority, labels, assigneeIds, linkedChangeSetId, linkedReleaseId, createdBy, actor }) {
+    await this.requireGraphCapability(codebaseId, actor, 'write')
+    const now = new Date().toISOString()
+    const number = await this.allocateCollaborationNumber(codebaseId, 'issue', now)
+    const issueId = `iss_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`
+    await this.query(
+      `insert into issues (
+        issue_id, codebase_id, number, title, body, status, priority, labels_json, assignee_ids_json,
+        linked_change_set_id, linked_release_id, created_by, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        issueId,
+        codebaseId,
+        number,
+        requireTextValue(title, 'Issue title'),
+        stringOrNull(body),
+        issuePriorityOrNull(priority),
+        stringifyJson(uniqueStrings(labels)),
+        stringifyJson(uniqueStrings(assigneeIds)),
+        stringOrNull(linkedChangeSetId),
+        stringOrNull(linkedReleaseId),
+        actorAuditId(actor, createdBy, 'Issue creator'),
+        now,
+        now,
+      ],
+    )
+    return mapD1Issue(await this.first(`select * from issues where issue_id = ?`, [issueId]))
+  }
+
+  async setIssueStatus({ issueId, status, updatedBy, actor }) {
+    const issue = await this.first(`select * from issues where issue_id = ? limit 1`, [issueId])
+    if (!issue) throw new Error('Issue not found.')
+    await this.requireGraphCapability(issue.codebase_id, actor, 'write')
+    const now = new Date().toISOString()
+    const nextStatus = issueStatus(status)
+    await this.query(
+      `update issues set status = ?, updated_by = ?, updated_at = ?, closed_at = ? where issue_id = ?`,
+      [nextStatus, actorAuditId(actor, updatedBy, 'Issue updater'), now, nextStatus === 'closed' ? now : null, issueId],
+    )
+    return mapD1Issue(await this.first(`select * from issues where issue_id = ?`, [issueId]))
+  }
+
+  async createDiscussion({ codebaseId, title, body, category, labels, linkedIssueIds, linkedChangeSetId, createdBy, actor }) {
+    await this.requireGraphCapability(codebaseId, actor, 'write')
+    const now = new Date().toISOString()
+    const number = await this.allocateCollaborationNumber(codebaseId, 'discussion', now)
+    const discussionId = `dis_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`
+    await this.query(
+      `insert into discussions (
+        discussion_id, codebase_id, number, title, body, category, status, labels_json,
+        linked_issue_ids_json, linked_change_set_id, created_by, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, ?, ?)`,
+      [
+        discussionId,
+        codebaseId,
+        number,
+        requireTextValue(title, 'Discussion title'),
+        requireTextValue(body, 'Discussion body'),
+        discussionCategory(category),
+        stringifyJson(uniqueStrings(labels)),
+        stringifyJson(uniqueStrings(linkedIssueIds)),
+        stringOrNull(linkedChangeSetId),
+        actorAuditId(actor, createdBy, 'Discussion creator'),
+        now,
+        now,
+      ],
+    )
+    return mapD1Discussion(await this.first(`select * from discussions where discussion_id = ?`, [discussionId]))
+  }
+
+  async setDiscussionStatus({ discussionId, status, updatedBy, actor }) {
+    const discussion = await this.first(`select * from discussions where discussion_id = ? limit 1`, [discussionId])
+    if (!discussion) throw new Error('Discussion not found.')
+    await this.requireGraphCapability(discussion.codebase_id, actor, 'write')
+    const now = new Date().toISOString()
+    const nextStatus = discussionStatus(status)
+    await this.query(
+      `update discussions set status = ?, updated_by = ?, updated_at = ?, closed_at = ? where discussion_id = ?`,
+      [nextStatus, actorAuditId(actor, updatedBy, 'Discussion updater'), now, nextStatus === 'closed' ? now : null, discussionId],
+    )
+    return mapD1Discussion(await this.first(`select * from discussions where discussion_id = ?`, [discussionId]))
+  }
+
+  async createRelease({ codebaseId, version, title, notes, status, target, createdBy, actor }) {
+    await this.requireGraphCapability(codebaseId, actor, 'release')
+    const normalizedVersion = requireTextValue(version, 'Release version')
+    const existing = await this.first(
+      `select release_id from releases where codebase_id = ? and version = ? limit 1`,
+      [codebaseId, normalizedVersion],
+    )
+    if (existing) throw new Error(`Release ${normalizedVersion} already exists for ${codebaseId}.`)
+    const now = new Date().toISOString()
+    const nextStatus = releaseStatus(status)
+    const number = await this.allocateCollaborationNumber(codebaseId, 'release', now)
+    const releaseId = `rel_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`
+    await this.query(
+      `insert into releases (
+        release_id, codebase_id, number, version, title, notes, status, target_json,
+        created_by, created_at, updated_at, published_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        releaseId,
+        codebaseId,
+        number,
+        normalizedVersion,
+        requireTextValue(title, 'Release title'),
+        requireTextValue(notes, 'Release notes'),
+        nextStatus,
+        stringifyJson(normalizeReleaseTarget(target)),
+        actorAuditId(actor, createdBy, 'Release creator'),
+        now,
+        now,
+        nextStatus === 'published' ? now : null,
+      ],
+    )
+    return mapD1Release(await this.first(`select * from releases where release_id = ?`, [releaseId]))
+  }
+
+  async publishRelease({ releaseId, updatedBy, actor }) {
+    const release = await this.first(`select * from releases where release_id = ? limit 1`, [releaseId])
+    if (!release) throw new Error('Release not found.')
+    await this.requireGraphCapability(release.codebase_id, actor, 'release')
+    const now = new Date().toISOString()
+    await this.query(
+      `update releases set status = 'published', updated_by = ?, updated_at = ?, published_at = ? where release_id = ?`,
+      [actorAuditId(actor, updatedBy, 'Release publisher'), now, now, releaseId],
+    )
+    return mapD1Release(await this.first(`select * from releases where release_id = ?`, [releaseId]))
+  }
+
+  async requireGraphCapability(codebaseId, actor = {}, capability = 'read') {
+    const graph = await this.readGraph(codebaseId)
+    const access = await this.readAccessContext(graph, actor)
+    if (!hasCapability(access, capability)) {
+      throw new Error(`User ${actor.userId ?? '(anonymous)'} does not have ${capability} access to ${codebaseId}.`)
+    }
+    return { graph, access }
+  }
+
+  async refreshCodebaseMemberCount(codebaseId, now = new Date().toISOString()) {
+    const row = await this.first(
+      `select count(*) as count from codebase_members where codebase_id = ? and status = 'active'`,
+      [codebaseId],
+    )
+    await this.query(
+      `update codebases set member_count = ?, updated_at = ? where codebase_id = ?`,
+      [integerValue(row?.count, 0), now, codebaseId],
+    )
+  }
+
+  async readActiveMemberByEmail(codebaseId, normalizedEmail) {
+    const user = await this.first(`select user_id from users where primary_email = ? limit 1`, [normalizedEmail])
+    if (!user) return null
+    return await this.first(
+      `select * from codebase_members where codebase_id = ? and user_id = ? and status = 'active' limit 1`,
+      [codebaseId, user.user_id],
+    )
+  }
+
+  async expireInvitationsForCodebase(codebaseId, normalizedEmail = null) {
+    const now = new Date().toISOString()
+    const rows = normalizedEmail
+      ? await this.query(
+          `select * from codebase_invitations where codebase_id = ? and normalized_email = ? and status = 'pending'`,
+          [codebaseId, normalizedEmail],
+        )
+      : await this.query(
+          `select * from codebase_invitations where codebase_id = ? and status = 'pending'`,
+          [codebaseId],
+        )
+    for (const invitation of rows) {
+      if (!isInvitationExpired(invitation)) continue
+      await this.query(
+        `update codebase_invitations set status = 'expired', updated_at = ? where invitation_id = ?`,
+        [now, invitation.invitation_id],
+      )
+    }
+  }
+
+  async createUniqueInvitationToken() {
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const token = randomBytes(32).toString('base64url')
+      const tokenHash = hashInvitationToken(token)
+      const existing = await this.first(
+        `select invitation_id from codebase_invitations where token_hash = ? limit 1`,
+        [tokenHash],
+      )
+      if (!existing) return { token, tokenHash }
+    }
+    throw new Error('Could not allocate a unique invitation token.')
+  }
+
+  async allocateCollaborationNumber(codebaseId, scope, now = new Date().toISOString()) {
+    const normalizedScope = collaborationScope(scope)
+    const existing = await this.first(
+      `select next_number from collaboration_counters where codebase_id = ? and scope = ? limit 1`,
+      [codebaseId, normalizedScope],
+    )
+    if (existing) {
+      const nextNumber = integerValue(existing.next_number, 1)
+      await this.query(
+        `update collaboration_counters set next_number = ?, updated_at = ? where codebase_id = ? and scope = ?`,
+        [nextNumber + 1, now, codebaseId, normalizedScope],
+      )
+      return nextNumber
+    }
+    await this.query(
+      `insert into collaboration_counters (codebase_id, scope, next_number, updated_at) values (?, ?, 2, ?)`,
+      [codebaseId, normalizedScope, now],
+    )
+    return 1
   }
 
   async upsertMember(member) {
@@ -893,7 +1487,451 @@ export const d1SchemaStatements = [
   )`,
   `create index if not exists idx_action_jobs_status_created on action_jobs(status, created_at)`,
   `create index if not exists idx_action_jobs_codebase_created on action_jobs(codebase_id, created_at)`,
+  `create table if not exists collaboration_counters (
+    codebase_id text not null,
+    scope text not null,
+    next_number integer not null,
+    updated_at text not null,
+    primary key (codebase_id, scope)
+  )`,
+  `create table if not exists issues (
+    issue_id text primary key,
+    codebase_id text not null,
+    number integer not null,
+    title text not null,
+    body text,
+    status text not null,
+    priority text,
+    labels_json text not null default '[]',
+    assignee_ids_json text not null default '[]',
+    linked_change_set_id text,
+    linked_release_id text,
+    created_by text not null,
+    updated_by text,
+    created_at text not null,
+    updated_at text not null,
+    closed_at text
+  )`,
+  `create index if not exists idx_issues_codebase_created on issues(codebase_id, created_at)`,
+  `create index if not exists idx_issues_codebase_status on issues(codebase_id, status)`,
+  `create unique index if not exists idx_issues_codebase_number on issues(codebase_id, number)`,
+  `create table if not exists issue_comments (
+    comment_id text primary key,
+    codebase_id text not null,
+    issue_id text not null,
+    body text not null,
+    created_by text not null,
+    updated_by text,
+    created_at text not null,
+    updated_at text not null
+  )`,
+  `create index if not exists idx_issue_comments_issue on issue_comments(issue_id)`,
+  `create index if not exists idx_issue_comments_codebase on issue_comments(codebase_id)`,
+  `create table if not exists projects (
+    project_id text primary key,
+    codebase_id text not null,
+    number integer not null,
+    name text not null,
+    description text,
+    status text not null,
+    columns_json text not null default '[]',
+    created_by text not null,
+    updated_by text,
+    created_at text not null,
+    updated_at text not null,
+    archived_at text
+  )`,
+  `create index if not exists idx_projects_codebase_created on projects(codebase_id, created_at)`,
+  `create index if not exists idx_projects_codebase_status on projects(codebase_id, status)`,
+  `create unique index if not exists idx_projects_codebase_number on projects(codebase_id, number)`,
+  `create table if not exists project_items (
+    project_item_id text primary key,
+    codebase_id text not null,
+    project_id text not null,
+    item_json text not null,
+    column_id text not null,
+    position real not null,
+    created_by text not null,
+    updated_by text,
+    created_at text not null,
+    updated_at text not null
+  )`,
+  `create index if not exists idx_project_items_project on project_items(project_id)`,
+  `create index if not exists idx_project_items_codebase on project_items(codebase_id)`,
+  `create table if not exists discussions (
+    discussion_id text primary key,
+    codebase_id text not null,
+    number integer not null,
+    title text not null,
+    body text not null,
+    category text not null,
+    status text not null,
+    labels_json text not null default '[]',
+    linked_issue_ids_json text not null default '[]',
+    linked_change_set_id text,
+    created_by text not null,
+    updated_by text,
+    created_at text not null,
+    updated_at text not null,
+    closed_at text
+  )`,
+  `create index if not exists idx_discussions_codebase_created on discussions(codebase_id, created_at)`,
+  `create index if not exists idx_discussions_codebase_status on discussions(codebase_id, status)`,
+  `create unique index if not exists idx_discussions_codebase_number on discussions(codebase_id, number)`,
+  `create table if not exists discussion_comments (
+    comment_id text primary key,
+    codebase_id text not null,
+    discussion_id text not null,
+    body text not null,
+    created_by text not null,
+    updated_by text,
+    created_at text not null,
+    updated_at text not null
+  )`,
+  `create index if not exists idx_discussion_comments_discussion on discussion_comments(discussion_id)`,
+  `create index if not exists idx_discussion_comments_codebase on discussion_comments(codebase_id)`,
+  `create table if not exists releases (
+    release_id text primary key,
+    codebase_id text not null,
+    number integer not null,
+    version text not null,
+    title text not null,
+    notes text not null,
+    status text not null,
+    target_json text not null,
+    provenance_json text,
+    created_by text not null,
+    updated_by text,
+    created_at text not null,
+    updated_at text not null,
+    published_at text
+  )`,
+  `create index if not exists idx_releases_codebase_created on releases(codebase_id, created_at)`,
+  `create index if not exists idx_releases_codebase_status on releases(codebase_id, status)`,
+  `create unique index if not exists idx_releases_codebase_version on releases(codebase_id, version)`,
+  `create unique index if not exists idx_releases_codebase_number on releases(codebase_id, number)`,
+  `create table if not exists release_assets (
+    asset_id text primary key,
+    codebase_id text not null,
+    release_id text not null,
+    name text not null,
+    kind text not null,
+    url text,
+    size integer,
+    checksum text,
+    created_by text not null,
+    created_at text not null
+  )`,
+  `create index if not exists idx_release_assets_release on release_assets(release_id)`,
+  `create index if not exists idx_release_assets_codebase on release_assets(codebase_id)`,
 ]
+
+function memberSelectSql(whereClause) {
+  return `select
+    m.codebase_id,
+    m.user_id,
+    m.role,
+    m.status,
+    m.source,
+    m.invited_by_user_id,
+    m.joined_at,
+    m.created_at,
+    m.updated_at,
+    u.primary_email as profile_primary_email,
+    u.display_name as profile_display_name,
+    u.avatar_url as profile_avatar_url
+  from codebase_members m
+  left join users u on u.user_id = m.user_id
+  ${whereClause}
+  order by
+    case m.role
+      when 'owner' then 0
+      when 'maintainer' then 1
+      when 'member' then 2
+      when 'viewer' then 3
+      else 4
+    end,
+    m.user_id asc`
+}
+
+function mapD1Member(row) {
+  const userId = stringOrNull(row.user_id) ?? ''
+  const id = `${row.codebase_id}:${userId}`
+  return {
+    _id: id,
+    id,
+    codebaseId: row.codebase_id,
+    userId,
+    role: normalizeRole(row.role),
+    status: row.status === 'suspended' ? 'suspended' : 'active',
+    source: stringOrNull(row.source) ?? 'membership',
+    invitedByUserId: stringOrNull(row.invited_by_user_id),
+    joinedAt: stringOrNull(row.joined_at),
+    createdAt: stringOrNull(row.created_at),
+    updatedAt: stringOrNull(row.updated_at),
+    profile: {
+      userId,
+      primaryEmail: stringOrNull(row.profile_primary_email),
+      displayName: stringOrNull(row.profile_display_name),
+      avatarUrl: stringOrNull(row.profile_avatar_url),
+    },
+  }
+}
+
+function mapD1Invitation(row) {
+  if (!row) return null
+  return {
+    _id: row.invitation_id,
+    id: row.invitation_id,
+    invitationId: row.invitation_id,
+    codebaseId: row.codebase_id,
+    normalizedEmail: row.normalized_email,
+    email: row.normalized_email,
+    role: invitationRole(row.role),
+    status: invitationStatusForRead(row),
+    invitedByUserId: row.invited_by_user_id,
+    acceptedByUserId: stringOrNull(row.accepted_by_user_id),
+    revokedByUserId: stringOrNull(row.revoked_by_user_id),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    expiresAt: stringOrNull(row.expires_at),
+    acceptedAt: stringOrNull(row.accepted_at),
+    revokedAt: stringOrNull(row.revoked_at),
+  }
+}
+
+function mapD1Issue(row) {
+  if (!row) return null
+  return {
+    _id: row.issue_id,
+    id: row.issue_id,
+    codebaseId: row.codebase_id,
+    number: integerValue(row.number, 0),
+    title: stringOrNull(row.title) ?? 'Untitled issue',
+    body: stringOrNull(row.body),
+    status: row.status === 'closed' ? 'closed' : 'open',
+    priority: issuePriorityOrNull(row.priority),
+    labels: parseStringArray(row.labels_json),
+    assigneeIds: parseStringArray(row.assignee_ids_json),
+    linkedChangeSetId: stringOrNull(row.linked_change_set_id),
+    linkedReleaseId: stringOrNull(row.linked_release_id),
+    createdBy: stringOrNull(row.created_by) ?? 'unknown',
+    updatedBy: stringOrNull(row.updated_by),
+    createdAt: stringOrNull(row.created_at) ?? '',
+    updatedAt: stringOrNull(row.updated_at) ?? '',
+    closedAt: stringOrNull(row.closed_at),
+  }
+}
+
+function mapD1Discussion(row) {
+  if (!row) return null
+  return {
+    _id: row.discussion_id,
+    id: row.discussion_id,
+    codebaseId: row.codebase_id,
+    number: integerValue(row.number, 0),
+    title: stringOrNull(row.title) ?? 'Untitled discussion',
+    body: stringOrNull(row.body) ?? '',
+    category: discussionCategory(row.category),
+    status: discussionStatus(row.status),
+    labels: parseStringArray(row.labels_json),
+    linkedIssueIds: parseStringArray(row.linked_issue_ids_json),
+    linkedChangeSetId: stringOrNull(row.linked_change_set_id),
+    createdBy: stringOrNull(row.created_by) ?? 'unknown',
+    updatedBy: stringOrNull(row.updated_by),
+    createdAt: stringOrNull(row.created_at) ?? '',
+    updatedAt: stringOrNull(row.updated_at) ?? '',
+    closedAt: stringOrNull(row.closed_at),
+  }
+}
+
+function mapD1Release(row) {
+  if (!row) return null
+  const target = parseJson(row.target_json, null)
+  return {
+    _id: row.release_id,
+    id: row.release_id,
+    codebaseId: row.codebase_id,
+    number: integerValue(row.number, 0),
+    version: stringOrNull(row.version) ?? 'unversioned',
+    title: stringOrNull(row.title) ?? 'Untitled release',
+    notes: stringOrNull(row.notes) ?? '',
+    status: releaseStatus(row.status),
+    target: normalizeReleaseTarget(target),
+    createdBy: stringOrNull(row.created_by) ?? 'unknown',
+    updatedBy: stringOrNull(row.updated_by),
+    createdAt: stringOrNull(row.created_at) ?? '',
+    updatedAt: stringOrNull(row.updated_at) ?? '',
+    publishedAt: stringOrNull(row.published_at),
+  }
+}
+
+function requireAuthenticatedActor(actor = {}, message = 'Product auth is required.') {
+  const userId = stringOrNull(actor.userId)
+  if (!userId) throw new Error(message)
+  return {
+    ...actor,
+    userId,
+    primaryEmail: stringOrNull(actor.primaryEmail),
+    displayName: stringOrNull(actor.displayName),
+    avatarUrl: stringOrNull(actor.avatarUrl),
+    currentAuthEmailVerified: actor.currentAuthEmailVerified === true || actor.emailVerified === true,
+  }
+}
+
+function requireVerifiedEmailActor(actor = {}, message = 'A verified account email is required.') {
+  const authenticated = requireAuthenticatedActor(actor, message)
+  if (!normalizeEmail(authenticated.primaryEmail) || authenticated.currentAuthEmailVerified !== true) {
+    throw new Error(message)
+  }
+  return authenticated
+}
+
+function requireOwnerClaimActor(actor = {}) {
+  const ownerActor = requireVerifiedEmailActor(actor, 'A verified account email is required to claim codebase ownership.')
+  const expectedEmail = normalizeEmail(process.env.HOPIT_OWNER_EMAIL)
+  if (!expectedEmail) {
+    throw new Error('HOPIT_OWNER_EMAIL must be configured before a codebase owner can be claimed.')
+  }
+  if (normalizeEmail(ownerActor.primaryEmail) !== expectedEmail) {
+    throw new Error('Authenticated account email is not allowed to claim codebase ownership.')
+  }
+  return ownerActor
+}
+
+function isBootstrapOwnerMember(member, graph) {
+  if (member.user_id === 'local-owner') return true
+  return member.source === 'graph-owner' && member.user_id === graph.codebase.ownerId
+}
+
+function claimedOwnerValue(existingOwner, actor) {
+  const owner = existingOwner && typeof existingOwner === 'object' && !Array.isArray(existingOwner)
+    ? { ...existingOwner }
+    : {}
+  owner.id = actor.userId
+  owner.userId = actor.userId
+  if (stringOrNull(actor.displayName)) {
+    owner.name = actor.displayName
+    owner.displayName = actor.displayName
+  }
+  if (stringOrNull(actor.primaryEmail)) {
+    owner.email = actor.primaryEmail
+    owner.primaryEmail = actor.primaryEmail
+  }
+  owner.role = 'owner'
+  owner.status = 'active'
+  owner.source = 'owner-claim'
+  owner.joinedAt = owner.joinedAt ?? new Date().toISOString()
+  return owner
+}
+
+function normalizeEmail(email) {
+  return typeof email === 'string' ? email.trim().toLowerCase() : ''
+}
+
+function invitationRole(value) {
+  if (value === 'maintainer' || value === 'viewer') return value
+  return 'member'
+}
+
+function invitationStatusOrNull(value) {
+  if (value === 'pending' || value === 'accepted' || value === 'revoked' || value === 'expired') return value
+  return null
+}
+
+function isInvitationExpired(invitation) {
+  if (invitation?.status !== 'pending') return false
+  const expiresAt = stringOrNull(invitation.expires_at ?? invitation.expiresAt)
+  if (!expiresAt) return false
+  const time = Date.parse(expiresAt)
+  return !Number.isFinite(time) || time <= Date.now()
+}
+
+function invitationStatusForRead(invitation) {
+  return isInvitationExpired(invitation) ? 'expired' : invitation.status
+}
+
+function normalizeFutureTimestamp(value, label) {
+  const text = stringOrNull(value)
+  if (!text) return null
+  const time = Date.parse(text)
+  if (!Number.isFinite(time)) throw new Error(`${label} must be a valid timestamp.`)
+  if (time <= Date.now()) throw new Error(`${label} must be in the future.`)
+  return new Date(time).toISOString()
+}
+
+function hashInvitationToken(token) {
+  const normalized = stringOrNull(token)
+  if (!normalized) throw new Error('Invitation token is required.')
+  return `sha256:${createHash('sha256').update(`hopit.invite.v1:${normalized}`).digest('hex')}`
+}
+
+function actorAuditId(actor, override, label) {
+  const actorId = stringOrNull(actor?.userId)
+  return requireTextValue(actorId === 'service:hopit-agent' ? override ?? actorId : actorId, label)
+}
+
+function requireTextValue(value, label) {
+  const text = stringOrNull(value)
+  if (!text) throw new Error(`${label} is required.`)
+  return text
+}
+
+function uniqueStrings(values) {
+  return Array.isArray(values)
+    ? Array.from(new Set(values.map((value) => typeof value === 'string' ? value.trim() : '').filter(Boolean))).sort()
+    : []
+}
+
+function parseStringArray(value) {
+  const parsed = parseJson(value, [])
+  return uniqueStrings(parsed)
+}
+
+function issuePriorityOrNull(value) {
+  return value === 'low' || value === 'medium' || value === 'high' ? value : null
+}
+
+function issueStatus(value) {
+  if (value === 'closed' || value === 'open') return value
+  throw new Error('Issue status must be open or closed.')
+}
+
+function discussionCategory(value) {
+  if (value === 'ideas' || value === 'q-and-a' || value === 'announcements') return value
+  return 'general'
+}
+
+function discussionStatus(value) {
+  if (value === 'answered' || value === 'locked' || value === 'closed') return value
+  return 'open'
+}
+
+function releaseStatus(value) {
+  if (value === 'published' || value === 'archived') return value
+  return 'draft'
+}
+
+function normalizeReleaseTarget(value) {
+  const target = value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+  const type = target.type === 'snapshot' || target.type === 'change-set' || target.type === 'git'
+    ? target.type
+    : 'main'
+  return {
+    type,
+    id: stringOrNull(target.id) ?? 'main',
+    revision: integerOrNull(target.revision),
+  }
+}
+
+function collaborationScope(value) {
+  if (value === 'issue' || value === 'project' || value === 'discussion' || value === 'release') return value
+  throw new Error('Unknown collaboration counter scope.')
+}
+
+function hasCapability(access, capability) {
+  return Array.isArray(access?.permissions) && access.permissions.includes(capability)
+}
 
 function graphFromRows(codebaseRow, fileRows) {
   const codebase = codebaseRowToRecord(codebaseRow)
@@ -1120,16 +2158,32 @@ function visibilityContextForGraph(graph, request = {}) {
   if (!request.requesterId && !request.sessionId && graph.visibilityContext) return graph.visibilityContext
   const ownerId = graph.owner?.id ?? graph.codebase?.ownerId ?? null
   const requesterId = request.requesterId ?? ownerId
+  const membership = request.membership ?? null
   const collaborator = (graph.collaborators ?? []).find((entry) => (entry.id ?? entry.userId) === requesterId) ?? null
   const isOwner = Boolean(requesterId && requesterId === ownerId)
-  const role = isOwner ? 'owner' : normalizeRole(collaborator?.role)
+  const activeMembership = membership?.status === 'active' ? membership : null
+  const role = isOwner
+    ? 'owner'
+    : activeMembership
+      ? normalizeRole(activeMembership.role)
+      : collaborator
+        ? normalizeRole(collaborator?.role)
+        : 'guest'
   const context = {
     id: requesterId ?? null,
     sessionId: request.sessionId ?? null,
     role,
     isOwner,
-    isCollaborator: Boolean(collaborator),
-    membershipSource: isOwner ? 'owner' : collaborator ? 'graph-collaborator' : 'fallback',
+    isCollaborator: role !== 'guest' && !isOwner,
+    membershipSource: isOwner
+      ? 'owner'
+      : activeMembership
+        ? 'membership'
+        : membership
+          ? stringOrNull(membership.source) ?? 'membership'
+          : collaborator
+            ? 'graph-collaborator'
+            : 'none',
     permissions: permissionsForRole(role),
     visibleFileCount: null,
     hiddenFileCount: null,
@@ -1141,6 +2195,11 @@ function visibilityContextForGraph(graph, request = {}) {
 function filterVisibleGraphForRequester(graph, request = {}) {
   const next = normalizeGraph(graph)
   const context = visibilityContextForGraph(next, request)
+  return filterVisibleGraphForAccess(next, context)
+}
+
+function filterVisibleGraphForAccess(graph, context) {
+  const next = normalizeGraph(graph)
   const files = {}
   const hiddenPaths = []
   for (const [filePath, file] of Object.entries(next.files ?? {})) {
@@ -1174,12 +2233,11 @@ function canWrite(context) {
 }
 
 function permissionsForRole(role) {
-  const permissions = []
-  if (visibleRoles.has(role)) permissions.push('read')
-  if (writeRoles.has(role)) permissions.push('write')
-  if (inviteRoles.has(role)) permissions.push('invite')
-  if (adminRoles.has(role)) permissions.push('admin', 'manage_members')
-  return permissions
+  if (role === 'owner') return ['read', 'write', 'invite', 'admin', 'manage_members', 'review', 'merge', 'release']
+  if (role === 'maintainer') return ['read', 'write', 'invite', 'review', 'merge', 'release']
+  if (role === 'member') return ['read', 'write', 'review']
+  if (role === 'viewer') return ['read']
+  return []
 }
 
 function summarizeAccessContext(context) {

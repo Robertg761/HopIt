@@ -1,6 +1,6 @@
 # Personal Production Runbook
 
-This runbook is the first real-use path for one-person HopIt dogfooding. It keeps the local JSON graph as a development fallback, and now treats Cloudflare D1 as the free-first canonical cloud graph target. Convex remains a disabled legacy backend and export source. Vercel hosts the protected dashboard. Hosted workspace commands are disabled; collaboration/member/work-item mutations are partly still legacy Convex until their D1 port lands, with Basic Auth kept only as a temporary emergency fallback.
+This runbook is the first real-use path for one-person HopIt dogfooding. It keeps the local JSON graph as a development fallback, and now treats Cloudflare D1 as the free-first canonical cloud graph target. Convex remains a disabled legacy backend and export source. Vercel hosts the protected dashboard. Hosted workspace commands are disabled; collaboration/member/work-item APIs now route through the D1 backend selector, with Basic Auth kept only as a temporary emergency fallback for selected read paths.
 
 Last updated: 2026-06-30
 
@@ -47,7 +47,7 @@ These are the accounts and source-of-truth locations for the current personal pr
 | Hosted dashboard | Vercel project `robertg761s-projects/hopit` | `.vercel/project.json`, Vercel project env, Vercel dashboard | Hosts the private Next.js dashboard on a production-shaped deployment at `hopit.dev`. |
 | Product auth | Clerk production instance through Vercel Marketplace app `hopit-auth` | Clerk dashboard, Vercel Marketplace integration, Vercel env | Provides real account sign-in for hosted HopIt. Basic Auth remains enabled only as a temporary recovery fallback. |
 | Google OAuth | Google Cloud project `HopIt` / `hopit-auth-prod-rg` under `robertgordon761@gmail.com` | Google Cloud Console Auth Platform, Clerk social connection settings, macOS Keychain credential entries | Enables Sign in with Google for the production Clerk instance without putting OAuth secrets in Vercel, Convex, docs, or repo files. |
-| Cloud graph | Cloudflare D1 | Cloudflare dashboard/API, `cloudflare/d1/schema.sql`, `cloudflare/d1/api-worker.js`, `HOPIT_D1_*` | Stores graph metadata, file metadata, account sync, action jobs, and events on a free-first backend. Member/invite/work-item/session/key tables still need full D1 porting. |
+| Cloud graph | Cloudflare D1 | Cloudflare dashboard/API, `cloudflare/d1/schema.sql`, `cloudflare/d1/api-worker.js`, `HOPIT_D1_*` | Stores graph metadata, file metadata, account sync, action jobs, events, members, invitations, and first work-item/release records on a free-first backend. Device-session and key-management cloud tables still need full D1 porting. |
 | Legacy cloud graph | Convex project `robertgordon761/hopit` | Convex dashboard, `convex/`, saved export ZIP | Disabled after Free-plan limits; retained as migration source and fallback code path only. |
 | Object blobs | Cloudflare R2 bucket `hopit-blobs` | Cloudflare dashboard, `HOPIT_R2_*`, `HOPIT_BLOB_*` | Stores file bytes through an S3-compatible adapter so D1/Convex are not used for large repository content. |
 | Local agent service | macOS LaunchAgent `com.hopit.agent.hopit` | `/Users/robert/Library/LaunchAgents/com.hopit.agent.hopit.plist` | Keeps the production-profile watcher/status service running outside the source checkout. It is running against D1; remote-pull stays disabled until the managed workspace's unjournaled local tree is resolved. |
@@ -166,7 +166,7 @@ npm run d1:migrate:convex-export -- \
 
 The production import on 2026-06-30 wrote `58` files and the latest `500` events from `11,638` exported events into D1. Use `--dry-run` for future rehearsals. Use `--all-events` only if the daily D1 write budget can absorb the full event history.
 
-The D1 path currently covers agent graph reads/writes, graph-head status polling, hosted dashboard status, codebase list/create/update/delete, text file read/edit, account sync, and hosted action jobs. Member/invite routes, work-item/release/project tables, scoped device sessions, and key-management cloud tables are still legacy Convex and need D1 ports before the Convex code can be retired completely.
+The D1 path currently covers agent graph reads/writes, graph-head status polling, hosted dashboard status, codebase list/create/update/delete, text file read/edit, account sync, hosted action jobs, member/invite routes, and first issue/discussion/release collaboration tables. Scoped device sessions, complete project-board operations, and key-management cloud tables still need D1 ports before the Convex code can be retired completely.
 
 ## Legacy Convex Backend
 

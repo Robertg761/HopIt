@@ -1,4 +1,4 @@
-export type CollaborationBackend = 'convex' | 'unavailable'
+export type CollaborationBackend = 'd1' | 'convex' | 'unavailable'
 
 export type CollaborationActionCapability = {
   enabled: boolean

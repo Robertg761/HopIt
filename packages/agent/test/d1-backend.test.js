@@ -8,6 +8,7 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
+import { createD1Backend } from '../../../src/lib/d1-backend.js'
 
 const execFileAsync = promisify(execFile)
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -44,6 +45,145 @@ test('agent can initialize, hydrate, sync, and report status through D1', async 
   assert.equal(status.cloud.path, 'd1:hopit-core')
   assert.equal(status.cloud.fileCount, 4)
   assert.equal(status.cloud.revision, 2)
+})
+
+test('D1 backend supports members, invitations, and collaboration work items', async (t) => {
+  const server = await startD1ApiServer(t)
+  const previousOwnerEmail = process.env.HOPIT_OWNER_EMAIL
+  process.env.HOPIT_OWNER_EMAIL = 'owner@example.com'
+  t.after(() => {
+    if (previousOwnerEmail === undefined) delete process.env.HOPIT_OWNER_EMAIL
+    else process.env.HOPIT_OWNER_EMAIL = previousOwnerEmail
+  })
+
+  const backend = createD1Backend({
+    'codebase-id': 'collab-core',
+    'd1-api-base-url': server.baseUrl,
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_test',
+    'd1-api-token': 'token_test',
+  })
+  await backend.initialize({
+    schemaVersion: 2,
+    codebase: {
+      id: 'collab-core',
+      name: 'Collab Core',
+      ownerId: 'local-owner',
+    },
+    main: {
+      id: 'main',
+      revision: 1,
+      updatedAt: new Date().toISOString(),
+      mergedChangeSetId: null,
+    },
+    selectedState: {
+      type: 'active-change-set',
+      id: 'cs_collab_core_main',
+      ownerId: 'local-owner',
+      baseMainId: 'main',
+      baseRevision: 1,
+      revision: 1,
+      visibility: 'team-visible',
+      effectiveVisibility: 'team-visible',
+      reviewState: 'not-open',
+      mergeState: 'unmerged',
+      conflictState: 'none',
+      conflict: null,
+      review: null,
+      merge: null,
+    },
+    owner: {
+      id: 'local-owner',
+      name: 'Local Owner',
+    },
+    collaborators: [],
+    session: {
+      id: 'session_test',
+      deviceName: 'test',
+    },
+    visibility: {
+      productDefault: 'private',
+      globalUserDefault: null,
+      codebaseOverride: null,
+      changeSetOverride: 'team-visible',
+      effective: 'team-visible',
+    },
+    revision: 1,
+    files: {
+      'README.md': {
+        kind: 'file',
+        content: 'hello',
+        encoding: 'utf8',
+        revision: 1,
+        updatedAt: new Date().toISOString(),
+      },
+    },
+  })
+
+  const owner = {
+    userId: 'user_owner',
+    primaryEmail: 'owner@example.com',
+    displayName: 'Owner',
+    currentAuthEmailVerified: true,
+  }
+  await backend.claimCodebaseOwner({ codebaseId: 'collab-core', actor: owner })
+
+  await backend.createWorkItem({
+    type: 'issue',
+    codebaseId: 'collab-core',
+    title: 'Track D1 collaboration',
+    priority: 'high',
+    labels: ['d1', 'migration', 'd1'],
+    actor: owner,
+  })
+  await backend.createWorkItem({
+    type: 'discussion',
+    codebaseId: 'collab-core',
+    title: 'Migration notes',
+    body: 'D1 is the primary backend.',
+    category: 'announcements',
+    actor: owner,
+  })
+  await backend.createWorkItem({
+    type: 'release',
+    codebaseId: 'collab-core',
+    version: 'v1.0.0-d1',
+    title: 'D1 migration',
+    notes: 'First D1-backed collaboration release.',
+    actor: owner,
+  })
+
+  const items = await backend.listWorkItems({ codebaseId: 'collab-core', actor: owner })
+  assert.equal(items.issues.length, 1)
+  assert.equal(items.issues[0].number, 1)
+  assert.deepEqual(items.issues[0].labels, ['d1', 'migration'])
+  assert.equal(items.discussions.length, 1)
+  assert.equal(items.releases.length, 1)
+
+  const invitation = await backend.createInvitation({
+    codebaseId: 'collab-core',
+    email: 'member@example.com',
+    role: 'member',
+    actor: owner,
+  })
+  assert.match(invitation.token, /^[A-Za-z0-9_-]+$/)
+
+  const member = {
+    userId: 'user_member',
+    primaryEmail: 'member@example.com',
+    displayName: 'Member',
+    currentAuthEmailVerified: true,
+  }
+  await backend.acceptInvitation({ token: invitation.token, actor: member })
+  const members = await backend.listMembers({ codebaseId: 'collab-core', status: 'active', actor: owner })
+  assert.deepEqual(members.map((row) => row.userId).sort(), ['user_member', 'user_owner'])
+
+  const memberRead = await backend.readTextFile({
+    codebaseId: 'collab-core',
+    path: 'README.md',
+    actor: member,
+  })
+  assert.equal(memberRead.content, 'hello')
 })
 
 async function startD1ApiServer(t) {
