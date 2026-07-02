@@ -226,12 +226,12 @@ Current spike:
 - Fixture conflict handling detects stale selected-state revisions, stale file/base revisions, and stale Main revisions, emits `change_set.conflict_detected`, and surfaces conflict state while preserving local edits for review.
 - The Next.js product shell now polls `/api/agent/status`, maps live local status/events/cloud data into the dashboard, and can read the Cloudflare D1 dashboard data when the D1 backend env is configured. Legacy Convex dashboard reads remain available while the old backend is being retired.
 - `/api/agent/command` exposes whitelisted local actions for sync, refresh, recover, review, and merge. Hosted D1-backed deployments can read status but still require the local agent for workspace commands.
-- `hop workspace` persists a root-level index keyed by codebase and concrete workspace path; configured-codebase discovery and metadata-only attach can bind a cloud codebase into the Workspace Root, and hydrate, refresh, and sync update the materialized revision cursor that status and remote-pull use.
+- `hop workspace` persists a root-level index keyed by codebase and concrete workspace path; D1 account-visible discovery now merges cloud codebase heads with local attach/readiness state when credentials allow it, scoped device tokens fall back to the configured codebase, metadata-only attach can bind a cloud codebase into the Workspace Root, and hydrate, refresh, and sync update the materialized revision cursor that status and remote-pull use.
 - `hop device` / `hop session` exposes local session status. Scoped session registration, listing, touch, and revocation now work on D1 and the legacy Convex fallback; the D1 proxy can accept scoped session tokens for codebase-scoped reads/writes, while installer/setup UX and complete product write-path coverage remain to harden.
 
 Current next work:
 
-1. Finish the HopIt Workspace Root product contract: account-wide cloud codebase discovery, richer per-file cache metadata, and automatic lazy materialization policy on top of the current configured-codebase attach, metadata-only, and single-file hydrate primitives.
+1. Finish the HopIt Workspace Root product contract: automatic account setup/attach UX, richer per-file cache metadata, and automatic lazy materialization policy on top of the current D1 account-visible discovery, metadata-only attach, and single-file hydrate primitives.
 2. Broaden object-backed content-addressed storage and per-file revision guards beyond the agent sync path into full history, large files, product write flows, retention, and garbage collection.
 3. Implement the privacy/encryption framework: device trust, user vault keys,
    repo/private/secret zone keys, encrypted blobs, key grants, invite-time key

@@ -48,6 +48,112 @@ test('agent can initialize, hydrate, sync, and report status through D1', async 
   assert.equal(status.cloud.revision, 2)
 })
 
+test('workspace discover lists account-visible D1 codebases with local readiness', async (t) => {
+  const server = await startD1ApiServer(t)
+  const state = await makeState()
+  const baseArgs = [
+    ...stateArgs(state),
+    '--cloud-backend',
+    'd1',
+    '--d1-api-base-url',
+    server.baseUrl,
+    '--d1-account-id',
+    'account_test',
+    '--d1-database-id',
+    'database_test',
+    '--d1-api-token',
+    'token_test',
+  ]
+
+  await runCli('init', [...baseArgs, '--codebase-id', 'hopit-core', '--force'])
+  await runCli('hydrate', [...baseArgs, '--codebase-id', 'hopit-core'])
+  const backend = createD1Backend({
+    'codebase-id': 'beta-core',
+    'd1-api-base-url': server.baseUrl,
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_test',
+    'd1-api-token': 'token_test',
+  })
+  await backend.initialize({
+    schemaVersion: 2,
+    codebase: {
+      id: 'beta-core',
+      name: 'Beta Core',
+      ownerId: 'user_demo_owner',
+    },
+    main: {
+      id: 'main',
+      revision: 1,
+      updatedAt: new Date().toISOString(),
+      mergedChangeSetId: null,
+    },
+    selectedState: {
+      type: 'active-change-set',
+      id: 'cs_beta_core_active',
+      ownerId: 'user_demo_owner',
+      baseMainId: 'main',
+      baseRevision: 1,
+      revision: 1,
+      visibility: 'private',
+      effectiveVisibility: 'private',
+      reviewState: 'not-open',
+      mergeState: 'unmerged',
+      conflictState: 'none',
+      conflict: null,
+      review: null,
+      merge: null,
+    },
+    owner: {
+      id: 'user_demo_owner',
+      name: 'Demo Owner',
+    },
+    collaborators: [],
+    session: {
+      id: 'session_beta_core',
+      deviceName: 'test',
+    },
+    visibility: {
+      productDefault: 'private',
+      globalUserDefault: null,
+      codebaseOverride: null,
+      changeSetOverride: 'private',
+      effective: 'private',
+    },
+    revision: 1,
+    files: {
+      'README.md': {
+        kind: 'file',
+        content: 'beta',
+        encoding: 'utf8',
+        revision: 1,
+        updatedAt: new Date().toISOString(),
+      },
+    },
+  })
+
+  const discovered = JSON.parse((await runCli('workspace', [
+    'discover',
+    ...baseArgs,
+    '--codebase-id',
+    'hopit-core',
+  ])).stdout)
+
+  assert.equal(discovered.ok, true)
+  assert.equal(discovered.cloud.discovery, 'account-codebases')
+  assert.equal(discovered.codebases.length, 2)
+
+  const alpha = discovered.codebases.find((codebase) => codebase.id === 'hopit-core')
+  const beta = discovered.codebases.find((codebase) => codebase.id === 'beta-core')
+  assert.equal(alpha.attached, true)
+  assert.equal(alpha.remoteUpdate.state, 'ready')
+  assert.equal(alpha.remoteUpdate.behindByRevisions, 0)
+  assert.equal(alpha.workspace.hydration.state, 'materialized')
+  assert.equal(beta.attached, false)
+  assert.equal(beta.remoteUpdate.state, 'not-attached')
+  assert.equal(beta.workspace.hydration.state, 'not_attached')
+  assert.equal(beta.cloud.service, 'cloudflare-d1-graph')
+})
+
 test('D1 backend supports members, invitations, and collaboration work items', async (t) => {
   const server = await startD1ApiServer(t)
   const previousOwnerEmail = process.env.HOPIT_OWNER_EMAIL

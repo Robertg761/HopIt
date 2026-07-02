@@ -392,7 +392,38 @@ export class CloudflareD1HopBackend {
         )
       : await this.query(`select * from codebases order by updated_at desc`)
 
-    return rows.map((row) => summarizeCodebaseHead(codebaseRowToRecord(row), null))
+    const summaries = []
+    for (const row of rows) {
+      const record = codebaseRowToRecord(row)
+      summaries.push(summarizeCodebaseHead(record, await this.readCodebaseHeadAccess(record, actor)))
+    }
+    return summaries
+  }
+
+  async readCodebaseHeadAccess(record, actor = {}) {
+    const actorId = stringOrNull(actor.userId)
+    const membership = actorId
+      ? await this.first(
+          `select * from codebase_members where codebase_id = ? and user_id = ? limit 1`,
+          [record.codebaseId, actorId],
+        )
+      : null
+    const context = visibilityContextForGraph({
+      codebase: {
+        id: record.codebaseId,
+        ownerId: record.ownerId,
+      },
+      owner: record.owner ?? (record.ownerId ? { id: record.ownerId } : null),
+      collaborators: record.collaborators ?? [],
+      visibility: record.visibility,
+      selectedState: record.selectedState,
+      files: {},
+    }, {
+      requesterId: actorId,
+      sessionId: stringOrNull(actor.sessionId),
+      membership,
+    })
+    return accessContextForCodebaseHead(record, context)
   }
 
   async upsertUser(user) {
@@ -4265,7 +4296,50 @@ function summarizeCodebaseHead(codebase, access = null) {
     fileCount: integerOrNull(codebase.fileCount),
     privateFileCount: integerOrNull(codebase.privateFileCount),
     memberCount: integerOrNull(codebase.memberCount),
+    remoteUpdate: summarizeCodebaseRemoteUpdate(codebase),
     updatedAt: stringOrNull(codebase.updatedAt),
+  }
+}
+
+function summarizeCodebaseRemoteUpdate(codebase) {
+  const selectedState = codebase.selectedState && typeof codebase.selectedState === 'object'
+    ? codebase.selectedState
+    : null
+  return {
+    state: 'cloud-head-ready',
+    delivery: 'manual-or-activity-gated',
+    graphRevision: integerOrNull(codebase.revision),
+    mainRevision: integerOrNull(codebase.main?.revision),
+    selectedStateRevision: integerOrNull(selectedState?.revision),
+    updatedAt: stringOrNull(codebase.updatedAt),
+  }
+}
+
+function accessContextForCodebaseHead(codebase, context) {
+  if (!context) return null
+
+  const fileCount = integerOrNull(codebase.fileCount) ?? 0
+  const privateFileCount = integerOrNull(codebase.privateFileCount) ?? 0
+  const sharedFileCount = Math.max(0, fileCount - privateFileCount)
+  const effectiveVisibility =
+    stringOrNull(codebase.selectedState?.effectiveVisibility) ??
+    stringOrNull(codebase.visibility?.effective) ??
+    'private'
+  const visibleFileCount = context.isOwner
+    ? fileCount
+    : context.role === 'guest' || effectiveVisibility === 'private'
+      ? 0
+      : sharedFileCount
+  const hiddenFileCount = Math.max(0, fileCount - visibleFileCount)
+
+  return {
+    ...context,
+    visibleFileCount,
+    hiddenFileCount,
+    hiddenScopeCounts: {
+      shared: Math.max(0, sharedFileCount - visibleFileCount),
+      private: context.isOwner ? 0 : privateFileCount,
+    },
   }
 }
 

@@ -1256,7 +1256,7 @@ test('workspace discover and attach bind a cloud codebase without hydrating file
   assert.equal(discovered.ok, true)
   assert.equal(discovered.action, 'discover')
   assert.equal(discovered.cloud.exists, true)
-  assert.equal(discovered.cloud.discovery, 'configured-codebase')
+  assert.equal(discovered.cloud.discovery, 'account-codebases')
   assert.equal(discovered.root.exists, false)
   assert.equal(discovered.codebases.length, 1)
   assert.equal(discovered.codebases[0].id, 'hopit-core')
@@ -1264,6 +1264,7 @@ test('workspace discover and attach bind a cloud codebase without hydrating file
   assert.equal(discovered.codebases[0].available, true)
   assert.equal(discovered.codebases[0].workspace.path, workspace)
   assert.equal(discovered.codebases[0].workspace.hydration.state, 'not_attached')
+  assert.equal(discovered.codebases[0].remoteUpdate.state, 'not-attached')
 
   const attached = parseLastJsonObject((await runCli('workspace', ['attach', ...args])).stdout)
   assert.equal(attached.ok, true)

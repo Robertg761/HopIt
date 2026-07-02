@@ -1092,11 +1092,18 @@ async function discoverWorkspaces(options, discoverOptions = {}) {
   const action = discoverOptions.action ?? 'discover'
   const cloudService = createCloudGraphService(options)
   const cloud = await cloudService.readOptionalVisibleGraph(visibilityRequestFromOptions(options))
+  const cloudDiscovery = await discoverCloudCodebases(options, cloudService, cloud)
   const index = await readWorkspaceIndex(options)
   const rootPath = path.resolve(workspaceRootFromOptions(options))
   const codebases = []
 
-  if (cloud?.codebase) {
+  if (cloudDiscovery.discovery.startsWith('configured-codebase') && cloud?.codebase) {
+    codebases.push(discoveredCloudCodebase(options, cloud, index, cloudService))
+  } else if (cloudDiscovery.codebases.length > 0) {
+    for (const cloudCodebase of cloudDiscovery.codebases) {
+      codebases.push(discoveredCloudCodebaseHead(options, cloudCodebase, index, cloudService))
+    }
+  } else if (cloud?.codebase) {
     codebases.push(discoveredCloudCodebase(options, cloud, index, cloudService))
   }
 
@@ -1128,10 +1135,38 @@ async function discoverWorkspaces(options, discoverOptions = {}) {
       service: cloudService.type,
       path: cloudService.location ?? cloudLocationFromOptions(options),
       exists: Boolean(cloud),
-      discovery: 'configured-codebase',
+      discovery: cloudDiscovery.discovery,
+      error: cloudDiscovery.error,
     },
     codebases,
   }, null, 2))
+}
+
+async function discoverCloudCodebases(options, cloudService, configuredCloud) {
+  if (typeof cloudService.listCodebases !== 'function') {
+    return {
+      discovery: 'configured-codebase',
+      codebases: configuredCloud?.codebase ? [graphHeadFromGraph(configuredCloud)] : [],
+      error: null,
+    }
+  }
+
+  try {
+    const codebases = (await cloudService.listCodebases(visibilityRequestFromOptions(options)))
+      .map(normalizeCloudGraphHead)
+      .filter((codebase) => codebase?.codebase?.id)
+    return {
+      discovery: codebases.length > 0 ? 'account-codebases' : 'account-codebases-empty',
+      codebases,
+      error: null,
+    }
+  } catch (error) {
+    return {
+      discovery: 'configured-codebase-fallback',
+      codebases: configuredCloud?.codebase ? [graphHeadFromGraph(configuredCloud)] : [],
+      error: error instanceof Error ? error.message : 'Account-wide codebase discovery failed.',
+    }
+  }
 }
 
 async function attachWorkspace(options) {
@@ -3673,13 +3708,82 @@ function discoveredCloudCodebase(options, cloud, index, cloudService) {
     scopeCounts: countCloudScopes(cloud),
     hiddenScopeCounts: cloud.visibilityContext?.hiddenScopeCounts ?? null,
     materialization: indexedCodebase?.materialization ?? 'not-attached',
-    remoteCursor: indexedCodebase?.remoteCursor ?? null,
+    remoteCursor: discoveryRemoteCursor(indexedCodebase, graphHeadFromGraph(cloud)),
+    remoteUpdate: discoveryRemoteUpdate(indexedCodebase, graphHeadFromGraph(cloud)),
     virtualized: false,
+    updatedAt: cloud.updatedAt ?? null,
+  }
+}
+
+function discoveredCloudCodebaseHead(options, head, index, cloudService) {
+  const codebaseId = head.codebase?.id ?? options['codebase-id'] ?? path.basename(path.resolve(options.workspace))
+  const codebaseOptions = workspaceOptionsForCodebaseId(options, codebaseId)
+  const indexedCodebase =
+    findIndexedCodebase(index, codebaseId, codebaseOptions.workspace) ??
+    findIndexedCodebase(index, codebaseId)
+  const workspacePath = path.resolve(indexedCodebase?.workspace?.path ?? codebaseOptions.workspace)
+  const workspaceRoot = path.resolve(indexedCodebase?.workspace?.root ?? workspaceRootFromOptions(codebaseOptions))
+  const remoteCursor = discoveryRemoteCursor(indexedCodebase, head)
+  const fileCount = head.access?.visibleFileCount ?? head.fileCount ?? 0
+  const privateFileCount = head.privateFileCount ?? 0
+
+  return {
+    id: codebaseId,
+    name: head.codebase?.name ?? codebaseId,
+    source: 'account-cloud',
+    attached: Boolean(indexedCodebase),
+    available: head.exists !== false,
+    initialized: head.exists !== false,
+    workspace: {
+      root: workspaceRoot,
+      path: workspacePath,
+      exists: existsSync(workspacePath),
+      adapter: workspaceMode.adapter,
+      cacheMode: workspaceMode.cacheMode,
+      virtualized: false,
+      hydration: indexedCodebase?.hydration ?? { state: 'not_attached' },
+    },
+    cloud: {
+      path: cloudLocationFromOptions(options, codebaseId),
+      service: cloudService.type,
+      exists: head.exists !== false,
+    },
+    ownerId: head.codebase?.ownerId ?? head.owner?.id ?? null,
+    activeChangeSetId: head.selectedState?.type === 'active-change-set' ? head.selectedState.id : null,
+    mainId: head.main?.id ?? null,
+    selectedState: {
+      type: head.selectedState?.type ?? null,
+      id: head.selectedState?.id ?? null,
+      revision: head.selectedState?.revision ?? null,
+      visibility: head.selectedState?.effectiveVisibility ?? head.visibility?.effective ?? null,
+      reviewState: head.selectedState?.reviewState ?? null,
+      mergeState: head.selectedState?.mergeState ?? null,
+      conflictState: head.selectedState?.conflictState ?? null,
+    },
+    access: head.access ?? null,
+    visibleFileCount: fileCount,
+    hiddenFileCount: head.access?.hiddenFileCount ?? null,
+    privateFileCount,
+    memberCount: head.memberCount ?? null,
+    scopeCounts: {
+      shared: Math.max(0, (head.fileCount ?? fileCount) - privateFileCount),
+      private: privateFileCount,
+    },
+    hiddenScopeCounts: head.access?.hiddenScopeCounts ?? null,
+    materialization: indexedCodebase?.materialization ?? 'not-attached',
+    remoteCursor,
+    remoteUpdate: discoveryRemoteUpdate(indexedCodebase, head, remoteCursor),
+    virtualized: false,
+    updatedAt: head.updatedAt ?? head.remoteUpdate?.updatedAt ?? null,
   }
 }
 
 function workspaceOptionsForCloudCodebase(options, cloud) {
   const codebaseId = cloud.codebase?.id ?? options['codebase-id'] ?? path.basename(path.resolve(options.workspace))
+  return workspaceOptionsForCodebaseId(options, codebaseId)
+}
+
+function workspaceOptionsForCodebaseId(options, codebaseId) {
   const next = {
     ...options,
     'codebase-id': codebaseId,
@@ -3690,6 +3794,55 @@ function workspaceOptionsForCloudCodebase(options, cloud) {
   }
 
   return next
+}
+
+function discoveryRemoteCursor(indexedCodebase, head) {
+  const graphRevision = head.remoteUpdate?.graphRevision ?? head.revision ?? null
+  const materializedRevision =
+    indexedCodebase?.remoteCursor?.materializedRevision ??
+    indexedCodebase?.hydration?.lastMaterializedRevision ??
+    null
+  return {
+    graphRevision,
+    selectedStateId: head.selectedState?.id ?? null,
+    selectedStateType: head.selectedState?.type ?? null,
+    selectedStateRevision: head.selectedState?.revision ?? head.remoteUpdate?.selectedStateRevision ?? null,
+    materializedRevision,
+    lastMaterializedAt:
+      indexedCodebase?.remoteCursor?.lastMaterializedAt ??
+      indexedCodebase?.hydration?.lastMaterializedAt ??
+      null,
+    behindByRevisions:
+      Number.isInteger(graphRevision) && Number.isInteger(materializedRevision)
+        ? Math.max(0, graphRevision - materializedRevision)
+        : null,
+  }
+}
+
+function discoveryRemoteUpdate(indexedCodebase, head, cursor = discoveryRemoteCursor(indexedCodebase, head)) {
+  const hydrationState = indexedCodebase?.hydration?.state ?? 'not_attached'
+  const behindByRevisions = cursor.behindByRevisions
+  const state = !indexedCodebase
+    ? 'not-attached'
+    : hydrationState === 'metadata-only' || hydrationState === 'partial'
+      ? 'needs-hydration'
+      : behindByRevisions === null
+        ? 'unknown'
+        : behindByRevisions > 0
+          ? 'behind'
+          : 'ready'
+
+  return {
+    state,
+    delivery: head.remoteUpdate?.delivery ?? 'manual-or-activity-gated',
+    graphRevision: cursor.graphRevision,
+    materializedRevision: cursor.materializedRevision,
+    selectedStateRevision: cursor.selectedStateRevision,
+    behindByRevisions,
+    safeRefreshOnly: true,
+    localHydrationState: hydrationState,
+    updatedAt: head.updatedAt ?? head.remoteUpdate?.updatedAt ?? null,
+  }
 }
 
 function workspaceFolderNameForCodebase(codebaseId) {
@@ -7154,6 +7307,11 @@ class FixtureJsonCloudGraphService {
     return this.readVisibleGraph(request)
   }
 
+  async listCodebases(request = {}) {
+    const graph = await this.readOptionalVisibleGraph(request)
+    return graph ? [graphHeadFromGraph(graph)] : []
+  }
+
   async writeGraph(cloud) {
     const normalized = normalizeValidatedCloudGraph(cloud)
     await prepareGraphForBlobStorage(this, normalized)
@@ -7245,6 +7403,13 @@ class ConvexCloudGraphService {
     const graph = await this.readOptionalGraph()
     if (!graph) return null
     return filterVisibleGraphForRequester(graph, request)
+  }
+
+  async listCodebases() {
+    const args = {}
+    Object.assign(args, this.credentialArgs())
+    const codebases = await this.client.query(anyApi.agent.listCodebases, args)
+    return Array.isArray(codebases) ? codebases.map(normalizeCloudGraphHead).filter(Boolean) : []
   }
 
   async writeGraph(cloud) {
@@ -7472,6 +7637,14 @@ class D1CloudGraphService extends CloudflareD1HopBackend {
     return graph ? filterVisibleGraphForRequester(graph, request) : null
   }
 
+  async listCodebases(request = {}) {
+    const codebases = await super.listCodebases({
+      userId: request.requesterId,
+      sessionId: request.sessionId,
+    })
+    return Array.isArray(codebases) ? codebases.map(normalizeCloudGraphHead).filter(Boolean) : []
+  }
+
   async writeGraph(cloud) {
     const normalized = normalizeValidatedCloudGraph(cloud)
     this.codebaseId = normalized.codebase.id
@@ -7548,7 +7721,11 @@ function graphHeadFromGraph(cloud) {
     owner: graph.owner,
     session: graph.session,
     visibility: graph.visibility,
+    access: graph.visibilityContext ?? null,
     revision: graph.revision,
+    fileCount: Object.keys(graph.files ?? {}).length,
+    privateFileCount: Object.keys(graph.files ?? {}).filter((filePath) => scopeForPath(filePath) === 'owner-private').length,
+    memberCount: 1 + (Array.isArray(graph.collaborators) ? graph.collaborators.length : 0),
   })
 }
 
@@ -7560,6 +7737,8 @@ function normalizeCloudGraphHead(head) {
   const selectedState = objectOrNull(head.selectedState)
   const owner = objectOrNull(head.owner)
   const session = objectOrNull(head.session)
+  const access = objectOrNull(head.access)
+  const remoteUpdate = objectOrNull(head.remoteUpdate)
 
   return {
     exists: head.exists !== false,
@@ -7600,7 +7779,40 @@ function normalizeCloudGraphHead(head) {
         }
       : null,
     visibility: objectOrNull(head.visibility),
+    access: access
+      ? {
+          id: textOrNull(access.id),
+          sessionId: textOrNull(access.sessionId),
+          role: textOrNull(access.role) ?? 'guest',
+          isOwner: access.isOwner === true,
+          isCollaborator: access.isCollaborator === true,
+          membershipSource: textOrNull(access.membershipSource) ?? 'unknown',
+          permissions: Array.isArray(access.permissions)
+            ? access.permissions.filter((permission) => typeof permission === 'string')
+            : [],
+          visibleFileCount: integerOrNull(access.visibleFileCount),
+          hiddenFileCount: integerOrNull(access.hiddenFileCount),
+          hiddenScopeCounts: objectOrNull(access.hiddenScopeCounts),
+        }
+      : null,
     revision: integerOrNull(head.revision),
+    fileCount: integerOrNull(head.fileCount),
+    privateFileCount: integerOrNull(head.privateFileCount),
+    memberCount: integerOrNull(head.memberCount),
+    remoteUpdate: remoteUpdate
+      ? {
+          state: textOrNull(remoteUpdate.state),
+          delivery: textOrNull(remoteUpdate.delivery),
+          graphRevision: integerOrNull(remoteUpdate.graphRevision),
+          mainRevision: integerOrNull(remoteUpdate.mainRevision),
+          materializedRevision: integerOrNull(remoteUpdate.materializedRevision),
+          selectedStateRevision: integerOrNull(remoteUpdate.selectedStateRevision),
+          behindByRevisions: integerOrNull(remoteUpdate.behindByRevisions),
+          safeRefreshOnly: remoteUpdate.safeRefreshOnly === true,
+          localHydrationState: textOrNull(remoteUpdate.localHydrationState),
+          updatedAt: textOrNull(remoteUpdate.updatedAt),
+        }
+      : null,
     updatedAt: textOrNull(head.updatedAt),
   }
 }

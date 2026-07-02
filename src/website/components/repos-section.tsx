@@ -3,6 +3,7 @@
 import * as React from 'react'
 import { motion } from 'framer-motion'
 import {
+  CheckCircle2,
   Clock,
   FileStack,
   History,
@@ -10,6 +11,7 @@ import {
   MoreHorizontal,
   Pencil,
   Plus,
+  RefreshCcw,
   Share2,
   Trash2,
 } from 'lucide-react'
@@ -44,11 +46,29 @@ type CodebaseRow = {
     effectiveVisibility: string | null
     reviewState: string | null
     mergeState: string | null
+    conflictState: string | null
   } | null
   access?: {
     role?: string | null
     isOwner?: boolean
+    membershipSource?: string | null
     permissions?: string[]
+    visibleFileCount?: number | null
+    hiddenFileCount?: number | null
+  } | null
+  workspace?: {
+    attached: boolean
+    path: string | null
+    hydrationState: string
+    materialization: string | null
+  } | null
+  remoteUpdate?: {
+    state: string | null
+    delivery: string | null
+    graphRevision: number | null
+    materializedRevision: number | null
+    behindByRevisions: number | null
+    localHydrationState: string | null
   } | null
   revision: number | null
   updatedAt: string | null
@@ -331,6 +351,16 @@ function CodebaseCard({
   const canRename = permissions.has('write')
   const canShare = permissions.has('invite') || permissions.has('manage_members')
   const canDelete = codebase.access?.isOwner === true
+  const workspaceState = codebase.workspace?.hydrationState ?? 'cloud-only'
+  const remoteUpdateState = codebase.remoteUpdate?.state ?? 'cloud-head-ready'
+  const workspaceLabel = formatStateLabel(workspaceState)
+  const behindByRevisions = codebase.remoteUpdate?.behindByRevisions
+  const remoteUpdateLabel =
+    behindByRevisions === null || behindByRevisions === undefined
+      ? formatStateLabel(remoteUpdateState)
+      : behindByRevisions > 0
+        ? `${behindByRevisions} behind`
+        : 'current'
 
   return (
     <motion.article
@@ -397,14 +427,14 @@ function CodebaseCard({
         </div>
 
         <div className="flex flex-wrap gap-1.5">
-          {[visibility, codebase.selectedState?.reviewState, codebase.selectedState?.mergeState]
+          {[visibility, workspaceState, remoteUpdateState, codebase.selectedState?.reviewState, codebase.selectedState?.mergeState, codebase.selectedState?.conflictState]
             .filter(Boolean)
             .map((tag) => (
               <span
                 key={tag}
                 className="rounded-md border border-border/40 bg-secondary/80 px-2 py-0.5 text-[9px] font-bold uppercase tracking-wide text-muted-foreground"
               >
-                #{tag}
+                #{formatStateLabel(String(tag))}
               </span>
             ))}
         </div>
@@ -422,19 +452,30 @@ function CodebaseCard({
             <Share2 className="size-3 text-primary" />
             {codebase.memberCount} members
           </span>
+          <span className="flex items-center gap-1.5">
+            <RefreshCcw className="size-3 text-primary" />
+            {remoteUpdateLabel}
+          </span>
         </div>
       </div>
 
       <div className="flex items-center gap-3 rounded-lg border border-border/40 bg-secondary/35 p-2.5">
-        <div className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary text-[9px] font-black text-primary-foreground">
-          {codebase.codebase.name.slice(0, 1).toUpperCase()}
+        <div className={cn(
+          'flex size-6 shrink-0 items-center justify-center rounded-full text-[9px] font-black',
+          selected ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground',
+        )}>
+          {remoteUpdateState === 'ready' || remoteUpdateLabel === 'current' ? (
+            <CheckCircle2 className="size-3.5" />
+          ) : (
+            codebase.codebase.name.slice(0, 1).toUpperCase()
+          )}
         </div>
         <div className="min-w-0 flex-1">
           <p className="truncate text-xs font-bold text-foreground">
             {selected ? 'Selected in dashboard' : 'Available codebase'}
           </p>
           <p className="truncate text-[10px] text-muted-foreground">
-            {codebase.privateFileCount} private files
+            {workspaceLabel} / {codebase.access?.membershipSource ?? role} / {codebase.privateFileCount} private files
           </p>
         </div>
         <span className="flex shrink-0 items-center gap-1 text-[10px] font-medium text-muted-foreground">
@@ -465,17 +506,23 @@ function normalizeCodebaseRow(value: unknown): CodebaseRow {
           effectiveVisibility: stringValue(selectedState.effectiveVisibility),
           reviewState: stringValue(selectedState.reviewState),
           mergeState: stringValue(selectedState.mergeState),
+          conflictState: stringValue(selectedState.conflictState),
         }
       : null,
     access: access
       ? {
           role: stringValue(access.role),
           isOwner: access.isOwner === true,
+          membershipSource: stringValue(access.membershipSource),
           permissions: Array.isArray(access.permissions)
             ? access.permissions.filter((permission): permission is string => typeof permission === 'string')
             : [],
+          visibleFileCount: numberValue(access.visibleFileCount),
+          hiddenFileCount: numberValue(access.hiddenFileCount),
         }
       : null,
+    workspace: normalizeWorkspace(row),
+    remoteUpdate: normalizeRemoteUpdate(row.remoteUpdate),
     revision: numberValue(row.revision),
     updatedAt: stringValue(row.updatedAt),
     fileCount: numberValue(row.fileCount) ?? 0,
@@ -485,12 +532,22 @@ function normalizeCodebaseRow(value: unknown): CodebaseRow {
 }
 
 function codebasesWithLiveFallback(codebases: CodebaseRow[], status: AgentStatusSnapshot) {
-  if (!status.codebaseId || codebases.some((codebase) => codebase.codebase.id === status.codebaseId)) {
+  if (!status.codebaseId) {
     return codebases
   }
 
-  return [
-    normalizeCodebaseRow({
+  const liveCodebase = liveCodebaseRow(status)
+  if (codebases.some((codebase) => codebase.codebase.id === status.codebaseId)) {
+    return codebases.map((codebase) =>
+      codebase.codebase.id === status.codebaseId ? mergeLiveCodebaseRow(codebase, liveCodebase) : codebase,
+    )
+  }
+
+  return [liveCodebase, ...codebases]
+}
+
+function liveCodebaseRow(status: AgentStatusSnapshot) {
+  return normalizeCodebaseRow({
       codebase: {
         id: status.codebaseId,
         name: status.codebaseName,
@@ -502,16 +559,78 @@ function codebasesWithLiveFallback(codebases: CodebaseRow[], status: AgentStatus
         effectiveVisibility: status.visibility,
         reviewState: status.reviewState,
         mergeState: status.mergeState,
+        conflictState: status.conflictState,
       },
       access: status.requester,
+      workspace: {
+        attached: true,
+        path: status.managedWorkspacePath,
+        hydrationState: status.workspaceHydrationState,
+        materialization: status.cacheState === 'ready' ? 'managed-folder' : status.cacheState,
+      },
+      remoteUpdate: {
+        state:
+          status.remoteBehindByRevisions === null
+            ? status.remotePullMode
+            : status.remoteBehindByRevisions > 0
+              ? 'behind'
+              : 'ready',
+        delivery: status.remotePullMode,
+        graphRevision: revisionNumber(status.cloudRevision),
+        materializedRevision: status.workspaceMaterializedRevision,
+        behindByRevisions: status.remoteBehindByRevisions,
+        localHydrationState: status.workspaceHydrationState,
+      },
       revision: revisionNumber(status.cloudRevision),
       updatedAt: status.rawUpdatedAt,
       fileCount: status.fileCount,
       privateFileCount: status.files.filter((file) => file.scope === 'owner-private').length,
       memberCount: status.members.length,
-    }),
-    ...codebases,
-  ]
+    })
+}
+
+function mergeLiveCodebaseRow(codebase: CodebaseRow, liveCodebase: CodebaseRow): CodebaseRow {
+  return {
+    ...codebase,
+    access: liveCodebase.access ?? codebase.access,
+    workspace: liveCodebase.workspace ?? codebase.workspace,
+    remoteUpdate: liveCodebase.remoteUpdate ?? codebase.remoteUpdate,
+    selectedState: liveCodebase.selectedState ?? codebase.selectedState,
+    revision: liveCodebase.revision ?? codebase.revision,
+    updatedAt: liveCodebase.updatedAt ?? codebase.updatedAt,
+    fileCount: liveCodebase.fileCount || codebase.fileCount,
+    privateFileCount: liveCodebase.privateFileCount || codebase.privateFileCount,
+    memberCount: Math.max(codebase.memberCount, liveCodebase.memberCount),
+  }
+}
+
+function normalizeWorkspace(row: Record<string, unknown>): CodebaseRow['workspace'] {
+  const workspace = recordValue(row.workspace)
+  const hydration = recordValue(workspace.hydration)
+  const path = stringValue(workspace.path)
+  const hydrationState = stringValue(hydration.state) ?? stringValue(row.materialization) ?? 'cloud-only'
+  if (!path && hydrationState === 'cloud-only') return null
+
+  return {
+    attached: Boolean(row.attached) || hydrationState !== 'cloud-only',
+    path,
+    hydrationState,
+    materialization: stringValue(row.materialization),
+  }
+}
+
+function normalizeRemoteUpdate(value: unknown): CodebaseRow['remoteUpdate'] {
+  const remoteUpdate = recordValue(value)
+  if (Object.keys(remoteUpdate).length === 0) return null
+
+  return {
+    state: stringValue(remoteUpdate.state),
+    delivery: stringValue(remoteUpdate.delivery),
+    graphRevision: numberValue(remoteUpdate.graphRevision),
+    materializedRevision: numberValue(remoteUpdate.materializedRevision),
+    behindByRevisions: numberValue(remoteUpdate.behindByRevisions),
+    localHydrationState: stringValue(remoteUpdate.localHydrationState),
+  }
 }
 
 function revisionNumber(revision: string) {
@@ -527,6 +646,14 @@ function formatUpdatedAt(value: string | null) {
     month: 'short',
     day: 'numeric',
   }).format(timestamp)
+}
+
+function formatStateLabel(value: string) {
+  return value
+    .split(/[-_ ]+/)
+    .filter(Boolean)
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join(' ')
 }
 
 function recordValue(value: unknown): Record<string, unknown> {
