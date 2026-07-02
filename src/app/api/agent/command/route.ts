@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { NextResponse } from 'next/server'
+import { mergeLocalProductionEnv, normalizeCloudBackend } from '@/lib/local-production-env'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -59,9 +60,10 @@ export async function POST(request: Request) {
   }
 
   return runExclusiveCommand(command, async () => {
+    const commandEnv = localCommandEnv()
     let codebaseId: string
     try {
-      codebaseId = codebaseIdFromRequest(body)
+      codebaseId = codebaseIdFromRequest(body, commandEnv)
     } catch (error) {
       return commandError('invalid_codebase_id', error instanceof Error ? error.message : 'Invalid codebase id.', 400)
     }
@@ -69,6 +71,7 @@ export async function POST(request: Request) {
     if (extraArgs instanceof NextResponse) return extraArgs
 
     const result = await runAgentCli(commandConfig.cliCommand, codebaseId, extraArgs, {
+      env: commandEnv,
       prefixArgs: 'subcommand' in commandConfig ? [commandConfig.subcommand] : [],
       timeoutMs: 'timeoutMs' in commandConfig ? commandConfig.timeoutMs : undefined,
     })
@@ -177,18 +180,19 @@ function runAgentCli(
   command: string,
   codebaseId: string,
   extraArgs: string[] = [],
-  config: { prefixArgs?: string[]; timeoutMs?: number } = {},
+  config: { env?: NodeJS.ProcessEnv; prefixArgs?: string[]; timeoutMs?: number } = {},
 ) {
   return new Promise<{ exitCode: number | null; stdout: string; stderr: string }>((resolve, reject) => {
+    const commandEnv = config.env ?? localCommandEnv()
     const child = spawn(process.execPath, [
       agentCli,
       command,
       ...(config.prefixArgs ?? []),
-      ...stateArgsForCodebase(codebaseId),
+      ...stateArgsForCodebase(codebaseId, commandEnv),
       ...extraArgs,
     ], {
       cwd,
-      env: process.env,
+      env: commandEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
     })
 
@@ -249,9 +253,9 @@ function commandArgsFromRequest(command: AgentCommand, body: AgentCommandRequest
   return args
 }
 
-function codebaseIdFromRequest(body: AgentCommandRequest) {
+function codebaseIdFromRequest(body: AgentCommandRequest, env: NodeJS.ProcessEnv) {
   const requested = typeof body.codebaseId === 'string' ? body.codebaseId.trim() : ''
-  const fallback = process.env.HOPIT_CODEBASE_ID ?? 'hopit'
+  const fallback = env.HOPIT_CODEBASE_ID ?? 'hopit'
   const codebaseId = requested || fallback
   if (!/^[a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?$/.test(codebaseId)) {
     throw new Error('Codebase id may only contain lowercase letters, numbers, and dashes.')
@@ -259,7 +263,17 @@ function codebaseIdFromRequest(body: AgentCommandRequest) {
   return codebaseId
 }
 
-function stateArgsForCodebase(codebaseId: string) {
+function stateArgsForCodebase(codebaseId: string, env: NodeJS.ProcessEnv) {
+  if (commandProfile(env) === 'production') {
+    return [
+      '--profile',
+      'production',
+      '--codebase-id',
+      codebaseId,
+      ...backendArgs(env),
+    ]
+  }
+
   return [
     '--cloud',
     path.join(localStateRoot, 'cloud', `${codebaseId}.json`),
@@ -275,25 +289,37 @@ function stateArgsForCodebase(codebaseId: string) {
     path.join(localStateRoot, 'events', `${codebaseId}.ndjson`),
     '--codebase-id',
     codebaseId,
-    ...backendArgs(),
+    ...backendArgs(env),
   ]
 }
 
-function backendArgs() {
-  const backend = process.env.HOPIT_CLOUD_BACKEND
-  if (backend === 'd1' || backend === 'cloudflare-d1') {
+function commandProfile(env: NodeJS.ProcessEnv) {
+  const requested = env.HOPIT_COMMAND_PROFILE?.trim()
+  if (requested === 'production') return 'production'
+  if (requested === 'development') return 'development'
+  if (env.HOPIT_WORKSPACE_ROOT || env.HOPIT_AGENT_STATE_ROOT || env.HOPIT_WORKSPACE_INDEX) return 'production'
+  return 'development'
+}
+
+function backendArgs(env: NodeJS.ProcessEnv) {
+  const backend = normalizeCloudBackend(env.HOPIT_CLOUD_BACKEND)
+  if (backend === 'd1') {
     return [
       '--cloud-backend',
       'd1',
-      ...optionArg('--d1-account-id', process.env.HOPIT_D1_ACCOUNT_ID ?? process.env.CLOUDFLARE_ACCOUNT_ID),
-      ...optionArg('--d1-database-id', process.env.HOPIT_D1_DATABASE_ID),
-      ...optionArg('--d1-api-base-url', process.env.HOPIT_D1_API_BASE_URL),
+      ...optionArg('--d1-account-id', env.HOPIT_D1_ACCOUNT_ID ?? env.CLOUDFLARE_ACCOUNT_ID),
+      ...optionArg('--d1-database-id', env.HOPIT_D1_DATABASE_ID),
+      ...optionArg('--d1-api-base-url', env.HOPIT_D1_API_BASE_URL),
     ]
   }
   return [
-    ...optionArg('--convex-url', process.env.HOPIT_CONVEX_URL ?? process.env.CONVEX_URL),
-    ...optionArg('--agent-token', process.env.HOPIT_AGENT_TOKEN),
+    ...optionArg('--convex-url', env.HOPIT_CONVEX_URL ?? env.CONVEX_URL),
+    ...optionArg('--agent-token', env.HOPIT_AGENT_TOKEN),
   ]
+}
+
+function localCommandEnv(): NodeJS.ProcessEnv {
+  return mergeLocalProductionEnv(process.env)
 }
 
 function isRemoteGitUrl(value: string) {

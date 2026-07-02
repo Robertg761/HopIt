@@ -162,6 +162,6 @@ function agentCapabilities(backend: 'd1' | 'convex' | 'local-agent' | 'unavailab
   return {
     backend,
     hosted: isHostedRuntime(),
-    commands: !isHostedRuntime() && backend === 'local-agent',
+    commands: !isHostedRuntime(),
   }
 }

@@ -353,6 +353,13 @@ checkout commands from a shell, export the file first:
 set -a; source "$HOME/.config/hopit/production.env"; set +a
 ```
 
+Local dashboard server routes read the same file as a fallback under the Next.js
+process env, and command routes use `--profile production` when installed-agent
+paths are configured. That keeps status/codebase reads plus sync, refresh,
+recover, review, merge, and Workspace Root attach actions on the installed-agent
+D1 config and Workspace Root even if `.env.local` still contains older rollback
+values.
+
 ## Local Agent Service
 
 Import one real project into D1 and hydrate a production-profile managed workspace:

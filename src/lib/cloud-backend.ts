@@ -2,6 +2,9 @@ import { anyApi } from 'convex/server'
 
 import { convexAuthToken, convexClient, convexUrl, isConvexConfigured } from '@/lib/convex-auth'
 import { createD1Backend, d1CloudServiceType, isD1Configured } from '@/lib/d1-backend.js'
+import { applyLocalProductionEnvFallback } from '@/lib/local-production-env'
+
+applyLocalProductionEnvFallback()
 
 const defaultD1ApiBaseUrl = 'https://api.cloudflare.com/client/v4'
 

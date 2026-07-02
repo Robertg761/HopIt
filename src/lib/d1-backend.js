@@ -381,6 +381,8 @@ export class CloudflareD1HopBackend {
 
   async listCodebases(actor = {}) {
     await this.ensureSchema()
+    if (usesScopedD1SessionAuth(this.config)) return await this.listConfiguredCodebase(actor)
+
     const actorId = stringOrNull(actor.userId)
     const rows = actorId
       ? await this.query(
@@ -398,6 +400,26 @@ export class CloudflareD1HopBackend {
       summaries.push(summarizeCodebaseHead(record, await this.readCodebaseHeadAccess(record, actor)))
     }
     return summaries
+  }
+
+  async listConfiguredCodebase(actor = {}) {
+    const codebaseId = this.codebaseId ?? this.config.codebaseId
+    if (!codebaseId) return []
+
+    let requester = actor
+    if (!stringOrNull(requester.userId) && this.config.agentSessionToken) {
+      const sessionAccess = await this.requireD1AgentAccess(codebaseId, {}, 'read')
+      requester = {
+        userId: sessionAccess.userId,
+        sessionId: sessionAccess.session?.session_id,
+      }
+    }
+
+    const graph = await this.readVisibleGraph({
+      userId: stringOrNull(requester.userId),
+      sessionId: stringOrNull(requester.sessionId),
+    }, codebaseId)
+    return [summarizeCodebaseHead(codebaseRecordFromGraph(graph, null), graph.visibilityContext)]
   }
 
   async readCodebaseHeadAccess(record, actor = {}) {
