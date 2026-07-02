@@ -338,7 +338,10 @@ export function mapAgentStatusResponse(response: unknown): AgentStatusSnapshot {
   const rawStatus = wrappedResponse?.status ?? (isRawAgentStatus(response) ? response : null)
 
   if (!rawStatus) {
-    return offlineAgentStatus(wrappedResponse?.error?.message ?? 'Agent status endpoint is unavailable.')
+    const offline = offlineAgentStatus(wrappedResponse?.error?.message ?? 'Agent status endpoint is unavailable.')
+    offline.backend = backendName(wrappedResponse?.capabilities?.backend)
+    offline.commandsAvailable = Boolean(wrappedResponse?.capabilities?.commands)
+    return offline
   }
 
   const status = rawStatus

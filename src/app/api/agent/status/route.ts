@@ -8,6 +8,17 @@ export const dynamic = 'force-dynamic'
 
 const agentBaseUrl = process.env.HOPIT_AGENT_BASE_URL ?? 'http://127.0.0.1:4785'
 const localAgentTimeoutMs = 5000
+const hostedCloudStatusCacheMs = 60_000
+const hostedCloudStatusErrorCacheMs = 10_000
+const hostedCloudStatusStaleMs = 5 * 60_000
+const hostedCloudStatusCache = new Map<string, HostedCloudStatusCacheEntry>()
+
+type HostedCloudStatusCacheEntry = {
+  expiresAt: number
+  staleUntil: number
+  value?: Awaited<ReturnType<typeof readCloudAgentDashboard>>
+  promise?: Promise<Awaited<ReturnType<typeof readCloudAgentDashboard>>>
+}
 
 export async function GET(request: Request) {
   const missingHostedConfig = requiredHostedConfigMissing()
@@ -29,7 +40,7 @@ export async function GET(request: Request) {
 
       return NextResponse.json(
         {
-          ...(await readCloudAgentDashboard(requester, codebaseId)),
+          ...(await readHostedCloudAgentDashboard(requester, codebaseId, cloudBackend)),
           capabilities: agentCapabilities(cloudBackend),
         },
         {
@@ -41,7 +52,9 @@ export async function GET(request: Request) {
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Unknown cloud status error'
 
-      return unavailableStatusResponse('cloud_unavailable', message)
+      return unavailableStatusResponse('cloud_unavailable', message, {}, {
+        capabilities: agentCapabilities(cloudBackend),
+      })
     }
   }
 
@@ -78,10 +91,62 @@ export async function GET(request: Request) {
   }
 }
 
+async function readHostedCloudAgentDashboard(
+  requester: Awaited<ReturnType<typeof readRequester>>,
+  codebaseId: string,
+  cloudBackend: ReturnType<typeof configuredCloudBackend>,
+) {
+  if (!isHostedRuntime()) return readCloudAgentDashboard(requester, codebaseId)
+
+  const now = Date.now()
+  const key = hostedCloudStatusCacheKey(requester, codebaseId, cloudBackend)
+  const cached = hostedCloudStatusCache.get(key)
+  if (cached?.value && cached.expiresAt > now) return cached.value
+  if (cached?.promise) return cached.promise
+
+  const entry: HostedCloudStatusCacheEntry = {
+    expiresAt: now + hostedCloudStatusErrorCacheMs,
+    staleUntil: cached?.staleUntil ?? 0,
+    value: cached?.value,
+  }
+  entry.promise = readCloudAgentDashboard(requester, codebaseId)
+    .then((value) => {
+      entry.value = value
+      entry.expiresAt = Date.now() + hostedCloudStatusCacheMs
+      entry.staleUntil = Date.now() + hostedCloudStatusStaleMs
+      return value
+    })
+    .catch((error) => {
+      entry.expiresAt = Date.now() + hostedCloudStatusErrorCacheMs
+      if (entry.value && entry.staleUntil > Date.now()) return entry.value
+      throw error
+    })
+    .finally(() => {
+      entry.promise = undefined
+    })
+
+  hostedCloudStatusCache.set(key, entry)
+  return entry.promise
+}
+
+function hostedCloudStatusCacheKey(
+  requester: Awaited<ReturnType<typeof readRequester>>,
+  codebaseId: string,
+  cloudBackend: ReturnType<typeof configuredCloudBackend>,
+) {
+  return [
+    cloudBackend,
+    codebaseId,
+    requester.requesterUserId ?? 'anonymous',
+    requester.requesterSessionId ?? 'no-session',
+  ].join(':')
+}
+
 function unavailableStatusResponse(
   code: string,
   message: string,
   details: Record<string, unknown> = {},
+  payload: Record<string, unknown> = {},
 ) {
   return NextResponse.json(
     {
@@ -91,6 +156,7 @@ function unavailableStatusResponse(
         message,
         ...details,
       },
+      ...payload,
     },
     {
       status: 200,

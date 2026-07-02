@@ -18,7 +18,8 @@ type AgentStatusState = {
   commandResult: AgentCommandResult | null
 }
 
-const pollMs = 2500
+const localPollMs = 2500
+const hostedPollMs = 30_000
 
 export type AgentCommand =
   | 'sync'
@@ -134,13 +135,13 @@ export function useAgentStatus(initialCodebaseId: string | null = null): AgentSt
     void loadStatus()
     const interval = window.setInterval(() => {
       void loadStatus()
-    }, pollMs)
+    }, status.backend === 'd1' || status.backend === 'convex' ? hostedPollMs : localPollMs)
 
     return () => {
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [refresh])
+  }, [refresh, status.backend])
 
   return {
     status,
