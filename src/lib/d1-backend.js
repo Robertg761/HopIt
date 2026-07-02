@@ -8,6 +8,7 @@ const visibleRoles = new Set(['owner', 'maintainer', 'member', 'viewer'])
 const writeRoles = new Set(['owner', 'maintainer'])
 const inviteRoles = new Set(['owner', 'maintainer'])
 const adminRoles = new Set(['owner'])
+const ensuredSchemaKeys = new Set()
 
 export function d1ConfigFromOptions(options = {}, env = process.env) {
   return {
@@ -17,6 +18,7 @@ export function d1ConfigFromOptions(options = {}, env = process.env) {
     apiBaseUrl: stringOrNull(options['d1-api-base-url']) ?? stringOrNull(env.HOPIT_D1_API_BASE_URL) ?? defaultD1ApiBaseUrl,
     codebaseId: stringOrNull(options['codebase-id']) ?? stringOrNull(env.HOPIT_CODEBASE_ID) ?? defaultCodebaseId,
     agentSessionToken: stringOrNull(options['session-token']) ?? stringOrNull(options.agentSessionToken) ?? stringOrNull(env.HOPIT_AGENT_SESSION_TOKEN),
+    assumeSchema: booleanOption(options['assume-schema']) ?? truthyEnv(env.HOPIT_D1_ASSUME_SCHEMA),
   }
 }
 
@@ -40,6 +42,26 @@ function d1AuthorizationToken(config) {
   return stringOrNull(config.apiToken) ?? stringOrNull(config.agentSessionToken)
 }
 
+function schemaCacheKey(config) {
+  return [
+    (config.apiBaseUrl ?? defaultD1ApiBaseUrl).replace(/\/+$/, ''),
+    config.accountId ?? '',
+    config.databaseId ?? '',
+  ].join('|')
+}
+
+function booleanOption(value) {
+  if (value === true || value === false) return value
+  if (typeof value !== 'string') return null
+  if (/^(1|true|yes|on)$/i.test(value)) return true
+  if (/^(0|false|no|off)$/i.test(value)) return false
+  return null
+}
+
+function truthyEnv(value) {
+  return /^(1|true|yes|on)$/i.test(String(value ?? ''))
+}
+
 function usesScopedD1SessionAuth(config) {
   return !stringOrNull(config.apiToken) && Boolean(stringOrNull(config.agentSessionToken)) && !usesCloudflareD1Api(config)
 }
@@ -55,13 +77,23 @@ export class CloudflareD1HopBackend {
 
   async ensureSchema() {
     if (this.schemaEnsured) return
+    if (this.config.assumeSchema) {
+      this.schemaEnsured = true
+      return
+    }
     if (usesScopedD1SessionAuth(this.config)) {
+      this.schemaEnsured = true
+      return
+    }
+    const cacheKey = schemaCacheKey(this.config)
+    if (ensuredSchemaKeys.has(cacheKey)) {
       this.schemaEnsured = true
       return
     }
     for (const sql of d1SchemaStatements) {
       await this.query(sql)
     }
+    ensuredSchemaKeys.add(cacheKey)
     this.schemaEnsured = true
   }
 

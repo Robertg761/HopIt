@@ -9,7 +9,7 @@ import { test } from 'node:test'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import d1ApiWorker from '../../../cloudflare/d1/api-worker.js'
-import { createD1Backend } from '../../../src/lib/d1-backend.js'
+import { createD1Backend, d1SchemaStatements } from '../../../src/lib/d1-backend.js'
 
 const execFileAsync = promisify(execFile)
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -614,10 +614,42 @@ test('D1 backend supports scoped sessions and trusted device key metadata', asyn
   assert.equal(revoked.session.status, 'revoked')
 })
 
-async function startD1ApiServer(t) {
+test('D1 assume-schema mode skips schema setup queries', async (t) => {
+  const statements = []
+  const server = await startD1ApiServer(t, { statements })
+  for (const sql of d1SchemaStatements) {
+    server.db.prepare(sql).run()
+  }
+
+  const backend = createD1Backend({
+    'codebase-id': 'schema-skip',
+    'd1-api-base-url': server.baseUrl,
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_schema_skip',
+    'd1-api-token': 'token_test',
+    'assume-schema': true,
+  })
+
+  await backend.createCodebase({
+    name: 'Schema Skip',
+    codebaseId: 'schema-skip',
+    actor: { userId: 'user_schema_skip' },
+  })
+  statements.length = 0
+
+  const dashboard = await backend.readDashboard({
+    codebaseId: 'schema-skip',
+    requesterUserId: 'user_schema_skip',
+  })
+
+  assert.equal(dashboard.cloud.exists, true)
+  assert.equal(statements.some((sql) => /^\s*create\s+/i.test(sql)), false)
+})
+
+async function startD1ApiServer(t, { statements = null } = {}) {
   const db = new DatabaseSync(':memory:')
   const env = {
-    HOPIT_D1_DB: d1Binding(db),
+    HOPIT_D1_DB: d1Binding(db, statements),
     HOPIT_D1_PROXY_TOKEN: 'token_test',
   }
   const server = createServer(async (request, response) => {
@@ -650,12 +682,13 @@ async function startD1ApiServer(t) {
   const address = server.address()
   const port = typeof address === 'object' && address ? address.port : null
   if (!port) throw new Error('D1 test server did not bind a port.')
-  return { baseUrl: `http://127.0.0.1:${port}` }
+  return { baseUrl: `http://127.0.0.1:${port}`, db }
 }
 
-function d1Binding(db) {
+function d1Binding(db, statements = null) {
   return {
     prepare(sql) {
+      statements?.push(sql)
       const statement = db.prepare(sql)
       return {
         bind(...params) {

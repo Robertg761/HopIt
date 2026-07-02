@@ -229,6 +229,7 @@ HOPIT_D1_ACCOUNT_ID=replace-with-cloudflare-account-id
 HOPIT_D1_DATABASE_ID=replace-with-cloudflare-d1-database-id
 HOPIT_D1_API_TOKEN=replace-with-cloudflare-d1-api-token-or-hopit-d1-proxy-token
 HOPIT_D1_API_BASE_URL=https://hopit-d1-api.<account-subdomain>.workers.dev
+HOPIT_D1_ASSUME_SCHEMA=1
 HOPIT_AUTH_PROVIDER=clerk
 # Emergency recovery only. Leave commented out for normal Clerk/D1 production access.
 # HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1

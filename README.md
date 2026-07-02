@@ -150,6 +150,7 @@ HOPIT_D1_ACCOUNT_ID=replace-with-cloudflare-account-id
 HOPIT_D1_DATABASE_ID=replace-with-cloudflare-d1-database-id
 HOPIT_D1_API_TOKEN=replace-with-cloudflare-d1-api-token-or-hopit-d1-proxy-token
 HOPIT_D1_API_BASE_URL=https://hopit-d1-api.<account-subdomain>.workers.dev
+HOPIT_D1_ASSUME_SCHEMA=1
 HOPIT_AUTH_PROVIDER=clerk
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_live_replace-with-your-clerk-publishable-key
 CLERK_SECRET_KEY=sk_live_replace-with-your-clerk-secret-key
@@ -236,7 +237,7 @@ npm run hop -- session register --profile production --codebase-id "$HOPIT_CODEB
 
 Store the returned `sessionToken` as `HOPIT_AGENT_SESSION_TOKEN` on that device. When the device talks to the `hopit-d1-api` Worker, that scoped token can replace `HOPIT_D1_API_TOKEN` for codebase-scoped graph reads/writes. The deployment-wide `HOPIT_AGENT_TOKEN` remains only the legacy Convex bootstrap/admin secret.
 
-For current personal production hosting, deploy the Next.js app to Vercel and set `HOPIT_CODEBASE_ID`, `HOPIT_CLOUD_BACKEND=d1`, `HOPIT_D1_ACCOUNT_ID`, `HOPIT_D1_DATABASE_ID`, `HOPIT_D1_API_TOKEN`, `HOPIT_D1_API_BASE_URL`, `HOPIT_AUTH_PROVIDER=clerk`, Clerk live-key variables, and the object-storage variables beginning with `HOPIT_BLOB_`/`HOPIT_R2_` as environment variables. The hosted dashboard reads from D1 through `/api/agent/status`; local workspace commands still run through the local HopIt agent on your machine and are refused on Vercel. Local dashboard server routes merge `~/.config/hopit/production.env` under the Next.js process env, and command routes use `--profile production` when installed-agent paths are configured, so D1 credentials and Workspace Root paths stay aligned even when `.env.local` is stale. Installed devices should use scoped session tokens for normal D1 proxy access after registration. Google OAuth provider credentials live in Clerk/Google Cloud, not in Vercel env or repo files. Keep `HOPIT_ALLOW_BASIC_AUTH_FALLBACK` unset in production unless you are deliberately using the emergency fallback path.
+For current personal production hosting, deploy the Next.js app to Vercel and set `HOPIT_CODEBASE_ID`, `HOPIT_CLOUD_BACKEND=d1`, `HOPIT_D1_ACCOUNT_ID`, `HOPIT_D1_DATABASE_ID`, `HOPIT_D1_API_TOKEN`, `HOPIT_D1_API_BASE_URL`, `HOPIT_D1_ASSUME_SCHEMA=1`, `HOPIT_AUTH_PROVIDER=clerk`, Clerk live-key variables, and the object-storage variables beginning with `HOPIT_BLOB_`/`HOPIT_R2_` as environment variables. The hosted dashboard reads from D1 through `/api/agent/status`; local workspace commands still run through the local HopIt agent on your machine and are refused on Vercel. Local dashboard server routes merge `~/.config/hopit/production.env` under the Next.js process env, and command routes use `--profile production` when installed-agent paths are configured, so D1 credentials and Workspace Root paths stay aligned even when `.env.local` is stale. Installed devices should use scoped session tokens for normal D1 proxy access after registration. Google OAuth provider credentials live in Clerk/Google Cloud, not in Vercel env or repo files. Keep `HOPIT_ALLOW_BASIC_AUTH_FALLBACK` unset in production unless you are deliberately using the emergency fallback path.
 
 Validate production configuration with:
 

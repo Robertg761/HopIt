@@ -109,6 +109,7 @@ HOPIT_D1_ACCOUNT_ID=<cloudflare-account-id>
 HOPIT_D1_DATABASE_ID=<d1-database-id>
 HOPIT_D1_API_TOKEN=<cloudflare-api-token-or-hopit-d1-proxy-token>
 HOPIT_D1_API_BASE_URL=https://hopit-d1-api.<account-subdomain>.workers.dev
+HOPIT_D1_ASSUME_SCHEMA=1
 HOPIT_AUTH_PROVIDER=clerk
 NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=pk_live_<redacted>
 CLERK_SECRET_KEY=sk_live_<redacted>
@@ -152,6 +153,7 @@ HOPIT_D1_ACCOUNT_ID=<cloudflare-account-id>
 HOPIT_D1_DATABASE_ID=<d1-database-id>
 HOPIT_D1_API_TOKEN=<cloudflare-api-token-or-hopit-d1-proxy-token>
 HOPIT_D1_API_BASE_URL=https://hopit-d1-api.<account-subdomain>.workers.dev
+HOPIT_D1_ASSUME_SCHEMA=1
 ```
 
 Validate the saved Convex snapshot before importing:

@@ -24,6 +24,8 @@ if (cloudBackend === 'd1') {
   checks.push(required('HOPIT_D1_DATABASE_ID'))
   checks.push(secretOneOf(['HOPIT_D1_API_TOKEN', 'CLOUDFLARE_API_TOKEN', 'HOPIT_AGENT_SESSION_TOKEN'], { minLength: 32 }))
   if (env.HOPIT_D1_API_BASE_URL) checks.push(urlCheck('HOPIT_D1_API_BASE_URL'))
+  if (env.HOPIT_D1_ASSUME_SCHEMA) checks.push(truthy('HOPIT_D1_ASSUME_SCHEMA'))
+  else warnings.push('HOPIT_D1_ASSUME_SCHEMA is unset; production D1 reads will re-run schema checks and can waste the free query budget.')
   if (env.HOPIT_CONVEX_URL || env.CONVEX_URL || env.NEXT_PUBLIC_CONVEX_URL) {
     warnings.push('Convex URL variables are still set, but HOPIT_CLOUD_BACKEND=d1 will use Cloudflare D1 for graph/status/actions.')
   }
