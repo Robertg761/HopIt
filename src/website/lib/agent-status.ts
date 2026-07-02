@@ -97,6 +97,34 @@ export type AgentFile = {
   blobHash: string | null
   contentPreview: string | null
   contentPreviewTruncated: boolean
+  local: AgentFileLocal
+}
+
+export type AgentFileLocalState =
+  | 'cloud-only'
+  | 'hydrated'
+  | 'dirty'
+  | 'pending-upload'
+  | 'uploaded'
+  | 'prunable'
+  | 'pinned'
+  | 'blocked'
+
+export type AgentFileLocal = {
+  path: string | null
+  exists: boolean
+  hydrated: boolean
+  state: AgentFileLocalState
+  pinned: boolean
+  dirty: boolean
+  pending: boolean
+  blocked: boolean
+  prunable: boolean
+  bytesOnDisk: number | null
+  lastHydratedAt: string | null
+  lastEditedAt: string | null
+  lastSyncedAt: string | null
+  lastPrunedAt: string | null
 }
 
 type RawAgentResponse = {
@@ -214,6 +242,13 @@ type RawAgentStatus = {
       path?: string | null
       exists?: boolean
     } | null
+    cache?: {
+      hydratedFiles?: number
+      pinnedFiles?: number
+      prunableFiles?: number
+      bytesOnDisk?: number
+    } | null
+    files?: Record<string, RawLocalFileState>
   }
   cloud?: {
     revision?: number | null
@@ -277,6 +312,23 @@ type RawAgentEvent = {
   at?: string
   payload?: Record<string, unknown>
   detail?: Record<string, unknown>
+}
+
+type RawLocalFileState = {
+  path?: string | null
+  exists?: boolean
+  hydrated?: boolean
+  state?: string
+  pinned?: boolean
+  dirty?: boolean
+  pending?: boolean
+  blocked?: boolean
+  prunable?: boolean
+  bytesOnDisk?: number | null
+  lastHydratedAt?: string | null
+  lastEditedAt?: string | null
+  lastSyncedAt?: string | null
+  lastPrunedAt?: string | null
 }
 
 export function offlineAgentStatus(reason = 'Start the local HopIt agent status server.'): AgentStatusSnapshot {
@@ -415,7 +467,7 @@ export function mapAgentStatusResponse(response: unknown): AgentStatusSnapshot {
     backend,
     requester: mapRequester(status, access),
     members: mapGraphMembers(wrappedResponse?.cloud?.graph, access, status),
-    files: mapCloudFiles(wrappedResponse?.cloud),
+    files: mapCloudFiles(wrappedResponse?.cloud, status.workspace?.files),
     events: mapRecentEvents(recentEvents),
     rawUpdatedAt: status.generatedAt ?? null,
   }
@@ -558,12 +610,16 @@ function memberStatus(value: unknown): AgentMember['status'] {
   return 'active'
 }
 
-function mapCloudFiles(cloud: RawCloudResponse | null | undefined): AgentFile[] {
+function mapCloudFiles(
+  cloud: RawCloudResponse | null | undefined,
+  localFiles: Record<string, RawLocalFileState> | undefined,
+): AgentFile[] {
   const files = cloud?.graph?.files ?? {}
 
   return Object.entries(files)
     .map(([filePath, file]) => {
       const preview = contentPreview(file)
+      const local = mapLocalFileState(filePath, localFiles?.[filePath])
 
       return {
         path: filePath,
@@ -582,9 +638,53 @@ function mapCloudFiles(cloud: RawCloudResponse | null | undefined): AgentFile[] 
         blobHash: typeof file.blobHash === 'string' ? file.blobHash : null,
         contentPreview: preview.content,
         contentPreviewTruncated: preview.truncated,
+        local,
       }
     })
     .sort((a, b) => a.path.localeCompare(b.path))
+}
+
+function mapLocalFileState(filePath: string, local: RawLocalFileState | undefined): AgentFileLocal {
+  const state = localFileState(local?.state)
+  const hydrated = Boolean(local?.hydrated) || state !== 'cloud-only'
+  const dirty = Boolean(local?.dirty) || state === 'dirty'
+  const pending = Boolean(local?.pending) || state === 'pending-upload'
+  const blocked = Boolean(local?.blocked) || state === 'blocked'
+  const pinned = Boolean(local?.pinned) || state === 'pinned'
+  const prunable = Boolean(local?.prunable) || state === 'prunable'
+
+  return {
+    path: stringOrNull(local?.path),
+    exists: Boolean(local?.exists) || hydrated,
+    hydrated,
+    state,
+    pinned,
+    dirty,
+    pending,
+    blocked,
+    prunable,
+    bytesOnDisk: numberOrNull(local?.bytesOnDisk),
+    lastHydratedAt: stringOrNull(local?.lastHydratedAt),
+    lastEditedAt: stringOrNull(local?.lastEditedAt),
+    lastSyncedAt: stringOrNull(local?.lastSyncedAt),
+    lastPrunedAt: stringOrNull(local?.lastPrunedAt),
+  }
+}
+
+function localFileState(value: string | undefined): AgentFileLocalState {
+  if (
+    value === 'cloud-only' ||
+    value === 'hydrated' ||
+    value === 'dirty' ||
+    value === 'pending-upload' ||
+    value === 'uploaded' ||
+    value === 'prunable' ||
+    value === 'pinned' ||
+    value === 'blocked'
+  ) {
+    return value
+  }
+  return 'cloud-only'
 }
 
 function backendName(value: string | undefined): AgentStatusSnapshot['backend'] {

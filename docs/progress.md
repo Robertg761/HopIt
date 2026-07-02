@@ -1,6 +1,6 @@
 # HopIt Progress Tracker
 
-Last updated: 2026-07-01
+Last updated: 2026-07-02
 
 This tracker is the working view of what is done, what is in progress, what is next, and what is still deliberately out of scope. The roadmap source remains [MVP Plan](mvp-plan.md), and the agent contract source remains [Local Agent Architecture](agent-architecture.md). This file turns those plans into a practical implementation ledger.
 
@@ -102,15 +102,55 @@ Current verified result:
 - `npx convex env get --prod CLERK_JWT_ISSUER_DOMAIN`: returns `https://clerk.hopit.dev`.
 - Google Auth Platform Audience for project `hopit-auth-prod-rg`: shows `1 user (1 test, 0 other) / 100 user cap` and the test-user row `robertgordon761@gmail.com`.
 
+## 2026-07-02 Workspace Cache Verification Log
+
+This log records the lazy-materialization/cache work completed after the D1 migration baseline and the verification performed for the full change set.
+
+Implemented:
+
+- Workspace indexes now persist per-path local cache state alongside workspace hydration/cursor state.
+- `hop workspace hydrate-path --path <prefix> --recursive` can materialize selected file/folder prefixes without hydrating the whole codebase.
+- `hop workspace pin --path <path>` and `hop workspace unpin --path <path>` control whether clean local bodies are allowed to be evicted.
+- `hop workspace prune` is dry-run by default, and `hop workspace prune --execute` removes only clean acknowledged cached bodies. Pruned files stay in the cloud graph and are removed from local manifests/hydrated path state so the next sync does not treat them as cloud deletes.
+- `hop workspace files` now reports file-level local state from the workspace index, manifest, journal, and disk scan, including hydrated, dirty, pending upload, uploaded, pinned, blocked, cloud-only, and prunable states.
+- `hop status` exposes `workspace.cache` and `workspace.files` so the dashboard and local status API can show local/cache health without requiring a full hydrate.
+- The local command API now supports file-level hydrate, prune, pin, and unpin actions through `/api/agent/command`.
+- The dashboard Files view shows local cache state, local/freeable counters, hydrate/keep/unpin/free-space actions, and the selected file's local status.
+- Theme-toggle rendering now uses a stable light/dark fallback before client theme resolution to avoid a hydration mismatch in the app header and command deck.
+
+Verification:
+
+- `node --test packages/agent/test/agent-cli.test.js`: passes with 73 tests, including recursive path hydration, clean-cache prune/no-cloud-delete behavior, pin protection, and the existing production-profile handoff coverage.
+- `npm test`: passes with 87 tests total.
+- `npm run lint`: passes.
+- `npm exec tsc -- --noEmit --pretty false`: passes.
+- `npm run build`: passes.
+- `git diff --check`: passes.
+- Render verification: the in-app Browser loaded `http://localhost:3001/files`
+  with dashboard auth disabled, verified the HopIt page title, populated Files
+  page, local/freeable counters, search interaction, offline/no-codebase empty
+  state, screenshot evidence at `/tmp/hopit-files-page-2026-07-02.png`, and no
+  browser console warnings or errors. This dev run did not have a local file
+  graph mounted, so file-specific hydrate/free buttons were covered by tests,
+  type checks, build, and command-route wiring rather than a live-file visual
+  state.
+
+Still open:
+
+- Editor/tool demand hydration when a local tool asks for a file body that is still metadata-only.
+- An automatic pruning policy on top of the explicit dry-run/execute primitive.
+- Production-grade push/subscription remote-update delivery beyond the current activity-gated polling/cursor path.
+- Broader blocked/conflicted UI detail and cross-device production verification for the full Workspace Root lifecycle.
+
 ## Executive Progress
 
 | Area | Status | Summary |
 | --- | --- | --- |
 | Product concept | Done | The repo has converged on cloud-native managed workspaces, active change sets, explicit Main, and `.private/` owner-only workspace scope. |
-| Web product shell | Mostly done | The prototype UI polls live local agent state through `/api/agent/status`, maps files/events/revisions/review/merge/conflict state, can read D1 or legacy Convex dashboard state when configured, merges local workspace discovery into codebase cards, shows codebase-level workspace/remote-update readiness in the topology cards, and can run first-run Workspace Root setup/attach plus hydrate/dehydrate actions for discovered cloud codebases. |
-| HopIt Workspace Root | In progress | Production-profile paths, a root-level workspace index, D1 account-visible codebase discovery when credentials allow it, scoped-token configured-codebase fallback, automatic verified-owner bootstrap for migrated `local-owner` codebases, local attach/readiness summaries, metadata-only attach, dashboard setup/attach/hydrate/dehydrate actions, hydration/materialized revision state, metadata-only/dehydrate, single-file hydrate, explicit metadata-first lazy materialization policy, and a remote cursor are in place; richer per-file lazy states and editor/tool demand hydration remain. |
+| Web product shell | Mostly done | The prototype UI polls live local agent state through `/api/agent/status`, maps files/events/revisions/review/merge/conflict/cache state, can read D1 or legacy Convex dashboard state when configured, merges local workspace discovery into codebase cards, shows codebase-level workspace/remote-update readiness in the topology cards, and can run first-run Workspace Root setup/attach, hydrate/dehydrate, and file-level hydrate/pin/free-space actions through the local agent. |
+| HopIt Workspace Root | In progress | Production-profile paths, a root-level workspace index, per-path local cache state, D1 account-visible codebase discovery when credentials allow it, scoped-token configured-codebase fallback, automatic verified-owner bootstrap for migrated `local-owner` codebases, local attach/readiness summaries, metadata-only attach, dashboard setup/attach/hydrate/dehydrate actions, hydration/materialized revision state, metadata-only/dehydrate, single-file and recursive-prefix hydrate, explicit pin/unpin, clean-cache prune, explicit metadata-first lazy materialization policy, and a remote cursor are in place; editor/tool demand hydration remains. |
 | Local managed-folder agent | Done for spike | The agent proves hydration, journaling, sync acknowledgement, recovery, watch startup gating, safe refresh, status, and same-owner continuity. |
-| Lazy materialization | In progress | `workspace attach`, `workspace files`, `workspace hydrate-file`, safe full hydrate through `refresh`, dashboard hydrate/dehydrate controls, and `workspace dehydrate --force` prove metadata-first attach, metadata listing, single-file hydration, explicit full materialization, and metadata-only state. V1 still needs richer per-file lazy states, editor/tool demand hydration, and broader cache pruning. |
+| Lazy materialization | In progress | `workspace attach`, `workspace files`, `workspace hydrate-file`, `workspace hydrate-path --recursive`, safe full hydrate through `refresh`, `workspace pin|unpin`, dry-run-by-default `workspace prune`, dashboard file cache controls, and `workspace dehydrate --force` prove metadata-first attach, metadata listing, path-level hydration, explicit full materialization, clean local-body eviction, and metadata-only state. V1 still needs editor/tool demand hydration and an automatic pruning policy. |
 | Vercel/D1 production baseline | Active dogfood | Vercel hosts the protected dashboard and Clerk sign-in routing is live. The D1 database/env/seeding sequence is complete, `hopit-d1-api` proxies D1 for Vercel, hosted D1 reads can skip schema re-checks with `HOPIT_D1_ASSUME_SCHEMA=1`, hosted status reads are cached/coalesced and the hosted client polls less often to protect the free D1 budget, `hopit.dev` live API smoke checks pass, and the packaged LaunchAgent reports D1 cloud status. Automatic remote-pull is now activity-gated with a five-minute cooldown when enabled. |
 | D1 cloud graph | In progress | D1 now has schema, HTTP API backend, agent service integration, hosted status/codebase/file/account/action-job/member/invite/work-item/key-grant routes, automatic verified-owner bootstrap for `local-owner` migrations, account-visible codebase heads with actor access summaries, scoped-token configured-codebase fallback, actions-runner support, scoped D1 proxy session auth, scoped agent sessions, device key/user keyring/wrapped key metadata, project-board operations and UI, durable issue/discussion comments, Convex-export migration script, and D1 graph/collaboration/session/key round-trip tests. History reconstruction, retention policy, richer release assets, and full product write-path coverage remain to port or complete. |
 | Legacy Convex cloud graph | Paused | Convex functions persist graph metadata, file rows, object-blob references, fallback `fileBlobs`, and agent events, but production is disabled for Free-plan limits. The export backup is retained as the migration source. |
@@ -539,7 +579,7 @@ Risks:
 | `change_set.review_opened` | Done for fixture | Emitted when the selected active change set is opened for review. |
 | `change_set.merged` | Done for fixture | Emitted when the reviewed selected active change set is merged into Main. |
 | `change_set.conflict_detected` | Done for fixture | Emitted when stale selected-state, file/base, or Main revisions are detected. |
-| `cache.evicted` | Not started | Needed for safe cache pruning work. |
+| `cache.evicted` | Done for explicit prune | Emitted by `hop workspace prune --execute` after clean acknowledged local cached bodies are removed. |
 | `connection.changed` | Not started | Needed for online/offline/retry state. |
 
 ### Status Fields
@@ -655,9 +695,12 @@ Current foundation:
 - The agent can hydrate a selected codebase into `/Users/robert/HopIt Workspaces/hopit`.
 - `hop workspace discover` lists the configured visible cloud codebase plus indexed local workspaces.
 - `hop workspace attach` binds the configured cloud codebase into the Workspace Root as metadata-only without downloading file bodies.
-- `hop workspace files` lists visible cloud file metadata without hydrating bodies.
+- `hop workspace files` lists visible cloud file metadata with local states such as cloud-only, hydrated, dirty, pending-upload, uploaded, pinned, blocked, and prunable.
 - `hop workspace hydrate-file --path <path>` materializes a single visible file and records partial hydration.
-- The dashboard can run first-run Workspace Root setup, attach metadata-only codebases, hydrate an attached codebase through the safe refresh path, and dehydrate clean cached file bodies back to metadata-only state.
+- `hop workspace hydrate-path --path <prefix> --recursive` materializes visible files under a folder prefix without hydrating the whole codebase.
+- `hop workspace pin|unpin --path <path>` controls whether a hydrated file should stay local.
+- `hop workspace prune --path <path> --execute` removes only clean acknowledged cached bodies, updates the hydrated path manifest, and does not become a cloud delete on the next sync.
+- The dashboard can run first-run Workspace Root setup, attach metadata-only codebases, hydrate an attached codebase through the safe refresh path, show file-level local cache states, hydrate/pin/free selected files, and dehydrate clean cached file bodies back to metadata-only state.
 - `hop workspace dehydrate --force` removes clean cached bodies, writes `.hopit/metadata.json`, and records metadata-only hydration state.
 - The workspace mode now reports a metadata-first materialization policy: attach stays metadata-only, full local content requires explicit hydrate/refresh, single files can be hydrated explicitly, and automatic remote-pull only applies to clean fully materialized workspaces.
 - Status exposes the managed workspace path, cache mode, materialization policy, visible file count, journal state, remote-update state, and backend.
@@ -915,8 +958,8 @@ Definition of done:
 
 ## Known Gaps
 
-- No full HopIt Workspace Root contract yet: the root-level codebase/workspace index, D1 account-visible discovery with scoped-token fallback, automatic account bootstrap, metadata-only attach, dashboard setup/attach/hydrate/dehydrate actions, hydration cursor, metadata-only state, single-file hydrate primitive, and explicit metadata-first lazy materialization policy exist, but richer per-file lazy states and editor/tool demand hydration remain.
-- The current managed folder path has a safe metadata-first policy and dashboard controls, but metadata-only and single-file hydration are still explicit operations rather than a complete editor/tool demand-hydration system.
+- No full HopIt Workspace Root contract yet: the root-level codebase/workspace index, D1 account-visible discovery with scoped-token fallback, automatic account bootstrap, metadata-only attach, dashboard setup/attach/hydrate/dehydrate actions, hydration cursor, metadata-only state, per-file cache state, path-level hydrate/pin/prune primitives, and explicit metadata-first lazy materialization policy exist, but editor/tool demand hydration remains.
+- The current managed folder path has a safe metadata-first policy and dashboard controls, but metadata-only, path hydration, and cache pruning are still explicit operations rather than a complete editor/tool demand-hydration and automatic pruning system.
 - Real account provider code exists and production Clerk DNS/issuer/live-key plus Google OAuth rollout is active; owner sign-in and D1 owner mapping are smoke-tested, and Basic Auth fallback env vars are removed from production.
 - Durable membership, role, invitation, hosted member/invite UI, and scoped agent-session token groundwork exist, but complete permission coverage is not done yet.
 - The full private-repo encryption/key-grant model is documented but not
@@ -935,7 +978,7 @@ Definition of done:
 - Service mode syncs local edits and serves status. Local two-service simulation proves device A edits sync through the watcher, while device B pulls them through explicit safe refresh before switching devices.
 - No conflict resolution UI yet; fixture conflict detection/status exists.
 - `hop import-git` now provides a production-safe literal Git checkout conversion path for snapshot-style repo migration, including `.git/` as owner-private metadata and encrypted routed secrets. Full Git history import, ancestry preservation, and remote publish are still pending.
-- No local cache pruning yet.
+- Explicit local cache pruning exists through `hop workspace prune`; automatic pruning policy and editor/tool demand hydration are still pending.
 - No offline mode yet.
 - No signed production installer, notarization, native package manager integration, or tray/menu agent wrapper yet.
 - Start-on-login setup is script/template based and expects the operator to create a correct local env file.

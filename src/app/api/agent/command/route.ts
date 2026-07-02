@@ -19,6 +19,10 @@ const commandMap = {
   setupWorkspace: { label: 'Set up workspace', cliCommand: 'workspace', subcommand: 'attach', timeoutMs: 30_000 },
   attachWorkspace: { label: 'Attach workspace', cliCommand: 'workspace', subcommand: 'attach', timeoutMs: 30_000 },
   hydrateWorkspace: { label: 'Hydrate workspace', cliCommand: 'refresh', timeoutMs: 60_000 },
+  hydratePath: { label: 'Hydrate path', cliCommand: 'workspace', subcommand: 'hydrate-path', timeoutMs: 60_000 },
+  pruneWorkspace: { label: 'Free local cache', cliCommand: 'workspace', subcommand: 'prune', timeoutMs: 60_000 },
+  pinPath: { label: 'Keep path local', cliCommand: 'workspace', subcommand: 'pin', timeoutMs: 30_000 },
+  unpinPath: { label: 'Stop keeping path local', cliCommand: 'workspace', subcommand: 'unpin', timeoutMs: 30_000 },
   dehydrateWorkspace: {
     label: 'Dehydrate workspace',
     cliCommand: 'workspace',
@@ -35,6 +39,10 @@ type AgentCommandRequest = {
   codebaseId?: unknown
   url?: unknown
   branch?: unknown
+  path?: unknown
+  recursive?: unknown
+  execute?: unknown
+  inactiveMs?: unknown
 }
 
 let activeCommand: string | null = null
@@ -136,6 +144,10 @@ function summarizeCommandResult(
   if (command === 'setupWorkspace') return summarizeSetupWorkspace(result.stdout)
   if (command === 'attachWorkspace') return summarizeAttachWorkspace(result.stdout)
   if (command === 'hydrateWorkspace') return summarizeHydrateWorkspace(result.stdout)
+  if (command === 'hydratePath') return summarizeHydratePath(result.stdout)
+  if (command === 'pruneWorkspace') return summarizePruneWorkspace(result.stdout)
+  if (command === 'pinPath') return summarizePinPath(result.stdout, true)
+  if (command === 'unpinPath') return summarizePinPath(result.stdout, false)
   if (command === 'dehydrateWorkspace') return summarizeDehydrateWorkspace(result.stdout)
   if (command === 'importGitUrl') return summarizeGitUrlImport(result.stdout)
 
@@ -197,6 +209,40 @@ function summarizeDehydrateWorkspace(stdout: string) {
     return `Returned workspace to metadata-only state and removed ${removed} cached file${removed === 1 ? '' : 's'}.`
   }
   return 'Returned workspace to metadata-only state.'
+}
+
+function summarizeHydratePath(stdout: string) {
+  const parsed = parseLastJsonObject(stdout)
+  const hydrated = nestedNumber(parsed, ['hydrated'])
+  const path = nestedString(parsed, ['path'])
+  if (hydrated !== null && path) return `Hydrated ${path} into the local workspace.`
+  if (hydrated !== null) return `Hydrated ${hydrated} local file${hydrated === 1 ? '' : 's'}.`
+  return 'Hydrated the selected path into the local workspace.'
+}
+
+function summarizePruneWorkspace(stdout: string) {
+  const parsed = parseLastJsonObject(stdout)
+  const mode = nestedString(parsed, ['mode'])
+  const removed = nestedNumber(parsed, ['removed'])
+  const candidates = nestedNumber(parsed, ['candidateCount'])
+  if (mode === 'dry-run' && candidates !== null) {
+    return `Found ${candidates} clean cached file${candidates === 1 ? '' : 's'} that can be freed.`
+  }
+  if (removed !== null) return `Freed ${removed} clean cached file${removed === 1 ? '' : 's'} locally.`
+  return 'Updated the local cache.'
+}
+
+function summarizePinPath(stdout: string, pinned: boolean) {
+  const parsed = parseLastJsonObject(stdout)
+  const path = nestedString(parsed, ['path'])
+  const paths = nestedArrayLength(parsed, ['paths'])
+  if (path) return pinned ? `Keeping ${path} local.` : `Stopped keeping ${path} local.`
+  if (paths !== null) {
+    return pinned
+      ? `Keeping ${paths} path${paths === 1 ? '' : 's'} local.`
+      : `Stopped keeping ${paths} path${paths === 1 ? '' : 's'} local.`
+  }
+  return pinned ? 'Keeping the selected path local.' : 'Stopped keeping the selected path local.'
 }
 
 function summarizeGitUrlImport(stdout: string) {
@@ -273,6 +319,12 @@ function runAgentCli(
 }
 
 function commandArgsFromRequest(command: AgentCommand, body: AgentCommandRequest) {
+  if (command === 'hydratePath' || command === 'pinPath' || command === 'unpinPath') {
+    return pathCommandArgs(body, { allowAll: false })
+  }
+  if (command === 'pruneWorkspace') {
+    return pathCommandArgs(body, { allowAll: true, defaultPath: 'all', execute: body.execute === true })
+  }
   if (command !== 'importGitUrl') return []
 
   if (typeof body.url !== 'string' || body.url.trim().length === 0) {
@@ -293,6 +345,55 @@ function commandArgsFromRequest(command: AgentCommand, body: AgentCommandRequest
     args.push('--branch', branch)
   }
   return args
+}
+
+function pathCommandArgs(
+  body: AgentCommandRequest,
+  options: { allowAll: boolean; defaultPath?: string; execute?: boolean },
+) {
+  const requestedPath = cloudPathFromRequest(body.path, options)
+  if (requestedPath instanceof NextResponse) return requestedPath
+
+  const args = ['--path', requestedPath]
+  if (body.recursive === true) args.push('--recursive')
+  if (options.execute) args.push('--execute')
+  if (body.inactiveMs !== undefined) {
+    const inactiveMs = numericRequestValue(body.inactiveMs, 'inactiveMs')
+    if (inactiveMs instanceof NextResponse) return inactiveMs
+    args.push('--inactive-ms', String(inactiveMs))
+  }
+  return args
+}
+
+function cloudPathFromRequest(
+  value: unknown,
+  options: { allowAll: boolean; defaultPath?: string },
+) {
+  const raw = typeof value === 'string' && value.trim().length > 0
+    ? value.trim()
+    : options.defaultPath
+  if (!raw) return commandError('invalid_path', 'Expected a non-empty cloud path.', 400)
+  if (raw === 'all') {
+    if (options.allowAll) return raw
+    return commandError('invalid_path', 'This command requires a file or folder path.', 400)
+  }
+  if (raw.startsWith('-') || /[\0\r\n]/.test(raw) || path.isAbsolute(raw)) {
+    return commandError('invalid_path', 'Cloud path contains unsupported characters.', 400)
+  }
+
+  const normalized = path.posix.normalize(raw).replace(/\/+$/g, '')
+  if (!normalized || normalized === '.' || normalized === '..' || normalized.startsWith('../')) {
+    return commandError('invalid_path', 'Cloud path must stay inside the workspace.', 400)
+  }
+  return normalized
+}
+
+function numericRequestValue(value: unknown, label: string) {
+  const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : Number.NaN
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return commandError('invalid_number', `${label} must be a non-negative integer.`, 400)
+  }
+  return parsed
 }
 
 function codebaseIdFromRequest(body: AgentCommandRequest, env: NodeJS.ProcessEnv) {
@@ -394,6 +495,11 @@ function nestedBoolean(value: unknown, path: string[]) {
 function nestedString(value: unknown, path: string[]) {
   const found = nestedValue(value, path)
   return typeof found === 'string' ? found : null
+}
+
+function nestedArrayLength(value: unknown, path: string[]) {
+  const found = nestedValue(value, path)
+  return Array.isArray(found) ? found.length : null
 }
 
 function nestedValue(value: unknown, path: string[]): unknown {

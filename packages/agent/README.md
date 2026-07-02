@@ -12,7 +12,7 @@ It is intentionally not a real FUSE, OS filesystem provider, or clone manager. I
 
 The selected cloud state remains the source of truth for the managed folder. In the production model, day-to-day edits should sync into an active change set; Main advances only after review or merge. The local folder is a materialized cache that HopIt manages so OS file pickers, editors, CLIs, and search tools can work without a special mount or a user-managed clone.
 
-The solid v1 target is a HopIt Workspace Root, such as `~/HopIt Workspaces`, where cloud codebases appear as HopIt-managed project folders. This package currently proves selected managed folders, a durable workspace-root index, D1 account-visible codebase discovery with local readiness when credentials allow it, scoped-token configured-codebase fallback, automatic verified-owner bootstrap for migrated `local-owner` codebases, metadata-only attach, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, safe full hydrate through refresh, an explicit metadata-first lazy-materialization policy, S3-compatible object-blob storage for file bodies, activity-gated safe remote-pull plus one-shot remote-pull checks, Cloudflare D1 graph storage, and legacy scoped Convex agent-session tokens. It does not yet provide editor/tool demand hydration, richer per-file cache state, complete D1 device-session auth hardening, or production-grade push/subscription remote-update delivery.
+The solid v1 target is a HopIt Workspace Root, such as `~/HopIt Workspaces`, where cloud codebases appear as HopIt-managed project folders. This package currently proves selected managed folders, a durable workspace-root index, D1 account-visible codebase discovery with local readiness when credentials allow it, scoped-token configured-codebase fallback, automatic verified-owner bootstrap for migrated `local-owner` codebases, metadata-only attach, hydration/cursor status, metadata-only/dehydrate, per-path local cache state, single-file and recursive-prefix hydrate primitives, pin/unpin controls, clean cached-body pruning that does not become a cloud delete, safe full hydrate through refresh, an explicit metadata-first lazy-materialization policy, S3-compatible object-blob storage for file bodies, activity-gated safe remote-pull plus one-shot remote-pull checks, Cloudflare D1 graph storage, and legacy scoped Convex agent-session tokens. It does not yet provide editor/tool demand hydration, complete D1 device-session auth hardening, or production-grade push/subscription remote-update delivery.
 
 HopIt does not use ignore files as product sharing controls. Files under `.private/` are still snapshotted, synced, and versioned, but owner-visible only. Files outside `.private/` are governed by the active change set's effective visibility and the codebase's permissions.
 
@@ -148,7 +148,7 @@ HOPIT_R2_ACCESS_KEY_ID=<r2-access-key-id>
 HOPIT_R2_SECRET_ACCESS_KEY=<r2-secret-access-key>
 ```
 
-With those variables set, `hop sync` uploads regular file bytes to Cloudflare R2 first, then commits only metadata to the active cloud graph: storage mode, provider, object key, SHA-256, size, revision, path, and scope. `HOPIT_BLOB_FREE_ONLY=1` makes R2 use an 8 GB default budget, below Cloudflare R2's free storage tier, and fails before uploading a blob that would exceed that cap. `hydrate`, `refresh`, `hydrate-file`, recovery, export, and publish download object bytes and verify the hash before writing locally. Tests can use `--blob-provider filesystem --blob-root /tmp/hopit-blobs`. A later Backblaze B2 migration should use the same S3-compatible adapter with `HOPIT_BLOB_PROVIDER=b2`, `HOPIT_B2_BUCKET`, `HOPIT_B2_ENDPOINT`, `HOPIT_B2_REGION`, `HOPIT_B2_KEY_ID`, and `HOPIT_B2_APPLICATION_KEY`.
+With those variables set, `hop sync` uploads regular file bytes to Cloudflare R2 first, then commits only metadata to the active cloud graph: storage mode, provider, object key, SHA-256, size, revision, path, and scope. `HOPIT_BLOB_FREE_ONLY=1` makes R2 use an 8 GB default budget, below Cloudflare R2's free storage tier, and fails before uploading a blob that would exceed that cap. `hydrate`, `refresh`, `hydrate-file`, `hydrate-path`, recovery, export, and publish download object bytes and verify the hash before writing locally. Tests can use `--blob-provider filesystem --blob-root /tmp/hopit-blobs`. A later Backblaze B2 migration should use the same S3-compatible adapter with `HOPIT_BLOB_PROVIDER=b2`, `HOPIT_B2_BUCKET`, `HOPIT_B2_ENDPOINT`, `HOPIT_B2_REGION`, `HOPIT_B2_KEY_ID`, and `HOPIT_B2_APPLICATION_KEY`.
 
 Build a Node/npm-free artifact for the current macOS or Linux platform with:
 
@@ -186,6 +186,11 @@ npm run hop -- workspace ensure
 npm run hop -- workspace attach
 npm run hop -- workspace files
 npm run hop -- workspace hydrate-file --path README.md
+npm run hop -- workspace hydrate-path --path src --recursive
+npm run hop -- workspace pin --path README.md
+npm run hop -- workspace prune --path README.md
+npm run hop -- workspace prune --path README.md --execute
+npm run hop -- workspace unpin --path README.md
 npm run hop -- workspace dehydrate --force
 npm run hop -- remote-pull --profile production --codebase-id hopit
 npm run hop -- device status
@@ -302,7 +307,7 @@ schema version, codebase/Main/active-change-set identity, visibility enums,
 review/merge/conflict states, file content/revisions, safe relative paths, and
 path-derived `.private/` owner-private scope.
 
-`hop workspace status|list|discover|ensure|attach|files|hydrate-file|dehydrate`
+`hop workspace status|list|discover|ensure|attach|files|hydrate-file|hydrate-path|pin|unpin|prune|dehydrate`
 is the first product-facing workspace-root surface. It reports the configured
 HopIt root, the current codebase folder, whether the codebase has been attached
 or initialized, hydration state, dirty-state, visible cloud files, hydrated path
@@ -310,12 +315,19 @@ count, and the durable root index path. `discover` lists the configured visible
 cloud codebase plus any indexed local workspaces. `attach` binds the configured
 cloud codebase into the Workspace Root as metadata-only without downloading file
 bodies, writes `.hopit/metadata.json`, and refuses non-empty unmanaged folders
-unless `--force` is explicit. `hydrate-file` materializes one visible cloud path
-into the managed folder. `dehydrate --force` removes clean cached file bodies,
-writes workspace metadata, and marks the workspace metadata-only. `ensure`
-creates the configured root and current managed codebase folder without claiming
-a true virtual filesystem: the adapter remains `managed-folder`, cache mode
-remains `local-cache`, and the status payload explicitly reports
+unless `--force` is explicit. `files` lists visible cloud files and local cache
+state (`cloud-only`, `hydrated`, `dirty`, `pending-upload`, `uploaded`,
+`pinned`, `blocked`, and `prunable`) without hydrating bodies. `hydrate-file`
+materializes one visible cloud path into the managed folder, while
+`hydrate-path --recursive` materializes a folder prefix. `pin` and `unpin`
+control whether a local body should be protected from pruning. `prune` is a
+dry-run by default; `prune --execute` removes only clean acknowledged local
+bodies, updates the hydrated path manifest, and does not create cloud delete
+journal entries. `dehydrate --force` removes clean cached file bodies, writes
+workspace metadata, and marks the workspace metadata-only. `ensure` creates the
+configured root and current managed codebase folder without claiming a true
+virtual filesystem: the adapter remains `managed-folder`, cache mode remains
+`local-cache`, and the status payload explicitly reports
 `virtualized: false`.
 
 Hydrate, refresh, and sync update `workspaces.json` under the agent state root
@@ -435,11 +447,12 @@ Generated local agent state is demo/runtime state, not workspace content:
 
 Promote this selected managed-folder proof into the full HopIt Workspace Root
 contract. The root-level index, hydration/materialized revision state,
-metadata-only and single-file hydrate primitives, scoped agent-session tokens,
+metadata-only and path-level hydrate primitives, scoped agent-session tokens,
 object-backed content-addressed blobs, per-file agent mutations, configured-codebase
-discover/attach, and opt-in remote-pull cursor are now in place. The next agent
-work should add richer per-file cache metadata, editor/tool demand hydration,
-cache pruning policy, and production-grade remote-update delivery.
+discover/attach, per-file local cache state, pin/unpin, explicit clean-cache
+pruning, and opt-in remote-pull cursor are now in place. The next agent work
+should add editor/tool demand hydration, automatic cache pruning policy, and
+production-grade remote-update delivery.
 
 In parallel, the cloud graph needs durable history reconstruction,
 object-retention/garbage-collection policy, and full product write-path coverage

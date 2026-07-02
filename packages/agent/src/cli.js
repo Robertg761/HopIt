@@ -59,6 +59,7 @@ const workspaceMode = {
 }
 
 const workspaceIndexVersion = 1
+const localCacheSchemaVersion = 1
 const cloudServiceType = 'fixture-json-cloud-graph'
 const convexCloudServiceType = 'convex-cloud-graph'
 
@@ -327,6 +328,7 @@ function parseOptions(args) {
     'skip-service-control',
     'production-safe',
     'execute',
+    'recursive',
     'skip-cloud-registration',
   ])
 
@@ -997,44 +999,96 @@ async function hydrateWorkspace(options) {
 }
 
 async function hydrateWorkspaceFile(options) {
-  const relativePath = assertSafeCloudPath(options.path ?? options.file)
+  await hydrateWorkspacePaths(options, {
+    action: 'hydrate-file',
+    reason: 'lazy-hydrate',
+    event: 'file.lazy_hydrated',
+    recursive: false,
+  })
+}
+
+async function hydrateWorkspacePath(options) {
+  await hydrateWorkspacePaths(options, {
+    action: 'hydrate-path',
+    reason: 'hydrate-path',
+    event: 'file.lazy_hydrated',
+    recursive: Boolean(options.recursive),
+  })
+}
+
+async function hydrateWorkspacePaths(options, command) {
+  const requestedPath = options.path ?? options.file
+  if (!requestedPath) {
+    throw new Error(`workspace ${command.action} requires --path <cloud-path>.`)
+  }
   await assertWorkspacePathSafe(options)
   const cloudService = createCloudGraphService(options)
   const cloud = await cloudService.readVisibleGraph(visibilityRequestFromOptions(options))
-  const file = cloud.files?.[relativePath]
-  if (!file) {
-    throw new Error(`File is not visible in the configured cloud graph: ${relativePath}`)
+  const paths = selectedCloudPaths(cloud, requestedPath, { recursive: command.recursive })
+  const hydratedFiles = []
+
+  for (const relativePath of paths) {
+    const file = cloud.files?.[relativePath]
+    if (!file) continue
+    const entry = normalizeCloudFileEntry(relativePath, file)
+    await materializeCloudEntry(options.workspace, relativePath, entry, cloudService, {
+      codebaseId: cloud.codebase?.id ?? options['codebase-id'] ?? 'hopit',
+    })
+    hydratedFiles.push({
+      path: relativePath,
+      file,
+      entry,
+    })
   }
 
-  const entry = normalizeCloudFileEntry(relativePath, file)
-  await materializeCloudEntry(options.workspace, relativePath, entry, cloudService)
-  const hydratedPaths = await hydratedPathUnion(options, cloud.codebase?.id, [relativePath])
+  const now = new Date().toISOString()
+  const hydratedPaths = await hydratedPathUnion(options, cloud.codebase?.id, hydratedFiles.map((file) => file.path))
 
-  await emit(options, 'file.lazy_hydrated', {
-    path: relativePath,
-    scope: scopeForPath(relativePath),
-    kind: entry.kind,
-    bytes: entry.size,
-    revision: entry.revision,
+  await emit(options, command.event, {
+    path: hydratedFiles.length === 1 ? hydratedFiles[0].path : null,
+    paths: hydratedFiles.map((file) => file.path),
+    recursive: command.recursive,
+    scope: hydratedFiles.length === 1 ? scopeForPath(hydratedFiles[0].path) : null,
+    scopeCounts: countPathScopes(hydratedFiles.map((file) => file.path)),
+    bytes: hydratedFiles.reduce((sum, file) => sum + (file.entry.size ?? 0), 0),
     workspace: options.workspace,
     service: cloudService.type,
     contract: summarizeGraphContract(cloud),
     hydratedPathCount: hydratedPaths.length,
   })
   const index = await upsertWorkspaceIndexFromCloud(options, cloud, {
-    reason: 'lazy-hydrate',
-    lastEvent: 'file.lazy_hydrated',
+    reason: command.reason,
+    lastEvent: command.event,
     hydrationState: 'partial',
     hydratedPaths,
     materialization: 'partial-managed-folder',
+    localCache: localCachePatchForPaths(cloud, hydratedFiles.map((file) => file.path), {
+      now,
+      state: 'hydrated',
+      lastHydratedAt: now,
+    }),
   })
 
   console.log(JSON.stringify({
     ok: true,
-    action: 'hydrate-file',
-    path: relativePath,
+    action: command.action,
+    path: hydratedFiles.length === 1 ? hydratedFiles[0].path : null,
+    paths: hydratedFiles.map((file) => file.path),
+    recursive: command.recursive,
+    hydrated: hydratedFiles.length,
     workspace: path.resolve(options.workspace),
-    file: workspaceFileMetadata(options, relativePath, file, true),
+    file: hydratedFiles.length === 1
+      ? workspaceFileMetadata(options, hydratedFiles[0].path, hydratedFiles[0].file, {
+        forceExists: true,
+        indexedCodebase: findIndexedCodebase(index, cloud.codebase?.id ?? options['codebase-id'], options.workspace),
+      })
+      : null,
+    files: hydratedFiles.map(({ path: relativePath, file }) =>
+      workspaceFileMetadata(options, relativePath, file, {
+        forceExists: true,
+        indexedCodebase: findIndexedCodebase(index, cloud.codebase?.id ?? options['codebase-id'], options.workspace),
+      }),
+    ),
     index: workspaceIndexSummary(options, index),
     hydration: findIndexedCodebase(index, cloud.codebase?.id ?? options['codebase-id'], options.workspace)?.hydration ?? null,
   }, null, 2))
@@ -1089,6 +1143,180 @@ async function dehydrateWorkspace(options) {
     workspace: path.resolve(options.workspace),
     index: workspaceIndexSummary(options, index),
   }, null, 2))
+}
+
+async function pruneWorkspaceCache(options) {
+  await assertWorkspacePathSafe(options)
+  const cloudService = createCloudGraphService(options)
+  const cloud = await cloudService.readVisibleGraph(visibilityRequestFromOptions(options))
+  const target = options.path ?? 'all'
+  const targetPaths = selectedCloudPaths(cloud, target, { recursive: target === 'all' || Boolean(options.recursive) })
+  const [workspaceIndex, diskEntries, journalEntries, eventEntries] = await Promise.all([
+    readWorkspaceIndex(options),
+    readWorkspaceFiles(options.workspace, options),
+    readNdjson(options.journal),
+    readNdjson(options.events),
+  ])
+  const journalState = classifyJournalEntries(journalEntries, eventEntries)
+  const indexedCodebase = findIndexedCodebase(workspaceIndex, cloud.codebase?.id ?? options['codebase-id'], options.workspace)
+  const inactiveMs = parseNonNegativeIntegerOption(options['inactive-ms'], 0)
+  const now = new Date().toISOString()
+  const nowMs = Date.now()
+  const candidates = []
+  const skipped = []
+
+  for (const relativePath of targetPaths) {
+    const diskEntry = diskEntries[relativePath]
+    const cached = indexedCodebase?.localCache?.files?.[relativePath] ?? {}
+    const manifestEntry = indexedCodebase?.contentManifest?.files?.[relativePath] ?? null
+    const pathJournalEntries = journalState.entries.filter((entry) => entry.path === relativePath)
+    const unresolved = pathJournalEntries.find((entry) => entry.recoveryStatus === 'pending' || entry.recoveryStatus === 'failed')
+
+    if (!diskEntry) {
+      skipped.push({ path: relativePath, reason: 'not_hydrated' })
+      continue
+    }
+    if (cached.pinned) {
+      skipped.push({ path: relativePath, reason: 'pinned' })
+      continue
+    }
+    if (unresolved) {
+      skipped.push({ path: relativePath, reason: `journal_${unresolved.recoveryStatus}` })
+      continue
+    }
+    if (!manifestEntry) {
+      skipped.push({ path: relativePath, reason: 'not_acknowledged_in_manifest' })
+      continue
+    }
+    if (manifestEntryChanged(manifestEntry, normalizeCloudFileEntry(relativePath, diskEntry))) {
+      skipped.push({ path: relativePath, reason: 'dirty' })
+      continue
+    }
+    if (inactiveMs > 0) {
+      const lastActiveAt = latestIsoTimestamp([
+        cached.lastSyncedAt,
+        cached.lastHydratedAt,
+        cached.lastEditedAt,
+      ])
+      if (lastActiveAt && nowMs - new Date(lastActiveAt).getTime() < inactiveMs) {
+        skipped.push({ path: relativePath, reason: 'recently_active', lastActiveAt })
+        continue
+      }
+    }
+
+    candidates.push({
+      path: relativePath,
+      size: Number.isInteger(diskEntry.size) ? diskEntry.size : manifestEntry.size ?? null,
+      revision: manifestEntry.revision ?? null,
+    })
+  }
+
+  const execute = Boolean(options.execute)
+  const removedPaths = []
+  if (execute) {
+    for (const candidate of candidates) {
+      await fs.rm(workspaceFilePath(options.workspace, candidate.path), { recursive: true, force: true })
+      await removeEmptyAncestorDirectories(options.workspace, path.dirname(candidate.path))
+      removedPaths.push(candidate.path)
+    }
+  }
+
+  let index = workspaceIndex
+  if (execute && removedPaths.length > 0) {
+    const visiblePaths = Object.keys(cloud.files ?? {})
+    const hydratedPaths = hydratedPathsAfterPrune(indexedCodebase, visiblePaths, removedPaths)
+    const hydrationState = hydrationStateForHydratedPaths(hydratedPaths, visiblePaths)
+    index = await upsertWorkspaceIndexFromCloud(options, cloud, {
+      reason: 'prune',
+      lastEvent: 'cache.evicted',
+      hydrationState,
+      hydratedPaths,
+      materialization: materializationForHydrationState(hydrationState),
+      prunedPaths: removedPaths,
+      localCache: localCachePatchForPaths(cloud, removedPaths, {
+        now,
+        state: 'cloud-only',
+        lastPrunedAt: now,
+        bytesOnDisk: null,
+      }),
+    })
+  }
+
+  const result = {
+    ok: true,
+    action: 'prune',
+    mode: execute ? 'execute' : 'dry-run',
+    target,
+    recursive: target === 'all' || Boolean(options.recursive),
+    inactiveMs,
+    workspace: path.resolve(options.workspace),
+    candidates,
+    candidateCount: candidates.length,
+    candidateBytes: candidates.reduce((sum, candidate) => sum + (candidate.size ?? 0), 0),
+    removed: removedPaths.length,
+    removedPaths,
+    skipped,
+    skippedCount: skipped.length,
+    index: workspaceIndexSummary(options, index),
+    hydration: findIndexedCodebase(index, cloud.codebase?.id ?? options['codebase-id'], options.workspace)?.hydration ?? null,
+  }
+  await emit(options, execute ? 'cache.evicted' : 'cache.prune_planned', result)
+  console.log(JSON.stringify(result, null, 2))
+}
+
+async function setWorkspaceCachePin(options, pinned) {
+  const requestedPath = options.path ?? options.file
+  if (!requestedPath) {
+    throw new Error(`workspace ${pinned ? 'pin' : 'unpin'} requires --path <cloud-path>.`)
+  }
+
+  await assertWorkspacePathSafe(options)
+  const cloudService = createCloudGraphService(options)
+  const cloud = await cloudService.readVisibleGraph(visibilityRequestFromOptions(options))
+  const paths = selectedCloudPaths(cloud, requestedPath, { recursive: Boolean(options.recursive) })
+  const now = new Date().toISOString()
+  const workspaceIndex = await readWorkspaceIndex(options)
+  const indexedCodebase =
+    findIndexedCodebase(workspaceIndex, cloud.codebase?.id ?? options['codebase-id'], options.workspace) ??
+    workspaceIndexEntryFromCloud(options, cloud, {
+      reason: 'attach',
+      lastEvent: null,
+      hydrationState: 'metadata-only',
+      hydratedPaths: [],
+      materialization: 'metadata-only',
+      now,
+    })
+  const files = {}
+  for (const relativePath of paths) {
+    const exists = existsSync(workspaceFilePath(options.workspace, relativePath))
+    files[relativePath] = {
+      pinned,
+      state: pinned ? 'pinned' : exists ? 'hydrated' : 'cloud-only',
+    }
+  }
+  const localCache = {
+    schemaVersion: localCacheSchemaVersion,
+    updatedAt: now,
+    files,
+  }
+  const index = await upsertWorkspaceIndex(options, {
+    ...indexedCodebase,
+    localCache,
+    updatedAt: now,
+  })
+
+  const result = {
+    ok: true,
+    action: pinned ? 'pin' : 'unpin',
+    path: paths.length === 1 ? paths[0] : null,
+    paths,
+    recursive: Boolean(options.recursive),
+    workspace: path.resolve(options.workspace),
+    index: workspaceIndexSummary(options, index),
+    cache: findIndexedCodebase(index, cloud.codebase?.id ?? options['codebase-id'], options.workspace)?.localCache?.summary ?? null,
+  }
+  await emit(options, pinned ? 'cache.pinned' : 'cache.unpinned', result)
+  console.log(JSON.stringify(result, null, 2))
 }
 
 async function discoverWorkspaces(options, discoverOptions = {}) {
@@ -1569,6 +1797,7 @@ async function performSyncOnce(options, contextDetail = {}) {
     lastEvent: 'sync.complete',
     hydrationState: workspaceIndexHydrationStateForSync(indexedCodebase),
     hydratedPaths: hydratedPathsAfterSync(indexedCodebase, Object.keys(diskEntries), Object.keys(visibleCloud.files ?? {})),
+    syncedPaths: writeEvents.map((entry) => entry.path).filter(Boolean),
   })
   return result
 }
@@ -1581,6 +1810,7 @@ async function recoverJournal(options) {
   const eventEntries = await readNdjson(options.events)
   const journalState = classifyJournalEntries(journalEntries, eventEntries)
   const candidates = journalState.entries.filter((entry) => entry.recoveryStatus !== 'acknowledged')
+  const recoveredPaths = []
   const result = {
     totalJournalEntries: journalEntries.length,
     attempted: 0,
@@ -1605,6 +1835,7 @@ async function recoverJournal(options) {
         recoveryReason: recovery.reason,
       })
       result.acknowledged += 1
+      if (entry.path) recoveredPaths.push(entry.path)
     } catch (error) {
       result.failed += 1
       if (error instanceof ConflictError) {
@@ -1649,6 +1880,7 @@ async function recoverJournal(options) {
       hydrationState,
       hydratedPaths: hydratedPathsAfterSync(indexedCodebase, Object.keys(diskEntries), Object.keys(visibleCloud.files ?? {})),
       materialization: hydrationState === 'materialized' ? 'managed-folder' : 'partial-managed-folder',
+      syncedPaths: recoveredPaths,
     })
   }
 
@@ -3547,7 +3779,20 @@ async function installAgent(options) {
 }
 
 async function runWorkspaceCommand(action, options) {
-  const allowedActions = new Set(['status', 'list', 'discover', 'ensure', 'attach', 'files', 'hydrate-file', 'dehydrate'])
+  const allowedActions = new Set([
+    'status',
+    'list',
+    'discover',
+    'ensure',
+    'attach',
+    'files',
+    'hydrate-file',
+    'hydrate-path',
+    'prune',
+    'pin',
+    'unpin',
+    'dehydrate',
+  ])
   if (!allowedActions.has(action)) {
     throw new Error(`Unknown workspace action: ${action}`)
   }
@@ -3567,6 +3812,29 @@ async function runWorkspaceCommand(action, options) {
       throw new Error('workspace hydrate-file requires --path <cloud-path>.')
     }
     await hydrateWorkspaceFile(options)
+    return
+  }
+
+  if (action === 'hydrate-path') {
+    if (!options.path && !options.file) {
+      throw new Error('workspace hydrate-path requires --path <cloud-path>.')
+    }
+    await hydrateWorkspacePath(options)
+    return
+  }
+
+  if (action === 'prune') {
+    await pruneWorkspaceCache(options)
+    return
+  }
+
+  if (action === 'pin') {
+    await setWorkspaceCachePin(options, true)
+    return
+  }
+
+  if (action === 'unpin') {
+    await setWorkspaceCachePin(options, false)
     return
   }
 
@@ -3620,16 +3888,34 @@ async function runWorkspaceCommand(action, options) {
   }
 
   if (action === 'files') {
+    const [diskEntries, journalEntries, eventEntries] = await Promise.all([
+      readWorkspaceFiles(options.workspace, options),
+      readNdjson(options.journal),
+      readNdjson(options.events),
+    ])
+    const journalState = classifyJournalEntries(journalEntries, eventEntries)
+    const indexedCodebase = findIndexedCodebase(index, cloud?.codebase?.id ?? options['codebase-id'], options.workspace)
     result.files = cloud
       ? Object.entries(cloud.files ?? {}).map(([relativePath, file]) =>
-          workspaceFileMetadata(options, relativePath, file),
+          workspaceFileMetadata(options, relativePath, file, {
+            diskEntries,
+            journalState,
+            indexedCodebase,
+          }),
         )
       : []
     result.summary = {
       visibleFiles: result.files.length,
       hydratedFiles: result.files.filter((file) => file.local.exists).length,
+      dirtyFiles: result.files.filter((file) => file.local.dirty).length,
+      pendingFiles: result.files.filter((file) => file.local.pending).length,
+      pinnedFiles: result.files.filter((file) => file.local.pinned).length,
+      prunableFiles: result.files.filter((file) => file.local.prunable).length,
       materialization: current?.materialization ?? 'unknown',
       hydration: current?.hydration ?? null,
+      cache: localCacheSummary({
+        files: Object.fromEntries(result.files.map((file) => [file.path, file.local])),
+      }),
     }
   }
 
@@ -3877,10 +4163,11 @@ async function assertAttachWorkspaceSafe(options, cloud, index) {
   )
 }
 
-function workspaceFileMetadata(options, relativePath, file, forceExists = false) {
+function workspaceFileMetadata(options, relativePath, file, context = {}) {
+  const metadataContext = typeof context === 'boolean' ? { forceExists: context } : context
   const absolutePath = workspaceFilePath(options.workspace, relativePath)
-  const exists = forceExists || existsSync(absolutePath)
   const entry = normalizeCloudFileEntry(relativePath, file)
+  const local = workspaceFileLocalState(options, relativePath, file, metadataContext)
   return {
     path: relativePath,
     kind: entry.kind,
@@ -3893,9 +4180,64 @@ function workspaceFileMetadata(options, relativePath, file, forceExists = false)
     target: entry.target ?? null,
     local: {
       path: absolutePath,
-      exists,
-      hydrated: exists,
+      ...local,
     },
+  }
+}
+
+function workspaceFileLocalState(options, relativePath, file, context = {}) {
+  const absolutePath = workspaceFilePath(options.workspace, relativePath)
+  const cached = context.indexedCodebase?.localCache?.files?.[relativePath] ?? {}
+  const diskEntry = context.diskEntries?.[relativePath] ?? null
+  const shouldCheckDisk = context.scanDisk !== false
+  const cachedHydrated = cached.state && cached.state !== 'cloud-only'
+  const exists = Boolean(context.forceExists || diskEntry || (shouldCheckDisk ? existsSync(absolutePath) : cachedHydrated))
+  const effectiveDiskEntry = diskEntry ?? (context.forceExists ? normalizeCloudFileEntry(relativePath, file) : null)
+  const manifestEntry = context.indexedCodebase?.contentManifest?.files?.[relativePath] ?? null
+  const pathJournalEntries = (context.journalState?.entries ?? []).filter((entry) => entry.path === relativePath)
+  const pending = pathJournalEntries.some((entry) => entry.recoveryStatus === 'pending')
+  const failed = pathJournalEntries.some((entry) => entry.recoveryStatus === 'failed')
+  const dirty = Boolean(
+    exists &&
+      effectiveDiskEntry &&
+      (!manifestEntry || manifestEntryChanged(manifestEntry, normalizeCloudFileEntry(relativePath, effectiveDiskEntry))),
+  )
+  const pinned = Boolean(cached.pinned)
+  let state = cached.state ?? (exists ? 'hydrated' : 'cloud-only')
+
+  if (failed) state = 'blocked'
+  else if (pending) state = 'pending-upload'
+  else if (dirty) state = 'dirty'
+  else if (!exists) state = 'cloud-only'
+  else if (pinned) state = 'pinned'
+  else if (cached.lastSyncedAt || cached.state === 'uploaded') state = 'uploaded'
+  else state = 'hydrated'
+
+  const hydrated = exists && state !== 'cloud-only'
+  const clean = hydrated && !dirty && !pending && !failed
+  const prunable = clean && !pinned
+  const bytesOnDisk = exists
+    ? Number.isInteger(effectiveDiskEntry?.size)
+      ? effectiveDiskEntry.size
+      : Number.isInteger(cached.bytesOnDisk)
+        ? cached.bytesOnDisk
+        : null
+    : null
+
+  return {
+    exists,
+    hydrated,
+    state,
+    pinned,
+    dirty,
+    pending,
+    blocked: failed,
+    prunable,
+    bytesOnDisk,
+    lastHydratedAt: cached.lastHydratedAt ?? null,
+    lastEditedAt: cached.lastEditedAt ?? null,
+    lastSyncedAt: cached.lastSyncedAt ?? null,
+    lastPrunedAt: cached.lastPrunedAt ?? null,
   }
 }
 
@@ -4471,6 +4813,215 @@ function uniqueCloudPaths(paths) {
   return Array.from(new Set(paths.map((value) => assertSafeCloudPath(value)))).sort()
 }
 
+function selectedCloudPaths(cloud, targetPath, options = {}) {
+  const target = targetPath === 'all' ? 'all' : assertSafeCloudPath(String(targetPath ?? ''))
+  const cloudPaths = uniqueCloudPaths(Object.keys(cloud.files ?? {}))
+  if (target === 'all') return cloudPaths
+
+  const normalizedTarget = target.replace(/\/+$/g, '')
+  if (cloud.files?.[normalizedTarget]) return [normalizedTarget]
+
+  const prefixMatches = cloudPaths.filter((relativePath) => cloudPathMatchesPrefix(relativePath, normalizedTarget))
+  if (prefixMatches.length === 0) {
+    throw new Error(`No visible cloud file matches: ${normalizedTarget}`)
+  }
+  if (!options.recursive) {
+    throw new Error(`Path is a folder prefix with ${prefixMatches.length} visible file${prefixMatches.length === 1 ? '' : 's'}: ${normalizedTarget}. Pass --recursive to include it.`)
+  }
+
+  return prefixMatches
+}
+
+function cloudPathMatchesPrefix(relativePath, prefix) {
+  return relativePath === prefix || relativePath.startsWith(`${prefix}/`)
+}
+
+function parseNonNegativeIntegerOption(value, fallback = 0) {
+  if (value === undefined || value === null || value === '') return fallback
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    throw new Error(`Expected a non-negative integer, got: ${value}`)
+  }
+  return parsed
+}
+
+function localCachePatchForPaths(cloud, paths, detail = {}) {
+  const now = detail.now ?? new Date().toISOString()
+  const files = {}
+  for (const relativePath of uniqueCloudPaths(paths)) {
+    const cloudEntry = cloud.files?.[relativePath] ? normalizeCloudFileEntry(relativePath, cloud.files[relativePath]) : null
+    files[relativePath] = compactObject({
+      state: detail.state,
+      pinned: detail.pinned,
+      lastHydratedAt: detail.lastHydratedAt,
+      lastEditedAt: detail.lastEditedAt,
+      lastSyncedAt: detail.lastSyncedAt,
+      lastPrunedAt: detail.lastPrunedAt,
+      bytesOnDisk: detail.bytesOnDisk ?? cloudEntry?.size ?? null,
+    })
+  }
+
+  return {
+    schemaVersion: localCacheSchemaVersion,
+    updatedAt: now,
+    files,
+  }
+}
+
+function localCachePatchFromCloudMetadata(cloud, metadata, now) {
+  if (metadata.localCache) return metadata.localCache
+  const visiblePaths = Object.keys(cloud.files ?? {})
+  if (metadata.reason === 'attach') {
+    return localCachePatchForPaths(cloud, visiblePaths, {
+      now,
+      state: 'cloud-only',
+      bytesOnDisk: null,
+    })
+  }
+  if (metadata.reason === 'dehydrate') {
+    return localCachePatchForPaths(cloud, visiblePaths, {
+      now,
+      state: 'cloud-only',
+      lastPrunedAt: now,
+      bytesOnDisk: null,
+    })
+  }
+  if (Array.isArray(metadata.prunedPaths) && metadata.prunedPaths.length > 0) {
+    return localCachePatchForPaths(cloud, metadata.prunedPaths, {
+      now,
+      state: 'cloud-only',
+      lastPrunedAt: now,
+      bytesOnDisk: null,
+    })
+  }
+  if (Array.isArray(metadata.syncedPaths) && metadata.syncedPaths.length > 0) {
+    return localCachePatchForPaths(cloud, metadata.syncedPaths, {
+      now,
+      state: 'uploaded',
+      lastEditedAt: now,
+      lastSyncedAt: now,
+    })
+  }
+  if (Array.isArray(metadata.hydratedPaths) && metadata.hydratedPaths.length > 0) {
+    const hydratedState = metadata.reason === 'sync' || metadata.reason === 'recover'
+      ? 'uploaded'
+      : 'hydrated'
+    return localCachePatchForPaths(cloud, metadata.hydratedPaths, {
+      now,
+      state: hydratedState,
+      lastHydratedAt: hydratedState === 'hydrated' ? now : undefined,
+      lastSyncedAt: hydratedState === 'uploaded' ? now : undefined,
+    })
+  }
+  return null
+}
+
+function mergeLocalCache(existing, incoming) {
+  if (!existing && !incoming) return null
+  const files = { ...(existing?.files ?? {}) }
+  for (const [relativePath, patch] of Object.entries(incoming?.files ?? {})) {
+    const previous = files[relativePath] ?? {}
+    files[relativePath] = compactObject({
+      ...previous,
+      ...patch,
+      pinned: patch.pinned === undefined ? Boolean(previous.pinned) : Boolean(patch.pinned),
+    })
+  }
+
+  return {
+    schemaVersion: localCacheSchemaVersion,
+    updatedAt: incoming?.updatedAt ?? existing?.updatedAt ?? null,
+    files,
+    summary: localCacheSummary({ files }),
+  }
+}
+
+function localCacheSnapshotForCloud(options, cloud, indexedCodebase) {
+  const files = {}
+  if (cloud?.files) {
+    for (const [relativePath, file] of Object.entries(cloud.files ?? {})) {
+      files[relativePath] = workspaceFileLocalState(options, relativePath, file, {
+        indexedCodebase,
+        forceExists: false,
+        scanDisk: false,
+      })
+    }
+  } else {
+    for (const [relativePath, entry] of Object.entries(indexedCodebase?.localCache?.files ?? {})) {
+      files[relativePath] = normalizePersistedLocalCacheEntry(entry)
+    }
+  }
+
+  return {
+    schemaVersion: localCacheSchemaVersion,
+    updatedAt: indexedCodebase?.localCache?.updatedAt ?? null,
+    files,
+    summary: localCacheSummary({ files }),
+  }
+}
+
+function normalizePersistedLocalCacheEntry(entry = {}) {
+  const state = entry.state ?? 'cloud-only'
+  const hydrated = state !== 'cloud-only'
+  const pinned = Boolean(entry.pinned)
+  const pending = state === 'pending-upload'
+  const blocked = state === 'blocked'
+  const dirty = state === 'dirty'
+  const prunable = hydrated && !pinned && !pending && !blocked && !dirty
+
+  return {
+    exists: hydrated,
+    hydrated,
+    state,
+    pinned,
+    dirty,
+    pending,
+    blocked,
+    prunable,
+    bytesOnDisk: Number.isInteger(entry.bytesOnDisk) ? entry.bytesOnDisk : null,
+    lastHydratedAt: entry.lastHydratedAt ?? null,
+    lastEditedAt: entry.lastEditedAt ?? null,
+    lastSyncedAt: entry.lastSyncedAt ?? null,
+    lastPrunedAt: entry.lastPrunedAt ?? null,
+  }
+}
+
+function localCacheSummary(cache) {
+  const counts = {}
+  let pinnedFiles = 0
+  let hydratedFiles = 0
+  let prunableFiles = 0
+  let bytesOnDisk = 0
+
+  for (const entry of Object.values(cache?.files ?? {})) {
+    const state = entry?.state ?? 'cloud-only'
+    const pinned = Boolean(entry?.pinned)
+    const pending = state === 'pending-upload' || Boolean(entry?.pending)
+    const blocked = state === 'blocked' || Boolean(entry?.blocked)
+    const dirty = state === 'dirty' || Boolean(entry?.dirty)
+    const hydrated = Boolean(entry?.hydrated) || state !== 'cloud-only'
+    const prunable = Boolean(entry?.prunable) || (hydrated && !pinned && !pending && !blocked && !dirty)
+    counts[state] = (counts[state] ?? 0) + 1
+    if (pinned) pinnedFiles += 1
+    if (hydrated) hydratedFiles += 1
+    if (prunable) prunableFiles += 1
+    if (Number.isInteger(entry?.bytesOnDisk)) bytesOnDisk += entry.bytesOnDisk
+  }
+
+  return {
+    fileCount: Object.keys(cache?.files ?? {}).length,
+    hydratedFiles,
+    pinnedFiles,
+    prunableFiles,
+    bytesOnDisk,
+    states: counts,
+  }
+}
+
+function compactObject(value) {
+  return Object.fromEntries(Object.entries(value).filter(([, entry]) => entry !== undefined))
+}
+
 function deletableCloudPathsForWorkspace(indexedCodebase, visibleCloudPaths) {
   const visible = uniqueCloudPaths(visibleCloudPaths)
   if (!indexedCodebase || indexedCodebase.hydration?.state === 'materialized') {
@@ -4495,6 +5046,40 @@ function hydratedPathsAfterSync(indexedCodebase, diskPaths, cloudPaths) {
       ? indexedCodebase.hydratedPaths ?? []
       : cloudPaths
   return uniqueCloudPaths([...existing, ...diskPaths])
+}
+
+function hydratedPathsAfterPrune(indexedCodebase, visibleCloudPaths, prunedPaths) {
+  const pruned = new Set(uniqueCloudPaths(prunedPaths))
+  const existing =
+    indexedCodebase?.hydration?.state === 'partial' || indexedCodebase?.hydration?.state === 'metadata-only'
+      ? indexedCodebase.hydratedPaths ?? []
+      : visibleCloudPaths
+  return uniqueCloudPaths(existing.filter((relativePath) => !pruned.has(relativePath)))
+}
+
+function hydrationStateForHydratedPaths(hydratedPaths, visibleCloudPaths) {
+  const visible = uniqueCloudPaths(visibleCloudPaths)
+  const hydrated = uniqueCloudPaths(hydratedPaths)
+  if (hydrated.length === 0) return 'metadata-only'
+  if (hydrated.length === visible.length && visible.every((relativePath) => hydrated.includes(relativePath))) {
+    return 'materialized'
+  }
+  return 'partial'
+}
+
+function materializationForHydrationState(hydrationState) {
+  if (hydrationState === 'materialized') return 'managed-folder'
+  if (hydrationState === 'partial') return 'partial-managed-folder'
+  return 'metadata-only'
+}
+
+function latestIsoTimestamp(values) {
+  const timestamps = values
+    .filter((value) => typeof value === 'string' && value.length > 0)
+    .map((value) => ({ value, time: new Date(value).getTime() }))
+    .filter((entry) => Number.isFinite(entry.time))
+    .sort((a, b) => b.time - a.time)
+  return timestamps[0]?.value ?? null
 }
 
 function emptyWorkspaceIndex(options) {
@@ -4527,9 +5112,12 @@ function mergeIndexedCodebases(indexedCodebases, current) {
   }
   if (current?.id) {
     const key = workspaceIndexEntryKey(current)
+    const existing = byId.get(key) ?? {}
+    const localCache = mergeLocalCache(existing.localCache, current.localCache)
     byId.set(key, {
-      ...(byId.get(key) ?? {}),
+      ...existing,
       ...current,
+      ...(localCache ? { localCache } : {}),
     })
   }
 
@@ -4585,6 +5173,7 @@ function workspaceIndexEntryFromCloud(options, cloud, metadata = {}) {
     lastEvent: metadata.lastEvent ?? null,
     hydratedPathCount: hydratedPaths.length,
   }
+  const localCache = localCachePatchFromCloudMetadata(cloud, metadata, now)
 
   return {
     id: codebaseId,
@@ -4611,6 +5200,7 @@ function workspaceIndexEntryFromCloud(options, cloud, metadata = {}) {
     hydration,
     hydratedPaths,
     contentManifest,
+    ...(localCache ? { localCache } : {}),
     remoteCursor: {
       graphRevision: cloud.revision ?? null,
       selectedStateRevision: cloud.selectedState?.revision ?? null,
@@ -5194,6 +5784,7 @@ async function readAgentStatusEndpoint(options) {
   const initialized = cloudSummary.exists && (hydration.state === 'materialized' || hydration.state === 'partial')
   const attached = cloudSummary.exists && hydration.state === 'metadata-only'
   const readiness = initialized || watchHealth.state === 'watching' ? 'ready' : attached ? 'attached' : 'not_initialized'
+  const localCache = localCacheSnapshotForCloud(options, null, indexedCodebase)
 
   return {
     ok:
@@ -5252,6 +5843,8 @@ async function readAgentStatusEndpoint(options) {
         samplePaths: [],
       },
       contentManifest: contentManifestSummary(indexedCodebase?.contentManifest),
+      cache: localCache.summary,
+      files: localCache.files,
       index: workspaceIndexSummary(options, workspaceIndex),
       virtualized: false,
     },
@@ -5740,6 +6333,7 @@ async function readAgentState(options) {
     indexedCodebase,
   })
   const localChanges = await workspaceLocalChanges(options, indexedCodebase)
+  const localCache = localCacheSnapshotForCloud(options, cloud, indexedCodebase)
   remotePullHealth.cursor = buildRemoteCursor({
     cloudSummary,
     eventsSummary,
@@ -5803,6 +6397,8 @@ async function readAgentState(options) {
         hydration,
         localChanges,
         contentManifest: contentManifestSummary(indexedCodebase?.contentManifest),
+        cache: localCache.summary,
+        files: localCache.files,
         index: workspaceIndexSummary(options, workspaceIndex),
         virtualized: false,
       },
@@ -8645,10 +9241,12 @@ Options:
   --device-keys <path> Override local per-codebase device keyring path
   --recovery-passphrase <secret> One-shot passphrase for keys export-recovery
   --production-safe import-git/mirror: skip cloud sync if routed secrets are not encrypted
-  --execute          storage gc: delete planned orphaned blobs; default is dry-run
+  --execute          storage gc/workspace prune: perform planned local removals; default is dry-run
   --launch-agent-label <label> mirror: macOS LaunchAgent label to stop/restart
   --output <path>     Output folder for Git export/publish
-  --path <cloud-path> Cloud file path for workspace hydrate-file
+  --path <cloud-path> Cloud file/folder path for workspace hydrate-file, hydrate-path, prune, pin, or unpin
+  --recursive        workspace hydrate-path/pin/unpin/prune: include visible files under a folder prefix
+  --inactive-ms <n>  workspace prune: only prune clean cached files inactive for this many ms
   --codebase-id <id>  Codebase id for import
   --codebase-name <name> Codebase display name for import
   --profile <name>    development or production path profile

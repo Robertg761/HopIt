@@ -30,6 +30,10 @@ export type AgentCommand =
   | 'setupWorkspace'
   | 'attachWorkspace'
   | 'hydrateWorkspace'
+  | 'hydratePath'
+  | 'pruneWorkspace'
+  | 'pinPath'
+  | 'unpinPath'
   | 'dehydrateWorkspace'
   | 'importGitUrl'
 
@@ -37,6 +41,10 @@ export type AgentCommandPayload = {
   codebaseId?: string | null
   url?: string
   branch?: string
+  path?: string
+  recursive?: boolean
+  execute?: boolean
+  inactiveMs?: number
 }
 
 export type AgentCommandResult = {

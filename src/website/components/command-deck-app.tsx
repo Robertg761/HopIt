@@ -218,7 +218,12 @@ function PageContent({
         />
         <section className="grid gap-5 xl:grid-cols-[minmax(380px,0.55fr)_minmax(0,1fr)]">
           <FileCloudPanel status={status} />
-          <DriveSection status={status} onChanged={refreshStatus} />
+          <DriveSection
+            status={status}
+            onChanged={refreshStatus}
+            runCommand={runCommand}
+            runningCommand={runningCommand}
+          />
         </section>
       </>
     )
@@ -550,7 +555,7 @@ function TopDock({
     : activeView === 'history'
       ? 'activity'
       : activeView
-  const activeTheme = theme ?? 'light'
+  const activeTheme = theme === 'light' ? 'light' : 'dark'
   const online = status.state === 'online' || status.state === 'syncing'
   const blocked = status.state === 'blocked'
 

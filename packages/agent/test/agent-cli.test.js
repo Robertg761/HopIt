@@ -1460,6 +1460,7 @@ test('workspace files and hydrate-file expose cloud metadata and materialize one
   assert.equal(listedBefore.summary.visibleFiles, 4)
   assert.equal(listedBefore.summary.hydratedFiles, 0)
   assert.equal(listedBefore.files.find((file) => file.path === 'README.md').local.exists, false)
+  assert.equal(listedBefore.files.find((file) => file.path === 'README.md').local.state, 'cloud-only')
 
   const hydrated = parseLastJsonObject((await runCli('workspace', [
     'hydrate-file',
@@ -1470,12 +1471,15 @@ test('workspace files and hydrate-file expose cloud metadata and materialize one
   assert.equal(hydrated.ok, true)
   assert.equal(hydrated.action, 'hydrate-file')
   assert.equal(hydrated.path, 'README.md')
+  assert.equal(hydrated.file.local.state, 'hydrated')
   assert.equal(await pathExists(path.join(state.workspace, 'README.md')), true)
   assert.equal(await pathExists(path.join(state.workspace, 'src/presence.ts')), false)
 
   const listedAfter = JSON.parse((await runCli('workspace', ['files', ...stateArgs(state)])).stdout)
   assert.equal(listedAfter.summary.hydratedFiles, 1)
   assert.equal(listedAfter.files.find((file) => file.path === 'README.md').local.hydrated, true)
+  assert.equal(listedAfter.files.find((file) => file.path === 'README.md').local.state, 'hydrated')
+  assert.equal(listedAfter.files.find((file) => file.path === 'README.md').local.prunable, true)
 
   const status = JSON.parse((await runCli('status', stateArgs(state))).stdout)
   assert.equal(status.ok, true)
@@ -1483,6 +1487,133 @@ test('workspace files and hydrate-file expose cloud metadata and materialize one
   assert.equal(status.workspace.hydration.state, 'partial')
   assert.equal(status.workspace.hydration.hydratedPathCount, 1)
   assert.equal(status.workspace.contentManifest.fileCount, 1)
+  assert.equal(status.workspace.cache.hydratedFiles, 1)
+  assert.equal(status.workspace.files['README.md'].state, 'hydrated')
+})
+
+test('workspace hydrate-path materializes recursive path selections with local cache state', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+
+  const nonRecursive = await runCliFailure('workspace', [
+    'hydrate-path',
+    ...stateArgs(state),
+    '--path',
+    'src',
+  ])
+  assert.match(nonRecursive.stderr, /Pass --recursive/)
+
+  const hydrated = parseLastJsonObject((await runCli('workspace', [
+    'hydrate-path',
+    ...stateArgs(state),
+    '--path',
+    'src',
+    '--recursive',
+  ])).stdout)
+  assert.equal(hydrated.ok, true)
+  assert.equal(hydrated.action, 'hydrate-path')
+  assert.deepEqual(hydrated.paths, ['src/presence.ts'])
+  assert.equal(await pathExists(path.join(state.workspace, 'src/presence.ts')), true)
+  assert.equal(await pathExists(path.join(state.workspace, 'README.md')), false)
+
+  const listed = JSON.parse((await runCli('workspace', ['files', ...stateArgs(state)])).stdout)
+  const hydratedFile = listed.files.find((file) => file.path === 'src/presence.ts')
+  assert.equal(listed.summary.hydratedFiles, 1)
+  assert.equal(hydratedFile.local.state, 'hydrated')
+  assert.equal(hydratedFile.local.prunable, true)
+})
+
+test('workspace prune frees only clean acknowledged local cache without cloud deletes', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+
+  const planned = parseLastJsonObject((await runCli('workspace', [
+    'prune',
+    ...stateArgs(state),
+    '--path',
+    'README.md',
+  ])).stdout)
+  assert.equal(planned.ok, true)
+  assert.equal(planned.mode, 'dry-run')
+  assert.equal(planned.candidateCount, 1)
+  assert.equal(planned.removed, 0)
+  assert.equal(await pathExists(path.join(state.workspace, 'README.md')), true)
+
+  const pruned = parseLastJsonObject((await runCli('workspace', [
+    'prune',
+    ...stateArgs(state),
+    '--path',
+    'README.md',
+    '--execute',
+  ])).stdout)
+  assert.equal(pruned.ok, true)
+  assert.equal(pruned.mode, 'execute')
+  assert.equal(pruned.removed, 1)
+  assert.equal(await pathExists(path.join(state.workspace, 'README.md')), false)
+
+  let status = JSON.parse((await runCli('status', stateArgs(state))).stdout)
+  assert.equal(status.workspace.hydration.state, 'partial')
+  assert.equal(status.workspace.contentManifest.fileCount, 3)
+  assert.equal(status.workspace.files['README.md'].state, 'cloud-only')
+
+  await runCli('sync-once', stateArgs(state))
+  const cloud = await readJson(state.cloud)
+  assert.ok(cloud.files['README.md'])
+
+  status = JSON.parse((await runCli('status', stateArgs(state))).stdout)
+  assert.equal(status.workspace.contentManifest.fileCount, 3)
+  assert.equal(status.workspace.files['README.md'].state, 'cloud-only')
+})
+
+test('workspace pin protects hydrated paths from prune until unpinned', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('workspace', [
+    'hydrate-file',
+    ...stateArgs(state),
+    '--path',
+    'README.md',
+  ])
+
+  const pinned = parseLastJsonObject((await runCli('workspace', [
+    'pin',
+    ...stateArgs(state),
+    '--path',
+    'README.md',
+  ])).stdout)
+  assert.equal(pinned.ok, true)
+  assert.equal(pinned.action, 'pin')
+
+  const skipped = parseLastJsonObject((await runCli('workspace', [
+    'prune',
+    ...stateArgs(state),
+    '--path',
+    'README.md',
+    '--execute',
+  ])).stdout)
+  assert.equal(skipped.candidateCount, 0)
+  assert.equal(skipped.skipped[0].reason, 'pinned')
+  assert.equal(await pathExists(path.join(state.workspace, 'README.md')), true)
+
+  const unpinned = parseLastJsonObject((await runCli('workspace', [
+    'unpin',
+    ...stateArgs(state),
+    '--path',
+    'README.md',
+  ])).stdout)
+  assert.equal(unpinned.ok, true)
+  assert.equal(unpinned.action, 'unpin')
+
+  const pruned = parseLastJsonObject((await runCli('workspace', [
+    'prune',
+    ...stateArgs(state),
+    '--path',
+    'README.md',
+    '--execute',
+  ])).stdout)
+  assert.equal(pruned.removed, 1)
+  assert.equal(await pathExists(path.join(state.workspace, 'README.md')), false)
 })
 
 test('production-profile same-Mac dogfood simulation covers lazy hydration remote-pull handoff and dirty blocking', async () => {

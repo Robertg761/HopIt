@@ -19,7 +19,7 @@ Workspace Root responsibilities:
 - keep local cache metadata separate from user-authored files
 - make same-owner device handoff automatic when the local journal is clean
 
-The current implementation has a production-profile managed workspace path, a root-level `workspaces.json` index, D1 account-visible codebase discovery merged with local attach/readiness state when credentials allow it, scoped-token configured-codebase fallback, automatic verified-owner bootstrap for migrated `local-owner` codebases, dashboard-driven first-run setup/metadata-only attach, dashboard hydrate/dehydrate controls, hydration/materialized-revision status, visible-file metadata listing, single-file hydration, metadata-only dehydrate state, an explicit metadata-first lazy materialization policy, and a remote cursor exposed through `hop status`. Solid v1 still needs richer per-file lazy states, editor/tool demand hydration, and production-grade event delivery before claiming the "install and boom" experience.
+The current implementation has a production-profile managed workspace path, a root-level `workspaces.json` index, D1 account-visible codebase discovery merged with local attach/readiness state when credentials allow it, scoped-token configured-codebase fallback, automatic verified-owner bootstrap for migrated `local-owner` codebases, dashboard-driven first-run setup/metadata-only attach, dashboard hydrate/dehydrate controls, hydration/materialized-revision status, visible-file metadata listing with local cache states, single-file and recursive-prefix hydration, pin/unpin controls, clean-cache pruning, metadata-only dehydrate state, an explicit metadata-first lazy materialization policy, and a remote cursor exposed through `hop status`. Solid v1 still needs editor/tool demand hydration and production-grade event delivery before claiming the "install and boom" experience.
 
 ### Cloud File Graph
 
@@ -335,8 +335,8 @@ The local-agent contract is good enough for personal dogfooding, but the solid v
 
 - Persist a user-selected Workspace Root outside the source checkout. Production-profile paths and the root index path are in place.
 - Track codebase folders independently from one selected workspace path. The index now keys entries by codebase and concrete workspace path.
-- Add root-level codebase discovery and attach/hydrate state. D1 account-visible discovery, automatic account bootstrap, dashboard first-run setup/metadata-only attach, dashboard hydrate/dehydrate actions, and hydration/readiness state are in place; richer per-file lazy states remain.
-- Surface metadata-only, partial, hydrated, dirty, blocked, and conflicted states in `hop status` and the web UI. Hydrated/materialized, metadata-only, partial single-file hydration, cursor state, and metadata-first lazy policy are in place; broader blocked/conflicted UI detail and editor/tool demand hydration remain.
+- Add root-level codebase discovery and attach/hydrate state. D1 account-visible discovery, automatic account bootstrap, dashboard first-run setup/metadata-only attach, dashboard hydrate/dehydrate actions, hydration/readiness state, and per-path cache state are in place.
+- Surface metadata-only, partial, hydrated, dirty, blocked, pinned, prunable, and conflicted states in `hop status` and the web UI. Hydrated/materialized, metadata-only, partial path hydration, cursor state, and metadata-first lazy policy are in place; broader blocked/conflicted UI detail and editor/tool demand hydration remain.
 - Keep the current managed-folder implementation as the first adapter.
 
 ### 1. Lock The Managed-Folder Contracts
@@ -387,7 +387,7 @@ The local-agent contract is good enough for personal dogfooding, but the solid v
 ### 6. Tighten Managed-Folder Behavior
 
 - Handle creates, writes, deletes, renames, and `.private/` visibility paths consistently.
-- Make local cache pruning explicit and conservative.
+- Add automatic pruning policy on top of the explicit conservative prune command.
 - Preserve normal editor and terminal compatibility as the primary v1 constraint.
 
 ### 7. Add Review And Merge

@@ -37,7 +37,7 @@ type HeaderProps = {
 
 export function Header({ onOpenSidebar }: HeaderProps) {
   const { theme, setTheme } = useTheme()
-  const activeTheme = theme ?? 'light'
+  const activeTheme = theme === 'light' ? 'light' : 'dark'
   const jumpTo = React.useCallback((id: string) => {
     navigateToSection(id)
   }, [])
