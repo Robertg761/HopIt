@@ -428,3 +428,30 @@ create table if not exists review_thread_comments (
 
 create index if not exists idx_review_thread_comments_thread on review_thread_comments(thread_id);
 create index if not exists idx_review_thread_comments_codebase on review_thread_comments(codebase_id);
+
+create table if not exists review_decisions (
+  decision_id text primary key,
+  codebase_id text not null,
+  change_set_id text not null,
+  decision text not null,
+  summary text,
+  created_by text not null,
+  created_at text not null
+);
+
+create index if not exists idx_review_decisions_codebase_change_set on review_decisions(codebase_id, change_set_id, created_at);
+
+create table if not exists notifications (
+  notification_id text primary key,
+  codebase_id text not null,
+  recipient_user_id text,
+  kind text not null,
+  title text not null,
+  body text not null,
+  href text,
+  read_at text,
+  created_at text not null
+);
+
+create index if not exists idx_notifications_codebase_created on notifications(codebase_id, created_at);
+create index if not exists idx_notifications_recipient_created on notifications(recipient_user_id, created_at);

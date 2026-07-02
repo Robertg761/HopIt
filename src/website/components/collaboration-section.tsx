@@ -625,6 +625,7 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
             <StateNotice icon={AlertCircle} title="Collaboration unavailable" detail={workItems.error.message} />
           ) : tab === 'issues' ? (
             <IssuesList
+              codebaseId={codebaseId}
               issues={filteredIssues}
               emptyDetail={issues.length === 0 ? 'Create the first codebase issue.' : 'No issues match this filter.'}
               disabledReason={issueUpdateReason}
@@ -636,6 +637,7 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
             />
           ) : tab === 'discussions' ? (
             <DiscussionsList
+              codebaseId={codebaseId}
               discussions={filteredDiscussions}
               emptyDetail={
                 discussions.length === 0
@@ -651,6 +653,7 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
             />
           ) : tab === 'projects' ? (
             <ProjectsList
+              codebaseId={codebaseId}
               projects={filteredProjects}
               emptyDetail={projects.length === 0 ? 'Create the first project board.' : 'No projects match this filter.'}
               disabledReason={projectUpdateReason}
@@ -661,6 +664,7 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
             />
           ) : (
             <ReleasesList
+              codebaseId={codebaseId}
               releases={filteredReleases}
               emptyDetail={releases.length === 0 ? 'Draft the first release against Main.' : 'No releases match this filter.'}
               disabledReason={releasePublishReason}
@@ -855,6 +859,7 @@ function ContextDatum({
 }
 
 function IssuesList({
+  codebaseId,
   issues,
   emptyDetail,
   disabledReason,
@@ -864,6 +869,7 @@ function IssuesList({
   onSetStatus,
   onAddComment,
 }: {
+  codebaseId: string | null
   issues: CollaborationIssue[]
   emptyDetail: string
   disabledReason: string | null
@@ -889,6 +895,7 @@ function IssuesList({
               number={issue.number}
               status={issue.status}
               tone={issue.status === 'open' ? 'active' : 'neutral'}
+              href={workItemHref(codebaseId, 'issues', issue)}
             />
             {issue.body ? <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{issue.body}</p> : null}
             <ItemMeta
@@ -930,6 +937,7 @@ function IssuesList({
 }
 
 function DiscussionsList({
+  codebaseId,
   discussions,
   emptyDetail,
   disabledReason,
@@ -939,6 +947,7 @@ function DiscussionsList({
   onSetStatus,
   onAddComment,
 }: {
+  codebaseId: string | null
   discussions: CollaborationDiscussion[]
   emptyDetail: string
   disabledReason: string | null
@@ -964,6 +973,7 @@ function DiscussionsList({
               number={discussion.number}
               status={discussion.status}
               tone={discussion.status === 'open' ? 'active' : 'neutral'}
+              href={workItemHref(codebaseId, 'discussions', discussion)}
             />
             <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{discussion.body}</p>
             <ItemMeta items={[discussion.category, `${discussion.comments.length} comments`, `updated ${formatDate(discussion.updatedAt)}`]} />
@@ -1073,6 +1083,7 @@ function CommentThread({
 }
 
 function ProjectsList({
+  codebaseId,
   projects,
   emptyDetail,
   disabledReason,
@@ -1081,6 +1092,7 @@ function ProjectsList({
   onMoveItem,
   onArchive,
 }: {
+  codebaseId: string | null
   projects: CollaborationProject[]
   emptyDetail: string
   disabledReason: string | null
@@ -1112,6 +1124,7 @@ function ProjectsList({
                   number={project.number}
                   status={project.status}
                   tone={project.status === 'active' ? 'active' : 'neutral'}
+                  href={workItemHref(codebaseId, 'projects', project)}
                 />
                 {project.description ? (
                   <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{project.description}</p>
@@ -1270,6 +1283,7 @@ function ProjectCard({
 }
 
 function ReleasesList({
+  codebaseId,
   releases,
   emptyDetail,
   disabledReason,
@@ -1278,6 +1292,7 @@ function ReleasesList({
   onPublish,
   onAddAsset,
 }: {
+  codebaseId: string | null
   releases: CollaborationRelease[]
   emptyDetail: string
   disabledReason: string | null
@@ -1306,6 +1321,7 @@ function ReleasesList({
               number={release.number}
               status={release.status}
               tone={release.status === 'published' ? 'active' : 'neutral'}
+              href={workItemHref(codebaseId, 'releases', release)}
             />
             <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{release.notes}</p>
             <ItemMeta
@@ -1719,20 +1735,28 @@ function ItemHeader({
   number,
   status,
   tone,
+  href,
 }: {
   icon: React.ComponentType<{ className?: string }>
   title: string
   number: number
   status: string
   tone: 'active' | 'neutral'
+  href?: string | null
 }) {
   return (
     <div className="flex items-start justify-between gap-3">
       <div className="min-w-0">
-        <p className="flex min-w-0 items-center gap-1.5 text-sm font-semibold">
+        <div className="flex min-w-0 items-center gap-1.5 text-sm font-semibold">
           <Icon className="size-3.5 shrink-0 text-hop" />
-          <span className="truncate">{title}</span>
-        </p>
+          {href ? (
+            <a href={href} className="truncate transition hover:text-primary">
+              {title}
+            </a>
+          ) : (
+            <span className="truncate">{title}</span>
+          )}
+        </div>
         <p className="mt-0.5 text-[10.5px] text-muted-foreground">#{number}</p>
       </div>
       <span
@@ -1776,6 +1800,15 @@ function LabelRow({ labels }: { labels: string[] }) {
       ))}
     </div>
   )
+}
+
+function workItemHref(
+  codebaseId: string | null,
+  kind: 'issues' | 'discussions' | 'releases' | 'projects',
+  item: { id: string },
+) {
+  if (!codebaseId) return null
+  return `/codebases/${encodeURIComponent(codebaseId)}/work-items/${kind}/${encodeURIComponent(item.id)}`
 }
 
 function StateNotice({

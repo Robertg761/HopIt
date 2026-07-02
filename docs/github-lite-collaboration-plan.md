@@ -40,13 +40,13 @@ The first collaboration slice is now started in the repo:
 - The status mapper carries capped shared-file content previews.
 - The dashboard includes a read-only code-review browser section.
 - The dashboard includes member/invite management plus first issue, discussion, and release workflows.
-- D1 has permission-gated tables/functions for issues, issue comments, projects, project items, discussions, discussion comments, releases, release assets, and per-codebase counters; richer release assets and dedicated detail pages remain to be completed.
+- D1 has permission-gated tables/functions for issues, issue comments, projects, project items, discussions, discussion comments, releases, release assets, review decisions, notifications, and per-codebase counters; routeable work-item detail pages now exist, while richer linked-object cards remain to be completed.
 - D1 and legacy Convex both have scoped agent-session token registration/list/touch/revoke plus first trusted-device/key metadata APIs; complete write-path enforcement and public setup UX remain to harden.
 - Secret-only client encryption exists for routed `.private/env/` object blobs,
   but full private-repo encryption, invite-time key grants, independent secret
   sharing, path encryption, and revocation/rekey flows are still pending.
 
-This is still a foundation layer, but it is no longer only backend scaffolding. The repo has Clerk-backed sign-in routes, auth middleware, D1 backend selection, legacy Convex auth config, D1-backed member/invite UI, D1-backed work-item/project-board/comment UI, owner email config, D1-backed scoped agent-session/key metadata, scoped D1 proxy session auth, redacted key-grant status, and a Convex JWT template for the legacy path. Clerk production DNS, SSL, live Vercel env, `HOPIT_AUTH_PROVIDER=clerk`, production Google OAuth, owner sign-in, and D1 owner claim are active for `hopit.dev`; Basic Auth fallback env vars are removed from Vercel Production. Real diffs, snapshot-anchored inline review comments, routeable history, immutable release publishing, complete permission coverage, dashboard/setup UX for scoped sessions, and full private-repo key grant approval/rotation remain pending.
+This is still a foundation layer, but it is no longer only backend scaffolding. The repo has Clerk-backed sign-in routes, auth middleware, D1 backend selection, legacy Convex auth config, D1-backed member/invite UI, D1-backed work-item/project-board/comment/detail UI, review decisions, notifications, owner email config, D1-backed scoped agent-session/key metadata, scoped D1 proxy session auth, redacted key-grant status, and a Convex JWT template for the legacy path. Clerk production DNS, SSL, live Vercel env, `HOPIT_AUTH_PROVIDER=clerk`, production Google OAuth, owner sign-in, and D1 owner claim are active for `hopit.dev`; Basic Auth fallback env vars are removed from Vercel Production. Real diffs, object-backed history reconstruction, immutable release publishing, complete permission coverage, dashboard/setup UX for scoped sessions, and full private-repo key grant approval/rotation remain pending.
 
 ## Phase Principle
 

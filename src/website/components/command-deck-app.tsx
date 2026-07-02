@@ -46,6 +46,7 @@ import { CollaborationSection } from '@/website/components/collaboration-section
 import { DriveSection } from '@/website/components/drive-section'
 import { HopItLogo } from '@/website/components/logo'
 import { MembersInvitationsPanel } from '@/website/components/members-invitations-panel'
+import { NotificationsPanel } from '@/website/components/notifications-panel'
 import { ReposSection } from '@/website/components/repos-section'
 import { RightRail } from '@/website/components/right-rail'
 import {
@@ -298,6 +299,7 @@ function PageContent({
           icon={Activity}
           status={status}
         />
+        <NotificationsPanel status={status} />
         <ActivityFeed status={status} />
       </>
     )
@@ -315,6 +317,7 @@ function PageContent({
         />
         <RouteableCodebaseStrip status={status} view="history" />
         <HistorySnapshotPanel status={status} />
+        <NotificationsPanel status={status} />
         <ActivityFeed status={status} />
       </>
     )

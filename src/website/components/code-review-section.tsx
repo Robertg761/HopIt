@@ -3,6 +3,7 @@
 import * as React from 'react'
 import {
   AlertTriangle,
+  CheckCircle2,
   Code2,
   FileDiff,
   FileCode2,
@@ -21,12 +22,16 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
   createCollaborationItem,
+  createReviewDecision,
   createReviewThread,
   createReviewThreadComment,
   fetchWorkItems,
+  fetchReviewDecisions,
   fetchReviewThreads,
   resolveReviewThread,
   type CollaborationIssue,
+  type ReviewDecision,
+  type ReviewDecisionKind,
   type ReviewThread,
   type WorkItemsResponse,
 } from '@/lib/collaboration'
@@ -64,6 +69,11 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
   const [threadDraft, setThreadDraft] = React.useState('')
   const [threadMessage, setThreadMessage] = React.useState<string | null>(null)
   const [creatingThread, setCreatingThread] = React.useState(false)
+  const [reviewDecisions, setReviewDecisions] = React.useState<ReviewDecision[]>([])
+  const [loadingDecisions, setLoadingDecisions] = React.useState(false)
+  const [decisionDraft, setDecisionDraft] = React.useState('')
+  const [decisionMessage, setDecisionMessage] = React.useState<string | null>(null)
+  const [creatingDecision, setCreatingDecision] = React.useState<ReviewDecisionKind | null>(null)
   const [commentDrafts, setCommentDrafts] = React.useState<Record<string, string>>({})
   const [commentingIssueId, setCommentingIssueId] = React.useState<string | null>(null)
   const [threadCommentDrafts, setThreadCommentDrafts] = React.useState<Record<string, string>>({})
@@ -80,6 +90,7 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
   const privateFileCount = reviewRows.filter((row) => row.file.scope === 'owner-private').length
   const sharedFileCount = reviewRows.filter((row) => row.file.scope === 'shared').length
   const changedFileCount = reviewRows.filter((row) => row.state === 'changed').length
+  const activeChangeSetId = status.activeChangeSetId === 'None' ? null : status.activeChangeSetId
   const reviewEvents = status.events.filter((event) =>
     isReviewHistoryEvent(event.label),
   )
@@ -92,15 +103,20 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
     [reviewThreads, selectedFile?.path],
   )
   const canWrite = status.requester.permissions.includes('write')
+  const canReview = status.requester.permissions.includes('review')
   const canCreateFollowup =
     Boolean(status.codebaseId) &&
     selectedFile?.scope === 'shared' &&
     canWrite
   const canCreateAnchoredThread =
     Boolean(status.codebaseId) &&
-    status.activeChangeSetId !== 'None' &&
+    Boolean(activeChangeSetId) &&
     selectedFile?.scope === 'shared' &&
     canWrite
+  const canCreateDecision =
+    Boolean(status.codebaseId) &&
+    Boolean(activeChangeSetId) &&
+    canReview
 
   const loadReviewThreads = React.useCallback(async () => {
     if (!status.codebaseId) {
@@ -136,13 +152,13 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
     try {
       const result = await fetchReviewThreads(
         status.codebaseId,
-        status.activeChangeSetId === 'None' ? null : status.activeChangeSetId,
+        activeChangeSetId,
       )
       setReviewThreads(result.threads)
     } finally {
       setLoadingAnchoredThreads(false)
     }
-  }, [status.activeChangeSetId, status.codebaseId])
+  }, [activeChangeSetId, status.codebaseId])
 
   React.useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -153,6 +169,32 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
       window.clearTimeout(timeout)
     }
   }, [loadAnchoredThreads])
+
+  const loadReviewDecisions = React.useCallback(async () => {
+    if (!status.codebaseId) {
+      setReviewDecisions([])
+      return
+    }
+
+    setLoadingDecisions(true)
+    try {
+      const result = await fetchReviewDecisions(status.codebaseId, activeChangeSetId)
+      setReviewDecisions(result.decisions)
+      if (!result.ok) setDecisionMessage(result.error?.message ?? 'Review decisions failed to load.')
+    } finally {
+      setLoadingDecisions(false)
+    }
+  }, [activeChangeSetId, status.codebaseId])
+
+  React.useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      void loadReviewDecisions()
+    }, 0)
+
+    return () => {
+      window.clearTimeout(timeout)
+    }
+  }, [loadReviewDecisions])
 
   async function createFollowupIssue() {
     if (!status.codebaseId || !selectedFile || !canCreateFollowup) return
@@ -222,7 +264,7 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
     try {
       const result = await createReviewThread({
         codebaseId: status.codebaseId,
-        changeSetId: status.activeChangeSetId,
+        changeSetId: activeChangeSetId ?? status.activeChangeSetId,
         filePath: selectedFile.path,
         lineNumber: selectedLineForFile,
         baseRevision: status.mainRevision,
@@ -250,7 +292,7 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
     try {
       const result = await createReviewThreadComment({
         codebaseId: status.codebaseId,
-        changeSetId: status.activeChangeSetId === 'None' ? null : status.activeChangeSetId,
+        changeSetId: activeChangeSetId,
         threadId: thread.id,
         body,
         createdBy: status.requester.id ?? 'browser-ui',
@@ -275,7 +317,7 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
     try {
       const result = await resolveReviewThread({
         codebaseId: status.codebaseId,
-        changeSetId: status.activeChangeSetId === 'None' ? null : status.activeChangeSetId,
+        changeSetId: activeChangeSetId,
         threadId: thread.id,
         updatedBy: status.requester.id ?? 'browser-ui',
       })
@@ -285,6 +327,29 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
       setThreadMessage(error instanceof Error ? error.message : 'Review resolve failed.')
     } finally {
       setResolvingThreadId(null)
+    }
+  }
+
+  async function recordReviewDecision(decision: ReviewDecisionKind) {
+    if (!status.codebaseId || !activeChangeSetId || !canCreateDecision) return
+
+    setCreatingDecision(decision)
+    setDecisionMessage(null)
+    try {
+      const result = await createReviewDecision({
+        codebaseId: status.codebaseId,
+        changeSetId: activeChangeSetId,
+        decision,
+        summary: decisionDraft,
+        createdBy: status.requester.id ?? 'browser-ui',
+      })
+      setReviewDecisions(result.decisions)
+      setDecisionMessage(result.ok ? 'Review decision recorded.' : (result.error?.message ?? 'Review decision failed.'))
+      if (result.ok) setDecisionDraft('')
+    } catch (error) {
+      setDecisionMessage(error instanceof Error ? error.message : 'Review decision failed.')
+    } finally {
+      setCreatingDecision(null)
     }
   }
 
@@ -447,6 +512,18 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
             creatingFollowup={creatingFollowup}
             followupMessage={followupMessage}
             onCreateFollowup={() => void createFollowupIssue()}
+          />
+          <ReviewDecisionCard
+            decisions={reviewDecisions}
+            loading={loadingDecisions}
+            canCreate={canCreateDecision}
+            draft={decisionDraft}
+            message={decisionMessage}
+            creatingDecision={creatingDecision}
+            activeChangeSetId={activeChangeSetId}
+            onDraftChange={setDecisionDraft}
+            onCreate={(decision) => void recordReviewDecision(decision)}
+            onRefresh={() => void loadReviewDecisions()}
           />
           <AnchoredReviewThreadsCard
             threads={selectedFileThreads}
@@ -612,6 +689,165 @@ function SelectedFileCard({
         <p className="mt-2 text-xs text-muted-foreground">Select a visible file to inspect review metadata.</p>
       )}
     </div>
+  )
+}
+
+function ReviewDecisionCard({
+  decisions,
+  loading,
+  canCreate,
+  draft,
+  message,
+  creatingDecision,
+  activeChangeSetId,
+  onDraftChange,
+  onCreate,
+  onRefresh,
+}: {
+  decisions: ReviewDecision[]
+  loading: boolean
+  canCreate: boolean
+  draft: string
+  message: string | null
+  creatingDecision: ReviewDecisionKind | null
+  activeChangeSetId: string | null
+  onDraftChange: (value: string) => void
+  onCreate: (decision: ReviewDecisionKind) => void
+  onRefresh: () => void
+}) {
+  const latestDecision = decisions[0] ?? null
+
+  return (
+    <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-xs font-semibold">
+          <ShieldCheck className="size-3.5 text-hop" />
+          Review decision
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={loading}
+          className="h-7 rounded-md px-2 text-[11px]"
+          onClick={onRefresh}
+        >
+          <RefreshCcw className={cn('size-3.5', loading && 'animate-spin')} />
+          {decisions.length}
+        </Button>
+      </div>
+
+      <div className="mt-3 rounded-lg bg-card p-2.5 ring-1 ring-border/50">
+        <p className="text-[11px] font-medium">
+          {activeChangeSetId ?? 'No active change set'}
+        </p>
+        {latestDecision ? (
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            Latest: {decisionLabel(latestDecision.decision)} by {latestDecision.createdBy}
+          </p>
+        ) : (
+          <p className="mt-1 text-[11px] text-muted-foreground">No final decision recorded yet.</p>
+        )}
+        <textarea
+          value={draft}
+          onChange={(event) => onDraftChange(event.target.value)}
+          disabled={!canCreate || Boolean(creatingDecision)}
+          rows={3}
+          placeholder="Optional decision summary"
+          className="mt-2 h-auto w-full resize-none rounded-lg border border-border/60 bg-muted/40 px-2 py-1.5 text-xs outline-none transition placeholder:text-muted-foreground focus:border-hop/40 focus:ring-2 focus:ring-hop/20 disabled:cursor-not-allowed disabled:opacity-60"
+        />
+        <div className="mt-2 grid gap-1.5">
+          <ReviewDecisionButton
+            decision="approved"
+            label="Approve"
+            icon={CheckCircle2}
+            disabled={!canCreate || Boolean(creatingDecision)}
+            loading={creatingDecision === 'approved'}
+            onClick={onCreate}
+          />
+          <ReviewDecisionButton
+            decision="changes-requested"
+            label="Request changes"
+            icon={AlertTriangle}
+            disabled={!canCreate || Boolean(creatingDecision)}
+            loading={creatingDecision === 'changes-requested'}
+            onClick={onCreate}
+          />
+          <ReviewDecisionButton
+            decision="commented"
+            label="Comment only"
+            icon={MessageSquareText}
+            disabled={!canCreate || Boolean(creatingDecision)}
+            loading={creatingDecision === 'commented'}
+            onClick={onCreate}
+          />
+        </div>
+        {!canCreate ? (
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            Decisions require review access and an active change set.
+          </p>
+        ) : null}
+        {message ? (
+          <p className="mt-2 rounded-md bg-muted/60 px-2 py-1.5 text-[11px] text-muted-foreground">{message}</p>
+        ) : null}
+      </div>
+
+      {decisions.length > 0 ? (
+        <ol className="mt-3 max-h-40 space-y-1.5 overflow-auto scroll-thin">
+          {decisions.slice(0, 5).map((decision) => (
+            <li key={decision.id} className="rounded-md bg-card px-2 py-1.5 ring-1 ring-border/50">
+              <div className="flex items-center justify-between gap-2">
+                <span className={cn(
+                  'shrink-0 rounded-md px-1.5 py-0.5 text-[10px] ring-1 ring-inset',
+                  decision.decision === 'approved'
+                    ? 'bg-hop/10 text-hop ring-hop/20'
+                    : decision.decision === 'changes-requested'
+                      ? 'bg-hop-amber/10 text-hop-amber ring-hop-amber/20'
+                      : 'bg-muted text-muted-foreground ring-border/60',
+                )}>
+                  {decisionLabel(decision.decision)}
+                </span>
+                <span className="truncate text-[10px] text-muted-foreground">{formatDate(decision.createdAt)}</span>
+              </div>
+              {decision.summary ? (
+                <p className="mt-1 line-clamp-2 text-[11px]">{decision.summary}</p>
+              ) : null}
+              <p className="mt-0.5 truncate text-[10px] text-muted-foreground">{decision.createdBy}</p>
+            </li>
+          ))}
+        </ol>
+      ) : null}
+    </div>
+  )
+}
+
+function ReviewDecisionButton({
+  decision,
+  label,
+  icon: Icon,
+  disabled,
+  loading,
+  onClick,
+}: {
+  decision: ReviewDecisionKind
+  label: string
+  icon: React.ComponentType<{ className?: string }>
+  disabled: boolean
+  loading: boolean
+  onClick: (decision: ReviewDecisionKind) => void
+}) {
+  return (
+    <Button
+      type="button"
+      size="sm"
+      variant="outline"
+      disabled={disabled || loading}
+      className="h-8 justify-start rounded-lg text-xs"
+      onClick={() => onClick(decision)}
+    >
+      {loading ? <Loader2 className="size-3.5 animate-spin" /> : <Icon className="size-3.5" />}
+      {label}
+    </Button>
   )
 }
 
@@ -1143,6 +1379,12 @@ function reviewLineFingerprint(file: AgentFile, line: number | null) {
     file.revision?.toString() ?? 'rev-unavailable',
     line?.toString() ?? 'file',
   ].join(':')
+}
+
+function decisionLabel(decision: ReviewDecisionKind) {
+  if (decision === 'approved') return 'Approved'
+  if (decision === 'changes-requested') return 'Changes requested'
+  return 'Commented'
 }
 
 function formatDate(value: string) {

@@ -313,6 +313,45 @@ export type ReviewThreadsResponse = {
   error?: CollaborationError
 }
 
+export type ReviewDecisionKind = 'approved' | 'changes-requested' | 'commented'
+
+export type ReviewDecision = {
+  id: string
+  codebaseId: string
+  changeSetId: string
+  decision: ReviewDecisionKind
+  summary: string | null
+  createdBy: string
+  createdAt: string
+}
+
+export type ReviewDecisionsResponse = {
+  ok: boolean
+  codebaseId: string | null
+  changeSetId: string | null
+  decisions: ReviewDecision[]
+  error?: CollaborationError
+}
+
+export type NotificationItem = {
+  id: string
+  codebaseId: string
+  recipientUserId: string | null
+  kind: string
+  title: string
+  body: string
+  href: string | null
+  readAt: string | null
+  createdAt: string
+}
+
+export type NotificationsResponse = {
+  ok: boolean
+  codebaseId: string | null
+  notifications: NotificationItem[]
+  error?: CollaborationError
+}
+
 export type CreateIssueInput = {
   type: 'issue'
   codebaseId: string
@@ -497,6 +536,19 @@ export type ResolveReviewThreadInput = {
   updatedBy: string
 }
 
+export type CreateReviewDecisionInput = {
+  codebaseId: string
+  changeSetId: string
+  decision: ReviewDecisionKind
+  summary?: string | null
+  createdBy: string
+}
+
+export type MarkNotificationReadInput = {
+  codebaseId: string
+  notificationId: string
+}
+
 export async function fetchWorkItems(codebaseId: string): Promise<WorkItemsResponse> {
   return readJson<WorkItemsResponse>(`/api/collaboration/work-items?codebaseId=${encodeURIComponent(codebaseId)}`, {
     cache: 'no-store',
@@ -599,6 +651,46 @@ export async function resolveReviewThread(input: ResolveReviewThreadInput): Prom
       ...input,
     }),
   }, reviewThreadsFallback(input.codebaseId, null))
+}
+
+export async function fetchReviewDecisions(
+  codebaseId: string,
+  changeSetId?: string | null,
+): Promise<ReviewDecisionsResponse> {
+  const params = new URLSearchParams({ codebaseId })
+  if (changeSetId) params.set('changeSetId', changeSetId)
+  return readJson<ReviewDecisionsResponse>(`/api/review/decisions?${params.toString()}`, {
+    cache: 'no-store',
+  }, reviewDecisionsFallback(codebaseId, changeSetId ?? null))
+}
+
+export async function createReviewDecision(input: CreateReviewDecisionInput): Promise<ReviewDecisionsResponse> {
+  return readJson<ReviewDecisionsResponse>('/api/review/decisions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  }, reviewDecisionsFallback(input.codebaseId, input.changeSetId))
+}
+
+export async function fetchNotifications(codebaseId: string): Promise<NotificationsResponse> {
+  return readJson<NotificationsResponse>(`/api/notifications?codebaseId=${encodeURIComponent(codebaseId)}`, {
+    cache: 'no-store',
+  }, notificationsFallback(codebaseId))
+}
+
+export async function markNotificationRead(input: MarkNotificationReadInput): Promise<NotificationsResponse> {
+  return readJson<NotificationsResponse>('/api/notifications', {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      action: 'markRead',
+      ...input,
+    }),
+  }, notificationsFallback(input.codebaseId))
 }
 
 export async function createInvitation(input: CreateInvitationInput): Promise<InvitationsResponse> {
@@ -730,6 +822,39 @@ function reviewThreadsFallback(codebaseId: string, changeSetId: string | null): 
       codebaseId,
       changeSetId,
       threads: [],
+      error: {
+        code: `http_${response.status}`,
+        message: reason,
+      },
+    }
+  }
+}
+
+function reviewDecisionsFallback(codebaseId: string, changeSetId: string | null): (response: Response) => ReviewDecisionsResponse {
+  return (response) => {
+    const reason = responseMessage(response)
+
+    return {
+      ok: false,
+      codebaseId,
+      changeSetId,
+      decisions: [],
+      error: {
+        code: `http_${response.status}`,
+        message: reason,
+      },
+    }
+  }
+}
+
+function notificationsFallback(codebaseId: string): (response: Response) => NotificationsResponse {
+  return (response) => {
+    const reason = responseMessage(response)
+
+    return {
+      ok: false,
+      codebaseId,
+      notifications: [],
       error: {
         code: `http_${response.status}`,
         message: reason,

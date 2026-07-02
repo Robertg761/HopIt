@@ -273,6 +273,34 @@ test('D1 backend supports members, invitations, and collaboration work items', a
   assert.equal(reviewThreads.length, 1)
   assert.equal(reviewThreads[0].comments.length, 2)
 
+  const reviewDecision = await backend.createReviewDecision({
+    codebaseId: 'collab-core',
+    changeSetId: 'cs_collab_core_main',
+    decision: 'approved',
+    summary: 'Ready to merge after the D1-backed review loop.',
+    actor: owner,
+  })
+  assert.equal(reviewDecision.decision, 'approved')
+  assert.equal(reviewDecision.changeSetId, 'cs_collab_core_main')
+  const reviewDecisions = await backend.listReviewDecisions({
+    codebaseId: 'collab-core',
+    changeSetId: 'cs_collab_core_main',
+    actor: owner,
+  })
+  assert.equal(reviewDecisions.length, 1)
+  assert.equal(reviewDecisions[0].summary, 'Ready to merge after the D1-backed review loop.')
+
+  const notifications = await backend.listNotifications({ codebaseId: 'collab-core', actor: owner })
+  assert.ok(notifications.length >= 4)
+  assert.ok(notifications.some((notification) => notification.kind === 'review.approved'))
+  const readNotification = await backend.markNotificationRead({
+    codebaseId: 'collab-core',
+    notificationId: notifications[0].id,
+    actor: owner,
+  })
+  assert.equal(readNotification.id, notifications[0].id)
+  assert.match(readNotification.readAt, /^\d{4}-\d{2}-\d{2}T/)
+
   await backend.ensureCodebaseKeyring({
     codebaseId: 'collab-core',
     repoContentKeyId: 'key_repo_collab',

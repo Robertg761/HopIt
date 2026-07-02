@@ -567,6 +567,8 @@ export class CloudflareD1HopBackend {
     await this.query(`delete from release_assets where codebase_id = ?`, [codebaseId])
     await this.query(`delete from review_thread_comments where codebase_id = ?`, [codebaseId])
     await this.query(`delete from review_threads where codebase_id = ?`, [codebaseId])
+    await this.query(`delete from review_decisions where codebase_id = ?`, [codebaseId])
+    await this.query(`delete from notifications where codebase_id = ?`, [codebaseId])
     await this.query(`delete from projects where codebase_id = ?`, [codebaseId])
     await this.query(`delete from project_items where codebase_id = ?`, [codebaseId])
     await this.query(`delete from agent_sessions where codebase_id = ?`, [codebaseId])
@@ -1292,6 +1294,14 @@ export class CloudflareD1HopBackend {
       `update releases set updated_by = ?, updated_at = ? where codebase_id = ? and release_id = ?`,
       [actorAuditId(actor, createdBy, 'Release asset updater'), now, release.codebase_id, releaseId],
     )
+    await this.createNotification({
+      codebaseId: release.codebase_id,
+      kind: 'release.asset_attached',
+      title: 'Release asset attached',
+      body: `${requireTextValue(name, 'Release asset name')} was attached to ${release.version}.`,
+      href: workItemHref(release.codebase_id, 'releases', releaseId),
+      createdAt: now,
+    })
     return mapD1ReleaseAsset(await this.first(`select * from release_assets where codebase_id = ? and asset_id = ?`, [release.codebase_id, assetId]))
   }
 
@@ -1499,6 +1509,14 @@ export class CloudflareD1HopBackend {
       detail: { threadId, changeSetId, path: normalizedPath, lineNumber: nullablePositiveInteger(lineNumber, 'Review line number') },
       source: 'browser',
     })
+    await this.createNotification({
+      codebaseId,
+      kind: 'review.thread_opened',
+      title: 'Review thread opened',
+      body: `${author} opened a review thread on ${normalizedPath}.`,
+      href: reviewHref(codebaseId, changeSetId),
+      createdAt: now,
+    })
     return mapD1ReviewThread(
       await this.first(`select * from review_threads where codebase_id = ? and thread_id = ?`, [codebaseId, threadId]),
       [mapD1ReviewThreadComment(await this.first(`select * from review_thread_comments where codebase_id = ? and comment_id = ?`, [codebaseId, commentId]))],
@@ -1526,6 +1544,14 @@ export class CloudflareD1HopBackend {
       `update review_threads set updated_by = ?, updated_at = ? where codebase_id = ? and thread_id = ?`,
       [author, now, thread.codebase_id, threadId],
     )
+    await this.createNotification({
+      codebaseId: thread.codebase_id,
+      kind: 'review.comment_added',
+      title: 'Review comment added',
+      body: `${author} replied to ${thread.file_path}.`,
+      href: reviewHref(thread.codebase_id, thread.change_set_id),
+      createdAt: now,
+    })
     return mapD1ReviewThreadComment(await this.first(`select * from review_thread_comments where codebase_id = ? and comment_id = ?`, [thread.codebase_id, commentId]))
   }
 
@@ -1541,11 +1567,20 @@ export class CloudflareD1HopBackend {
       `update review_threads set status = 'resolved', updated_by = ?, updated_at = ?, resolved_at = ? where codebase_id = ? and thread_id = ?`,
       [actorAuditId(actor, updatedBy, 'Review thread resolver'), now, now, thread.codebase_id, threadId],
     )
+    const resolver = actorAuditId(actor, updatedBy, 'Review thread resolver')
     await this.appendEvent({
       codebaseId: thread.codebase_id,
       event: 'review.thread_resolved',
       detail: { threadId, changeSetId: thread.change_set_id, path: thread.file_path, lineNumber: thread.line_number ?? null },
       source: 'browser',
+    })
+    await this.createNotification({
+      codebaseId: thread.codebase_id,
+      kind: 'review.thread_resolved',
+      title: 'Review thread resolved',
+      body: `${resolver} resolved a review thread on ${thread.file_path}.`,
+      href: reviewHref(thread.codebase_id, thread.change_set_id),
+      createdAt: now,
     })
     const comments = await this.query(
       `select * from review_thread_comments where codebase_id = ? and thread_id = ? order by created_at asc`,
@@ -1555,6 +1590,116 @@ export class CloudflareD1HopBackend {
       await this.first(`select * from review_threads where codebase_id = ? and thread_id = ?`, [thread.codebase_id, threadId]),
       comments.map(mapD1ReviewThreadComment),
     )
+  }
+
+  async listReviewDecisions({ codebaseId, changeSetId = null, actor = {} }) {
+    await this.requireGraphCapability(codebaseId, actor, 'read')
+    const normalizedChangeSetId = stringOrNull(changeSetId)
+    const rows = normalizedChangeSetId
+      ? await this.query(
+          `select * from review_decisions where codebase_id = ? and change_set_id = ? order by created_at desc`,
+          [codebaseId, normalizedChangeSetId],
+        )
+      : await this.query(
+          `select * from review_decisions where codebase_id = ? order by created_at desc limit 100`,
+          [codebaseId],
+        )
+    return rows.map(mapD1ReviewDecision).filter(Boolean)
+  }
+
+  async createReviewDecision({ codebaseId, changeSetId, decision, summary, createdBy, actor = {} }) {
+    await this.requireGraphCapability(codebaseId, actor, 'review')
+    const normalizedChangeSetId = requireTextValue(changeSetId, 'Review change set id')
+    const nextDecision = reviewDecision(decision)
+    const now = new Date().toISOString()
+    const decisionId = `rdec_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`
+    const reviewer = actorAuditId(actor, createdBy, 'Review decision creator')
+    await this.query(
+      `insert into review_decisions (
+        decision_id, codebase_id, change_set_id, decision, summary, created_by, created_at
+      ) values (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        decisionId,
+        codebaseId,
+        normalizedChangeSetId,
+        nextDecision,
+        stringOrNull(summary),
+        reviewer,
+        now,
+      ],
+    )
+    await this.appendEvent({
+      codebaseId,
+      event: 'review.decision_recorded',
+      detail: { decisionId, changeSetId: normalizedChangeSetId, decision: nextDecision },
+      at: now,
+      source: 'browser',
+    })
+    await this.createNotification({
+      codebaseId,
+      kind: `review.${nextDecision}`,
+      title: reviewDecisionTitle(nextDecision),
+      body: reviewDecisionBody(nextDecision, reviewer, summary),
+      href: reviewHref(codebaseId, normalizedChangeSetId),
+      createdAt: now,
+    })
+    return mapD1ReviewDecision(await this.first(`select * from review_decisions where codebase_id = ? and decision_id = ?`, [codebaseId, decisionId]))
+  }
+
+  async listNotifications({ codebaseId, actor = {}, limit = 20, unreadOnly = false }) {
+    await this.requireGraphCapability(codebaseId, actor, 'read')
+    const userId = stringOrNull(actor.userId)
+    const maxRows = boundedLimit(limit, 50)
+    const unreadSql = unreadOnly ? ` and read_at is null` : ''
+    const rows = userId
+      ? await this.query(
+          `select * from notifications
+           where codebase_id = ? and (recipient_user_id is null or recipient_user_id = ?)${unreadSql}
+           order by created_at desc, notification_id desc limit ?`,
+          [codebaseId, userId, maxRows],
+        )
+      : await this.query(
+          `select * from notifications
+           where codebase_id = ? and recipient_user_id is null${unreadSql}
+           order by created_at desc, notification_id desc limit ?`,
+          [codebaseId, maxRows],
+        )
+    return rows.map(mapD1Notification).filter(Boolean)
+  }
+
+  async createNotification({ codebaseId, recipientUserId = null, kind, title, body, href = null, createdAt = new Date().toISOString() }) {
+    if (!codebaseId) return null
+    await this.ensureSchema()
+    const notificationId = `notif_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`
+    await this.query(
+      `insert into notifications (
+        notification_id, codebase_id, recipient_user_id, kind, title, body, href, read_at, created_at
+      ) values (?, ?, ?, ?, ?, ?, ?, null, ?)`,
+      [
+        notificationId,
+        codebaseId,
+        stringOrNull(recipientUserId),
+        notificationKind(kind),
+        requireTextValue(title, 'Notification title'),
+        requireTextValue(body, 'Notification body'),
+        stringOrNull(href),
+        createdAt,
+      ],
+    )
+    return mapD1Notification(await this.first(`select * from notifications where codebase_id = ? and notification_id = ?`, [codebaseId, notificationId]))
+  }
+
+  async markNotificationRead({ codebaseId, notificationId, actor = {} }) {
+    await this.requireGraphCapability(codebaseId, actor, 'read')
+    const userId = requireTextValue(actor?.userId, 'Notification reader')
+    const now = new Date().toISOString()
+    await this.query(
+      `update notifications
+       set read_at = ?
+       where codebase_id = ? and notification_id = ? and (recipient_user_id is null or recipient_user_id = ?)`,
+      [now, codebaseId, requireTextValue(notificationId, 'Notification id'), userId],
+    )
+    return mapD1Notification(await this.first(`select * from notifications where codebase_id = ? and notification_id = ?`, [codebaseId, notificationId]))
   }
 
   async requireGraphCapability(codebaseId, actor = {}, capability = 'read') {
@@ -2803,6 +2948,29 @@ export const d1SchemaStatements = [
   )`,
   `create index if not exists idx_review_thread_comments_thread on review_thread_comments(thread_id)`,
   `create index if not exists idx_review_thread_comments_codebase on review_thread_comments(codebase_id)`,
+  `create table if not exists review_decisions (
+    decision_id text primary key,
+    codebase_id text not null,
+    change_set_id text not null,
+    decision text not null,
+    summary text,
+    created_by text not null,
+    created_at text not null
+  )`,
+  `create index if not exists idx_review_decisions_codebase_change_set on review_decisions(codebase_id, change_set_id, created_at)`,
+  `create table if not exists notifications (
+    notification_id text primary key,
+    codebase_id text not null,
+    recipient_user_id text,
+    kind text not null,
+    title text not null,
+    body text not null,
+    href text,
+    read_at text,
+    created_at text not null
+  )`,
+  `create index if not exists idx_notifications_codebase_created on notifications(codebase_id, created_at)`,
+  `create index if not exists idx_notifications_recipient_created on notifications(recipient_user_id, created_at)`,
 ]
 
 function memberSelectSql(whereClause) {
@@ -3027,6 +3195,36 @@ function mapD1ReviewThreadComment(row) {
     updatedBy: stringOrNull(row.updated_by),
     createdAt: stringOrNull(row.created_at) ?? '',
     updatedAt: stringOrNull(row.updated_at) ?? '',
+  }
+}
+
+function mapD1ReviewDecision(row) {
+  if (!row) return null
+  return {
+    _id: row.decision_id,
+    id: row.decision_id,
+    codebaseId: row.codebase_id,
+    changeSetId: row.change_set_id,
+    decision: reviewDecision(row.decision),
+    summary: stringOrNull(row.summary),
+    createdBy: stringOrNull(row.created_by) ?? 'unknown',
+    createdAt: stringOrNull(row.created_at) ?? '',
+  }
+}
+
+function mapD1Notification(row) {
+  if (!row) return null
+  return {
+    _id: row.notification_id,
+    id: row.notification_id,
+    codebaseId: row.codebase_id,
+    recipientUserId: stringOrNull(row.recipient_user_id),
+    kind: notificationKind(row.kind),
+    title: stringOrNull(row.title) ?? 'Notification',
+    body: stringOrNull(row.body) ?? '',
+    href: stringOrNull(row.href),
+    readAt: stringOrNull(row.read_at),
+    createdAt: stringOrNull(row.created_at) ?? '',
   }
 }
 
@@ -3582,6 +3780,49 @@ function releaseAssetKind(value) {
     return value
   }
   return 'other'
+}
+
+function reviewDecision(value) {
+  if (value === 'approved' || value === 'changes-requested' || value === 'commented') return value
+  throw new Error('Review decision must be approved, changes-requested, or commented.')
+}
+
+function notificationKind(value) {
+  const text = stringOrNull(value)
+  if (!text) throw new Error('Notification kind is required.')
+  if (!/^[a-z0-9_.:-]{3,80}$/.test(text)) {
+    throw new Error('Notification kind may only contain letters, numbers, dots, underscores, colons, and dashes.')
+  }
+  return text
+}
+
+function reviewDecisionTitle(decision) {
+  if (decision === 'approved') return 'Change set approved'
+  if (decision === 'changes-requested') return 'Changes requested'
+  return 'Review comment recorded'
+}
+
+function reviewDecisionBody(decision, reviewer, summary) {
+  const note = stringOrNull(summary)
+  const base =
+    decision === 'approved'
+      ? `${reviewer} approved the change set.`
+      : decision === 'changes-requested'
+        ? `${reviewer} requested changes.`
+        : `${reviewer} recorded a review comment.`
+  return note ? `${base} ${note}` : base
+}
+
+function reviewHref(codebaseId, changeSetId) {
+  const params = new URLSearchParams()
+  const normalizedChangeSetId = stringOrNull(changeSetId)
+  if (normalizedChangeSetId) params.set('changeSetId', normalizedChangeSetId)
+  const query = params.toString()
+  return `/codebases/${encodeURIComponent(codebaseId)}/review${query ? `?${query}` : ''}`
+}
+
+function workItemHref(codebaseId, kind, itemId) {
+  return `/codebases/${encodeURIComponent(codebaseId)}/work-items/${encodeURIComponent(kind)}/${encodeURIComponent(itemId)}`
 }
 
 function projectStatus(value) {
