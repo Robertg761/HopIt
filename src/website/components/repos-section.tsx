@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   Clock,
   FileStack,
+  FolderPlus,
   History,
   Lock,
   MoreHorizontal,
@@ -26,12 +27,19 @@ import {
 import { cn } from '@/lib/utils'
 import { navigateToSection } from './navigation'
 import type { AgentStatusSnapshot } from '@/website/lib/agent-status'
+import type {
+  AgentCommand,
+  AgentCommandPayload,
+  AgentCommandResult,
+} from '@/website/hooks/use-agent-status'
 
 type ReposSectionProps = {
   status: AgentStatusSnapshot
   selectedCodebaseId: string | null
   onSelectCodebase: (codebaseId: string) => void
   onChanged: () => Promise<void>
+  runCommand: (command: AgentCommand, payload?: AgentCommandPayload) => Promise<AgentCommandResult>
+  runningCommand: AgentCommand | null
 }
 
 type CodebaseRow = {
@@ -84,6 +92,8 @@ export function ReposSection({
   selectedCodebaseId,
   onSelectCodebase,
   onChanged,
+  runCommand,
+  runningCommand,
 }: ReposSectionProps) {
   const [filter, setFilter] = React.useState<CodebaseFilter>('all')
   const [codebases, setCodebases] = React.useState<CodebaseRow[]>([])
@@ -92,6 +102,7 @@ export function ReposSection({
   const [name, setName] = React.useState('')
   const [description, setDescription] = React.useState('')
   const [creating, setCreating] = React.useState(false)
+  const [attachingCodebaseId, setAttachingCodebaseId] = React.useState<string | null>(null)
 
   const loadCodebases = React.useCallback(async () => {
     setLoading(true)
@@ -175,6 +186,33 @@ export function ReposSection({
     }
   }
 
+  async function attachCodebase(codebase: CodebaseRow) {
+    const codebaseId = codebase.codebase.id
+
+    if (!status.commandsAvailable) {
+      setError('Workspace attach requires the local HopIt agent.')
+      return
+    }
+
+    setAttachingCodebaseId(codebaseId)
+    onSelectCodebase(codebaseId)
+
+    try {
+      const result = await runCommand('attachWorkspace', { codebaseId })
+      if (!result.ok) {
+        throw new Error(result.summary || result.stderr || result.error?.message || 'Workspace attach failed.')
+      }
+
+      await loadCodebases()
+      await onChanged()
+      setError(null)
+    } catch (attachError) {
+      setError(attachError instanceof Error ? attachError.message : 'Workspace attach failed.')
+    } finally {
+      setAttachingCodebaseId(null)
+    }
+  }
+
   async function updateCodebase(
     codebaseId: string,
     payload: Record<string, unknown>,
@@ -232,6 +270,9 @@ export function ReposSection({
               onSelect={() => onSelectCodebase(codebase.codebase.id)}
               onRename={() => renameCodebase(codebase)}
               onDelete={() => deleteCodebase(codebase)}
+              onAttach={() => attachCodebase(codebase)}
+              attaching={attachingCodebaseId === codebase.codebase.id}
+              attachDisabledReason={attachDisabledReason(status, runningCommand, attachingCodebaseId)}
             />
           ))
         ) : (
@@ -336,6 +377,9 @@ function CodebaseCard({
   onSelect,
   onRename,
   onDelete,
+  onAttach,
+  attaching,
+  attachDisabledReason,
 }: {
   codebase: CodebaseRow
   index: number
@@ -343,6 +387,9 @@ function CodebaseCard({
   onSelect: () => void
   onRename: () => void
   onDelete: () => void
+  onAttach: () => void
+  attaching: boolean
+  attachDisabledReason: string | null
 }) {
   const visibility = codebase.selectedState?.effectiveVisibility ?? 'private'
   const role = codebase.access?.role ?? 'member'
@@ -354,6 +401,7 @@ function CodebaseCard({
   const workspaceState = codebase.workspace?.hydrationState ?? 'cloud-only'
   const remoteUpdateState = codebase.remoteUpdate?.state ?? 'cloud-head-ready'
   const workspaceLabel = formatStateLabel(workspaceState)
+  const isAttached = codebase.workspace?.attached === true
   const behindByRevisions = codebase.remoteUpdate?.behindByRevisions
   const remoteUpdateLabel =
     behindByRevisions === null || behindByRevisions === undefined
@@ -478,13 +526,40 @@ function CodebaseCard({
             {workspaceLabel} / {codebase.access?.membershipSource ?? role} / {codebase.privateFileCount} private files
           </p>
         </div>
-        <span className="flex shrink-0 items-center gap-1 text-[10px] font-medium text-muted-foreground">
-          <Clock className="size-2.5" />
-          {formatUpdatedAt(codebase.updatedAt)}
-        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          {!isAttached ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={Boolean(attachDisabledReason) || attaching}
+              title={attachDisabledReason ?? 'Attach to Workspace Root'}
+              onClick={onAttach}
+              className="h-7 gap-1.5 rounded-md px-2 text-[10px]"
+            >
+              <FolderPlus className={cn('size-3', attaching && 'animate-pulse')} />
+              <span>{attaching ? 'Attaching' : 'Attach'}</span>
+            </Button>
+          ) : null}
+          <span className="hidden items-center gap-1 text-[10px] font-medium text-muted-foreground sm:flex">
+            <Clock className="size-2.5" />
+            {formatUpdatedAt(codebase.updatedAt)}
+          </span>
+        </div>
       </div>
     </motion.article>
   )
+}
+
+function attachDisabledReason(
+  status: AgentStatusSnapshot,
+  runningCommand: AgentCommand | null,
+  attachingCodebaseId: string | null,
+) {
+  if (!status.commandsAvailable) return 'Workspace attach requires the local HopIt agent.'
+  if (runningCommand) return `Running ${runningCommand}`
+  if (attachingCodebaseId) return 'Another codebase is attaching.'
+  return null
 }
 
 function normalizeCodebaseRow(value: unknown): CodebaseRow {

@@ -20,7 +20,7 @@ HopIt has a working local managed-folder agent spike plus a deployed personal pr
 
 The solid v1 target is now broader than the current spike: a HopIt Workspace Root, managed-folder/lazy materialization first, production-grade automatic remote-update delivery, object-backed content-addressed storage with per-file revision guards, scoped device/session auth, and GitHub-like code/review/work-item/release surfaces. True native filesystem-provider work remains future research; v1 should prove the managed-folder Workspace Root before going there.
 
-The web app polls `/api/agent/status`. In local mode that route requires the local agent `/status` response and treats `/events` and `/cloud` as best-effort payloads so a slow graph read does not take the dashboard offline; in production it reads the configured cloud dashboard backend, now D1-first with legacy Convex fallback. The local command route can run whitelisted sync, refresh, recover, review, and merge actions against the local agent, while hosted deployments remain read-only for workspace commands and require dashboard authentication.
+The web app polls `/api/agent/status`. In local mode that route requires the local agent `/status` response and treats `/events` and `/cloud` as best-effort payloads so a slow graph read does not take the dashboard offline; in production it reads the configured cloud dashboard backend, now D1-first with legacy Convex fallback. The local command route can run whitelisted sync, refresh, recover, review, merge, and Workspace Root attach actions against the local agent, while hosted deployments remain read-only for workspace commands and require dashboard authentication.
 
 Fixture-backed conflict handling is in place for stale selected-state revisions, stale file/base revisions, and stale Main revisions. Conflicts are persisted on the selected active change set, emitted as `change_set.conflict_detected`, and surfaced through status while preserving local edits for review.
 
@@ -107,8 +107,8 @@ Current verified result:
 | Area | Status | Summary |
 | --- | --- | --- |
 | Product concept | Done | The repo has converged on cloud-native managed workspaces, active change sets, explicit Main, and `.private/` owner-only workspace scope. |
-| Web product shell | Mostly done | The prototype UI polls live local agent state through `/api/agent/status`, maps files/events/revisions/review/merge/conflict state, can read D1 or legacy Convex dashboard state when configured, and shows codebase-level workspace/remote-update readiness in the topology cards. |
-| HopIt Workspace Root | In progress | Production-profile paths, a root-level workspace index, D1 account-visible codebase discovery when credentials allow it, scoped-token configured-codebase fallback, local attach/readiness summaries, metadata-only attach, hydration/materialized revision state, metadata-only/dehydrate, single-file hydrate, and a remote cursor are in place; automatic account setup/attach UX, richer per-file lazy states, and lazy materialization policy remain. |
+| Web product shell | Mostly done | The prototype UI polls live local agent state through `/api/agent/status`, maps files/events/revisions/review/merge/conflict state, can read D1 or legacy Convex dashboard state when configured, shows codebase-level workspace/remote-update readiness in the topology cards, and can run a local Workspace Root attach for discovered cloud codebases. |
+| HopIt Workspace Root | In progress | Production-profile paths, a root-level workspace index, D1 account-visible codebase discovery when credentials allow it, scoped-token configured-codebase fallback, local attach/readiness summaries, metadata-only attach, dashboard attach action, hydration/materialized revision state, metadata-only/dehydrate, single-file hydrate, and a remote cursor are in place; automatic first-run account setup, richer per-file lazy states, and lazy materialization policy remain. |
 | Local managed-folder agent | Done for spike | The agent proves hydration, journaling, sync acknowledgement, recovery, watch startup gating, safe refresh, status, and same-owner continuity. |
 | Lazy materialization | In progress | `workspace files`, `workspace hydrate-file`, and `workspace dehydrate --force` prove metadata listing, single-file hydration, and metadata-only state. V1 still needs automatic policy, editor/tool demand hydration, and broader cache pruning. |
 | Vercel/D1 production baseline | Active dogfood | Vercel hosts the protected dashboard and Clerk sign-in routing is live. The D1 database/env/seeding sequence is complete, `hopit-d1-api` proxies D1 for Vercel, `hopit.dev` live API smoke checks pass, and the packaged LaunchAgent reports D1 cloud status. Automatic remote-pull is now activity-gated with a five-minute cooldown when enabled. |
@@ -150,7 +150,7 @@ Completed:
 - The app surface exists under `src/app` and `src/components/hopit`.
 - The app surface consumes `/api/agent/status` through `useAgentStatus`, maps live local status/events/cloud data into the dashboard, and falls back to offline state when the agent is unavailable.
 - The status API can read either the local status server or the Convex dashboard query, depending on environment configuration.
-- The command API exposes whitelisted local sync, refresh, recover, review, and merge actions for the prototype UI.
+- The command API exposes whitelisted local sync, refresh, recover, review, merge, and Workspace Root attach actions for the prototype UI.
 - GitHub-social concepts are documented as non-goals for v1.
 - `.private/` is documented as owner-visible, snapshotted, synced, and versioned.
 - Change-set visibility resolution order is documented: per-change-set override, codebase override, global user default, product default.
@@ -913,7 +913,7 @@ Definition of done:
 
 ## Known Gaps
 
-- No full HopIt Workspace Root contract yet: the root-level codebase/workspace index, D1 account-visible discovery with scoped-token fallback, metadata-only attach, hydration cursor, metadata-only state, and single-file hydrate primitive exist, but automatic setup/attach UX, richer per-file lazy states, and automatic lazy materialization policy remain.
+- No full HopIt Workspace Root contract yet: the root-level codebase/workspace index, D1 account-visible discovery with scoped-token fallback, metadata-only attach, dashboard attach action, hydration cursor, metadata-only state, and single-file hydrate primitive exist, but automatic first-run setup, richer per-file lazy states, and automatic lazy materialization policy remain.
 - The current managed folder path still defaults to eager hydrate/refresh for normal operation; metadata-only and single-file hydrate are CLI primitives rather than a complete editor/tool demand-hydration system.
 - Real account provider code exists and production Clerk DNS/issuer/live-key plus Google OAuth rollout is active; owner sign-in and D1 owner mapping are smoke-tested, and Basic Auth fallback env vars are removed from production.
 - Durable membership, role, invitation, hosted member/invite UI, and scoped agent-session token groundwork exist, but complete permission coverage is not done yet.

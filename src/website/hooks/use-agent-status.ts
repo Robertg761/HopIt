@@ -13,14 +13,14 @@ type AgentStatusState = {
   selectedCodebaseId: string | null
   selectCodebase: (codebaseId: string) => void
   refresh: () => Promise<void>
-  runCommand: (command: AgentCommand, payload?: AgentCommandPayload) => Promise<void>
+  runCommand: (command: AgentCommand, payload?: AgentCommandPayload) => Promise<AgentCommandResult>
   runningCommand: AgentCommand | null
   commandResult: AgentCommandResult | null
 }
 
 const pollMs = 2500
 
-export type AgentCommand = 'sync' | 'refresh' | 'recover' | 'review' | 'merge' | 'importGitUrl'
+export type AgentCommand = 'sync' | 'refresh' | 'recover' | 'review' | 'merge' | 'attachWorkspace' | 'importGitUrl'
 
 export type AgentCommandPayload = {
   codebaseId?: string | null
@@ -74,12 +74,13 @@ export function useAgentStatus(initialCodebaseId: string | null = null): AgentSt
   const runCommand = React.useCallback(
     async (command: AgentCommand, payload: AgentCommandPayload = {}) => {
       if (!status.commandsAvailable) {
-        setCommandResult({
+        const result: AgentCommandResult = {
           ok: false,
           command,
           stderr: 'Workspace commands are only available from the local HopIt agent.',
-        })
-        return
+        }
+        setCommandResult(result)
+        return result
       }
 
       setRunningCommand(command)
@@ -92,16 +93,20 @@ export function useAgentStatus(initialCodebaseId: string | null = null): AgentSt
           body: JSON.stringify({ command, codebaseId: selectedCodebaseId ?? status.codebaseId, ...payload }),
         })
         const result = (await response.json()) as AgentCommandResult
-        setCommandResult({
+        const nextResult = {
           ...result,
           command,
-        })
+        }
+        setCommandResult(nextResult)
+        return nextResult
       } catch (error) {
-        setCommandResult({
+        const result: AgentCommandResult = {
           ok: false,
           command,
           stderr: error instanceof Error ? error.message : 'Agent command failed.',
-        })
+        }
+        setCommandResult(result)
+        return result
       } finally {
         setRunningCommand(null)
         await refresh()

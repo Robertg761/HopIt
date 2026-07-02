@@ -66,7 +66,7 @@ type ActionJob = {
 type RightRailProps = {
   status: AgentStatusSnapshot
   loading: boolean
-  runCommand: (command: AgentCommand, payload?: AgentCommandPayload) => Promise<void>
+  runCommand: (command: AgentCommand, payload?: AgentCommandPayload) => Promise<AgentCommandResult>
   runningCommand: AgentCommand | null
   commandResult: AgentCommandResult | null
 }
@@ -112,7 +112,7 @@ function AgentStatusPanel({
 }: {
   status: AgentStatusSnapshot
   loading: boolean
-  runCommand: (command: AgentCommand, payload?: AgentCommandPayload) => Promise<void>
+  runCommand: (command: AgentCommand, payload?: AgentCommandPayload) => Promise<AgentCommandResult>
   runningCommand: AgentCommand | null
   commandResult: AgentCommandResult | null
 }) {

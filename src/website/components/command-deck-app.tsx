@@ -159,7 +159,7 @@ function PageContent({
   selectedCodebaseId: string | null
   onSelectCodebase: (codebaseId: string) => void
   refreshStatus: () => Promise<void>
-  runCommand: (command: AgentCommand, payload?: AgentCommandPayload) => Promise<void>
+  runCommand: (command: AgentCommand, payload?: AgentCommandPayload) => Promise<AgentCommandResult>
   runningCommand: AgentCommand | null
   commandResult: AgentCommandResult | null
 }) {
@@ -198,6 +198,8 @@ function PageContent({
             selectedCodebaseId={selectedCodebaseId}
             onSelectCodebase={onSelectCodebase}
             onChanged={refreshStatus}
+            runCommand={runCommand}
+            runningCommand={runningCommand}
           />
         </section>
       </>
@@ -769,7 +771,7 @@ function CommandDeck({
 }: {
   status: AgentStatusSnapshot
   loading: boolean
-  runCommand: (command: AgentCommand, payload?: AgentCommandPayload) => Promise<void>
+  runCommand: (command: AgentCommand, payload?: AgentCommandPayload) => Promise<AgentCommandResult>
   runningCommand: AgentCommand | null
 }) {
   const online = status.state === 'online' || status.state === 'syncing'

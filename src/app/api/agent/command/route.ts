@@ -15,6 +15,7 @@ const commandMap = {
   recover: { label: 'Recover', cliCommand: 'recover' },
   review: { label: 'Open review', cliCommand: 'review' },
   merge: { label: 'Merge', cliCommand: 'merge' },
+  attachWorkspace: { label: 'Attach workspace', cliCommand: 'workspace', subcommand: 'attach', timeoutMs: 30_000 },
   importGitUrl: { label: 'Import Git URL', cliCommand: 'import-git-url', timeoutMs: 10 * 60 * 1000 },
 } as const
 
@@ -68,6 +69,7 @@ export async function POST(request: Request) {
     if (extraArgs instanceof NextResponse) return extraArgs
 
     const result = await runAgentCli(commandConfig.cliCommand, codebaseId, extraArgs, {
+      prefixArgs: 'subcommand' in commandConfig ? [commandConfig.subcommand] : [],
       timeoutMs: 'timeoutMs' in commandConfig ? commandConfig.timeoutMs : undefined,
     })
 
@@ -117,6 +119,7 @@ function summarizeCommandResult(
   if (command === 'recover') return summarizeRecover(result.stdout)
   if (command === 'review') return 'Opened the active change set for review.'
   if (command === 'merge') return 'Merged the active change set into Main.'
+  if (command === 'attachWorkspace') return summarizeAttachWorkspace(result.stdout)
   if (command === 'importGitUrl') return summarizeGitUrlImport(result.stdout)
 
   return 'Agent command completed.'
@@ -141,6 +144,17 @@ function summarizeRecover(stdout: string) {
   return 'Recovered pending journal entries.'
 }
 
+function summarizeAttachWorkspace(stdout: string) {
+  const parsed = parseLastJsonObject(stdout)
+  const filesVisible = nestedNumber(parsed, ['files', 'visible'])
+  const workspace = nestedString(parsed, ['workspace'])
+  if (filesVisible !== null && workspace) {
+    return `Attached workspace at ${workspace} with ${filesVisible} visible file${filesVisible === 1 ? '' : 's'}.`
+  }
+  if (workspace) return `Attached workspace at ${workspace}.`
+  return 'Attached the codebase to the Workspace Root.'
+}
+
 function summarizeGitUrlImport(stdout: string) {
   const parsed = parseLastJsonObject(stdout)
   if (!parsed || typeof parsed !== 'object') return 'Imported the remote Git repository.'
@@ -159,9 +173,20 @@ function matchNumber(text: string, pattern: RegExp) {
   return match ? Number(match[1]) : null
 }
 
-function runAgentCli(command: string, codebaseId: string, extraArgs: string[] = [], config: { timeoutMs?: number } = {}) {
+function runAgentCli(
+  command: string,
+  codebaseId: string,
+  extraArgs: string[] = [],
+  config: { prefixArgs?: string[]; timeoutMs?: number } = {},
+) {
   return new Promise<{ exitCode: number | null; stdout: string; stderr: string }>((resolve, reject) => {
-    const child = spawn(process.execPath, [agentCli, command, ...stateArgsForCodebase(codebaseId), ...extraArgs], {
+    const child = spawn(process.execPath, [
+      agentCli,
+      command,
+      ...(config.prefixArgs ?? []),
+      ...stateArgsForCodebase(codebaseId),
+      ...extraArgs,
+    ], {
       cwd,
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
