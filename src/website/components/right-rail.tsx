@@ -297,7 +297,8 @@ function AgentStatusPanel({
             <StatusMetric
               icon={RotateCcw}
               label="Remote pull"
-              value={status.remotePullEnabled ? status.remotePullState : 'disabled'}
+              value={status.remotePullMode}
+              detail={status.remotePullCadence}
               highlight={status.remotePullEnabled && status.remotePullState !== 'enabled'}
             />
             <StatusMetric
@@ -558,10 +559,11 @@ type StatusMetricProps = {
   icon: React.ComponentType<{ className?: string }>
   label: string
   value: string
+  detail?: string
   highlight?: boolean
 }
 
-function StatusMetric({ icon: Icon, label, value, highlight = false }: StatusMetricProps) {
+function StatusMetric({ icon: Icon, label, value, detail, highlight = false }: StatusMetricProps) {
   return (
     <div className="min-w-0 rounded-lg bg-card px-3 py-2.5 border border-border/50 shadow-sm hover:border-primary/20 transition duration-200">
       <p className="flex items-center gap-1.5 text-[9.5px] font-bold uppercase tracking-wider text-muted-foreground">
@@ -576,6 +578,7 @@ function StatusMetric({ icon: Icon, label, value, highlight = false }: StatusMet
       >
         {value}
       </p>
+      {detail ? <p className="mt-0.5 truncate text-[10.5px] text-muted-foreground">{detail}</p> : null}
     </div>
   )
 }

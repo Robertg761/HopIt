@@ -2,7 +2,7 @@
 
 HopIt's local agent materializes selected cloud codebase state under a HopIt Workspace Root. For accepted project state that selected state can be Main; for day-to-day editing it is usually the user's active change set. The v1 architecture should optimize for OS and editor compatibility: a normal local folder, agent-owned cache metadata, lazy materialization where safe, a safety journal, automatic remote-update delivery, a status API, and an event log. A true OS filesystem mount is future optional research, not the default product path.
 
-Current production-shaped dogfood uses the hosted dashboard at `https://hopit.dev`, packaged `hop-darwin-arm64` runtime from `/Users/robert/Library/Application Support/HopIt/Runtime`, LaunchAgent `com.hopit.agent.hopit`, workspace root `/Users/robert/HopIt Workspaces`, Cloudflare D1 as the free-first graph target, the `hopit-d1-api` Worker as Vercel's D1 API adapter, and private Cloudflare R2 bucket `hopit-blobs` for object blobs. As of 2026-06-30, Convex production is disabled for Free-plan limits, the D1-backed production app is deployed, and the LaunchAgent is running with D1 cloud status; remote-pull remains disabled until the managed workspace's unjournaled local tree is cleaned or intentionally synced. Concrete account ids, DNS records, auth state, env locations, log paths, and temporary/long-term setup notes live in [Personal Production Runbook](personal-production.md).
+Current production-shaped dogfood uses the hosted dashboard at `https://hopit.dev`, packaged `hop-darwin-arm64` runtime from `/Users/robert/Library/Application Support/HopIt/Runtime`, LaunchAgent `com.hopit.agent.hopit`, workspace root `/Users/robert/HopIt Workspaces`, Cloudflare D1 as the free-first graph target, the `hopit-d1-api` Worker as Vercel's D1 API adapter, and private Cloudflare R2 bucket `hopit-blobs` for object blobs. As of 2026-07-02, Convex production is disabled for Free-plan limits, the D1-backed production app is deployed, and the LaunchAgent is running with D1 cloud status; remote-pull is activity-gated and uses a five-minute cooldown when enabled. Concrete account ids, DNS records, auth state, env locations, log paths, and temporary/long-term setup notes live in [Personal Production Runbook](personal-production.md).
 
 ## Core Pieces
 
@@ -220,7 +220,7 @@ Refresh expectations:
 
 ### Automatic Remote-Update Delivery
 
-Explicit `hop refresh` is the current safe primitive. The current worktree also has an opt-in `--remote-pull` polling loop for `watch` and `service start`; it calls the same safe refresh path only when local state is fully materialized, clean against the hash-only materialization manifest, and the per-workspace index cursor is behind the cloud revision. D1-backed polling reads only codebase-level revision metadata before any full graph read, so unchanged polls avoid scanning the file table and should stay inside free-tier daily limits. Solid v1 should keep that safety contract but make remote-update delivery production-grade, observable, and suitable for normal same-owner device handoff.
+Explicit `hop refresh` is the current safe primitive. The current worktree also has opt-in activity-gated `--remote-pull` for `watch` and `service start`; it wakes after local workspace activity, observes a five-minute cooldown by default, and calls the same safe refresh path only when local state is fully materialized, clean against the hash-only materialization manifest, and the per-workspace index cursor is behind the cloud revision. D1-backed remote-pull reads only codebase-level revision metadata before any full graph read, so idle services do not continuously query the graph and unchanged checks avoid scanning the file table. Solid v1 should keep that safety contract but make remote-update delivery production-grade, observable, and suitable for normal same-owner device handoff.
 
 Remote-update delivery expectations:
 
@@ -378,7 +378,7 @@ The local-agent contract is good enough for personal dogfooding, but the solid v
 
 - Run two agent sessions against the same active change set.
 - Show that writes acknowledged from device/session A become visible to same-owner device/session B after B performs the safe refresh flow.
-- Then promote the opt-in remote-pull proof to production-grade automatic remote-update delivery when B's local journal is clean.
+- Then promote the activity-gated remote-pull proof to production-grade automatic remote-update delivery when B's local journal is clean.
 - Simulate A syncing both non-private content and `.private/` owner-private content, then B refreshing as the same owner and seeing both sets of files with their visibility metadata preserved.
 - Keep collaborator visibility simulations passing: private change sets stay hidden, team-visible and review-visible change sets expose non-private paths to permitted collaborators, and `.private/` remains owner-only in every mode.
 - Emit event-log entries for remote updates and cache invalidation.

@@ -500,6 +500,10 @@ async function appendEvent(state, event, detail) {
   )
 }
 
+async function touchLocalActivityMarker(state) {
+  await fs.writeFile(path.join(state.workspace, '.DS_Store'), `hopit local activity ${randomUUID()}\n`, 'utf8')
+}
+
 async function setChangeSetVisibility(state, visibility) {
   const cloud = await readJson(state.cloud)
   cloud.visibility.effective = visibility
@@ -1833,6 +1837,16 @@ test('remote-pull applied event clears a previous skipped health state', async (
   assert.equal(status.remotePull.lastApplied.detail.toRevision, 2)
 })
 
+test('remote-pull default cooldown is five minutes', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+
+  const status = JSON.parse((await runCli('status', [...stateArgs(state), '--remote-pull'])).stdout)
+  assert.equal(status.remotePull.enabled, true)
+  assert.equal(status.remotePull.intervalMs, 300000)
+})
+
 test('production profile refuses local JSON cloud unless an explicit cloud backend is configured or local dry-run is allowed', async () => {
   const state = await makeState()
   const failure = await runCliFailure('status', [
@@ -2098,6 +2112,8 @@ test('remote-pull service option refreshes a clean second device automatically',
     },
   )
 
+  await touchLocalActivityMarker(deviceB)
+
   await waitFor(
     async () => {
       const content = await fs.readFile(path.join(deviceB.workspace, 'README.md'), 'utf8')
@@ -2116,6 +2132,8 @@ test('remote-pull service option refreshes a clean second device automatically',
   assert.deepEqual(deviceBStatus.agent.events.lastRemoteUpdate.detail.changedPaths, ['README.md'])
   assert.equal(deviceBStatus.agent.journal.pendingCount, 0)
   assert.equal(deviceBStatus.agent.journal.failedCount, 0)
+  const cloud = await readJson(deviceA.cloud)
+  assert.equal(cloud.files['.DS_Store'], undefined)
 })
 
 test('remote-pull service option skips refresh while the local journal is unresolved', async (t) => {
@@ -2186,6 +2204,8 @@ test('remote-pull service option skips refresh while the local journal is unreso
       message: 'Timed out waiting for device A service watcher to sync.',
     },
   )
+
+  await touchLocalActivityMarker(deviceB)
 
   const skippedStatus = await waitFor(
     async () => {
@@ -2518,6 +2538,7 @@ test('watch remote-pull refreshes device B when device A syncs acknowledged chan
   const remoteContent = '# hopit-core\n\nRemote-pull edit from device A.\n'
   await fs.writeFile(path.join(deviceA.workspace, 'README.md'), remoteContent, 'utf8')
   await runCli('sync-once', stateArgs(deviceA))
+  await touchLocalActivityMarker(deviceB)
 
   await waitFor(
     async () => {

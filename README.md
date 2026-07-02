@@ -83,7 +83,7 @@ The v1 target is not a Git clone manager and not yet a true native filesystem pr
 - Other same-owner devices receive acknowledged changes automatically when the local journal is clean, or get a visible conflict/blocked state when it is not.
 - Web surfaces show code, diffs, review state, history, issues, discussions, projects, releases, members, invitations, and permissions.
 
-Today HopIt has the managed-folder spike, workspace-root command surface with a durable index, configured-codebase discovery, metadata-only attach, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, service wrapper, a Cloudflare D1 graph backend, S3-compatible object-blob storage support, Clerk-protected hosted dashboard, routeable status-backed review/compare/history pages, first collaboration/project/comment/release-asset/key-grant surfaces, explicit refresh-based two-session continuity, D1-backed scoped session and trusted-device/key metadata, and opt-in safe remote-pull polling plus one-shot remote-pull checks for personal dogfooding. Remote-pull uses a lightweight graph-head cursor before any full graph read, so unchanged polling does not scan the file table. The current personal production D1 database is provisioned, schema-applied, seeded from the saved Convex export, and fronted by the `hopit-d1-api` Worker for Vercel. Remaining v1 work is account-wide codebase discovery, full lazy materialization policy, production-grade push/subscription remote-update delivery, true object-backed diff/history reconstruction, installer/tray setup, and broader cross-device verification.
+Today HopIt has the managed-folder spike, workspace-root command surface with a durable index, configured-codebase discovery, metadata-only attach, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, service wrapper, a Cloudflare D1 graph backend, S3-compatible object-blob storage support, Clerk-protected hosted dashboard, routeable status-backed review/compare/history pages, first collaboration/project/comment/release-asset/key-grant surfaces, explicit refresh-based two-session continuity, D1-backed scoped session and trusted-device/key metadata, and opt-in activity-gated safe remote-pull plus one-shot remote-pull checks for personal dogfooding. Remote-pull uses a lightweight graph-head cursor before any full graph read and only runs in watch/service mode after local workspace activity, with a default five-minute cooldown. The current personal production D1 database is provisioned, schema-applied, seeded from the saved Convex export, and fronted by the `hopit-d1-api` Worker for Vercel. Remaining v1 work is account-wide codebase discovery, full lazy materialization policy, production-grade push/subscription remote-update delivery, true object-backed diff/history reconstruction, installer/tray setup, and broader cross-device verification.
 
 ## Product Principles
 
@@ -163,7 +163,7 @@ HOPIT_DEVICE_NAME="Your Mac"
 HOPIT_AGENT_SESSION_TOKEN=replace-after-hop-session-register
 HOPIT_AGENT_SESSION_CAPABILITIES=read,write,sync,watch
 HOPIT_REMOTE_PULL=1
-HOPIT_REMOTE_REFRESH_INTERVAL_MS=5000
+HOPIT_REMOTE_PULL_COOLDOWN_MS=300000
 HOPIT_BACKUP_ROOT=/Users/you/HopIt-Backups
 HOPIT_EXPORT_ROOT=/Users/you/HopIt-Exports
 HOPIT_BLOB_PROVIDER=r2

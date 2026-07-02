@@ -928,8 +928,10 @@ function CommandDeck({
           <DeckSignal
             icon={RefreshCcw}
             label="Remote pull"
-            value={status.remotePullEnabled ? status.remotePullState : 'Disabled'}
-            detail={status.remoteBehindByRevisions === null ? 'behind unknown' : `${status.remoteBehindByRevisions} behind`}
+            value={status.remotePullMode}
+            detail={`${status.remotePullCadence} / ${
+              status.remoteBehindByRevisions === null ? 'behind unknown' : `${status.remoteBehindByRevisions} behind`
+            }`}
             active={status.remotePullEnabled}
           />
           <DeckSignal
@@ -1236,7 +1238,7 @@ function ReviewLane({ status }: { status: AgentStatusSnapshot }) {
     },
     {
       label: 'Devices',
-      value: status.remotePullEnabled ? status.remotePullState : 'disabled',
+      value: status.remotePullMode,
       icon: Cpu,
       active: status.remotePullEnabled,
     },

@@ -66,7 +66,7 @@ work.
 
 The installed macOS service is owned by LaunchAgent `com.hopit.agent.hopit`; it is verified with `launchctl print` plus `curl http://127.0.0.1:4785/status`. `hop service status` is still pid-file oriented and can report `running: false` for the direct launchd-owned `service run` process even when `/status` is healthy.
 
-Current production state as of 2026-07-01: Convex production is disabled after exceeding Free-plan limits, so HopIt is using Cloudflare D1 instead of paying for Convex. Vercel aliases and Clerk sign-in routing are live. The D1 database `hopit` is created, schema-applied, seeded from the Convex export, reachable through `hopit-d1-api.hopit-robert.workers.dev`, configured in Vercel/local env for graph/status/file/codebase/account/action-job/member/invite/work-item/session/key paths, and serving the deployed `hopit.dev` app. Local `HOPIT_REMOTE_PULL` remains disabled while the LaunchAgent runs D1-backed status/watch, because the managed workspace has a large unjournaled local tree that must be cleaned or intentionally synced before automatic remote refresh is safe.
+Current production state as of 2026-07-02: Convex production is disabled after exceeding Free-plan limits, so HopIt is using Cloudflare D1 instead of paying for Convex. Vercel aliases and Clerk sign-in routing are live. The D1 database `hopit` is created, schema-applied, seeded from the Convex export, reachable through `hopit-d1-api.hopit-robert.workers.dev`, configured in Vercel/local env for graph/status/file/codebase/account/action-job/member/invite/work-item/session/key paths, and serving the deployed `hopit.dev` app. Local remote-pull now uses activity-gated safe refresh with a five-minute cooldown so idle services do not burn Cloudflare Worker/D1 requests.
 
 Current Convex data backup: a production snapshot export was saved to `/Users/robert/HopIt-Backups/convex/hopit-convex-prod-2026-06-30-disabled-snapshot.zip` with SHA-256 `0e83df9ab7e80a81a9a3b06e1cd3399ff5b532fa968bded3c14334640b4c9f3d`. Dry-run D1 migration currently reads `58` files and `11,638` events, importing the latest `500` events by default.
 
@@ -83,7 +83,7 @@ npm run package:hop
 
 Current verified result:
 
-- `npm run agent:test`: passes with 78 tests total, 78 passing, and 0 failures; coverage includes object blobs, budget guard, literal mirror secret routing, binary files, symlinks, empty directories, `.git` owner-private scope, bounded dirty detection for large added workspace trees, encrypted routed-secret sync, device keyrings, encrypted recovery export, import-git production-safe behavior, object GC, D1 graph round-trip coverage, and regression coverage for sync/refresh/recovery/export.
+- `npm run agent:test`: passes with 81 tests total, 81 passing, and 0 failures; coverage includes object blobs, budget guard, literal mirror secret routing, binary files, symlinks, empty directories, `.git` owner-private scope, bounded dirty detection for large added workspace trees, encrypted routed-secret sync, device keyrings, encrypted recovery export, import-git production-safe behavior, activity-gated remote pull, object GC, D1 graph round-trip coverage, and regression coverage for sync/refresh/recovery/export.
 - `npm run lint`: passes.
 - `npx tsc --noEmit --pretty false`: passes.
 - `npm run check:production-config`: passes when the current local production env is loaded; the checker now accepts either D1 or legacy Convex backend config.
@@ -92,7 +92,7 @@ Current verified result:
 - `npm run d1:migrate:convex-export -- --export /Users/robert/HopIt-Backups/convex/hopit-convex-prod-2026-06-30-disabled-snapshot.zip --codebase-id hopit`: live D1 import completed with `58` files and the latest `500` events selected from `11,638` exported events; dry-run mode is still useful for future rehearsals.
 - `npm run convex:deploy:prod`: blocked until Convex production is re-enabled.
 - `npx convex run --prod agent:getGraphHead ...`: currently fails because Convex production is disabled for Free-plan limits.
-- Installed packaged runtime `hop remote-pull --profile production`: kept disabled until the managed workspace's unjournaled local tree is resolved.
+- Installed packaged runtime: LaunchAgent `com.hopit.agent.hopit` reports activity-gated remote pull enabled with a 300000 ms cooldown and no fixed interval polling.
 - `hop keys status --profile production`: packaged runtime reports the local keyring at `/Users/robert/Library/Application Support/HopIt/Agent/keys/hopit.device.json`, mode `0600`, device key `trusted`, user keyring `active`, and user vault wrap `active`.
 - `launchctl print gui/501/com.hopit.agent.hopit` plus `curl http://127.0.0.1:4785/status`: LaunchAgent is running and the loopback status endpoint reports `service=cloudflare-d1-graph`, `cloudExists=true`, and `fileCount=58`.
 - `node --test packages/agent/test/d1-backend.test.js`: passes D1 graph sync, collaboration routes, scoped session registration/list/touch/revoke, trusted device key registration, user keyring, and wrapped user-vault key metadata.
@@ -111,7 +111,7 @@ Current verified result:
 | HopIt Workspace Root | In progress | Production-profile paths, a root-level workspace index, configured-codebase discovery, metadata-only attach, hydration/materialized revision state, metadata-only/dehydrate, single-file hydrate, and a remote cursor are in place; account-wide discovery, richer per-file lazy states, and lazy materialization policy remain. |
 | Local managed-folder agent | Done for spike | The agent proves hydration, journaling, sync acknowledgement, recovery, watch startup gating, safe refresh, status, and same-owner continuity. |
 | Lazy materialization | In progress | `workspace files`, `workspace hydrate-file`, and `workspace dehydrate --force` prove metadata listing, single-file hydration, and metadata-only state. V1 still needs automatic policy, editor/tool demand hydration, and broader cache pruning. |
-| Vercel/D1 production baseline | Active dogfood | Vercel hosts the protected dashboard and Clerk sign-in routing is live. The D1 database/env/seeding sequence is complete, `hopit-d1-api` proxies D1 for Vercel, `hopit.dev` live API smoke checks pass, and the packaged LaunchAgent reports D1 cloud status. Automatic remote-pull stays disabled until the managed workspace's unjournaled local tree is resolved. |
+| Vercel/D1 production baseline | Active dogfood | Vercel hosts the protected dashboard and Clerk sign-in routing is live. The D1 database/env/seeding sequence is complete, `hopit-d1-api` proxies D1 for Vercel, `hopit.dev` live API smoke checks pass, and the packaged LaunchAgent reports D1 cloud status. Automatic remote-pull is now activity-gated with a five-minute cooldown when enabled. |
 | D1 cloud graph | In progress | D1 now has schema, HTTP API backend, agent service integration, hosted status/codebase/file/account/action-job/member/invite/work-item/key-grant routes, actions-runner support, scoped D1 proxy session auth, scoped agent sessions, device key/user keyring/wrapped key metadata, project-board operations and UI, durable issue/discussion comments, Convex-export migration script, and D1 graph/collaboration/session/key round-trip tests. History reconstruction, retention policy, richer release assets, and full product write-path coverage remain to port or complete. |
 | Legacy Convex cloud graph | Paused | Convex functions persist graph metadata, file rows, object-blob references, fallback `fileBlobs`, and agent events, but production is disabled for Free-plan limits. The export backup is retained as the migration source. |
 | Object blob storage | Mostly done | The agent has an S3-compatible blob provider boundary, Cloudflare R2 env contract, Backblaze B2-compatible migration path, filesystem-backed tests, metadata-only D1/legacy Convex commits, hash-verified hydrate/refresh/export, client-encrypted secret-object metadata, and dry-run-by-default storage GC. The live `hopit-blobs` R2 bucket exists, scoped local R2 credentials are configured for that bucket only, and read/write/hydrate/delete smoke coverage exists. Personal use keeps R2 free-only with an 8 GB cap, public access disabled, and a 1-day auto-delete lifecycle rule. Production retention policy and storage tier decisions remain. |
@@ -122,7 +122,7 @@ Current verified result:
 | Fixture cloud graph service boundary | Done | Commands now use a fixture-backed service boundary instead of direct command-level cloud JSON access. |
 | Main/change-set/owner/session/visibility contract | Done for fixture | The fixture graph and status surface include these identities and visibility fields. |
 | Same-owner two-session continuity | Done for spike | Device/session B can refresh acknowledged shared and `.private/` changes from device/session A. |
-| Automatic remote-update delivery | In progress | Remote-update events, explicit safe refresh, per-workspace materialization cursors, opt-in `--remote-pull` polling, graph-head cursor checks that avoid unchanged full graph reads, and one-shot `hop remote-pull` checks for clean materialized workspaces exist. Production-grade push/subscription delivery, default policy, and broader verification remain. |
+| Automatic remote-update delivery | In progress | Remote-update events, explicit safe refresh, per-workspace materialization cursors, opt-in activity-gated `--remote-pull` with a five-minute default cooldown, graph-head cursor checks that avoid unchanged full graph reads, and one-shot `hop remote-pull` checks for clean materialized workspaces exist. Production-grade push/subscription delivery, default policy, and broader verification remain. |
 | Collaborator visibility simulation | Done for fixture | Tests prove private change sets hide non-owner content, team/review-visible change sets expose non-private paths, and `.private/` remains owner-only. |
 | Remote-update events | Done for spike | Refresh emits first-class `remote-update` events and status exposes the latest update. |
 | Review and merge | Done for fixture | Fixture commands open the selected active change set for review, merge it into Main, emit review/merge events, and expose review/merge state through status. |
@@ -746,8 +746,8 @@ Current foundation:
 - Explicit `hop refresh` is safe and refuses pending or failed journal state and unjournaled local workspace drift.
 - Refresh emits `remote-update` events and status exposes the latest remote update.
 - Same-owner two-service simulation proves sequential handoff: device A syncs through the watcher, device B receives through explicit safe refresh.
-- The current worktree includes opt-in `--remote-pull` support for `watch` and `service start`, plus `hop remote-pull` for a deterministic one-shot safe refresh attempt.
-- Remote-pull checks the codebase-level graph head before full graph refresh, so unchanged polls do not repeatedly read all file metadata from Convex.
+- The current worktree includes opt-in activity-gated `--remote-pull` support for `watch` and `service start`, plus `hop remote-pull` for a deterministic one-shot safe refresh attempt.
+- Remote-pull checks the codebase-level graph head before full graph refresh, so unchanged activity-triggered checks do not repeatedly read all file metadata from the graph backend.
 - The production-profile same-Mac dogfood test uses two isolated state/workspace roots against one fixture graph and covers metadata-only dehydrate, single-file hydrate, refresh fallback, one-shot remote-pull apply, unchanged cursor skip before dirty scanning, and dirty-state blocking after a remote move without requiring loopback service access.
 
 ### 0.9. Installer, Daemon, And Production Hygiene
@@ -762,7 +762,7 @@ Definition of done:
 - Preserve manual `service start/status/stop/restart` for debugging.
 - Provide a supervised foreground `service run` mode for launchd/systemd.
 - Document restorable agent-state backup, owner-private Git export, publishable export, and scoped token rotation.
-- Make production config checks fail on unsafe path layouts, bad local-agent URLs, invalid refresh intervals, token reuse, placeholders, and malformed session capabilities.
+- Make production config checks fail on unsafe path layouts, bad local-agent URLs, invalid remote-pull cooldowns, token reuse, placeholders, and malformed session capabilities.
 - Expose enough status/events/journal evidence to diagnose service health before cross-device handoff.
 
 Current foundation:
@@ -929,7 +929,7 @@ Definition of done:
 - Requester-aware dashboard filtering exists, but the auth-backed collaborator permission model is not enforced across every user-facing write yet.
 - A first read-only code-review browser slice exists, now with routeable codebase review/compare/history pages, durable review-linked follow-up issues/comments, D1-backed snapshot-anchored inline review threads, and durable review decisions. A true tree/diff API and object-backed history reconstruction are still pending.
 - Issue, discussion, release, durable comments, release-asset attachment, project-board UI, routeable work-item detail pages, and first codebase notification feed exist for the first slice; richer linked-object cards and complete permission coverage are still pending.
-- No production-grade push/subscription remote-update delivery yet; explicit refresh, per-workspace cursor state, and opt-in polling remote-pull are personal-dogfood proof rather than the final v1 delivery model.
+- No production-grade push/subscription remote-update delivery yet; explicit refresh, per-workspace cursor state, and opt-in activity-gated remote-pull are personal-dogfood proof rather than the final v1 delivery model.
 - Service mode syncs local edits and serves status. Local two-service simulation proves device A edits sync through the watcher, while device B pulls them through explicit safe refresh before switching devices.
 - No conflict resolution UI yet; fixture conflict detection/status exists.
 - `hop import-git` now provides a production-safe literal Git checkout conversion path for snapshot-style repo migration, including `.git/` as owner-private metadata and encrypted routed secrets. Full Git history import, ancestry preservation, and remote publish are still pending.

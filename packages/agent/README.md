@@ -12,7 +12,7 @@ It is intentionally not a real FUSE, OS filesystem provider, or clone manager. I
 
 The selected cloud state remains the source of truth for the managed folder. In the production model, day-to-day edits should sync into an active change set; Main advances only after review or merge. The local folder is a materialized cache that HopIt manages so OS file pickers, editors, CLIs, and search tools can work without a special mount or a user-managed clone.
 
-The solid v1 target is a HopIt Workspace Root, such as `~/HopIt Workspaces`, where cloud codebases appear as HopIt-managed project folders. This package currently proves selected managed folders, a durable workspace-root index, configured-codebase discovery and metadata-only attach, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, S3-compatible object-blob storage for file bodies, safe remote-pull polling plus one-shot remote-pull checks, Cloudflare D1 graph storage, and legacy scoped Convex agent-session tokens. It does not yet provide account-wide codebase discovery, a full automatic lazy-materialization policy, D1 device-session auth, or production-grade push/subscription remote-update delivery.
+The solid v1 target is a HopIt Workspace Root, such as `~/HopIt Workspaces`, where cloud codebases appear as HopIt-managed project folders. This package currently proves selected managed folders, a durable workspace-root index, configured-codebase discovery and metadata-only attach, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, S3-compatible object-blob storage for file bodies, activity-gated safe remote-pull plus one-shot remote-pull checks, Cloudflare D1 graph storage, and legacy scoped Convex agent-session tokens. It does not yet provide account-wide codebase discovery, a full automatic lazy-materialization policy, D1 device-session auth, or production-grade push/subscription remote-update delivery.
 
 HopIt does not use ignore files as product sharing controls. Files under `.private/` are still snapshotted, synced, and versioned, but owner-visible only. Files outside `.private/` are governed by the active change set's effective visibility and the codebase's permissions.
 
@@ -359,14 +359,13 @@ oriented for the `service start` debug path until direct supervisor-owned
 `service run` installs write a pid record.
 
 Service mode syncs local workspace edits from the current device. It does not
-run an automatic remote-pull loop by default, so the conservative cross-device
-handoff remains: let device A sync, then run `hop remote-pull` or `hop refresh`
-on device B before continuing there. This avoids pretending concurrent
-multi-device editing is safe before the graph has stronger conflict/concurrency
-guards.
+run remote-pull by default, so the conservative cross-device handoff remains:
+let device A sync, then run `hop remote-pull` or `hop refresh` on device B
+before continuing there. This avoids pretending concurrent multi-device editing
+is safe before the graph has stronger conflict/concurrency guards.
 
-For personal dogfooding, `watch` and `service start` can opt into a safe
-background cloud refresh loop:
+For personal dogfooding, `watch` and `service start` can opt into activity-gated
+safe cloud refresh:
 
 ```bash
 npm run hop -- service start \
@@ -375,20 +374,21 @@ npm run hop -- service start \
   --remote-pull
 ```
 
-The remote-pull loop checks for a clean local journal, an idle local sync
-scheduler, a fully materialized workspace, and the workspace index cursor before
-calling the same safe `hop refresh` path. For D1 and legacy Convex workspaces,
-the polling path first reads only the codebase-level graph head. It performs the
+The remote-pull scheduler wakes only after local workspace activity has drained
+through the local sync scheduler, then checks for a clean local journal, an idle
+local sync scheduler, a fully materialized workspace, and the workspace index
+cursor before calling the same safe `hop refresh` path. For D1 and legacy Convex
+workspaces, it first reads only the codebase-level graph head. It performs the
 heavier local hash-manifest scan and full graph refresh only after that cursor
-shows the cloud revision moved, avoiding unchanged polls that repeatedly read
-every file row. `hop remote-pull` runs that decision once, which makes same-Mac
-and cross-device handoff verification
-deterministic without starting a service. If pending or failed journal entries
-exist, the workspace is partial/metadata-only, or disk content differs from the
-last materialized manifest after a remote move, HopIt emits `remote-pull.skipped`
-and leaves the workspace alone. Tune the polling interval with
-`--remote-refresh-interval-ms <ms>` or `HOPIT_REMOTE_REFRESH_INTERVAL_MS`; the
-default is `5000`.
+shows the cloud revision moved. `hop remote-pull` runs that decision once, which
+makes same-Mac and cross-device handoff verification deterministic without
+starting a service. If pending or failed journal entries exist, the workspace is
+partial/metadata-only, or disk content differs from the last materialized
+manifest after a remote move, HopIt emits `remote-pull.skipped` and leaves the
+workspace alone. Tune the activity cooldown with
+`--remote-pull-cooldown-ms <ms>` or `HOPIT_REMOTE_PULL_COOLDOWN_MS`; the default
+is `300000` (five minutes). `--remote-refresh-interval-ms` and
+`HOPIT_REMOTE_REFRESH_INTERVAL_MS` remain legacy aliases for existing scripts.
 
 Serve local agent status JSON:
 

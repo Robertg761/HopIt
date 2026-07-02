@@ -366,7 +366,11 @@ function applyRuntimeDefaults(options, provided) {
   if (!provided.has('auto-refresh') && isTruthyEnv(process.env.HOPIT_AUTO_REFRESH)) {
     options['auto-refresh'] = true
   }
-  if (!provided.has('remote-refresh-interval-ms') && process.env.HOPIT_REMOTE_REFRESH_INTERVAL_MS) {
+  const providedRemotePullCooldown = provided.has('remote-pull-cooldown-ms') || provided.has('remote-refresh-interval-ms')
+  if (!providedRemotePullCooldown && process.env.HOPIT_REMOTE_PULL_COOLDOWN_MS) {
+    options['remote-pull-cooldown-ms'] = process.env.HOPIT_REMOTE_PULL_COOLDOWN_MS
+  }
+  if (!providedRemotePullCooldown && !process.env.HOPIT_REMOTE_PULL_COOLDOWN_MS && process.env.HOPIT_REMOTE_REFRESH_INTERVAL_MS) {
     options['remote-refresh-interval-ms'] = process.env.HOPIT_REMOTE_REFRESH_INTERVAL_MS
   }
   if (!provided.has('session-id') && process.env.HOPIT_SESSION_ID) {
@@ -1725,10 +1729,14 @@ async function watchWorkspace(options) {
     cacheMode: workspaceMode.cacheMode,
   })
 
-  const scheduleSync = createWatchSyncScheduler(options)
   let watcher
   let poller = null
   let remotePuller = null
+  const scheduleSync = createWatchSyncScheduler(options, {
+    afterDrain: async (detail) => {
+      await remotePuller?.schedule('local-change', detail)
+    },
+  })
   const degradeToPolling = async (error) => {
     if (!poller) {
       poller = await createWorkspacePoller(options.workspace, scheduleSync, { agentOptions: options })
@@ -1795,6 +1803,7 @@ function createWatchSyncScheduler(options, schedulerOptions = {}) {
   let running = false
   let queued = false
   let queuedEvents = 0
+  let queuedSyncEvents = 0
   let lastEvent = null
 
   const drain = async () => {
@@ -1804,20 +1813,37 @@ function createWatchSyncScheduler(options, schedulerOptions = {}) {
     try {
       while (queued) {
         const coalescedEvents = queuedEvents
+        const syncableEvents = queuedSyncEvents
         const triggeringEvent = lastEvent
         queued = false
         queuedEvents = 0
+        queuedSyncEvents = 0
         lastEvent = null
 
-        try {
-          await syncOnce(options, {
-            trigger: 'watch',
-            coalescedEvents,
-            eventType: triggeringEvent?.eventType ?? null,
-            path: triggeringEvent?.path ?? null,
-          })
-        } catch (error) {
-          console.error(error)
+        if (syncableEvents > 0) {
+          try {
+            await syncOnce(options, {
+              trigger: 'watch',
+              coalescedEvents,
+              eventType: triggeringEvent?.eventType ?? null,
+              path: triggeringEvent?.path ?? null,
+            })
+          } catch (error) {
+            console.error(error)
+          }
+        }
+
+        if (schedulerOptions.afterDrain) {
+          try {
+            await schedulerOptions.afterDrain({
+              trigger: 'watch',
+              coalescedEvents,
+              eventType: triggeringEvent?.eventType ?? null,
+              path: triggeringEvent?.path ?? null,
+            })
+          } catch (error) {
+            console.error(error)
+          }
         }
       }
     } finally {
@@ -1828,6 +1854,9 @@ function createWatchSyncScheduler(options, schedulerOptions = {}) {
   const schedule = (eventType, filename) => {
     queued = true
     queuedEvents += 1
+    if (!isLocalActivityMarkerPath(filename)) {
+      queuedSyncEvents += 1
+    }
     lastEvent = {
       eventType,
       path: filename,
@@ -1849,18 +1878,23 @@ function createWatchSyncScheduler(options, schedulerOptions = {}) {
 async function createWorkspacePoller(workspace, onChange, pollerOptions = {}) {
   const intervalMs = pollerOptions.intervalMs ?? 1000
   const agentOptions = pollerOptions.agentOptions ?? {}
-  let previousSnapshot = await snapshotWorkspace(workspace, agentOptions)
+  const snapshotOptions = {
+    ...agentOptions,
+    includeLocalActivityMarkers: true,
+  }
+  let previousSnapshot = await snapshotWorkspace(workspace, snapshotOptions)
   let running = false
 
   const interval = setInterval(() => {
     if (running) return
     running = true
 
-    snapshotWorkspace(workspace, agentOptions)
+    snapshotWorkspace(workspace, snapshotOptions)
       .then((nextSnapshot) => {
         if (nextSnapshot !== previousSnapshot) {
+          const changedPath = firstChangedSnapshotPath(previousSnapshot, nextSnapshot)
           previousSnapshot = nextSnapshot
-          onChange('poll', null)
+          onChange('poll', changedPath)
         }
       })
       .catch((error) => {
@@ -1878,6 +1912,29 @@ async function createWorkspacePoller(workspace, onChange, pollerOptions = {}) {
   }
 }
 
+function firstChangedSnapshotPath(previousSnapshot, nextSnapshot) {
+  const previous = snapshotLineMap(previousSnapshot)
+  const next = snapshotLineMap(nextSnapshot)
+  for (const [relativePath, line] of next) {
+    if (previous.get(relativePath) !== line) return relativePath
+  }
+  for (const relativePath of previous.keys()) {
+    if (!next.has(relativePath)) return relativePath
+  }
+  return null
+}
+
+function snapshotLineMap(snapshot) {
+  const result = new Map()
+  for (const line of snapshot.split('\n')) {
+    if (!line) continue
+    const separator = line.indexOf(':')
+    const relativePath = separator === -1 ? line : line.slice(0, separator)
+    result.set(relativePath, line)
+  }
+  return result
+}
+
 async function snapshotWorkspace(root, options = {}) {
   const files = []
 
@@ -1888,7 +1945,12 @@ async function snapshotWorkspace(root, options = {}) {
     for (const entry of entries) {
       const absolutePath = path.join(dir, entry.name)
       const relativePath = toCloudPath(path.relative(root, absolutePath))
-      if (shouldSkipWorkspacePath(relativePath, entry, options)) continue
+      if (
+        shouldSkipWorkspacePath(relativePath, entry, options) &&
+        !(options.includeLocalActivityMarkers && shouldTrackLocalActivityPath(relativePath, entry))
+      ) {
+        continue
+      }
 
       if (entry.isSymbolicLink()) {
         const target = await fs.readlink(absolutePath)
@@ -1927,21 +1989,28 @@ async function snapshotWorkspace(root, options = {}) {
 async function createRemoteRefreshScheduler(options, schedulerOptions = {}) {
   if (!remotePullEnabled(options)) return null
 
-  const intervalMs = remoteRefreshIntervalMs(options)
+  const cooldownMs = remoteRefreshIntervalMs(options)
   const localSyncIdle = schedulerOptions.localSyncIdle ?? (() => true)
   let closed = false
   let running = false
+  let timer = null
+  let queued = false
+  let queuedTrigger = null
+  let queuedDetail = null
+  let lastRunAt = 0
 
   await emit(options, 'remote-pull.started', {
-    state: 'enabled',
+    state: 'activity-gated',
+    mode: 'local-change-cooldown',
     workspace: options.workspace,
-    intervalMs,
+    intervalMs: cooldownMs,
+    cooldownMs,
     adapter: workspaceMode.adapter,
     cacheMode: workspaceMode.cacheMode,
     safeRefreshOnly: true,
   })
 
-  const run = async (trigger) => {
+  const run = async (trigger, detail = null) => {
     if (closed || running) return
     running = true
 
@@ -1962,39 +2031,75 @@ async function createRemoteRefreshScheduler(options, schedulerOptions = {}) {
       await emit(options, 'remote-pull.applied', {
         state: 'applied',
         trigger,
+        activity: remotePullActivitySummary(detail),
         workspace: options.workspace,
         fromRevision: decision.fromRevision,
         toRevision: decision.toRevision,
-        intervalMs,
+        intervalMs: cooldownMs,
+        cooldownMs,
         safeRefreshOnly: true,
       })
     } catch (error) {
       await emit(options, 'remote-pull.failed', {
         state: 'failed',
         trigger,
+        activity: remotePullActivitySummary(detail),
         workspace: options.workspace,
         reason: error.message,
       })
     } finally {
+      lastRunAt = Date.now()
       running = false
+      if (queued && !closed) {
+        const nextTrigger = queuedTrigger ?? 'local-change'
+        const nextDetail = queuedDetail
+        queued = false
+        queuedTrigger = null
+        queuedDetail = null
+        await schedule(nextTrigger, nextDetail)
+      }
     }
   }
 
-  const interval = setInterval(() => {
-    run('interval').catch((error) => {
-      console.error(error)
-    })
-  }, intervalMs)
+  const schedule = async (trigger = 'local-change', detail = null) => {
+    if (closed) return
+    queued = true
+    queuedTrigger = trigger
+    queuedDetail = detail
+    if (running || timer) return
 
-  run('startup').catch((error) => {
-    console.error(error)
-  })
+    const elapsedMs = lastRunAt > 0 ? Date.now() - lastRunAt : cooldownMs
+    const waitMs = Math.max(0, cooldownMs - elapsedMs)
+    timer = setTimeout(() => {
+      timer = null
+      const nextTrigger = queuedTrigger ?? trigger
+      const nextDetail = queuedDetail
+      queued = false
+      queuedTrigger = null
+      queuedDetail = null
+      run(nextTrigger, nextDetail).catch((error) => {
+        console.error(error)
+      })
+    }, waitMs)
+  }
 
   return {
+    schedule,
     close() {
       closed = true
-      clearInterval(interval)
+      if (timer) clearTimeout(timer)
+      timer = null
     },
+  }
+}
+
+function remotePullActivitySummary(detail) {
+  if (!detail || typeof detail !== 'object') return null
+  return {
+    trigger: detail.trigger ?? null,
+    eventType: detail.eventType ?? null,
+    path: detail.path ?? null,
+    coalescedEvents: detail.coalescedEvents ?? null,
   }
 }
 
@@ -2562,7 +2667,9 @@ function runtimeArgsFromOptions(options) {
   if (remotePullEnabled(options)) {
     args.push('--remote-pull')
   }
-  if (options['remote-refresh-interval-ms']) {
+  if (options['remote-pull-cooldown-ms']) {
+    args.push('--remote-pull-cooldown-ms', options['remote-pull-cooldown-ms'])
+  } else if (options['remote-refresh-interval-ms']) {
     args.push('--remote-refresh-interval-ms', options['remote-refresh-interval-ms'])
   }
   if (options['allow-local-cloud']) {
@@ -4798,7 +4905,7 @@ HOPIT_SESSION_ID=${options['session-id'] ?? `session_${codebaseId}_${os.hostname
 HOPIT_DEVICE_NAME=${JSON.stringify(options['device-name'] ?? os.hostname() ?? 'local-device')}
 HOPIT_AGENT_SESSION_TOKEN=replace-after-hop-session-register
 HOPIT_REMOTE_PULL=1
-HOPIT_REMOTE_REFRESH_INTERVAL_MS=${options['remote-refresh-interval-ms'] ?? '5000'}
+HOPIT_REMOTE_PULL_COOLDOWN_MS=${options['remote-pull-cooldown-ms'] ?? options['remote-refresh-interval-ms'] ?? '300000'}
 `
 }
 
@@ -4820,8 +4927,15 @@ async function writeLaunchAgent(options) {
     'production',
     '--codebase-id',
     codebaseId,
-    '--remote-pull',
   ]
+  if (remotePullEnabled(options)) {
+    programArguments.push('--remote-pull')
+  }
+  if (options['remote-pull-cooldown-ms']) {
+    programArguments.push('--remote-pull-cooldown-ms', options['remote-pull-cooldown-ms'])
+  } else if (options['remote-refresh-interval-ms']) {
+    programArguments.push('--remote-refresh-interval-ms', options['remote-refresh-interval-ms'])
+  }
 
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -6019,10 +6133,12 @@ function remotePullEnabled(options) {
 }
 
 function remoteRefreshIntervalMs(options) {
-  const rawValue = options['remote-refresh-interval-ms'] ?? '5000'
+  const usesCooldownOption = options['remote-pull-cooldown-ms'] !== undefined
+  const rawValue = usesCooldownOption ? options['remote-pull-cooldown-ms'] : (options['remote-refresh-interval-ms'] ?? '300000')
   const value = Number(rawValue)
   if (!Number.isInteger(value) || value < 100) {
-    throw new Error(`Invalid --remote-refresh-interval-ms value: ${rawValue}`)
+    const optionName = usesCooldownOption ? '--remote-pull-cooldown-ms' : '--remote-refresh-interval-ms'
+    throw new Error(`Invalid ${optionName} value: ${rawValue}`)
   }
   return value
 }
@@ -6143,9 +6259,21 @@ async function sortedDirEntries(dir) {
 
 function shouldSkipWorkspacePath(relativePath, entry, options = {}) {
   const parts = relativePath.split('/')
+  const basename = parts.at(-1) ?? relativePath
   if (parts.includes('.hopit')) return true
+  if (basename === '.DS_Store') return true
   if (isLocalOnlySecretPath(relativePath) && !shouldSyncLocalOnlySecretPath(relativePath, options)) return true
   return false
+}
+
+function shouldTrackLocalActivityPath(relativePath, entry) {
+  return entry.isFile() && isLocalActivityMarkerPath(relativePath)
+}
+
+function isLocalActivityMarkerPath(relativePath) {
+  if (typeof relativePath !== 'string' || relativePath.length === 0) return false
+  const basename = relativePath.split('/').at(-1) ?? relativePath
+  return basename === '.DS_Store'
 }
 
 function shouldSkipLiteralMirrorPath(relativePath, _entry) {
@@ -8252,7 +8380,7 @@ Commands:
   mirror      Literal-copy a local folder into the managed workspace with safety checks
   hydrate     Materialize cloud files into the managed workspace
   refresh     Update the managed workspace from cloud when journal and disk are safe
-  remote-pull Run one safe remote refresh decision, matching watch/service polling
+  remote-pull Run one safe remote refresh decision, matching activity-gated watch/service refresh
   sync        Scan managed-folder writes, journal them, and acknowledge to cloud
   recover     Replay unacknowledged journal entries into the cloud graph
   review      Open the selected active change set for review
@@ -8320,8 +8448,9 @@ Options:
   --capabilities <csv> Session capabilities, default read,write,sync,watch
   --host <host>        Status server host, defaults to 127.0.0.1
   --port <port>        Status server port, defaults to 4785
-  --remote-pull        Opt into safe background cloud refresh in watch/service mode
-  --remote-refresh-interval-ms <ms> Background refresh interval, default 5000
+  --remote-pull        Opt into activity-gated safe cloud refresh in watch/service mode
+  --remote-pull-cooldown-ms <ms> Minimum delay between activity-triggered remote pulls, default 300000
+  --remote-refresh-interval-ms <ms> Legacy alias for --remote-pull-cooldown-ms
   --start-service      install: start the production service after preparing paths
   --write-env          install: write hopit.env.example under the agent state root
   --launch-agent       install: write a macOS LaunchAgent for start-on-login

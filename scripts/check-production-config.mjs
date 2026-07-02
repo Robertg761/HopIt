@@ -22,7 +22,7 @@ if (cloudBackend === 'd1') {
   checks.push(exactNormalized('HOPIT_CLOUD_BACKEND', ['d1', 'cloudflare-d1'], { allowUnset: true }))
   checks.push(requiredOneOf(['HOPIT_D1_ACCOUNT_ID', 'CLOUDFLARE_ACCOUNT_ID']))
   checks.push(required('HOPIT_D1_DATABASE_ID'))
-  checks.push(secretOneOf(['HOPIT_D1_API_TOKEN', 'CLOUDFLARE_API_TOKEN'], { minLength: 32 }))
+  checks.push(secretOneOf(['HOPIT_D1_API_TOKEN', 'CLOUDFLARE_API_TOKEN', 'HOPIT_AGENT_SESSION_TOKEN'], { minLength: 32 }))
   if (env.HOPIT_D1_API_BASE_URL) checks.push(urlCheck('HOPIT_D1_API_BASE_URL'))
   if (env.HOPIT_CONVEX_URL || env.CONVEX_URL || env.NEXT_PUBLIC_CONVEX_URL) {
     warnings.push('Convex URL variables are still set, but HOPIT_CLOUD_BACKEND=d1 will use Cloudflare D1 for graph/status/actions.')
@@ -83,7 +83,7 @@ if (!env.HOPIT_WORKSPACE_INDEX) {
 }
 if (!env.HOPIT_AGENT_SESSION_TOKEN) {
   warnings.push(cloudBackend === 'd1'
-    ? 'HOPIT_AGENT_SESSION_TOKEN is unset; scoped device sessions are still legacy Convex-only and will be ported after the D1 graph migration.'
+    ? 'HOPIT_AGENT_SESSION_TOKEN is unset; installed devices should use a scoped D1 proxy session token after registration. Server/bootstrap tasks can use HOPIT_D1_API_TOKEN.'
     : 'HOPIT_AGENT_SESSION_TOKEN is unset; bootstrap can use HOPIT_AGENT_TOKEN, but installed devices should use scoped session tokens.')
 } else {
   checks.push(secret('HOPIT_AGENT_SESSION_TOKEN', { minLength: 32 }))
@@ -100,15 +100,23 @@ if (!env.HOPIT_DEVICE_NAME) {
   checks.push(nonPlaceholder('HOPIT_DEVICE_NAME'))
 }
 if (!env.HOPIT_REMOTE_PULL) {
-  warnings.push('HOPIT_REMOTE_PULL is unset; start-on-login can run, but automatic safe refresh is disabled by default.')
+  warnings.push('HOPIT_REMOTE_PULL is unset; start-on-login can run, but activity-gated safe refresh is disabled by default.')
+} else if (/^(1|true|yes|on)$/i.test(env.HOPIT_REMOTE_PULL)) {
+  checks.push(truthy('HOPIT_REMOTE_PULL'))
+} else if (/^(0|false|no|off)$/i.test(env.HOPIT_REMOTE_PULL)) {
+  warnings.push('HOPIT_REMOTE_PULL is disabled; this avoids background remote checks until you opt into activity-gated safe refresh.')
 } else {
   checks.push(truthy('HOPIT_REMOTE_PULL'))
 }
+if (env.HOPIT_REMOTE_PULL_COOLDOWN_MS) {
+  checks.push(integerRange('HOPIT_REMOTE_PULL_COOLDOWN_MS', { min: 1000, max: 86400000 }))
+}
 if (env.HOPIT_REMOTE_REFRESH_INTERVAL_MS) {
-  checks.push(integerRange('HOPIT_REMOTE_REFRESH_INTERVAL_MS', { min: 1000, max: 60000 }))
+  checks.push(integerRange('HOPIT_REMOTE_REFRESH_INTERVAL_MS', { min: 1000, max: 86400000 }))
+  warnings.push('HOPIT_REMOTE_REFRESH_INTERVAL_MS is a legacy alias; prefer HOPIT_REMOTE_PULL_COOLDOWN_MS.')
 }
 if (env.HOPIT_AGENT_SESSION_CAPABILITIES) {
-  checks.push(csvSubset('HOPIT_AGENT_SESSION_CAPABILITIES', ['read', 'write', 'sync', 'watch']))
+  checks.push(csvSubset('HOPIT_AGENT_SESSION_CAPABILITIES', ['read', 'write', 'sync', 'watch', 'admin']))
 }
 if (env.HOPIT_AGENT_BASE_URL) {
   checks.push(loopbackUrl('HOPIT_AGENT_BASE_URL'))

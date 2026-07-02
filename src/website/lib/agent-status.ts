@@ -64,6 +64,8 @@ export type AgentStatusSnapshot = {
   remoteUpdateState: string
   remotePullState: string
   remotePullEnabled: boolean
+  remotePullMode: string
+  remotePullCadence: string
   workspaceHydrationState: string
   workspaceMaterializedRevision: number | null
   workspaceIndexPath: string | null
@@ -242,6 +244,13 @@ type RawAgentStatus = {
     enabled?: boolean
     state?: string
     intervalMs?: number | null
+    lastStarted?: {
+      detail?: {
+        state?: string
+        mode?: string
+        cooldownMs?: number | null
+      } | null
+    } | null
     cursor?: {
       materializedRevision?: number | null
       graphRevision?: number | null
@@ -299,6 +308,8 @@ export function offlineAgentStatus(reason = 'Start the local HopIt agent status 
     remoteUpdateState: 'Unavailable',
     remotePullState: 'Unavailable',
     remotePullEnabled: false,
+    remotePullMode: 'Disabled',
+    remotePullCadence: 'No remote pull',
     workspaceHydrationState: 'Unavailable',
     workspaceMaterializedRevision: null,
     workspaceIndexPath: null,
@@ -349,6 +360,8 @@ export function mapAgentStatusResponse(response: unknown): AgentStatusSnapshot {
   const remoteUpdateState = status.remoteUpdate?.state ?? (events?.lastRemoteUpdate ? 'updated' : 'idle')
   const remotePullState = status.remotePull?.state ?? 'disabled'
   const remotePullEnabled = Boolean(status.remotePull?.enabled)
+  const remotePullMode = remotePullModeLabel(status.remotePull)
+  const remotePullCadence = remotePullCadenceLabel(status.remotePull)
   const workspaceHydration = status.workspace?.hydration
   const remoteCursor = status.remotePull?.cursor
   const backend = backendName(wrappedResponse?.capabilities?.backend)
@@ -387,6 +400,8 @@ export function mapAgentStatusResponse(response: unknown): AgentStatusSnapshot {
     remoteUpdateState,
     remotePullState,
     remotePullEnabled,
+    remotePullMode,
+    remotePullCadence,
     workspaceHydrationState: workspaceHydration?.state ?? status.readiness ?? 'unknown',
     workspaceMaterializedRevision:
       numberOrNull(workspaceHydration?.lastMaterializedRevision) ??
@@ -633,6 +648,40 @@ function stringOrNull(value: unknown) {
 
 function numberOrNull(value: unknown) {
   return typeof value === 'number' && Number.isFinite(value) ? value : null
+}
+
+function remotePullModeLabel(remotePull: RawAgentStatus['remotePull']) {
+  if (!remotePull?.enabled) return 'Disabled'
+
+  const detailMode = remotePull.lastStarted?.detail?.mode
+  const detailState = remotePull.lastStarted?.detail?.state
+  if (detailMode === 'local-change-cooldown' || detailState === 'activity-gated') {
+    return 'Activity gated'
+  }
+
+  return titleCase(remotePull.state ?? 'enabled')
+}
+
+function remotePullCadenceLabel(remotePull: RawAgentStatus['remotePull']) {
+  if (!remotePull?.enabled) return 'No remote pull'
+
+  const cooldownMs =
+    numberOrNull(remotePull.lastStarted?.detail?.cooldownMs) ?? numberOrNull(remotePull.intervalMs)
+  return cooldownMs === null ? 'Cooldown unknown' : `${formatDuration(cooldownMs)} cooldown`
+}
+
+function formatDuration(ms: number) {
+  if (ms % 60000 === 0) return `${ms / 60000} min`
+  if (ms % 1000 === 0) return `${ms / 1000} sec`
+  return `${ms} ms`
+}
+
+function titleCase(value: string) {
+  return value
+    .split(/[-_ ]+/)
+    .filter(Boolean)
+    .map((part) => `${part.slice(0, 1).toUpperCase()}${part.slice(1)}`)
+    .join(' ')
 }
 
 function isRawAgentResponse(response: unknown): response is RawAgentResponse {

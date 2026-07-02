@@ -2,7 +2,7 @@
 
 This runbook is the first real-use path for one-person HopIt dogfooding. It keeps the local JSON graph as a development fallback, and now treats Cloudflare D1 as the free-first canonical cloud graph target. Convex remains a disabled legacy backend and export source. Vercel hosts the protected dashboard. Hosted workspace commands are disabled; collaboration/member/work-item/session/key APIs now route through the D1 backend selector. Basic Auth is not part of normal production access and should stay unset unless deliberately re-enabled for emergency recovery.
 
-Last updated: 2026-07-01
+Last updated: 2026-07-02
 
 ## Current Deployment
 
@@ -31,7 +31,7 @@ Last updated: 2026-07-01
 - Cloudflare R2 public access: disabled
 - Seeded codebase id: `hopit`
 - Production workspace: `/Users/robert/HopIt Workspaces/hopit`
-- Local LaunchAgent label: `com.hopit.agent.hopit` (running with D1-backed cloud status; remote-pull disabled until the managed workspace's unjournaled local tree is resolved)
+- Local LaunchAgent label: `com.hopit.agent.hopit` (running with D1-backed cloud status; remote-pull is activity-gated when enabled)
 - LaunchAgent plist: `/Users/robert/Library/LaunchAgents/com.hopit.agent.hopit.plist`
 - Packaged runtime: `/Users/robert/Library/Application Support/HopIt/Runtime/hop-darwin-arm64`
 - Agent state root: `/Users/robert/Library/Application Support/HopIt/Agent`
@@ -50,7 +50,7 @@ These are the accounts and source-of-truth locations for the current personal pr
 | Cloud graph | Cloudflare D1 | Cloudflare dashboard/API, `cloudflare/d1/schema.sql`, `cloudflare/d1/api-worker.js`, `HOPIT_D1_*` | Stores graph metadata, file metadata, account sync, action jobs, events, members, invitations, first work-item/release records, scoped sessions, and trusted-device/key metadata on a free-first backend. |
 | Legacy cloud graph | Convex project `robertgordon761/hopit` | Convex dashboard, `convex/`, saved export ZIP | Disabled after Free-plan limits; retained as migration source and fallback code path only. |
 | Object blobs | Cloudflare R2 bucket `hopit-blobs` | Cloudflare dashboard, `HOPIT_R2_*`, `HOPIT_BLOB_*` | Stores file bytes through an S3-compatible adapter so D1/Convex are not used for large repository content. |
-| Local agent service | macOS LaunchAgent `com.hopit.agent.hopit` | `/Users/robert/Library/LaunchAgents/com.hopit.agent.hopit.plist` | Keeps the production-profile watcher/status service running outside the source checkout. It is running against D1; remote-pull stays disabled until the managed workspace's unjournaled local tree is resolved. |
+| Local agent service | macOS LaunchAgent `com.hopit.agent.hopit` | `/Users/robert/Library/LaunchAgents/com.hopit.agent.hopit.plist` | Keeps the production-profile watcher/status service running outside the source checkout. It is running against D1; remote-pull is activity-gated with a five-minute cooldown when enabled. |
 | Local runtime | Standalone `hop-darwin-arm64` package | `/Users/robert/Library/Application Support/HopIt/Runtime/hop-darwin-arm64` | Runs the same packaged agent shape another device would install, instead of depending on this repo's `node_modules`. |
 | Local agent config | Production env file | `/Users/robert/.config/hopit/production.env` | Provides the LaunchAgent with cloud backend, R2, workspace, session, backup, and auth settings. |
 | Local device keyring | HopIt production keyring for `hopit` | `/Users/robert/Library/Application Support/HopIt/Agent/keys/hopit.device.json` | Stores this Mac's device private keys locally and keeps user vault key `uvk_99d350e5-2b2e-453a-b7a4-739cdb8893a7` self-wrapped. Trusted-device cloud registration now works on D1 and legacy Convex. |
@@ -122,7 +122,7 @@ HOPIT_DEVICE_NAME="<your-device-name>"
 HOPIT_AGENT_SESSION_TOKEN=<scoped-session-token-after-register>
 HOPIT_AGENT_SESSION_CAPABILITIES=read,write,sync,watch
 HOPIT_REMOTE_PULL=1
-HOPIT_REMOTE_REFRESH_INTERVAL_MS=5000
+HOPIT_REMOTE_PULL_COOLDOWN_MS=300000
 HOPIT_BACKUP_ROOT="$HOME/HopIt-Backups"
 HOPIT_EXPORT_ROOT="$HOME/HopIt-Exports"
 HOPIT_BLOB_PROVIDER=r2
@@ -303,7 +303,7 @@ Current safe runtime posture:
 - Basic Auth fallback env vars were removed from Vercel Production after owner access was verified.
 - Clerk production is configured and `HOPIT_AUTH_PROVIDER=clerk` is active in Vercel Production.
 - Google Auth Platform Audience shows `1 user (1 test, 0 other) / 100 user cap` with `robertgordon761@gmail.com`.
-- Local agent status/watch is running against D1. R2-backed object sync and automatic remote-pull remain paused until the managed workspace's unjournaled local tree is cleaned or intentionally synced; hosted workspace commands remain disabled.
+- Local agent status/watch is running against D1. R2-backed object sync is configured for the local agent, and automatic remote-pull is activity-gated so idle services do not continuously query Cloudflare; hosted workspace commands remain disabled.
 
 Auth handoff state:
 
@@ -421,8 +421,8 @@ pid record.
 For cross-device handoff today, the safe primitive is still refresh, and
 `--remote-pull` is the personal-dogfood automation around that primitive. The
 service syncs local edits from the device you are using; another device can run
-the remote-pull loop, a one-shot remote-pull check, or an explicit safe refresh
-before you continue there.
+activity-gated remote-pull, a one-shot remote-pull check, or an explicit safe
+refresh before you continue there.
 Remote-pull only applies when the workspace is fully materialized, the journal is
 clean, and disk content still matches the hash-only materialization manifest; if
 status shows `workspace.localChanges.state` as `dirty`, sync or recover that
@@ -480,8 +480,8 @@ Healthy personal-production service status should show:
 - `watch.state: "watching"`.
 - `journal.pendingCount: 0` before refresh or cross-device handoff.
 - `journal.failedCount: 0`.
-- `remotePull.enabled: true` when `HOPIT_REMOTE_PULL=1`, with `remotePull.state` possibly `skipped` when local work needs attention.
-- `hop remote-pull --profile production` should return `state: "up-to-date"` without a `remote-pull.skipped` event when the codebase-level D1 graph head matches the local materialized cursor. As of 2026-06-30, keep this disabled until the managed workspace's large unjournaled local tree is cleaned or intentionally synced.
+- `remotePull.enabled: true` when `HOPIT_REMOTE_PULL=1`, with `remotePull.intervalMs: 300000` unless intentionally tuned, and `remotePull.state` possibly `skipped` when local work needs attention.
+- `hop remote-pull --profile production` should return `state: "up-to-date"` without a `remote-pull.skipped` event when the codebase-level D1 graph head matches the local materialized cursor.
 
 Known current nuance: when launchd owns the foreground `service run` process
 directly, `hop service status` can report `running: false` if there is no

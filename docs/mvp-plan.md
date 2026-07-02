@@ -188,7 +188,7 @@ the current v1 proof gate.
 - Local agent: managed-folder process with service/session token support, workspace-root index, hydration cursor, local cache, safety journal, retry queue, service wrapper, and `.private/` visibility handling.
 - Installer/daemon: standalone package with embedded runtime, production env example, user-level launchd/systemd support scripts, manual service controls, supervised `service run`, backup/export runbook, token-rotation runbook, and stricter production config checks.
 - Storage today: D1 separates graph/file metadata from file bytes. The agent can upload regular file bytes to S3-compatible object storage, store only `contentStorage`, provider, key, hash, and size metadata in D1 or the legacy Convex fallback, and hydrate/refresh/export by downloading and verifying the object hash. Routed secrets can be client-encrypted with the legacy local key or the `hop keys` user-vault bridge. Durable history reconstruction, full private-repo encryption, repo/zone key use, private metadata, and all product write paths still need to move onto the same model.
-- Realtime today: polling through `/api/agent/status`, `remote-update` events emitted by explicit safe refresh, a per-workspace materialization cursor, and an opt-in `--remote-pull` polling loop for personal dogfooding. Solid v1 still needs production-grade automatic remote-update delivery for file changes, collaborator presence, sync status, visibility changes, review events, merge events, and device handoff.
+- Realtime today: polling through `/api/agent/status`, `remote-update` events emitted by explicit safe refresh, a per-workspace materialization cursor, and opt-in activity-gated `--remote-pull` with a five-minute default cooldown for personal dogfooding. Solid v1 still needs production-grade automatic remote-update delivery for file changes, collaborator presence, sync status, visibility changes, review events, merge events, and device handoff.
 - Git interoperability: import/export/publish stays as snapshot interoperability, not the everyday sync model.
 
 The local agent contract is detailed in [Local Agent Architecture](agent-architecture.md). That document is the implementation guide for the cloud file graph, managed-folder adapter, local cache, safety journal, status API, event log, two-device simulation, and editor read/write acknowledgement flow.
@@ -236,7 +236,7 @@ Current next work:
 3. Implement the privacy/encryption framework: device trust, user vault keys,
    repo/private/secret zone keys, encrypted blobs, key grants, invite-time key
    wrapping, revocation, recovery, and path-metadata privacy.
-4. Promote the opt-in remote-pull proof into production-grade automatic remote-update delivery so same-owner devices refresh safely without a manual command when the local journal is clean.
+4. Promote the opt-in activity-gated remote-pull proof into production-grade automatic remote-update delivery so same-owner devices refresh safely without a manual command when the local journal is clean.
 5. Harden scoped device/session auth coverage, membership, invitation, and permission work behind Clerk auth now that owner handoff is proven and production uses Clerk/D1 without Basic Auth.
 6. Deepen the hosted code browser, diff/review/comment/history surface, issue/detail and discussion thread flows, releases, and project boards beyond the first dashboard slices.
 
