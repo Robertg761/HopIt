@@ -394,3 +394,37 @@ create table if not exists release_assets (
 
 create index if not exists idx_release_assets_release on release_assets(release_id);
 create index if not exists idx_release_assets_codebase on release_assets(codebase_id);
+
+create table if not exists review_threads (
+  thread_id text primary key,
+  codebase_id text not null,
+  change_set_id text not null,
+  file_path text not null,
+  line_number integer,
+  base_revision text,
+  head_revision text,
+  line_fingerprint text,
+  status text not null,
+  created_by text not null,
+  updated_by text,
+  created_at text not null,
+  updated_at text not null,
+  resolved_at text
+);
+
+create index if not exists idx_review_threads_codebase_change_set on review_threads(codebase_id, change_set_id, updated_at);
+create index if not exists idx_review_threads_codebase_path on review_threads(codebase_id, file_path);
+
+create table if not exists review_thread_comments (
+  comment_id text primary key,
+  codebase_id text not null,
+  thread_id text not null,
+  body text not null,
+  created_by text not null,
+  updated_by text,
+  created_at text not null,
+  updated_at text not null
+);
+
+create index if not exists idx_review_thread_comments_thread on review_thread_comments(thread_id);
+create index if not exists idx_review_thread_comments_codebase on review_thread_comments(codebase_id);

@@ -4,10 +4,11 @@ import * as React from 'react'
 import {
   AlertCircle,
   CheckCircle2,
+  Copy,
   KeyRound,
+  Loader2,
   MailPlus,
   ShieldCheck,
-  Copy,
   UserPlus,
   Users,
   XCircle,
@@ -24,6 +25,7 @@ import {
   removeCodebaseMember,
   revokeInvitation,
   suspendCodebaseMember,
+  updateCodebaseKeyRotation,
   type CodebaseMember,
   type InvitationsResponse,
   type KeyGrantStatusResponse,
@@ -291,6 +293,20 @@ export function MembersInvitationsPanel({ status, loading, onRefreshStatus }: Me
     setSubmitting(null)
   }
 
+  async function handleKeyRotationState(rotationState: 'planned' | 'rotating' | 'wrapped' | 'stable' | 'blocked') {
+    if (!codebaseId) return
+
+    setSubmitting(`key-rotation:${rotationState}`)
+    setActionMessage(null)
+    const result = await updateCodebaseKeyRotation({
+      codebaseId,
+      rotationState,
+    })
+    setKeyGrantStatus(result)
+    setActionMessage(result.ok ? `Key rotation marked ${rotationState}.` : (result.error?.message ?? 'Key rotation update failed.'))
+    setSubmitting(null)
+  }
+
   return (
     <section className="panel-surface overflow-hidden rounded-xl border border-border shadow-sm">
       <div className="flex flex-col gap-3 border-b border-border/60 p-4 lg:flex-row lg:items-center lg:justify-between">
@@ -353,7 +369,13 @@ export function MembersInvitationsPanel({ status, loading, onRefreshStatus }: Me
             onTokenChange={setAcceptToken}
             onSubmit={handleAcceptSubmit}
           />
-          <KeyGrantStatusPanel status={keyGrantStatus} loading={loadingKeyGrants} canManage={canManageMembers} />
+          <KeyGrantStatusPanel
+            status={keyGrantStatus}
+            loading={loadingKeyGrants}
+            canManage={canManageMembers}
+            submitting={submitting}
+            onSetRotationState={(rotationState) => void handleKeyRotationState(rotationState)}
+          />
         </div>
       </div>
     </section>
@@ -820,10 +842,14 @@ function KeyGrantStatusPanel({
   status,
   loading,
   canManage,
+  submitting,
+  onSetRotationState,
 }: {
   status: KeyGrantStatusResponse | null
   loading: boolean
   canManage: boolean
+  submitting: string | null
+  onSetRotationState: (rotationState: 'planned' | 'rotating' | 'wrapped' | 'stable' | 'blocked') => void
 }) {
   const trustedDevices = status?.devices.filter((device) => device.status === 'trusted').length ?? 0
   const activeWraps = status?.wrappedKeys.filter((wrap) => wrap.status === 'active').length ?? 0
@@ -861,6 +887,31 @@ function KeyGrantStatusPanel({
             <KeyGrantDatum label="Private key" value={codebaseKeyring?.ownerPrivateKeyId ?? 'not configured'} />
             <KeyGrantDatum label="Rotation" value={codebaseKeyring?.rotationState ?? 'not started'} />
           </dl>
+          <div className="mt-3 rounded-lg bg-card p-2.5 ring-1 ring-border/50">
+            <p className="text-[11px] font-semibold text-muted-foreground">Rotation workflow</p>
+            <div className="mt-2 grid grid-cols-2 gap-1.5">
+              {(['planned', 'rotating', 'wrapped', 'stable'] as const).map((rotationState) => {
+                const isSubmitting = submitting === `key-rotation:${rotationState}`
+                return (
+                  <Button
+                    key={rotationState}
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={!canManage || !codebaseKeyring || Boolean(submitting)}
+                    className="h-7 justify-start rounded-md text-[11px]"
+                    onClick={() => onSetRotationState(rotationState)}
+                  >
+                    {isSubmitting ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldCheck className="size-3.5" />}
+                    {rotationState}
+                  </Button>
+                )
+              })}
+            </div>
+            {!codebaseKeyring ? (
+              <p className="mt-2 text-[11px] text-muted-foreground">Configure a codebase keyring before tracking rotation.</p>
+            ) : null}
+          </div>
           {status.devices.length > 0 ? (
             <ol className="mt-3 max-h-40 space-y-1.5 overflow-auto scroll-thin">
               {status.devices.slice(0, 5).map((device) => (

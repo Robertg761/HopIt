@@ -565,6 +565,8 @@ export class CloudflareD1HopBackend {
     await this.query(`delete from discussion_comments where codebase_id = ?`, [codebaseId])
     await this.query(`delete from releases where codebase_id = ?`, [codebaseId])
     await this.query(`delete from release_assets where codebase_id = ?`, [codebaseId])
+    await this.query(`delete from review_thread_comments where codebase_id = ?`, [codebaseId])
+    await this.query(`delete from review_threads where codebase_id = ?`, [codebaseId])
     await this.query(`delete from projects where codebase_id = ?`, [codebaseId])
     await this.query(`delete from project_items where codebase_id = ?`, [codebaseId])
     await this.query(`delete from agent_sessions where codebase_id = ?`, [codebaseId])
@@ -1023,12 +1025,13 @@ export class CloudflareD1HopBackend {
 
   async listWorkItems({ codebaseId, actor = {} }) {
     await this.requireGraphCapability(codebaseId, actor, 'read')
-    const [issues, issueComments, discussions, discussionComments, releases, projects, projectItems] = await Promise.all([
+    const [issues, issueComments, discussions, discussionComments, releases, releaseAssets, projects, projectItems] = await Promise.all([
       this.query(`select * from issues where codebase_id = ? order by created_at desc, number desc`, [codebaseId]),
       this.query(`select * from issue_comments where codebase_id = ? order by created_at asc`, [codebaseId]),
       this.query(`select * from discussions where codebase_id = ? order by created_at desc, number desc`, [codebaseId]),
       this.query(`select * from discussion_comments where codebase_id = ? order by created_at asc`, [codebaseId]),
       this.query(`select * from releases where codebase_id = ? order by created_at desc, number desc`, [codebaseId]),
+      this.query(`select * from release_assets where codebase_id = ? order by created_at asc`, [codebaseId]),
       this.query(`select * from projects where codebase_id = ? order by created_at desc, number desc`, [codebaseId]),
       this.query(`select * from project_items where codebase_id = ? order by project_id asc, position asc, created_at asc`, [codebaseId]),
     ])
@@ -1044,6 +1047,12 @@ export class CloudflareD1HopBackend {
       list.push(mapD1DiscussionComment(comment))
       commentsByDiscussionId.set(comment.discussion_id, list)
     }
+    const assetsByReleaseId = new Map()
+    for (const asset of releaseAssets) {
+      const list = assetsByReleaseId.get(asset.release_id) ?? []
+      list.push(mapD1ReleaseAsset(asset))
+      assetsByReleaseId.set(asset.release_id, list)
+    }
     const itemsByProjectId = new Map()
     for (const item of projectItems) {
       const list = itemsByProjectId.get(item.project_id) ?? []
@@ -1053,7 +1062,7 @@ export class CloudflareD1HopBackend {
     return {
       issues: issues.map((issue) => mapD1Issue(issue, commentsByIssueId.get(issue.issue_id) ?? [])),
       discussions: discussions.map((discussion) => mapD1Discussion(discussion, commentsByDiscussionId.get(discussion.discussion_id) ?? [])),
-      releases: releases.map(mapD1Release),
+      releases: releases.map((release) => mapD1Release(release, assetsByReleaseId.get(release.release_id) ?? [])),
       projects: projects.map((project) => mapD1Project(project, itemsByProjectId.get(project.project_id) ?? [])),
     }
   }
@@ -1063,11 +1072,12 @@ export class CloudflareD1HopBackend {
     if (input.type === 'issue') return this.createIssue({ ...input, actor })
     if (input.type === 'discussion') return this.createDiscussion({ ...input, actor })
     if (input.type === 'release') return this.createRelease({ ...input, actor })
+    if (input.type === 'releaseAsset') return this.createReleaseAsset({ ...input, actor })
     if (input.type === 'project') return this.createProject({ ...input, actor })
     if (input.type === 'projectItem') return this.addProjectItem({ ...input, actor })
     if (input.type === 'issueComment') return this.createIssueComment({ ...input, actor })
     if (input.type === 'discussionComment') return this.createDiscussionComment({ ...input, actor })
-    throw new Error('Expected type to be issue, discussion, release, project, projectItem, issueComment, or discussionComment.')
+    throw new Error('Expected type to be issue, discussion, release, releaseAsset, project, projectItem, issueComment, or discussionComment.')
   }
 
   async updateWorkItem(input) {
@@ -1236,7 +1246,7 @@ export class CloudflareD1HopBackend {
         nextStatus === 'published' ? now : null,
       ],
     )
-    return mapD1Release(await this.first(`select * from releases where release_id = ?`, [releaseId]))
+    return mapD1Release(await this.first(`select * from releases where release_id = ?`, [releaseId]), [])
   }
 
   async publishRelease({ releaseId, updatedBy, actor }) {
@@ -1248,7 +1258,41 @@ export class CloudflareD1HopBackend {
       `update releases set status = 'published', updated_by = ?, updated_at = ?, published_at = ? where release_id = ?`,
       [actorAuditId(actor, updatedBy, 'Release publisher'), now, now, releaseId],
     )
-    return mapD1Release(await this.first(`select * from releases where release_id = ?`, [releaseId]))
+    const assets = await this.query(`select * from release_assets where release_id = ? order by created_at asc`, [releaseId])
+    return mapD1Release(await this.first(`select * from releases where release_id = ?`, [releaseId]), assets.map(mapD1ReleaseAsset))
+  }
+
+  async createReleaseAsset({ codebaseId, releaseId, name, kind, url, size, checksum, createdBy, actor }) {
+    const release = codebaseId
+      ? await this.first(`select * from releases where codebase_id = ? and release_id = ? limit 1`, [codebaseId, releaseId])
+      : await this.first(`select * from releases where release_id = ? limit 1`, [releaseId])
+    if (!release) throw new Error('Release not found.')
+    if (codebaseId && release.codebase_id !== codebaseId) throw new Error('Release does not belong to the selected codebase.')
+    await this.requireGraphCapability(release.codebase_id, actor, 'release')
+    const now = new Date().toISOString()
+    const assetId = `asset_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`
+    await this.query(
+      `insert into release_assets (
+        asset_id, codebase_id, release_id, name, kind, url, size, checksum, created_by, created_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        assetId,
+        release.codebase_id,
+        releaseId,
+        requireTextValue(name, 'Release asset name'),
+        releaseAssetKind(kind),
+        stringOrNull(url),
+        nullableNonNegativeInteger(size, 'Release asset size'),
+        stringOrNull(checksum),
+        actorAuditId(actor, createdBy, 'Release asset creator'),
+        now,
+      ],
+    )
+    await this.query(
+      `update releases set updated_by = ?, updated_at = ? where codebase_id = ? and release_id = ?`,
+      [actorAuditId(actor, createdBy, 'Release asset updater'), now, release.codebase_id, releaseId],
+    )
+    return mapD1ReleaseAsset(await this.first(`select * from release_assets where codebase_id = ? and asset_id = ?`, [release.codebase_id, assetId]))
   }
 
   async createProject({ codebaseId, name, description, columns, createdBy, actor }) {
@@ -1374,6 +1418,143 @@ export class CloudflareD1HopBackend {
     const row = await this.first(`select release_id, title, version from releases where codebase_id = ? and release_id = ? limit 1`, [codebaseId, id])
     if (!row) throw new Error(`Release ${id} was not found in ${codebaseId}.`)
     return { type, id, title: row.title, version: row.version }
+  }
+
+  async listReviewThreads({ codebaseId, changeSetId = null, actor = {} }) {
+    await this.requireGraphCapability(codebaseId, actor, 'read')
+    const normalizedChangeSetId = stringOrNull(changeSetId)
+    const threads = normalizedChangeSetId
+      ? await this.query(
+          `select * from review_threads where codebase_id = ? and change_set_id = ? order by updated_at desc, created_at desc`,
+          [codebaseId, normalizedChangeSetId],
+        )
+      : await this.query(
+          `select * from review_threads where codebase_id = ? order by updated_at desc, created_at desc limit 100`,
+          [codebaseId],
+        )
+    if (threads.length === 0) return []
+    const threadIds = threads.map((thread) => thread.thread_id)
+    const comments = await this.query(
+      `select * from review_thread_comments where codebase_id = ? and thread_id in (${threadIds.map(() => '?').join(', ')}) order by created_at asc`,
+      [codebaseId, ...threadIds],
+    )
+    const commentsByThreadId = new Map()
+    for (const comment of comments) {
+      const list = commentsByThreadId.get(comment.thread_id) ?? []
+      list.push(mapD1ReviewThreadComment(comment))
+      commentsByThreadId.set(comment.thread_id, list)
+    }
+    return threads.map((thread) => mapD1ReviewThread(thread, commentsByThreadId.get(thread.thread_id) ?? []))
+  }
+
+  async createReviewThread({
+    codebaseId,
+    changeSetId,
+    filePath,
+    lineNumber,
+    baseRevision,
+    headRevision,
+    lineFingerprint,
+    body,
+    createdBy,
+    actor,
+  }) {
+    await this.requireGraphCapability(codebaseId, actor, 'write')
+    const normalizedPath = requireTextValue(filePath, 'Review file path')
+    const file = await this.first(`select path from files where codebase_id = ? and path = ? limit 1`, [codebaseId, normalizedPath])
+    if (!file) throw new Error(`Review file ${normalizedPath} was not found in ${codebaseId}.`)
+    const now = new Date().toISOString()
+    const threadId = `rthr_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`
+    const commentId = `rcom_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`
+    const author = actorAuditId(actor, createdBy, 'Review thread creator')
+    await this.query(
+      `insert into review_threads (
+        thread_id, codebase_id, change_set_id, file_path, line_number, base_revision,
+        head_revision, line_fingerprint, status, created_by, updated_by, created_at, updated_at, resolved_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?, ?, ?, ?, null)`,
+      [
+        threadId,
+        codebaseId,
+        requireTextValue(changeSetId, 'Review change set id'),
+        normalizedPath,
+        nullablePositiveInteger(lineNumber, 'Review line number'),
+        stringOrNull(baseRevision),
+        stringOrNull(headRevision),
+        stringOrNull(lineFingerprint),
+        author,
+        author,
+        now,
+        now,
+      ],
+    )
+    await this.query(
+      `insert into review_thread_comments (
+        comment_id, codebase_id, thread_id, body, created_by, updated_by, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [commentId, codebaseId, threadId, requireTextValue(body, 'Review comment body'), author, author, now, now],
+    )
+    await this.appendEvent({
+      codebaseId,
+      event: 'review.thread_opened',
+      detail: { threadId, changeSetId, path: normalizedPath, lineNumber: nullablePositiveInteger(lineNumber, 'Review line number') },
+      source: 'browser',
+    })
+    return mapD1ReviewThread(
+      await this.first(`select * from review_threads where codebase_id = ? and thread_id = ?`, [codebaseId, threadId]),
+      [mapD1ReviewThreadComment(await this.first(`select * from review_thread_comments where codebase_id = ? and comment_id = ?`, [codebaseId, commentId]))],
+    )
+  }
+
+  async createReviewThreadComment({ codebaseId, threadId, body, createdBy, actor }) {
+    const normalizedCodebaseId = stringOrNull(codebaseId)
+    const thread = normalizedCodebaseId
+      ? await this.first(`select * from review_threads where codebase_id = ? and thread_id = ? limit 1`, [normalizedCodebaseId, threadId])
+      : await this.first(`select * from review_threads where thread_id = ? limit 1`, [threadId])
+    if (!thread) throw new Error('Review thread not found.')
+    await this.requireGraphCapability(thread.codebase_id, actor, 'write')
+    if (thread.status !== 'open') throw new Error('Resolved review threads cannot accept new comments.')
+    const now = new Date().toISOString()
+    const commentId = `rcom_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`
+    const author = actorAuditId(actor, createdBy, 'Review comment creator')
+    await this.query(
+      `insert into review_thread_comments (
+        comment_id, codebase_id, thread_id, body, created_by, updated_by, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [commentId, thread.codebase_id, threadId, requireTextValue(body, 'Review comment body'), author, author, now, now],
+    )
+    await this.query(
+      `update review_threads set updated_by = ?, updated_at = ? where codebase_id = ? and thread_id = ?`,
+      [author, now, thread.codebase_id, threadId],
+    )
+    return mapD1ReviewThreadComment(await this.first(`select * from review_thread_comments where codebase_id = ? and comment_id = ?`, [thread.codebase_id, commentId]))
+  }
+
+  async resolveReviewThread({ codebaseId, threadId, updatedBy, actor }) {
+    const normalizedCodebaseId = stringOrNull(codebaseId)
+    const thread = normalizedCodebaseId
+      ? await this.first(`select * from review_threads where codebase_id = ? and thread_id = ? limit 1`, [normalizedCodebaseId, threadId])
+      : await this.first(`select * from review_threads where thread_id = ? limit 1`, [threadId])
+    if (!thread) throw new Error('Review thread not found.')
+    await this.requireGraphCapability(thread.codebase_id, actor, 'write')
+    const now = new Date().toISOString()
+    await this.query(
+      `update review_threads set status = 'resolved', updated_by = ?, updated_at = ?, resolved_at = ? where codebase_id = ? and thread_id = ?`,
+      [actorAuditId(actor, updatedBy, 'Review thread resolver'), now, now, thread.codebase_id, threadId],
+    )
+    await this.appendEvent({
+      codebaseId: thread.codebase_id,
+      event: 'review.thread_resolved',
+      detail: { threadId, changeSetId: thread.change_set_id, path: thread.file_path, lineNumber: thread.line_number ?? null },
+      source: 'browser',
+    })
+    const comments = await this.query(
+      `select * from review_thread_comments where codebase_id = ? and thread_id = ? order by created_at asc`,
+      [thread.codebase_id, threadId],
+    )
+    return mapD1ReviewThread(
+      await this.first(`select * from review_threads where codebase_id = ? and thread_id = ?`, [thread.codebase_id, threadId]),
+      comments.map(mapD1ReviewThreadComment),
+    )
   }
 
   async requireGraphCapability(codebaseId, actor = {}, capability = 'read') {
@@ -1858,6 +2039,27 @@ export class CloudflareD1HopBackend {
         return summary
       }),
     }
+  }
+
+  async updateCodebaseKeyringRotationState({ codebaseId = this.codebaseId, rotationState, actor = {} } = {}) {
+    const authenticatedActor = requireAuthenticatedActor(actor, 'Updating key rotation state requires product auth.')
+    await this.requireGraphCapability(codebaseId, authenticatedActor, 'manage_members')
+    const nextState = keyRotationState(rotationState)
+    const existing = await this.first(`select * from codebase_keyrings where codebase_id = ? limit 1`, [codebaseId])
+    if (!existing) throw new Error('Codebase keyring is not configured.')
+    const now = new Date().toISOString()
+    await this.query(
+      `update codebase_keyrings set rotation_state = ?, updated_at = ? where codebase_id = ?`,
+      [nextState, now, codebaseId],
+    )
+    await this.appendKeyAuditEvent({
+      codebaseId,
+      actorUserId: authenticatedActor.userId,
+      actorDeviceId: authenticatedActor.deviceId,
+      eventType: `codebase_keyring.rotation_${nextState}`,
+      keyId: existing.repo_content_key_id,
+    })
+    return summarizeCodebaseKeyring(await this.first(`select * from codebase_keyrings where codebase_id = ?`, [codebaseId]))
   }
 
   async revokeWrappedKey(options = {}) {
@@ -2571,6 +2773,36 @@ export const d1SchemaStatements = [
   )`,
   `create index if not exists idx_release_assets_release on release_assets(release_id)`,
   `create index if not exists idx_release_assets_codebase on release_assets(codebase_id)`,
+  `create table if not exists review_threads (
+    thread_id text primary key,
+    codebase_id text not null,
+    change_set_id text not null,
+    file_path text not null,
+    line_number integer,
+    base_revision text,
+    head_revision text,
+    line_fingerprint text,
+    status text not null,
+    created_by text not null,
+    updated_by text,
+    created_at text not null,
+    updated_at text not null,
+    resolved_at text
+  )`,
+  `create index if not exists idx_review_threads_codebase_change_set on review_threads(codebase_id, change_set_id, updated_at)`,
+  `create index if not exists idx_review_threads_codebase_path on review_threads(codebase_id, file_path)`,
+  `create table if not exists review_thread_comments (
+    comment_id text primary key,
+    codebase_id text not null,
+    thread_id text not null,
+    body text not null,
+    created_by text not null,
+    updated_by text,
+    created_at text not null,
+    updated_at text not null
+  )`,
+  `create index if not exists idx_review_thread_comments_thread on review_thread_comments(thread_id)`,
+  `create index if not exists idx_review_thread_comments_codebase on review_thread_comments(codebase_id)`,
 ]
 
 function memberSelectSql(whereClause) {
@@ -2724,7 +2956,7 @@ function mapD1DiscussionComment(row) {
   }
 }
 
-function mapD1Release(row) {
+function mapD1Release(row, assets = []) {
   if (!row) return null
   const target = parseJson(row.target_json, null)
   return {
@@ -2742,6 +2974,59 @@ function mapD1Release(row) {
     createdAt: stringOrNull(row.created_at) ?? '',
     updatedAt: stringOrNull(row.updated_at) ?? '',
     publishedAt: stringOrNull(row.published_at),
+    assets,
+  }
+}
+
+function mapD1ReleaseAsset(row) {
+  if (!row) return null
+  return {
+    _id: row.asset_id,
+    id: row.asset_id,
+    releaseId: row.release_id,
+    name: stringOrNull(row.name) ?? 'Unnamed asset',
+    kind: releaseAssetKind(row.kind),
+    url: stringOrNull(row.url),
+    size: integerValue(row.size, null),
+    checksum: stringOrNull(row.checksum),
+    createdBy: stringOrNull(row.created_by) ?? 'unknown',
+    createdAt: stringOrNull(row.created_at) ?? '',
+  }
+}
+
+function mapD1ReviewThread(row, comments = []) {
+  if (!row) return null
+  return {
+    _id: row.thread_id,
+    id: row.thread_id,
+    codebaseId: row.codebase_id,
+    changeSetId: row.change_set_id,
+    filePath: row.file_path,
+    lineNumber: integerValue(row.line_number, null),
+    baseRevision: stringOrNull(row.base_revision),
+    headRevision: stringOrNull(row.head_revision),
+    lineFingerprint: stringOrNull(row.line_fingerprint),
+    status: row.status === 'resolved' ? 'resolved' : 'open',
+    createdBy: stringOrNull(row.created_by) ?? 'unknown',
+    updatedBy: stringOrNull(row.updated_by),
+    createdAt: stringOrNull(row.created_at) ?? '',
+    updatedAt: stringOrNull(row.updated_at) ?? '',
+    resolvedAt: stringOrNull(row.resolved_at),
+    comments,
+  }
+}
+
+function mapD1ReviewThreadComment(row) {
+  if (!row) return null
+  return {
+    _id: row.comment_id,
+    id: row.comment_id,
+    threadId: row.thread_id,
+    body: stringOrNull(row.body) ?? '',
+    createdBy: stringOrNull(row.created_by) ?? 'unknown',
+    updatedBy: stringOrNull(row.updated_by),
+    createdAt: stringOrNull(row.created_at) ?? '',
+    updatedAt: stringOrNull(row.updated_at) ?? '',
   }
 }
 
@@ -2970,6 +3255,18 @@ function normalizeKeyEntityId(value, label) {
 
 function normalizePositiveInteger(value, label) {
   if (!Number.isInteger(value) || value <= 0) throw new Error(`${label} must be a positive integer.`)
+  return value
+}
+
+function nullablePositiveInteger(value, label) {
+  if (value === undefined || value === null || value === '') return null
+  if (!Number.isInteger(value) || value <= 0) throw new Error(`${label} must be a positive integer.`)
+  return value
+}
+
+function nullableNonNegativeInteger(value, label) {
+  if (value === undefined || value === null || value === '') return null
+  if (!Number.isInteger(value) || value < 0) throw new Error(`${label} must be a non-negative integer.`)
   return value
 }
 
@@ -3280,6 +3577,13 @@ function releaseStatus(value) {
   return 'draft'
 }
 
+function releaseAssetKind(value) {
+  if (value === 'archive' || value === 'binary' || value === 'source' || value === 'checksum' || value === 'installer') {
+    return value
+  }
+  return 'other'
+}
+
 function projectStatus(value) {
   return value === 'archived' ? 'archived' : 'active'
 }
@@ -3333,6 +3637,13 @@ function normalizeReleaseTarget(value) {
     id: stringOrNull(target.id) ?? 'main',
     revision: integerOrNull(target.revision),
   }
+}
+
+function keyRotationState(value) {
+  if (value === 'planned' || value === 'rotating' || value === 'wrapped' || value === 'stable' || value === 'blocked') {
+    return value
+  }
+  throw new Error('Key rotation state must be planned, rotating, wrapped, stable, or blocked.')
 }
 
 function collaborationScope(value) {

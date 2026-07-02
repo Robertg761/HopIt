@@ -362,13 +362,16 @@ export async function createCloudWorkItem(input: Record<string, unknown> & { cod
     if (input.type === 'release') {
       return client.mutation(anyApi.collaboration.createRelease, args)
     }
+    if (input.type === 'releaseAsset') {
+      throw new Error('Release assets require the D1 backend.')
+    }
     if (input.type === 'project' || input.type === 'projectItem') {
       throw new Error('Project boards require the D1 backend.')
     }
     if (input.type === 'issueComment' || input.type === 'discussionComment') {
       throw new Error('Durable collaboration comments require the D1 backend.')
     }
-    throw new Error('Expected type to be issue, discussion, release, project, projectItem, issueComment, or discussionComment.')
+    throw new Error('Expected type to be issue, discussion, release, releaseAsset, project, projectItem, issueComment, or discussionComment.')
   }
   throw new Error('No HopIt cloud backend is configured for collaboration.')
 }

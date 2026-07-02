@@ -13,6 +13,7 @@ export type CollaborationCapabilities = {
   createDiscussion: CollaborationActionCapability
   updateDiscussion: CollaborationActionCapability
   createRelease: CollaborationActionCapability
+  createReleaseAsset: CollaborationActionCapability
   publishRelease: CollaborationActionCapability
   createProject: CollaborationActionCapability
   updateProject: CollaborationActionCapability
@@ -102,6 +103,19 @@ export type CollaborationRelease = {
   createdAt: string
   updatedAt: string
   publishedAt: string | null
+  assets: CollaborationReleaseAsset[]
+}
+
+export type CollaborationReleaseAsset = {
+  id: string
+  releaseId: string
+  name: string
+  kind: 'archive' | 'binary' | 'source' | 'checksum' | 'installer' | 'other'
+  url: string | null
+  size: number | null
+  checksum: string | null
+  createdBy: string
+  createdAt: string
 }
 
 export type CollaborationProjectColumn = {
@@ -262,6 +276,43 @@ export type KeyGrantStatusResponse = {
   error?: CollaborationError
 }
 
+export type ReviewThreadStatus = 'open' | 'resolved'
+
+export type ReviewThreadComment = {
+  id: string
+  body: string
+  createdBy: string
+  updatedBy: string | null
+  createdAt: string
+  updatedAt: string
+}
+
+export type ReviewThread = {
+  id: string
+  codebaseId: string
+  changeSetId: string
+  filePath: string
+  lineNumber: number | null
+  baseRevision: string | null
+  headRevision: string | null
+  lineFingerprint: string | null
+  status: ReviewThreadStatus
+  createdBy: string
+  updatedBy: string | null
+  createdAt: string
+  updatedAt: string
+  resolvedAt: string | null
+  comments: ReviewThreadComment[]
+}
+
+export type ReviewThreadsResponse = {
+  ok: boolean
+  codebaseId: string | null
+  changeSetId: string | null
+  threads: ReviewThread[]
+  error?: CollaborationError
+}
+
 export type CreateIssueInput = {
   type: 'issue'
   codebaseId: string
@@ -293,6 +344,18 @@ export type CreateReleaseInput = {
   notes: string
   status?: CollaborationRelease['status']
   target?: CollaborationRelease['target']
+  createdBy: string
+}
+
+export type CreateReleaseAssetInput = {
+  type: 'releaseAsset'
+  codebaseId: string
+  releaseId: string
+  name: string
+  kind?: CollaborationReleaseAsset['kind']
+  url?: string
+  size?: number
+  checksum?: string
   createdBy: string
 }
 
@@ -335,6 +398,7 @@ export type CreateCollaborationInput =
   | CreateIssueInput
   | CreateDiscussionInput
   | CreateReleaseInput
+  | CreateReleaseAssetInput
   | CreateProjectInput
   | CreateProjectItemInput
   | CreateIssueCommentInput
@@ -401,6 +465,38 @@ export type MutateMemberInput = {
   userId: string
 }
 
+export type UpdateKeyRotationInput = {
+  codebaseId: string
+  rotationState: 'planned' | 'rotating' | 'wrapped' | 'stable' | 'blocked'
+}
+
+export type CreateReviewThreadInput = {
+  codebaseId: string
+  changeSetId: string
+  filePath: string
+  lineNumber?: number | null
+  baseRevision?: string | null
+  headRevision?: string | null
+  lineFingerprint?: string | null
+  body: string
+  createdBy: string
+}
+
+export type CreateReviewThreadCommentInput = {
+  codebaseId: string
+  changeSetId?: string | null
+  threadId: string
+  body: string
+  createdBy: string
+}
+
+export type ResolveReviewThreadInput = {
+  codebaseId: string
+  changeSetId?: string | null
+  threadId: string
+  updatedBy: string
+}
+
 export async function fetchWorkItems(codebaseId: string): Promise<WorkItemsResponse> {
   return readJson<WorkItemsResponse>(`/api/collaboration/work-items?codebaseId=${encodeURIComponent(codebaseId)}`, {
     cache: 'no-store',
@@ -443,6 +539,66 @@ export async function fetchKeyGrantStatus(codebaseId: string): Promise<KeyGrantS
   return readJson<KeyGrantStatusResponse>(`/api/collaboration/keys?codebaseId=${encodeURIComponent(codebaseId)}`, {
     cache: 'no-store',
   }, keyGrantStatusFallback(codebaseId))
+}
+
+export async function updateCodebaseKeyRotation(input: UpdateKeyRotationInput): Promise<KeyGrantStatusResponse> {
+  return readJson<KeyGrantStatusResponse>('/api/collaboration/keys', {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      action: 'setRotationState',
+      ...input,
+    }),
+  }, keyGrantStatusFallback(input.codebaseId))
+}
+
+export async function fetchReviewThreads(
+  codebaseId: string,
+  changeSetId?: string | null,
+): Promise<ReviewThreadsResponse> {
+  const params = new URLSearchParams({ codebaseId })
+  if (changeSetId) params.set('changeSetId', changeSetId)
+  return readJson<ReviewThreadsResponse>(`/api/review/threads?${params.toString()}`, {
+    cache: 'no-store',
+  }, reviewThreadsFallback(codebaseId, changeSetId ?? null))
+}
+
+export async function createReviewThread(input: CreateReviewThreadInput): Promise<ReviewThreadsResponse> {
+  return readJson<ReviewThreadsResponse>('/api/review/threads', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(input),
+  }, reviewThreadsFallback(input.codebaseId, input.changeSetId))
+}
+
+export async function createReviewThreadComment(input: CreateReviewThreadCommentInput): Promise<ReviewThreadsResponse> {
+  return readJson<ReviewThreadsResponse>('/api/review/threads', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      type: 'comment',
+      ...input,
+    }),
+  }, reviewThreadsFallback(input.codebaseId, null))
+}
+
+export async function resolveReviewThread(input: ResolveReviewThreadInput): Promise<ReviewThreadsResponse> {
+  return readJson<ReviewThreadsResponse>('/api/review/threads', {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      action: 'resolve',
+      ...input,
+    }),
+  }, reviewThreadsFallback(input.codebaseId, null))
 }
 
 export async function createInvitation(input: CreateInvitationInput): Promise<InvitationsResponse> {
@@ -548,6 +704,7 @@ function workItemsFallback(codebaseId: string): (response: Response) => WorkItem
         createDiscussion: disabled(reason),
         updateDiscussion: disabled(reason),
         createRelease: disabled(reason),
+        createReleaseAsset: disabled(reason),
         publishRelease: disabled(reason),
         createProject: disabled(reason),
         updateProject: disabled(reason),
@@ -556,6 +713,23 @@ function workItemsFallback(codebaseId: string): (response: Response) => WorkItem
       discussions: [],
       releases: [],
       projects: [],
+      error: {
+        code: `http_${response.status}`,
+        message: reason,
+      },
+    }
+  }
+}
+
+function reviewThreadsFallback(codebaseId: string, changeSetId: string | null): (response: Response) => ReviewThreadsResponse {
+  return (response) => {
+    const reason = responseMessage(response)
+
+    return {
+      ok: false,
+      codebaseId,
+      changeSetId,
+      threads: [],
       error: {
         code: `http_${response.status}`,
         message: reason,

@@ -927,8 +927,8 @@ Definition of done:
 - Per-file revision-guarded mutation exists for the agent path, but the full product write surface has not moved to the same model yet.
 - Graph contract validators exist for the agent/Convex graph path, but product-level validation is not yet comprehensive across every future object type.
 - Requester-aware dashboard filtering exists, but the auth-backed collaborator permission model is not enforced across every user-facing write yet.
-- A first read-only code-review browser slice exists, and it now surfaces durable review-linked follow-up issues/comments. Dedicated routeable code browsing, diff view, snapshot-anchored inline review comments, durable review records, and history UI are still pending.
-- Issue, discussion, release, durable comments, and project-board UI exist for the first slice; comment/detail pages, richer release assets, and richer filters are still pending.
+- A first read-only code-review browser slice exists, now with routeable codebase review/compare/history pages, durable review-linked follow-up issues/comments, and D1-backed snapshot-anchored inline review threads. A true tree/diff API, object-backed history reconstruction, and durable review decision records are still pending.
+- Issue, discussion, release, durable comments, release-asset attachment, and project-board UI exist for the first slice; dedicated detail pages, richer linked-object cards, and notifications are still pending.
 - No production-grade push/subscription remote-update delivery yet; explicit refresh, per-workspace cursor state, and opt-in polling remote-pull are personal-dogfood proof rather than the final v1 delivery model.
 - Service mode syncs local edits and serves status. Local two-service simulation proves device A edits sync through the watcher, while device B pulls them through explicit safe refresh before switching devices.
 - No conflict resolution UI yet; fixture conflict detection/status exists.
@@ -937,7 +937,7 @@ Definition of done:
 - No offline mode yet.
 - No signed production installer, notarization, native package manager integration, or tray/menu agent wrapper yet.
 - Start-on-login setup is script/template based and expects the operator to create a correct local env file.
-- Scoped token rotation is documented and CLI-backed, but not yet a dashboard-guided recovery flow.
+- Scoped token rotation is documented and CLI-backed, and the dashboard can track codebase keyring rotation state. Dashboard-guided recovery import, real rekey orchestration, and revocation workflows are still pending.
 - No cross-platform watch behavior matrix yet.
 
 ## Verification Checklist

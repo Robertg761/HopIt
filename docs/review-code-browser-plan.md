@@ -1,6 +1,6 @@
 # Code Browsing, Review, Comments, And History Plan
 
-Last updated: 2026-06-24
+Last updated: 2026-07-02
 
 ## Purpose
 
@@ -32,9 +32,11 @@ Already available in this repo:
 - `/api/agent/status` can read local agent `status`, `events`, and `cloud` endpoints, or the D1/legacy Convex dashboard backend when configured.
 - The web UI maps visible file metadata, capped shared-file content previews, review state, merge state, conflict state, remote-update state, and recent events.
 - The dashboard has a read-only `CodeReviewSection` that lists visible files, supports path search and scope/status filters, renders capped content previews with line anchors, and groups review readiness/history signals.
+- Routeable codebase review, compare, and history pages exist at `/codebases/[codebaseId]/review`, `/codebases/[codebaseId]/compare`, and `/codebases/[codebaseId]/history`; they pin the selected codebase and reuse the live D1/status payload.
+- D1-backed snapshot-anchored inline review threads now store codebase id, change-set id, file path, line number, base/head revision labels, line fingerprint, comments, and resolution state.
 - D1 can persist the current graph, files, and agent events; legacy Convex remains a fallback/export source.
 
-Current live setup note: this browser/review work runs inside the Clerk-protected Vercel deployment at `https://hopit.dev` against Cloudflare D1 through the `hopit-d1-api` Worker. Production Google OAuth is configured for the owner test user, and D1 owner claim is verified. The dashboard can create review follow-up issues and show/add durable comments on review-linked issues. Routeable tree APIs, durable diffs, snapshot-anchored inline review comments, and durable review decision records are still future work. Operational setup details are centralized in [Personal Production Runbook](personal-production.md).
+Current live setup note: this browser/review work runs inside the Clerk-protected Vercel deployment at `https://hopit.dev` against Cloudflare D1 through the `hopit-d1-api` Worker. Production Google OAuth is configured for the owner test user, and D1 owner claim is verified. The dashboard can create review follow-up issues, show/add durable comments on review-linked issues, and store snapshot-anchored inline review threads. Routeable tree APIs, true durable diffs, object-backed history reconstruction, and durable review decision records are still future work. Operational setup details are centralized in [Personal Production Runbook](personal-production.md).
 
 Not yet available:
 
@@ -42,10 +44,10 @@ Not yet available:
 - Durable merge records.
 - A true tree API separate from the status payload.
 - A diff API that compares Main, snapshots, and active change sets.
-- Standalone snapshot-anchored review comment storage.
+- Durable review decision records.
 - Review decisions or requested-change state.
 - File history import from Git ancestry.
-- Dedicated routeable tree/file/compare APIs beyond the status-backed dashboard slice.
+- Dedicated routeable tree/file/diff APIs beyond the status-backed dashboard slice.
 
 ## Product Principles
 

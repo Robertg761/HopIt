@@ -1,6 +1,6 @@
 # HopIt Privacy And Encryption Plan
 
-Last updated: 2026-06-23
+Last updated: 2026-07-02
 
 ## Purpose
 
@@ -61,9 +61,9 @@ Not implemented yet:
 - private repo-wide encryption for all normal files
 - repo/private/secret zone key generation and use in file encryption
 - invite acceptance that grants decryption keys
-- dashboard-guided device approval, recovery import, and key rotation; the first
-  dashboard key-grant status panel now shows redacted trusted-device and
-  wrapped-key metadata for managers
+- dashboard-guided device approval and recovery import; the first dashboard
+  key-grant status panel now shows redacted trusted-device and wrapped-key
+  metadata for managers, and managers can track codebase keyring rotation state
 - path and metadata privacy for private repos
 - independent secret-sharing grants
 - complete revocation/rekey flows

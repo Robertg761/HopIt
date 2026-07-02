@@ -21,8 +21,13 @@ import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import {
   createCollaborationItem,
+  createReviewThread,
+  createReviewThreadComment,
   fetchWorkItems,
+  fetchReviewThreads,
+  resolveReviewThread,
   type CollaborationIssue,
+  type ReviewThread,
   type WorkItemsResponse,
 } from '@/lib/collaboration'
 import type { AgentFile, AgentStatusSnapshot } from '@/website/lib/agent-status'
@@ -54,8 +59,16 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
   const [creatingFollowup, setCreatingFollowup] = React.useState(false)
   const [workItems, setWorkItems] = React.useState<WorkItemsResponse | null>(null)
   const [loadingThreads, setLoadingThreads] = React.useState(false)
+  const [reviewThreads, setReviewThreads] = React.useState<ReviewThread[]>([])
+  const [loadingAnchoredThreads, setLoadingAnchoredThreads] = React.useState(false)
+  const [threadDraft, setThreadDraft] = React.useState('')
+  const [threadMessage, setThreadMessage] = React.useState<string | null>(null)
+  const [creatingThread, setCreatingThread] = React.useState(false)
   const [commentDrafts, setCommentDrafts] = React.useState<Record<string, string>>({})
   const [commentingIssueId, setCommentingIssueId] = React.useState<string | null>(null)
+  const [threadCommentDrafts, setThreadCommentDrafts] = React.useState<Record<string, string>>({})
+  const [commentingThreadId, setCommentingThreadId] = React.useState<string | null>(null)
+  const [resolvingThreadId, setResolvingThreadId] = React.useState<string | null>(null)
   const filteredRows = React.useMemo(
     () => filterReviewRows(reviewRows, fileFilter, fileQuery),
     [fileFilter, fileQuery, reviewRows],
@@ -74,10 +87,20 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
     () => reviewLinkedIssues(workItems?.issues ?? [], status.activeChangeSetId),
     [status.activeChangeSetId, workItems?.issues],
   )
+  const selectedFileThreads = React.useMemo(
+    () => reviewThreads.filter((thread) => thread.filePath === selectedFile?.path),
+    [reviewThreads, selectedFile?.path],
+  )
+  const canWrite = status.requester.permissions.includes('write')
   const canCreateFollowup =
     Boolean(status.codebaseId) &&
     selectedFile?.scope === 'shared' &&
-    status.requester.permissions.includes('write')
+    canWrite
+  const canCreateAnchoredThread =
+    Boolean(status.codebaseId) &&
+    status.activeChangeSetId !== 'None' &&
+    selectedFile?.scope === 'shared' &&
+    canWrite
 
   const loadReviewThreads = React.useCallback(async () => {
     if (!status.codebaseId) {
@@ -102,6 +125,34 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
       window.clearTimeout(timeout)
     }
   }, [loadReviewThreads])
+
+  const loadAnchoredThreads = React.useCallback(async () => {
+    if (!status.codebaseId) {
+      setReviewThreads([])
+      return
+    }
+
+    setLoadingAnchoredThreads(true)
+    try {
+      const result = await fetchReviewThreads(
+        status.codebaseId,
+        status.activeChangeSetId === 'None' ? null : status.activeChangeSetId,
+      )
+      setReviewThreads(result.threads)
+    } finally {
+      setLoadingAnchoredThreads(false)
+    }
+  }, [status.activeChangeSetId, status.codebaseId])
+
+  React.useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      void loadAnchoredThreads()
+    }, 0)
+
+    return () => {
+      window.clearTimeout(timeout)
+    }
+  }, [loadAnchoredThreads])
 
   async function createFollowupIssue() {
     if (!status.codebaseId || !selectedFile || !canCreateFollowup) return
@@ -159,6 +210,81 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
       setFollowupMessage(error instanceof Error ? error.message : 'Review comment failed.')
     } finally {
       setCommentingIssueId(null)
+    }
+  }
+
+  async function createAnchoredThread() {
+    const body = threadDraft.trim()
+    if (!status.codebaseId || !selectedFile || !canCreateAnchoredThread || !body) return
+
+    setCreatingThread(true)
+    setThreadMessage(null)
+    try {
+      const result = await createReviewThread({
+        codebaseId: status.codebaseId,
+        changeSetId: status.activeChangeSetId,
+        filePath: selectedFile.path,
+        lineNumber: selectedLineForFile,
+        baseRevision: status.mainRevision,
+        headRevision: status.cloudRevision,
+        lineFingerprint: reviewLineFingerprint(selectedFile, selectedLineForFile),
+        body,
+        createdBy: status.requester.id ?? 'browser-ui',
+      })
+      setReviewThreads(result.threads)
+      setThreadMessage(result.ok ? 'Inline review thread created.' : (result.error?.message ?? 'Review thread failed.'))
+      if (result.ok) setThreadDraft('')
+    } catch (error) {
+      setThreadMessage(error instanceof Error ? error.message : 'Review thread failed.')
+    } finally {
+      setCreatingThread(false)
+    }
+  }
+
+  async function addThreadComment(thread: ReviewThread) {
+    const body = threadCommentDrafts[thread.id]?.trim()
+    if (!status.codebaseId || !body || !canWrite) return
+
+    setCommentingThreadId(thread.id)
+    setThreadMessage(null)
+    try {
+      const result = await createReviewThreadComment({
+        codebaseId: status.codebaseId,
+        changeSetId: status.activeChangeSetId === 'None' ? null : status.activeChangeSetId,
+        threadId: thread.id,
+        body,
+        createdBy: status.requester.id ?? 'browser-ui',
+      })
+      setReviewThreads(result.threads)
+      setThreadMessage(result.ok ? 'Inline review comment added.' : (result.error?.message ?? 'Review comment failed.'))
+      if (result.ok) {
+        setThreadCommentDrafts((current) => ({ ...current, [thread.id]: '' }))
+      }
+    } catch (error) {
+      setThreadMessage(error instanceof Error ? error.message : 'Review comment failed.')
+    } finally {
+      setCommentingThreadId(null)
+    }
+  }
+
+  async function resolveThread(thread: ReviewThread) {
+    if (!status.codebaseId || !canWrite) return
+
+    setResolvingThreadId(thread.id)
+    setThreadMessage(null)
+    try {
+      const result = await resolveReviewThread({
+        codebaseId: status.codebaseId,
+        changeSetId: status.activeChangeSetId === 'None' ? null : status.activeChangeSetId,
+        threadId: thread.id,
+        updatedBy: status.requester.id ?? 'browser-ui',
+      })
+      setReviewThreads(result.threads)
+      setThreadMessage(result.ok ? 'Inline review thread resolved.' : (result.error?.message ?? 'Review resolve failed.'))
+    } catch (error) {
+      setThreadMessage(error instanceof Error ? error.message : 'Review resolve failed.')
+    } finally {
+      setResolvingThreadId(null)
     }
   }
 
@@ -322,10 +448,31 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
             followupMessage={followupMessage}
             onCreateFollowup={() => void createFollowupIssue()}
           />
+          <AnchoredReviewThreadsCard
+            threads={selectedFileThreads}
+            totalThreads={reviewThreads.length}
+            selectedFile={selectedFile}
+            selectedLine={selectedLineForFile}
+            loading={loadingAnchoredThreads}
+            canCreate={canCreateAnchoredThread}
+            canComment={canWrite}
+            draft={threadDraft}
+            message={threadMessage}
+            creating={creatingThread}
+            commentDrafts={threadCommentDrafts}
+            commentingThreadId={commentingThreadId}
+            resolvingThreadId={resolvingThreadId}
+            onDraftChange={setThreadDraft}
+            onCreate={() => void createAnchoredThread()}
+            onRefresh={() => void loadAnchoredThreads()}
+            onCommentDraftChange={(thread, value) => setThreadCommentDrafts((current) => ({ ...current, [thread.id]: value }))}
+            onAddComment={(thread) => void addThreadComment(thread)}
+            onResolve={(thread) => void resolveThread(thread)}
+          />
           <ReviewThreadsCard
             issues={reviewIssues}
             loading={loadingThreads}
-            canComment={status.requester.permissions.includes('write')}
+            canComment={canWrite}
             commentDrafts={commentDrafts}
             commentingIssueId={commentingIssueId}
             onRefresh={() => void loadReviewThreads()}
@@ -483,6 +630,193 @@ function ReviewMetric({ icon: Icon, label, value, tone }: ReviewMetricProps) {
         <span className="truncate">{label}</span>
       </p>
       <p className="mt-1 truncate text-xs font-bold text-foreground">{value}</p>
+    </div>
+  )
+}
+
+function AnchoredReviewThreadsCard({
+  threads,
+  totalThreads,
+  selectedFile,
+  selectedLine,
+  loading,
+  canCreate,
+  canComment,
+  draft,
+  message,
+  creating,
+  commentDrafts,
+  commentingThreadId,
+  resolvingThreadId,
+  onDraftChange,
+  onCreate,
+  onRefresh,
+  onCommentDraftChange,
+  onAddComment,
+  onResolve,
+}: {
+  threads: ReviewThread[]
+  totalThreads: number
+  selectedFile: AgentFile | null
+  selectedLine: number | null
+  loading: boolean
+  canCreate: boolean
+  canComment: boolean
+  draft: string
+  message: string | null
+  creating: boolean
+  commentDrafts: Record<string, string>
+  commentingThreadId: string | null
+  resolvingThreadId: string | null
+  onDraftChange: (value: string) => void
+  onCreate: () => void
+  onRefresh: () => void
+  onCommentDraftChange: (thread: ReviewThread, value: string) => void
+  onAddComment: (thread: ReviewThread) => void
+  onResolve: (thread: ReviewThread) => void
+}) {
+  const openThreads = threads.filter((thread) => thread.status === 'open')
+
+  return (
+    <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-xs font-semibold">
+          <MessageSquareText className="size-3.5 text-hop" />
+          Inline threads
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={loading}
+          className="h-7 rounded-md px-2 text-[11px]"
+          onClick={onRefresh}
+        >
+          <RefreshCcw className={cn('size-3.5', loading && 'animate-spin')} />
+          {totalThreads}
+        </Button>
+      </div>
+
+      <div className="mt-3 rounded-lg bg-card p-2.5 ring-1 ring-border/50">
+        <p className="text-[11px] font-medium">
+          {selectedFile ? selectedFile.path : 'No file selected'}
+          {selectedLine ? `:${selectedLine}` : ''}
+        </p>
+        <textarea
+          value={draft}
+          onChange={(event) => onDraftChange(event.target.value)}
+          disabled={!canCreate || creating}
+          rows={3}
+          placeholder="Start an inline review thread"
+          className="mt-2 h-auto w-full resize-none rounded-lg border border-border/60 bg-muted/40 px-2 py-1.5 text-xs outline-none transition placeholder:text-muted-foreground focus:border-hop/40 focus:ring-2 focus:ring-hop/20 disabled:cursor-not-allowed disabled:opacity-60"
+        />
+        <Button
+          type="button"
+          size="sm"
+          disabled={!canCreate || creating || !draft.trim()}
+          className="mt-2 h-8 w-full justify-start rounded-lg text-xs"
+          onClick={onCreate}
+        >
+          {creating ? <Loader2 className="size-3.5 animate-spin" /> : <MessageSquareText className="size-3.5" />}
+          Start thread
+        </Button>
+        {!canCreate ? (
+          <p className="mt-2 text-[11px] text-muted-foreground">
+            Inline threads require write access, a selected shared file, and an active change set.
+          </p>
+        ) : null}
+        {message ? (
+          <p className="mt-2 rounded-md bg-muted/60 px-2 py-1.5 text-[11px] text-muted-foreground">{message}</p>
+        ) : null}
+      </div>
+
+      {loading ? (
+        <p className="mt-2 text-xs text-muted-foreground">Loading inline review threads.</p>
+      ) : threads.length > 0 ? (
+        <ol className="mt-3 max-h-72 space-y-2 overflow-auto scroll-thin">
+          {threads.map((thread) => {
+            const draftValue = commentDrafts[thread.id] ?? ''
+            const isCommenting = commentingThreadId === thread.id
+            const isResolving = resolvingThreadId === thread.id
+            const recentComments = thread.comments.slice(-2)
+
+            return (
+              <li key={thread.id} className="rounded-lg bg-card p-2.5 ring-1 ring-border/50">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-xs font-semibold">
+                      {thread.filePath}{thread.lineNumber ? `:${thread.lineNumber}` : ''}
+                    </p>
+                    <p className="mt-0.5 text-[10.5px] text-muted-foreground">
+                      {thread.status} - {thread.comments.length} comments
+                    </p>
+                  </div>
+                  <span className={cn(
+                    'shrink-0 rounded-md px-1.5 py-0.5 text-[10px] ring-1 ring-inset',
+                    thread.status === 'open'
+                      ? 'bg-hop/10 text-hop ring-hop/20'
+                      : 'bg-muted text-muted-foreground ring-border/60',
+                  )}>
+                    {thread.status}
+                  </span>
+                </div>
+                {recentComments.length > 0 ? (
+                  <ol className="mt-2 space-y-1.5">
+                    {recentComments.map((comment) => (
+                      <li key={comment.id} className="rounded-md bg-muted/50 px-2 py-1.5">
+                        <p className="line-clamp-2 text-[11px]">{comment.body}</p>
+                        <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
+                          {comment.createdBy} - {formatDate(comment.createdAt)}
+                        </p>
+                      </li>
+                    ))}
+                  </ol>
+                ) : null}
+                {thread.status === 'open' ? (
+                  <div className="mt-2 grid gap-1.5">
+                    <textarea
+                      value={draftValue}
+                      onChange={(event) => onCommentDraftChange(thread, event.target.value)}
+                      disabled={!canComment || isCommenting}
+                      rows={2}
+                      placeholder="Reply to thread"
+                      className="h-auto resize-none rounded-lg border border-border/60 bg-muted/40 px-2 py-1.5 text-xs outline-none transition placeholder:text-muted-foreground focus:border-hop/40 focus:ring-2 focus:ring-hop/20 disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                    <div className="flex gap-1.5">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={!canComment || isCommenting || !draftValue.trim()}
+                        className="h-7 flex-1 justify-start rounded-md text-[11px]"
+                        onClick={() => onAddComment(thread)}
+                      >
+                        {isCommenting ? <Loader2 className="size-3.5 animate-spin" /> : <MessageSquareText className="size-3.5" />}
+                        Reply
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={!canComment || isResolving}
+                        className="h-7 rounded-md px-2 text-[11px]"
+                        onClick={() => onResolve(thread)}
+                      >
+                        {isResolving ? <Loader2 className="size-3.5 animate-spin" /> : <ShieldCheck className="size-3.5" />}
+                        Resolve
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+              </li>
+            )
+          })}
+        </ol>
+      ) : (
+        <p className="mt-2 text-xs text-muted-foreground">
+          {openThreads.length === 0 ? 'No inline threads for this file yet.' : 'No matching inline threads.'}
+        </p>
+      )}
     </div>
   )
 }
@@ -801,6 +1135,14 @@ function reviewLinkedIssues(issues: CollaborationIssue[], activeChangeSetId: str
       return activeChangeSetId !== 'None' && issue.linkedChangeSetId === activeChangeSetId
     })
     .sort((a, b) => Date.parse(b.updatedAt || b.createdAt) - Date.parse(a.updatedAt || a.createdAt))
+}
+
+function reviewLineFingerprint(file: AgentFile, line: number | null) {
+  return [
+    file.hash ?? 'hash-unavailable',
+    file.revision?.toString() ?? 'rev-unavailable',
+    line?.toString() ?? 'file',
+  ].join(':')
 }
 
 function formatDate(value: string) {

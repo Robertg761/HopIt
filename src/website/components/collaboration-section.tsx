@@ -32,6 +32,7 @@ import {
   type CollaborationProject,
   type CollaborationProjectItem,
   type CollaborationRelease,
+  type CollaborationReleaseAsset,
   type WorkItemsResponse,
 } from '@/lib/collaboration'
 import type { AgentStatusSnapshot } from '@/website/lib/agent-status'
@@ -44,6 +45,14 @@ type CollaborationSectionProps = {
 type CollaborationTab = 'issues' | 'discussions' | 'projects' | 'releases'
 
 type WorkItemFilter = 'active' | 'all' | 'closed'
+
+type ReleaseAssetDraft = {
+  name: string
+  kind: CollaborationReleaseAsset['kind']
+  url: string
+  checksum: string
+  size: string
+}
 
 type FormState = {
   issueTitle: string
@@ -183,6 +192,13 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
     capability: workItems?.capabilities.publishRelease,
     loading,
     roleReason: 'Current role cannot publish releases.',
+  })
+  const releaseAssetCreateReason = disabledReason({
+    codebaseId,
+    roleAllowed: canRelease,
+    capability: workItems?.capabilities.createReleaseAsset,
+    loading,
+    roleReason: 'Current role cannot attach release assets.',
   })
   const projectUpdateReason = disabledReason({
     codebaseId,
@@ -414,6 +430,33 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
     setSubmitting(null)
   }
 
+  async function addReleaseAsset(release: CollaborationRelease, draft: ReleaseAssetDraft) {
+    if (!codebaseId || releaseAssetCreateReason || !draft.name.trim()) return
+
+    const parsedSize = draft.size.trim() ? Number(draft.size.trim()) : undefined
+    if (parsedSize !== undefined && (!Number.isInteger(parsedSize) || parsedSize < 0)) {
+      setMessage('Release asset size must be a non-negative integer.')
+      return
+    }
+
+    setSubmitting(`release-asset-${release.id}`)
+    setMessage(null)
+    const result = await createCollaborationItem({
+      type: 'releaseAsset',
+      codebaseId,
+      releaseId: release.id,
+      name: draft.name,
+      kind: draft.kind,
+      url: draft.url,
+      checksum: draft.checksum,
+      size: parsedSize,
+      createdBy: actorId,
+    })
+    setWorkItems(result)
+    setMessage(result.ok ? 'Release asset attached.' : (result.error?.message ?? 'Release asset failed.'))
+    setSubmitting(null)
+  }
+
   async function moveProjectItem(
     project: CollaborationProject,
     item: CollaborationProjectItem,
@@ -621,8 +664,10 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
               releases={filteredReleases}
               emptyDetail={releases.length === 0 ? 'Draft the first release against Main.' : 'No releases match this filter.'}
               disabledReason={releasePublishReason}
+              assetDisabledReason={releaseAssetCreateReason}
               submitting={submitting}
               onPublish={(release) => void publishRelease(release)}
+              onAddAsset={(release, draft) => void addReleaseAsset(release, draft)}
             />
           )}
         </div>
@@ -1228,15 +1273,21 @@ function ReleasesList({
   releases,
   emptyDetail,
   disabledReason,
+  assetDisabledReason,
   submitting,
   onPublish,
+  onAddAsset,
 }: {
   releases: CollaborationRelease[]
   emptyDetail: string
   disabledReason: string | null
+  assetDisabledReason: string | null
   submitting: string | null
   onPublish: (release: CollaborationRelease) => void
+  onAddAsset: (release: CollaborationRelease, draft: ReleaseAssetDraft) => void
 }) {
+  const [assetDrafts, setAssetDrafts] = React.useState<Record<string, ReleaseAssetDraft>>({})
+
   if (releases.length === 0) {
     return <StateNotice icon={PackageCheck} title="No releases" detail={emptyDetail} />
   }
@@ -1245,6 +1296,8 @@ function ReleasesList({
     <ol className="grid gap-3 lg:grid-cols-2">
       {releases.map((release) => {
         const isSubmitting = submitting === `release-${release.id}`
+        const assetSubmitting = submitting === `release-asset-${release.id}`
+        const assetDraft = assetDrafts[release.id] ?? defaultReleaseAssetDraft()
         return (
           <li key={release.id} className="rounded-lg border border-border/60 bg-muted/20 p-3">
             <ItemHeader
@@ -1259,9 +1312,110 @@ function ReleasesList({
               items={[
                 `${release.target.type} ${release.target.id}`,
                 release.target.revision === null ? null : `rev ${release.target.revision}`,
+                `${release.assets.length} assets`,
                 `updated ${formatDate(release.updatedAt)}`,
               ]}
             />
+            {release.assets.length > 0 ? (
+              <ol className="mt-3 space-y-1.5 rounded-lg bg-card/70 p-2 ring-1 ring-border/50">
+                {release.assets.map((asset) => (
+                  <li key={asset.id} className="flex min-w-0 items-center justify-between gap-2 rounded-md bg-muted/50 px-2 py-1.5">
+                    <div className="min-w-0">
+                      <p className="truncate text-[11px] font-semibold">{asset.name}</p>
+                      <p className="truncate text-[10px] text-muted-foreground">
+                        {asset.kind}{asset.size !== null ? ` - ${formatBytes(asset.size)}` : ''}
+                      </p>
+                    </div>
+                    {asset.url ? (
+                      <a
+                        href={asset.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="shrink-0 rounded-md bg-card px-1.5 py-0.5 text-[10px] text-primary ring-1 ring-border/60"
+                      >
+                        Open
+                      </a>
+                    ) : null}
+                  </li>
+                ))}
+              </ol>
+            ) : null}
+            <div className="mt-3 rounded-lg bg-card/70 p-2 ring-1 ring-border/50">
+              <p className="text-[11px] font-semibold text-muted-foreground">Attach release asset</p>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                <input
+                  value={assetDraft.name}
+                  onChange={(event) => setAssetDrafts((current) => ({
+                    ...current,
+                    [release.id]: { ...assetDraft, name: event.target.value },
+                  }))}
+                  disabled={Boolean(assetDisabledReason) || assetSubmitting}
+                  placeholder="Asset name"
+                  className={inputClassName}
+                />
+                <select
+                  value={assetDraft.kind}
+                  onChange={(event) => setAssetDrafts((current) => ({
+                    ...current,
+                    [release.id]: { ...assetDraft, kind: event.target.value as CollaborationReleaseAsset['kind'] },
+                  }))}
+                  disabled={Boolean(assetDisabledReason) || assetSubmitting}
+                  className={inputClassName}
+                >
+                  <option value="archive">archive</option>
+                  <option value="binary">binary</option>
+                  <option value="source">source</option>
+                  <option value="checksum">checksum</option>
+                  <option value="installer">installer</option>
+                  <option value="other">other</option>
+                </select>
+                <input
+                  value={assetDraft.url}
+                  onChange={(event) => setAssetDrafts((current) => ({
+                    ...current,
+                    [release.id]: { ...assetDraft, url: event.target.value },
+                  }))}
+                  disabled={Boolean(assetDisabledReason) || assetSubmitting}
+                  placeholder="URL"
+                  className={inputClassName}
+                />
+                <input
+                  value={assetDraft.checksum}
+                  onChange={(event) => setAssetDrafts((current) => ({
+                    ...current,
+                    [release.id]: { ...assetDraft, checksum: event.target.value },
+                  }))}
+                  disabled={Boolean(assetDisabledReason) || assetSubmitting}
+                  placeholder="Checksum"
+                  className={inputClassName}
+                />
+                <input
+                  value={assetDraft.size}
+                  onChange={(event) => setAssetDrafts((current) => ({
+                    ...current,
+                    [release.id]: { ...assetDraft, size: event.target.value },
+                  }))}
+                  disabled={Boolean(assetDisabledReason) || assetSubmitting}
+                  inputMode="numeric"
+                  placeholder="Size in bytes"
+                  className={inputClassName}
+                />
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={Boolean(assetDisabledReason) || assetSubmitting || !assetDraft.name.trim()}
+                  className="h-9 justify-start rounded-lg text-xs"
+                  onClick={() => {
+                    onAddAsset(release, assetDraft)
+                    setAssetDrafts((current) => ({ ...current, [release.id]: defaultReleaseAssetDraft() }))
+                  }}
+                >
+                  {assetSubmitting ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
+                  Attach
+                </Button>
+              </div>
+              {assetDisabledReason ? <p className="mt-2 text-[11px] text-muted-foreground">{assetDisabledReason}</p> : null}
+            </div>
             <div className="mt-3 flex justify-end">
               <Button
                 type="button"
@@ -1727,6 +1881,7 @@ function filterReleases(
       release.target.id,
       release.target.revision === null ? null : `rev ${release.target.revision}`,
       `#${release.number}`,
+      ...release.assets.flatMap((asset) => [asset.name, asset.kind, asset.url, asset.checksum]),
     )
   })
 }
@@ -1849,6 +2004,7 @@ function unavailableCapabilities(reason: string): WorkItemsResponse['capabilitie
     createDiscussion: action,
     updateDiscussion: action,
     createRelease: action,
+    createReleaseAsset: action,
     publishRelease: action,
     createProject: action,
     updateProject: action,
@@ -1870,6 +2026,28 @@ function formatDate(value: string) {
     hour: 'numeric',
     minute: '2-digit',
   }).format(time)
+}
+
+function formatBytes(value: number | null | undefined) {
+  if (!value) return '0 B'
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let size = value
+  let unit = 0
+  while (size >= 1024 && unit < units.length - 1) {
+    size /= 1024
+    unit += 1
+  }
+  return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`
+}
+
+function defaultReleaseAssetDraft(): ReleaseAssetDraft {
+  return {
+    name: '',
+    kind: 'archive',
+    url: '',
+    checksum: '',
+    size: '',
+  }
 }
 
 const inputClassName =

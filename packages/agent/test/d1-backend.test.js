@@ -153,6 +153,19 @@ test('D1 backend supports members, invitations, and collaboration work items', a
     notes: 'First D1-backed collaboration release.',
     actor: owner,
   })
+  const releaseAsset = await backend.createWorkItem({
+    type: 'releaseAsset',
+    codebaseId: 'collab-core',
+    releaseId: release.id,
+    name: 'hopit-d1-migration.tar.gz',
+    kind: 'archive',
+    url: 'https://example.com/hopit-d1-migration.tar.gz',
+    checksum: 'sha256:test',
+    size: 1024,
+    actor: owner,
+  })
+  assert.equal(releaseAsset.releaseId, release.id)
+  assert.equal(releaseAsset.kind, 'archive')
   const issueComment = await backend.createWorkItem({
     type: 'issueComment',
     codebaseId: 'collab-core',
@@ -222,9 +235,58 @@ test('D1 backend supports members, invitations, and collaboration work items', a
   assert.equal(items.discussions[0].comments.length, 1)
   assert.equal(items.discussions[0].comments[0].body, 'This discussion also has a durable comment.')
   assert.equal(items.releases.length, 1)
+  assert.equal(items.releases[0].assets.length, 1)
+  assert.equal(items.releases[0].assets[0].name, 'hopit-d1-migration.tar.gz')
   assert.equal(items.projects.length, 1)
   assert.equal(items.projects[0].items.length, 1)
   assert.equal(items.projects[0].items[0].columnId, 'in-progress')
+
+  const reviewThread = await backend.createReviewThread({
+    codebaseId: 'collab-core',
+    changeSetId: 'cs_collab_core_main',
+    filePath: 'README.md',
+    lineNumber: 1,
+    baseRevision: 'main-rev-1',
+    headRevision: 'cloud-rev-1',
+    lineFingerprint: 'hash:1:1',
+    body: 'Anchor this line before merge.',
+    actor: owner,
+  })
+  assert.equal(reviewThread.filePath, 'README.md')
+  assert.equal(reviewThread.comments.length, 1)
+  const threadComment = await backend.createReviewThreadComment({
+    threadId: reviewThread.id,
+    body: 'Follow-up on the anchored line.',
+    actor: owner,
+  })
+  assert.equal(threadComment.threadId, reviewThread.id)
+  const resolvedThread = await backend.resolveReviewThread({
+    threadId: reviewThread.id,
+    actor: owner,
+  })
+  assert.equal(resolvedThread.status, 'resolved')
+  const reviewThreads = await backend.listReviewThreads({
+    codebaseId: 'collab-core',
+    changeSetId: 'cs_collab_core_main',
+    actor: owner,
+  })
+  assert.equal(reviewThreads.length, 1)
+  assert.equal(reviewThreads[0].comments.length, 2)
+
+  await backend.ensureCodebaseKeyring({
+    codebaseId: 'collab-core',
+    repoContentKeyId: 'key_repo_collab',
+    ownerPrivateKeyId: 'key_owner_private_collab',
+    gitInternalsKeyId: 'key_git_collab',
+    defaultSecretKeyId: 'key_secret_collab',
+    actor: owner,
+  })
+  const rotation = await backend.updateCodebaseKeyringRotationState({
+    codebaseId: 'collab-core',
+    rotationState: 'planned',
+    actor: owner,
+  })
+  assert.equal(rotation.rotationState, 'planned')
 
   const archivedProject = await backend.updateWorkItem({
     action: 'archiveProject',

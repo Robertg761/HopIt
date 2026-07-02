@@ -16,6 +16,7 @@ import {
   FileStack,
   FolderOpen,
   GitCommitHorizontal,
+  GitCompareArrows,
   GitMerge,
   GitPullRequest,
   HardDrive,
@@ -89,17 +90,20 @@ export type HopItDashboardView =
   | 'codebases'
   | 'files'
   | 'review'
+  | 'compare'
   | 'members'
   | 'work-items'
   | 'activity'
+  | 'history'
   | 'status'
 
 type HopItDashboardPageProps = {
   view: HopItDashboardView
+  codebaseId?: string | null
 }
 
-export function HopItDashboardPage({ view }: HopItDashboardPageProps) {
-  const agentStatus = useAgentStatus()
+export function HopItDashboardPage({ view, codebaseId = null }: HopItDashboardPageProps) {
+  const agentStatus = useAgentStatus(codebaseId)
   const { status } = agentStatus
 
   return (
@@ -233,6 +237,23 @@ function PageContent({
     )
   }
 
+  if (view === 'compare') {
+    return (
+      <>
+        <PageIntro
+          eyebrow="Compare"
+          title="Routeable diff and change-set comparison"
+          description="Inspect the selected codebase by URL, compare visible files against Main, and anchor review work to the active snapshot."
+          icon={GitCompareArrows}
+          status={status}
+        />
+        <RouteableCodebaseStrip status={status} view="compare" />
+        <CompareSnapshotPanel status={status} />
+        <CodeReviewSection status={status} />
+      </>
+    )
+  }
+
   if (view === 'members') {
     return (
       <>
@@ -277,6 +298,23 @@ function PageContent({
           icon={Activity}
           status={status}
         />
+        <ActivityFeed status={status} />
+      </>
+    )
+  }
+
+  if (view === 'history') {
+    return (
+      <>
+        <PageIntro
+          eyebrow="History"
+          title="Routeable codebase history"
+          description="Review sync, merge, remote-update, and inline-review events for a specific codebase URL."
+          icon={History}
+          status={status}
+        />
+        <RouteableCodebaseStrip status={status} view="history" />
+        <HistorySnapshotPanel status={status} />
         <ActivityFeed status={status} />
       </>
     )
@@ -362,6 +400,136 @@ function PageIntro({
   )
 }
 
+function RouteableCodebaseStrip({
+  status,
+  view,
+}: {
+  status: AgentStatusSnapshot
+  view: 'compare' | 'history'
+}) {
+  const codebaseId = status.codebaseId ?? 'hopit'
+  const links = [
+    { label: 'Review', href: `/codebases/${encodeURIComponent(codebaseId)}/review`, active: false },
+    { label: 'Compare', href: `/codebases/${encodeURIComponent(codebaseId)}/compare`, active: view === 'compare' },
+    { label: 'History', href: `/codebases/${encodeURIComponent(codebaseId)}/history`, active: view === 'history' },
+  ]
+
+  return (
+    <section className="panel-surface rounded-xl border border-border bg-card px-4 py-3 shadow-sm">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+        <div className="min-w-0">
+          <p className="text-xs font-semibold text-muted-foreground">Routeable codebase</p>
+          <p className="mt-0.5 truncate font-mono text-sm font-bold">{codebaseId}</p>
+        </div>
+        <div className="flex gap-1 overflow-x-auto rounded-lg border border-border/60 bg-muted/40 p-0.5 scroll-thin">
+          {links.map((link) => (
+            <a
+              key={link.href}
+              href={link.href}
+              className={cn(
+                'whitespace-nowrap rounded-md px-3 py-1.5 text-xs font-semibold transition',
+                link.active
+                  ? 'bg-card text-primary shadow-sm ring-1 ring-border/40'
+                  : 'text-muted-foreground hover:bg-muted hover:text-foreground',
+              )}
+            >
+              {link.label}
+            </a>
+          ))}
+        </div>
+      </div>
+    </section>
+  )
+}
+
+function CompareSnapshotPanel({ status }: { status: AgentStatusSnapshot }) {
+  const mainRevision = revisionNumber(status.mainRevision)
+  const sharedFiles = status.files.filter((file) => file.scope === 'shared')
+  const changedFiles = sharedFiles.filter((file) => typeof file.revision === 'number' && mainRevision !== null && file.revision > mainRevision)
+  const metadataOnly = status.files.filter((file) => file.scope === 'owner-private' || !file.contentPreview).length
+
+  return (
+    <section className="grid gap-4 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+      <div className="panel-surface rounded-xl border border-border bg-card p-4 shadow-sm">
+        <p className="flex items-center gap-1.5 text-sm font-bold">
+          <GitCompareArrows className="size-4 text-primary" />
+          Snapshot compare
+        </p>
+        <dl className="mt-4 grid gap-2 text-xs">
+          <RouteableDatum label="Base" value={status.mainRevision} />
+          <RouteableDatum label="Head" value={status.cloudRevision} />
+          <RouteableDatum label="Change set" value={status.activeChangeSetId} />
+          <RouteableDatum label="Merge state" value={status.mergeState} />
+        </dl>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <RouteableMetric label="Changed" value={changedFiles.length.toString()} active={changedFiles.length > 0} />
+        <RouteableMetric label="Shared" value={sharedFiles.length.toString()} active={sharedFiles.length > 0} />
+        <RouteableMetric label="Metadata only" value={metadataOnly.toString()} active={metadataOnly === 0} />
+      </div>
+    </section>
+  )
+}
+
+function HistorySnapshotPanel({ status }: { status: AgentStatusSnapshot }) {
+  const reviewEvents = status.events.filter((event) => /review|merge|remote|sync|acknowledged/i.test(event.label))
+  const latest = reviewEvents.at(-1) ?? status.events.at(-1) ?? null
+
+  return (
+    <section className="grid gap-4 lg:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+      <div className="panel-surface rounded-xl border border-border bg-card p-4 shadow-sm">
+        <p className="flex items-center gap-1.5 text-sm font-bold">
+          <History className="size-4 text-primary" />
+          History cursor
+        </p>
+        <dl className="mt-4 grid gap-2 text-xs">
+          <RouteableDatum label="Codebase" value={status.codebaseId ?? 'No codebase'} />
+          <RouteableDatum label="Workspace revision" value={status.workspaceMaterializedRevision?.toString() ?? 'unknown'} />
+          <RouteableDatum label="Behind by" value={status.remoteBehindByRevisions?.toString() ?? '0'} />
+          <RouteableDatum label="Last sync" value={status.lastSync} />
+        </dl>
+      </div>
+      <div className="panel-surface rounded-xl border border-border bg-card p-4 shadow-sm">
+        <p className="text-sm font-bold">Latest routeable event</p>
+        {latest ? (
+          <div className="mt-3 rounded-lg bg-muted/40 p-3 ring-1 ring-border/50">
+            <div className="flex items-center justify-between gap-2">
+              <p className="truncate font-mono text-xs font-semibold">{latest.label}</p>
+              <span className="shrink-0 text-[11px] text-muted-foreground">{latest.when}</span>
+            </div>
+            <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{latest.detail}</p>
+          </div>
+        ) : (
+          <p className="mt-3 text-xs text-muted-foreground">No history events are available for this codebase yet.</p>
+        )}
+      </div>
+    </section>
+  )
+}
+
+function RouteableMetric({ label, value, active }: { label: string; value: string; active: boolean }) {
+  return (
+    <div
+      className={cn(
+        'panel-surface min-w-0 rounded-xl border p-4 shadow-sm',
+        active ? 'border-primary/20 bg-primary/8' : 'border-border bg-card',
+      )}
+    >
+      <p className="truncate text-[10px] font-bold uppercase text-muted-foreground">{label}</p>
+      <p className="mt-1 text-2xl font-bold">{value}</p>
+    </div>
+  )
+}
+
+function RouteableDatum({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-lg bg-muted/35 px-2.5 py-2">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 truncate font-medium">{value}</dd>
+    </div>
+  )
+}
+
 function TopDock({
   status,
   loading,
@@ -372,6 +540,11 @@ function TopDock({
   activeView: HopItDashboardView
 }) {
   const { theme, setTheme } = useTheme()
+  const highlightedView = activeView === 'compare'
+    ? 'review'
+    : activeView === 'history'
+      ? 'activity'
+      : activeView
   const activeTheme = theme ?? 'light'
   const online = status.state === 'online' || status.state === 'syncing'
   const blocked = status.state === 'blocked'
@@ -443,7 +616,7 @@ function TopDock({
         >
           {moduleAnchors.map((item) => {
             const Icon = item.icon
-            const active = item.id === activeView
+            const active = item.id === highlightedView
             return (
               <a
                 key={item.id}
@@ -1265,6 +1438,11 @@ function formatBytes(value: number | null | undefined) {
     unit += 1
   }
   return `${size >= 10 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`
+}
+
+function revisionNumber(revision: string) {
+  const match = revision.match(/\d+/)
+  return match ? Number(match[0]) : null
 }
 
 function compactValue(value: string) {

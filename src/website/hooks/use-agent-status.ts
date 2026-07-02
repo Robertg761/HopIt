@@ -40,12 +40,12 @@ export type AgentCommandResult = {
   }
 }
 
-export function useAgentStatus(): AgentStatusState {
+export function useAgentStatus(initialCodebaseId: string | null = null): AgentStatusState {
   const [status, setStatus] = React.useState<AgentStatusSnapshot>(() =>
     offlineAgentStatus('Connecting to the local HopIt agent.'),
   )
   const [loading, setLoading] = React.useState(true)
-  const [selectedCodebaseId, setSelectedCodebaseId] = React.useState<string | null>(null)
+  const [selectedCodebaseId, setSelectedCodebaseId] = React.useState<string | null>(initialCodebaseId)
   const [runningCommand, setRunningCommand] = React.useState<AgentCommand | null>(null)
   const [commandResult, setCommandResult] = React.useState<AgentCommandResult | null>(null)
 

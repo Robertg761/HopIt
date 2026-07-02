@@ -16,6 +16,7 @@ import type {
   CollaborationProject,
   CollaborationProjectItem,
   CollaborationRelease,
+  CollaborationReleaseAsset,
   WorkItemsResponse,
 } from '@/lib/collaboration'
 import { cloudActorFromRequest } from '@/lib/request-cloud-actor'
@@ -92,6 +93,19 @@ export async function POST(request: Request) {
         createdBy,
         actor,
       })
+    } else if (body.type === 'releaseAsset') {
+      await createCloudWorkItem({
+        type: 'releaseAsset',
+        codebaseId,
+        releaseId: requireText(body.releaseId, 'releaseId'),
+        name: requireText(body.name, 'name'),
+        kind: optionalReleaseAssetKind(body.kind),
+        url: optionalText(body.url),
+        size: optionalNumber(body.size),
+        checksum: optionalText(body.checksum),
+        createdBy,
+        actor,
+      })
     } else if (body.type === 'project') {
       await createCloudWorkItem({
         type: 'project',
@@ -132,7 +146,7 @@ export async function POST(request: Request) {
         actor,
       })
     } else {
-      return workItemsError(codebaseId, 'invalid_type', 'Expected type to be issue, discussion, release, project, projectItem, issueComment, or discussionComment.', 400)
+      return workItemsError(codebaseId, 'invalid_type', 'Expected type to be issue, discussion, release, releaseAsset, project, projectItem, issueComment, or discussionComment.', 400)
     }
 
     return NextResponse.json(await readWorkItems(codebaseId, actor), responseInit())
@@ -294,6 +308,21 @@ function mapRelease(row: Record<string, unknown>): CollaborationRelease {
     createdAt: stringValue(row.createdAt) ?? '',
     updatedAt: stringValue(row.updatedAt) ?? '',
     publishedAt: stringValue(row.publishedAt),
+    assets: Array.isArray(row.assets) ? row.assets.map((asset) => mapReleaseAsset(recordValue(asset) ?? {})) : [],
+  }
+}
+
+function mapReleaseAsset(row: Record<string, unknown>): CollaborationReleaseAsset {
+  return {
+    id: documentId(row),
+    releaseId: stringValue(row.releaseId) ?? '',
+    name: stringValue(row.name) ?? 'Unnamed asset',
+    kind: releaseAssetKind(row.kind),
+    url: stringValue(row.url),
+    size: numberValue(row.size),
+    checksum: stringValue(row.checksum),
+    createdBy: stringValue(row.createdBy) ?? 'unknown',
+    createdAt: stringValue(row.createdAt) ?? '',
   }
 }
 
@@ -395,6 +424,7 @@ function collaborationCapabilities(hasAuth = false): CollaborationCapabilities {
     createDiscussion: write,
     updateDiscussion: write,
     createRelease: write,
+    createReleaseAsset: write,
     publishRelease: write,
     createProject: write,
     updateProject: write,
@@ -544,9 +574,21 @@ function optionalReleaseStatus(value: unknown) {
   return releaseStatus(value)
 }
 
+function optionalReleaseAssetKind(value: unknown) {
+  if (value === undefined || value === null || value === '') return undefined
+  return releaseAssetKind(value)
+}
+
 function releaseStatus(value: unknown): CollaborationRelease['status'] {
   if (value === 'published' || value === 'archived') return value
   return 'draft'
+}
+
+function releaseAssetKind(value: unknown): CollaborationReleaseAsset['kind'] {
+  if (value === 'archive' || value === 'binary' || value === 'source' || value === 'checksum' || value === 'installer') {
+    return value
+  }
+  return 'other'
 }
 
 function releaseTarget(value: unknown) {
