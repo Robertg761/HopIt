@@ -10,6 +10,7 @@ import {
   updateCloudCodebase,
   type CloudActor,
 } from '@/lib/cloud-backend'
+import { readLocalWorkspaceDiscovery } from '@/lib/local-workspace-discovery'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -21,7 +22,16 @@ export async function GET(request: Request) {
   try {
     const actor = await requireActor(request, { allowBasicFallback: true })
     const codebases = await listCloudCodebases(actor)
-    return NextResponse.json({ ok: true, codebases: Array.isArray(codebases) ? codebases : [] }, responseInit())
+    const localDiscovery = await readLocalWorkspaceDiscovery()
+    const mergedCodebases = mergeLocalWorkspaceDiscovery(
+      Array.isArray(codebases) ? codebases : [],
+      localDiscovery,
+    )
+    return NextResponse.json({
+      ok: true,
+      codebases: mergedCodebases,
+      workspaceDiscovery: summarizeLocalWorkspaceDiscovery(localDiscovery),
+    }, responseInit())
   } catch (error) {
     return codebaseError('codebase_list_failed', errorMessage(error), 400)
   }
@@ -179,10 +189,126 @@ function responseInit() {
   }
 }
 
+function mergeLocalWorkspaceDiscovery(cloudCodebases: unknown[], localDiscovery: unknown) {
+  const discovery = recordValue(localDiscovery)
+  const localCodebases = Array.isArray(discovery?.codebases)
+    ? discovery.codebases.map(localWorkspaceCodebaseRow).filter(Boolean)
+    : []
+  const localById = new Map(
+    localCodebases
+      .map((codebase) => [codebase?.codebase?.id, codebase] as const)
+      .filter((entry): entry is [string, NonNullable<ReturnType<typeof localWorkspaceCodebaseRow>>] => Boolean(entry[0] && entry[1])),
+  )
+
+  const merged = cloudCodebases.map((codebase) => {
+    const cloudRow = recordValue(codebase) ?? {}
+    const cloudCodebase = recordValue(cloudRow.codebase)
+    const id = optionalText(cloudCodebase?.id) ?? optionalText(cloudRow.id)
+    if (!id) return codebase
+    const local = localById.get(id)
+    if (!local) return codebase
+
+    localById.delete(id)
+    return {
+      ...cloudRow,
+      ...local,
+      codebase: {
+        ...recordValue(local.codebase),
+        ...cloudCodebase,
+      },
+      selectedState: local.selectedState ?? cloudRow.selectedState ?? null,
+      access: local.access ?? cloudRow.access ?? null,
+      revision: local.revision ?? cloudRow.revision ?? null,
+      fileCount: local.fileCount || numberValue(cloudRow.fileCount) || 0,
+      privateFileCount: local.privateFileCount ?? numberValue(cloudRow.privateFileCount) ?? 0,
+      memberCount: Math.max(local.memberCount ?? 0, numberValue(cloudRow.memberCount) ?? 0),
+    }
+  })
+
+  for (const local of localById.values()) {
+    if (local) merged.push(local)
+  }
+
+  return merged
+}
+
+function localWorkspaceCodebaseRow(value: unknown) {
+  const row = recordValue(value)
+  if (!row) return null
+
+  const id = optionalText(row.id) ?? optionalText(recordValue(row.codebase)?.id)
+  if (!id) return null
+
+  const selectedState = recordValue(row.selectedState)
+  const workspace = recordValue(row.workspace)
+  const hydration = recordValue(workspace?.hydration) ?? recordValue(row.hydration)
+  const remoteCursor = recordValue(row.remoteCursor)
+
+  return {
+    codebase: {
+      id,
+      name: optionalText(row.name) ?? id,
+      ownerId: optionalText(row.ownerId) ?? optionalText(recordValue(row.codebase)?.ownerId),
+    },
+    selectedState: {
+      id: optionalText(selectedState?.id) ?? optionalText(row.activeChangeSetId),
+      revision: numberValue(selectedState?.revision) ?? numberValue(remoteCursor?.selectedStateRevision),
+      effectiveVisibility: optionalText(selectedState?.effectiveVisibility) ?? optionalText(selectedState?.visibility),
+      reviewState: optionalText(selectedState?.reviewState),
+      mergeState: optionalText(selectedState?.mergeState),
+      conflictState: optionalText(selectedState?.conflictState),
+    },
+    access: recordValue(row.access),
+    workspace: {
+      ...workspace,
+      hydration,
+    },
+    remoteUpdate: recordValue(row.remoteUpdate),
+    revision: numberValue(row.revision) ?? numberValue(remoteCursor?.graphRevision),
+    updatedAt: optionalText(row.updatedAt),
+    fileCount: numberValue(row.visibleFileCount) ?? numberValue(row.fileCount) ?? 0,
+    privateFileCount: numberValue(row.privateFileCount) ?? numberValue(row.hiddenFileCount) ?? 0,
+    memberCount: numberValue(row.memberCount) ?? 0,
+    materialization: optionalText(row.materialization),
+    attached: row.attached === true,
+    available: row.available === true,
+    source: optionalText(row.source),
+  }
+}
+
+function summarizeLocalWorkspaceDiscovery(value: unknown) {
+  const discovery = recordValue(value)
+  if (!discovery) return null
+  const root = recordValue(discovery.root)
+  const cloud = recordValue(discovery.cloud)
+  return {
+    ok: discovery.ok === true,
+    root: root
+      ? {
+          path: optionalText(root.path),
+          exists: root.exists === true,
+          index: recordValue(root.index),
+        }
+      : null,
+    cloud: cloud
+      ? {
+          service: optionalText(cloud.service),
+          discovery: optionalText(cloud.discovery),
+          error: optionalText(cloud.error),
+        }
+      : null,
+    error: optionalText(discovery.error),
+  }
+}
+
 function codebaseError(code: string, message: string, status = 400) {
   return NextResponse.json({ ok: false, error: { code, message }, codebases: [] }, { status, ...responseInit() })
 }
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'Codebase request failed.'
+}
+
+function numberValue(value: unknown) {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null
 }

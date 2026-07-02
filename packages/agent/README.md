@@ -12,7 +12,7 @@ It is intentionally not a real FUSE, OS filesystem provider, or clone manager. I
 
 The selected cloud state remains the source of truth for the managed folder. In the production model, day-to-day edits should sync into an active change set; Main advances only after review or merge. The local folder is a materialized cache that HopIt manages so OS file pickers, editors, CLIs, and search tools can work without a special mount or a user-managed clone.
 
-The solid v1 target is a HopIt Workspace Root, such as `~/HopIt Workspaces`, where cloud codebases appear as HopIt-managed project folders. This package currently proves selected managed folders, a durable workspace-root index, D1 account-visible codebase discovery with local readiness when credentials allow it, scoped-token configured-codebase fallback, metadata-only attach, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, S3-compatible object-blob storage for file bodies, activity-gated safe remote-pull plus one-shot remote-pull checks, Cloudflare D1 graph storage, and legacy scoped Convex agent-session tokens. It does not yet provide automatic first-run account setup, a full attach/hydrate onboarding flow, a full automatic lazy-materialization policy, complete D1 device-session auth hardening, or production-grade push/subscription remote-update delivery.
+The solid v1 target is a HopIt Workspace Root, such as `~/HopIt Workspaces`, where cloud codebases appear as HopIt-managed project folders. This package currently proves selected managed folders, a durable workspace-root index, D1 account-visible codebase discovery with local readiness when credentials allow it, scoped-token configured-codebase fallback, metadata-only attach, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, S3-compatible object-blob storage for file bodies, activity-gated safe remote-pull plus one-shot remote-pull checks, Cloudflare D1 graph storage, and legacy scoped Convex agent-session tokens. It does not yet provide automatic account bootstrap, a full hydrate onboarding flow, a full automatic lazy-materialization policy, complete D1 device-session auth hardening, or production-grade push/subscription remote-update delivery.
 
 HopIt does not use ignore files as product sharing controls. Files under `.private/` are still snapshotted, synced, and versioned, but owner-visible only. Files outside `.private/` are governed by the active change set's effective visibility and the codebase's permissions.
 
@@ -438,7 +438,7 @@ contract. The root-level index, hydration/materialized revision state,
 metadata-only and single-file hydrate primitives, scoped agent-session tokens,
 object-backed content-addressed blobs, per-file agent mutations, configured-codebase
 discover/attach, and opt-in remote-pull cursor are now in place. The next agent
-work should add automatic first-run account setup, richer per-file cache metadata,
+work should add automatic account bootstrap, richer per-file cache metadata,
 automatic lazy materialization policy, and production-grade remote-update delivery.
 
 In parallel, the cloud graph needs durable history reconstruction,

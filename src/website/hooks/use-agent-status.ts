@@ -20,7 +20,15 @@ type AgentStatusState = {
 
 const pollMs = 2500
 
-export type AgentCommand = 'sync' | 'refresh' | 'recover' | 'review' | 'merge' | 'attachWorkspace' | 'importGitUrl'
+export type AgentCommand =
+  | 'sync'
+  | 'refresh'
+  | 'recover'
+  | 'review'
+  | 'merge'
+  | 'setupWorkspace'
+  | 'attachWorkspace'
+  | 'importGitUrl'
 
 export type AgentCommandPayload = {
   codebaseId?: string | null

@@ -52,6 +52,14 @@ export function normalizeCloudBackend(value: string | undefined) {
   return normalized ?? null
 }
 
+export function localCommandProfile(env: NodeJS.ProcessEnv = process.env) {
+  const requested = env.HOPIT_COMMAND_PROFILE?.trim()
+  if (requested === 'production') return 'production'
+  if (requested === 'development') return 'development'
+  if (env.HOPIT_WORKSPACE_ROOT || env.HOPIT_AGENT_STATE_ROOT || env.HOPIT_WORKSPACE_INDEX) return 'production'
+  return 'development'
+}
+
 function productionCommandEnv() {
   if (cachedProductionEnv !== undefined) return cachedProductionEnv
   if (!existsSync(productionEnvPath)) {

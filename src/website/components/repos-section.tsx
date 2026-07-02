@@ -85,6 +85,24 @@ type CodebaseRow = {
   memberCount: number
 }
 
+type WorkspaceDiscoverySummary = {
+  ok: boolean
+  root: {
+    path: string | null
+    exists: boolean
+    index: {
+      exists?: boolean
+      codebaseCount?: number | null
+    } | null
+  } | null
+  cloud: {
+    service: string | null
+    discovery: string | null
+    error: string | null
+  } | null
+  error: string | null
+}
+
 type CodebaseFilter = 'all' | 'shared' | 'private'
 
 export function ReposSection({
@@ -97,12 +115,14 @@ export function ReposSection({
 }: ReposSectionProps) {
   const [filter, setFilter] = React.useState<CodebaseFilter>('all')
   const [codebases, setCodebases] = React.useState<CodebaseRow[]>([])
+  const [workspaceDiscovery, setWorkspaceDiscovery] = React.useState<WorkspaceDiscoverySummary | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [name, setName] = React.useState('')
   const [description, setDescription] = React.useState('')
   const [creating, setCreating] = React.useState(false)
   const [attachingCodebaseId, setAttachingCodebaseId] = React.useState<string | null>(null)
+  const [settingUpCodebaseId, setSettingUpCodebaseId] = React.useState<string | null>(null)
 
   const loadCodebases = React.useCallback(async () => {
     setLoading(true)
@@ -113,6 +133,7 @@ export function ReposSection({
         throw new Error(body?.error?.message ?? 'Codebase list failed.')
       }
       setCodebases(Array.isArray(body.codebases) ? body.codebases.map(normalizeCodebaseRow) : [])
+      setWorkspaceDiscovery(normalizeWorkspaceDiscovery(body.workspaceDiscovery))
       setError(null)
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Codebase list failed.')
@@ -138,6 +159,7 @@ export function ReposSection({
     if (filter === 'shared') return codebase.selectedState?.effectiveVisibility !== 'private'
     return true
   })
+  const setupTarget = items.find((codebase) => codebase.workspace?.attached !== true) ?? null
 
   async function createCodebase(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
@@ -213,6 +235,33 @@ export function ReposSection({
     }
   }
 
+  async function setupCodebase(codebase: CodebaseRow) {
+    const codebaseId = codebase.codebase.id
+
+    if (!status.commandsAvailable) {
+      setError('Workspace setup requires the local HopIt agent.')
+      return
+    }
+
+    setSettingUpCodebaseId(codebaseId)
+    onSelectCodebase(codebaseId)
+
+    try {
+      const result = await runCommand('setupWorkspace', { codebaseId })
+      if (!result.ok) {
+        throw new Error(result.summary || result.stderr || result.error?.message || 'Workspace setup failed.')
+      }
+
+      await loadCodebases()
+      await onChanged()
+      setError(null)
+    } catch (setupError) {
+      setError(setupError instanceof Error ? setupError.message : 'Workspace setup failed.')
+    } finally {
+      setSettingUpCodebaseId(null)
+    }
+  }
+
   async function updateCodebase(
     codebaseId: string,
     payload: Record<string, unknown>,
@@ -259,6 +308,16 @@ export function ReposSection({
         </div>
       ) : null}
 
+      {setupTarget ? (
+        <WorkspaceSetupBanner
+          codebase={setupTarget}
+          discovery={workspaceDiscovery}
+          settingUp={settingUpCodebaseId === setupTarget.codebase.id}
+          disabledReason={setupDisabledReason(status, runningCommand, settingUpCodebaseId, attachingCodebaseId)}
+          onSetup={() => setupCodebase(setupTarget)}
+        />
+      ) : null}
+
       <div className="grid gap-3 p-4 md:grid-cols-2">
         {filtered.length > 0 ? (
           filtered.map((codebase, i) => (
@@ -272,7 +331,7 @@ export function ReposSection({
               onDelete={() => deleteCodebase(codebase)}
               onAttach={() => attachCodebase(codebase)}
               attaching={attachingCodebaseId === codebase.codebase.id}
-              attachDisabledReason={attachDisabledReason(status, runningCommand, attachingCodebaseId)}
+              attachDisabledReason={attachDisabledReason(status, runningCommand, attachingCodebaseId, settingUpCodebaseId)}
             />
           ))
         ) : (
@@ -366,6 +425,59 @@ function EmptyCodebases({ loading }: { loading: boolean }) {
       <p className="mt-1 text-xs text-muted-foreground">
         Create one here, or import a local folder with the HopIt agent.
       </p>
+    </div>
+  )
+}
+
+function WorkspaceSetupBanner({
+  codebase,
+  discovery,
+  settingUp,
+  disabledReason,
+  onSetup,
+}: {
+  codebase: CodebaseRow
+  discovery: WorkspaceDiscoverySummary | null
+  settingUp: boolean
+  disabledReason: string | null
+  onSetup: () => void
+}) {
+  const rootPath = discovery?.root?.path ?? codebase.workspace?.path ?? 'Workspace Root'
+  const fileCount = codebase.fileCount || codebase.access?.visibleFileCount || 0
+  const rootReady = discovery?.root?.exists === true
+
+  return (
+    <div className="border-b border-border/60 bg-primary/5 px-4 py-3">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <FolderPlus className="size-4" />
+          </span>
+          <div className="min-w-0">
+            <p className="text-sm font-semibold text-foreground">
+              Set up {codebase.codebase.name}
+            </p>
+            <p className="mt-1 truncate text-[11px] text-muted-foreground">
+              {rootReady ? 'Workspace Root ready' : 'Workspace Root pending'} / {formatStateLabel(codebase.workspace?.hydrationState ?? 'not-attached')} / {fileCount} files
+            </p>
+            <p className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
+              {rootPath}
+            </p>
+          </div>
+        </div>
+
+        <Button
+          type="button"
+          size="sm"
+          disabled={Boolean(disabledReason) || settingUp}
+          title={disabledReason ?? 'Set up Workspace Root'}
+          onClick={onSetup}
+          className="h-8 shrink-0 gap-1.5 rounded-md px-3 text-xs"
+        >
+          <FolderPlus className={cn('size-3.5', settingUp && 'animate-pulse')} />
+          {settingUp ? 'Setting Up' : 'Set Up'}
+        </Button>
+      </div>
     </div>
   )
 }
@@ -555,9 +667,24 @@ function attachDisabledReason(
   status: AgentStatusSnapshot,
   runningCommand: AgentCommand | null,
   attachingCodebaseId: string | null,
+  settingUpCodebaseId: string | null,
 ) {
   if (!status.commandsAvailable) return 'Workspace attach requires the local HopIt agent.'
   if (runningCommand) return `Running ${runningCommand}`
+  if (settingUpCodebaseId) return 'Workspace setup is running.'
+  if (attachingCodebaseId) return 'Another codebase is attaching.'
+  return null
+}
+
+function setupDisabledReason(
+  status: AgentStatusSnapshot,
+  runningCommand: AgentCommand | null,
+  settingUpCodebaseId: string | null,
+  attachingCodebaseId: string | null,
+) {
+  if (!status.commandsAvailable) return 'Workspace setup requires the local HopIt agent.'
+  if (runningCommand) return `Running ${runningCommand}`
+  if (settingUpCodebaseId) return 'Workspace setup is running.'
   if (attachingCodebaseId) return 'Another codebase is attaching.'
   return null
 }
@@ -622,6 +749,7 @@ function codebasesWithLiveFallback(codebases: CodebaseRow[], status: AgentStatus
 }
 
 function liveCodebaseRow(status: AgentStatusSnapshot) {
+  const hasLocalWorkspaceStatus = status.backend === 'local-agent'
   return normalizeCodebaseRow({
       codebase: {
         id: status.codebaseId,
@@ -637,25 +765,29 @@ function liveCodebaseRow(status: AgentStatusSnapshot) {
         conflictState: status.conflictState,
       },
       access: status.requester,
-      workspace: {
-        attached: true,
-        path: status.managedWorkspacePath,
-        hydrationState: status.workspaceHydrationState,
-        materialization: status.cacheState === 'ready' ? 'managed-folder' : status.cacheState,
-      },
-      remoteUpdate: {
-        state:
-          status.remoteBehindByRevisions === null
-            ? status.remotePullMode
-            : status.remoteBehindByRevisions > 0
-              ? 'behind'
-              : 'ready',
-        delivery: status.remotePullMode,
-        graphRevision: revisionNumber(status.cloudRevision),
-        materializedRevision: status.workspaceMaterializedRevision,
-        behindByRevisions: status.remoteBehindByRevisions,
-        localHydrationState: status.workspaceHydrationState,
-      },
+      workspace: hasLocalWorkspaceStatus
+        ? {
+            attached: true,
+            path: status.managedWorkspacePath,
+            hydrationState: status.workspaceHydrationState,
+            materialization: status.cacheState === 'ready' ? 'managed-folder' : status.cacheState,
+          }
+        : null,
+      remoteUpdate: hasLocalWorkspaceStatus
+        ? {
+            state:
+              status.remoteBehindByRevisions === null
+                ? status.remotePullMode
+                : status.remoteBehindByRevisions > 0
+                  ? 'behind'
+                  : 'ready',
+            delivery: status.remotePullMode,
+            graphRevision: revisionNumber(status.cloudRevision),
+            materializedRevision: status.workspaceMaterializedRevision,
+            behindByRevisions: status.remoteBehindByRevisions,
+            localHydrationState: status.workspaceHydrationState,
+          }
+        : null,
       revision: revisionNumber(status.cloudRevision),
       updatedAt: status.rawUpdatedAt,
       fileCount: status.fileCount,
@@ -685,12 +817,44 @@ function normalizeWorkspace(row: Record<string, unknown>): CodebaseRow['workspac
   const path = stringValue(workspace.path)
   const hydrationState = stringValue(hydration.state) ?? stringValue(row.materialization) ?? 'cloud-only'
   if (!path && hydrationState === 'cloud-only') return null
+  const attachedState = !['cloud-only', 'not-attached', 'not_attached', 'not-materialized', 'not_materialized'].includes(hydrationState)
 
   return {
-    attached: Boolean(row.attached) || hydrationState !== 'cloud-only',
+    attached: Boolean(row.attached) || attachedState,
     path,
     hydrationState,
     materialization: stringValue(row.materialization),
+  }
+}
+
+function normalizeWorkspaceDiscovery(value: unknown): WorkspaceDiscoverySummary | null {
+  const discovery = recordValue(value)
+  if (Object.keys(discovery).length === 0) return null
+  const root = recordValue(discovery.root)
+  const cloud = recordValue(discovery.cloud)
+  const index = recordValue(root.index)
+  return {
+    ok: discovery.ok === true,
+    root: Object.keys(root).length > 0
+      ? {
+          path: stringValue(root.path),
+          exists: root.exists === true,
+          index: Object.keys(index).length > 0
+            ? {
+                exists: index.exists === true,
+                codebaseCount: numberValue(index.codebaseCount),
+              }
+            : null,
+        }
+      : null,
+    cloud: Object.keys(cloud).length > 0
+      ? {
+          service: stringValue(cloud.service),
+          discovery: stringValue(cloud.discovery),
+          error: stringValue(cloud.error),
+        }
+      : null,
+    error: stringValue(discovery.error),
   }
 }
 

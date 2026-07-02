@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { NextResponse } from 'next/server'
-import { mergeLocalProductionEnv, normalizeCloudBackend } from '@/lib/local-production-env'
+import { localCommandProfile, mergeLocalProductionEnv, normalizeCloudBackend } from '@/lib/local-production-env'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -16,6 +16,7 @@ const commandMap = {
   recover: { label: 'Recover', cliCommand: 'recover' },
   review: { label: 'Open review', cliCommand: 'review' },
   merge: { label: 'Merge', cliCommand: 'merge' },
+  setupWorkspace: { label: 'Set up workspace', cliCommand: 'workspace', subcommand: 'attach', timeoutMs: 30_000 },
   attachWorkspace: { label: 'Attach workspace', cliCommand: 'workspace', subcommand: 'attach', timeoutMs: 30_000 },
   importGitUrl: { label: 'Import Git URL', cliCommand: 'import-git-url', timeoutMs: 10 * 60 * 1000 },
 } as const
@@ -122,6 +123,7 @@ function summarizeCommandResult(
   if (command === 'recover') return summarizeRecover(result.stdout)
   if (command === 'review') return 'Opened the active change set for review.'
   if (command === 'merge') return 'Merged the active change set into Main.'
+  if (command === 'setupWorkspace') return summarizeSetupWorkspace(result.stdout)
   if (command === 'attachWorkspace') return summarizeAttachWorkspace(result.stdout)
   if (command === 'importGitUrl') return summarizeGitUrlImport(result.stdout)
 
@@ -156,6 +158,17 @@ function summarizeAttachWorkspace(stdout: string) {
   }
   if (workspace) return `Attached workspace at ${workspace}.`
   return 'Attached the codebase to the Workspace Root.'
+}
+
+function summarizeSetupWorkspace(stdout: string) {
+  const parsed = parseLastJsonObject(stdout)
+  const filesVisible = nestedNumber(parsed, ['files', 'visible'])
+  const workspace = nestedString(parsed, ['workspace'])
+  if (filesVisible !== null && workspace) {
+    return `Workspace ready at ${workspace} with ${filesVisible} visible file${filesVisible === 1 ? '' : 's'}.`
+  }
+  if (workspace) return `Workspace ready at ${workspace}.`
+  return 'Workspace Root is ready.'
 }
 
 function summarizeGitUrlImport(stdout: string) {
@@ -294,11 +307,7 @@ function stateArgsForCodebase(codebaseId: string, env: NodeJS.ProcessEnv) {
 }
 
 function commandProfile(env: NodeJS.ProcessEnv) {
-  const requested = env.HOPIT_COMMAND_PROFILE?.trim()
-  if (requested === 'production') return 'production'
-  if (requested === 'development') return 'development'
-  if (env.HOPIT_WORKSPACE_ROOT || env.HOPIT_AGENT_STATE_ROOT || env.HOPIT_WORKSPACE_INDEX) return 'production'
-  return 'development'
+  return localCommandProfile(env)
 }
 
 function backendArgs(env: NodeJS.ProcessEnv) {
@@ -372,7 +381,7 @@ function optionArg(name: string, value: string | undefined) {
 }
 
 function capOutput(output: string) {
-  return output.length > 16_000 ? output.slice(-16_000) : output
+  return output.length > 64_000 ? output.slice(-64_000) : output
 }
 
 function commandError(code: string, message: string, status: number) {

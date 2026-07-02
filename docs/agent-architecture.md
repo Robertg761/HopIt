@@ -19,7 +19,7 @@ Workspace Root responsibilities:
 - keep local cache metadata separate from user-authored files
 - make same-owner device handoff automatic when the local journal is clean
 
-The current implementation has a production-profile managed workspace path, a root-level `workspaces.json` index, D1 account-visible codebase discovery merged with local attach/readiness state when credentials allow it, scoped-token configured-codebase fallback, dashboard-driven metadata-only attach, hydration/materialized-revision status, visible-file metadata listing, single-file hydration, metadata-only dehydrate state, and a remote cursor exposed through `hop status`. Solid v1 still needs automatic first-run account setup, richer attach/hydrate onboarding, automatic lazy materialization policy, and production-grade event delivery before claiming the "install and boom" experience.
+The current implementation has a production-profile managed workspace path, a root-level `workspaces.json` index, D1 account-visible codebase discovery merged with local attach/readiness state when credentials allow it, scoped-token configured-codebase fallback, dashboard-driven first-run setup/metadata-only attach, hydration/materialized-revision status, visible-file metadata listing, single-file hydration, metadata-only dehydrate state, and a remote cursor exposed through `hop status`. Solid v1 still needs automatic account bootstrap, richer hydrate onboarding, automatic lazy materialization policy, and production-grade event delivery before claiming the "install and boom" experience.
 
 ### Cloud File Graph
 
@@ -335,7 +335,7 @@ The local-agent contract is good enough for personal dogfooding, but the solid v
 
 - Persist a user-selected Workspace Root outside the source checkout. Production-profile paths and the root index path are in place.
 - Track codebase folders independently from one selected workspace path. The index now keys entries by codebase and concrete workspace path.
-- Add root-level codebase discovery and attach/hydrate state. D1 account-visible discovery, dashboard metadata-only attach, and hydration/readiness state are in place; automatic first-run setup and richer attach/hydrate onboarding remain.
+- Add root-level codebase discovery and attach/hydrate state. D1 account-visible discovery, dashboard first-run setup/metadata-only attach, and hydration/readiness state are in place; automatic account bootstrap and richer hydrate onboarding remain.
 - Surface metadata-only, partial, hydrated, dirty, blocked, and conflicted states in `hop status` and the web UI. Hydrated/materialized, metadata-only, partial single-file hydration, and cursor state are in place; automatic lazy policy and broader blocked/conflicted UI detail remain.
 - Keep the current managed-folder implementation as the first adapter.
 
