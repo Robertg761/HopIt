@@ -61,7 +61,9 @@ Not implemented yet:
 - private repo-wide encryption for all normal files
 - repo/private/secret zone key generation and use in file encryption
 - invite acceptance that grants decryption keys
-- dashboard-guided device approval, recovery import, and key rotation
+- dashboard-guided device approval, recovery import, and key rotation; the first
+  dashboard key-grant status panel now shows redacted trusted-device and
+  wrapped-key metadata for managers
 - path and metadata privacy for private repos
 - independent secret-sharing grants
 - complete revocation/rekey flows
@@ -666,7 +668,8 @@ Status: `Next`
 - Add explicit options for reviewer-only access, maintainer access, and future
   secret-group access.
 - Add owner-device approval flow for wrapping repo keys to recipients.
-- Add dashboard and CLI status for pending key grants.
+- Expand the first dashboard key-grant status panel into pending grant approval,
+  recovery import, and rotation flows.
 
 Exit criteria:
 

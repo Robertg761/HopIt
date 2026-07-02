@@ -1023,13 +1023,27 @@ export class CloudflareD1HopBackend {
 
   async listWorkItems({ codebaseId, actor = {} }) {
     await this.requireGraphCapability(codebaseId, actor, 'read')
-    const [issues, discussions, releases, projects, projectItems] = await Promise.all([
+    const [issues, issueComments, discussions, discussionComments, releases, projects, projectItems] = await Promise.all([
       this.query(`select * from issues where codebase_id = ? order by created_at desc, number desc`, [codebaseId]),
+      this.query(`select * from issue_comments where codebase_id = ? order by created_at asc`, [codebaseId]),
       this.query(`select * from discussions where codebase_id = ? order by created_at desc, number desc`, [codebaseId]),
+      this.query(`select * from discussion_comments where codebase_id = ? order by created_at asc`, [codebaseId]),
       this.query(`select * from releases where codebase_id = ? order by created_at desc, number desc`, [codebaseId]),
       this.query(`select * from projects where codebase_id = ? order by created_at desc, number desc`, [codebaseId]),
       this.query(`select * from project_items where codebase_id = ? order by project_id asc, position asc, created_at asc`, [codebaseId]),
     ])
+    const commentsByIssueId = new Map()
+    for (const comment of issueComments) {
+      const list = commentsByIssueId.get(comment.issue_id) ?? []
+      list.push(mapD1IssueComment(comment))
+      commentsByIssueId.set(comment.issue_id, list)
+    }
+    const commentsByDiscussionId = new Map()
+    for (const comment of discussionComments) {
+      const list = commentsByDiscussionId.get(comment.discussion_id) ?? []
+      list.push(mapD1DiscussionComment(comment))
+      commentsByDiscussionId.set(comment.discussion_id, list)
+    }
     const itemsByProjectId = new Map()
     for (const item of projectItems) {
       const list = itemsByProjectId.get(item.project_id) ?? []
@@ -1037,8 +1051,8 @@ export class CloudflareD1HopBackend {
       itemsByProjectId.set(item.project_id, list)
     }
     return {
-      issues: issues.map(mapD1Issue),
-      discussions: discussions.map(mapD1Discussion),
+      issues: issues.map((issue) => mapD1Issue(issue, commentsByIssueId.get(issue.issue_id) ?? [])),
+      discussions: discussions.map((discussion) => mapD1Discussion(discussion, commentsByDiscussionId.get(discussion.discussion_id) ?? [])),
       releases: releases.map(mapD1Release),
       projects: projects.map((project) => mapD1Project(project, itemsByProjectId.get(project.project_id) ?? [])),
     }
@@ -1051,7 +1065,9 @@ export class CloudflareD1HopBackend {
     if (input.type === 'release') return this.createRelease({ ...input, actor })
     if (input.type === 'project') return this.createProject({ ...input, actor })
     if (input.type === 'projectItem') return this.addProjectItem({ ...input, actor })
-    throw new Error('Expected type to be issue, discussion, release, project, or projectItem.')
+    if (input.type === 'issueComment') return this.createIssueComment({ ...input, actor })
+    if (input.type === 'discussionComment') return this.createDiscussionComment({ ...input, actor })
+    throw new Error('Expected type to be issue, discussion, release, project, projectItem, issueComment, or discussionComment.')
   }
 
   async updateWorkItem(input) {
@@ -1106,6 +1122,26 @@ export class CloudflareD1HopBackend {
     return mapD1Issue(await this.first(`select * from issues where issue_id = ?`, [issueId]))
   }
 
+  async createIssueComment({ issueId, body, createdBy, actor }) {
+    const issue = await this.first(`select * from issues where issue_id = ? limit 1`, [issueId])
+    if (!issue) throw new Error('Issue not found.')
+    await this.requireGraphCapability(issue.codebase_id, actor, 'write')
+    const now = new Date().toISOString()
+    const commentId = `icom_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`
+    const author = actorAuditId(actor, createdBy, 'Issue comment creator')
+    await this.query(
+      `insert into issue_comments (
+        comment_id, codebase_id, issue_id, body, created_by, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?)`,
+      [commentId, issue.codebase_id, issueId, requireTextValue(body, 'Issue comment body'), author, now, now],
+    )
+    await this.query(
+      `update issues set updated_by = ?, updated_at = ? where issue_id = ?`,
+      [author, now, issueId],
+    )
+    return mapD1IssueComment(await this.first(`select * from issue_comments where comment_id = ?`, [commentId]))
+  }
+
   async createDiscussion({ codebaseId, title, body, category, labels, linkedIssueIds, linkedChangeSetId, createdBy, actor }) {
     await this.requireGraphCapability(codebaseId, actor, 'write')
     const now = new Date().toISOString()
@@ -1145,6 +1181,27 @@ export class CloudflareD1HopBackend {
       [nextStatus, actorAuditId(actor, updatedBy, 'Discussion updater'), now, nextStatus === 'closed' ? now : null, discussionId],
     )
     return mapD1Discussion(await this.first(`select * from discussions where discussion_id = ?`, [discussionId]))
+  }
+
+  async createDiscussionComment({ discussionId, body, createdBy, actor }) {
+    const discussion = await this.first(`select * from discussions where discussion_id = ? limit 1`, [discussionId])
+    if (!discussion) throw new Error('Discussion not found.')
+    if (discussion.status === 'locked') throw new Error('Locked discussions cannot accept new comments.')
+    await this.requireGraphCapability(discussion.codebase_id, actor, 'write')
+    const now = new Date().toISOString()
+    const commentId = `dcom_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`
+    const author = actorAuditId(actor, createdBy, 'Discussion comment creator')
+    await this.query(
+      `insert into discussion_comments (
+        comment_id, codebase_id, discussion_id, body, created_by, created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?)`,
+      [commentId, discussion.codebase_id, discussionId, requireTextValue(body, 'Discussion comment body'), author, now, now],
+    )
+    await this.query(
+      `update discussions set updated_by = ?, updated_at = ? where discussion_id = ?`,
+      [author, now, discussionId],
+    )
+    return mapD1DiscussionComment(await this.first(`select * from discussion_comments where comment_id = ?`, [commentId]))
   }
 
   async createRelease({ codebaseId, version, title, notes, status, target, createdBy, actor }) {
@@ -1762,6 +1819,45 @@ export class CloudflareD1HopBackend {
       .filter((row) => options.includeExpired || row.status !== 'expired')
       .filter((row) => canActorReadWrappedKey(row, actor, actorDevices))
       .map(summarizeWrappedKey)
+  }
+
+  async readKeyGrantStatus({ codebaseId = this.codebaseId, actor = {} } = {}) {
+    await this.requireGraphCapability(codebaseId, actor, 'manage_members')
+    const [codebaseKeyring, members, wraps] = await Promise.all([
+      this.first(`select * from codebase_keyrings where codebase_id = ? limit 1`, [codebaseId]),
+      this.query(`select user_id, role, status from codebase_members where codebase_id = ? order by joined_at asc`, [codebaseId]),
+      this.query(`select * from wrapped_keys where codebase_id = ? order by created_at desc`, [codebaseId]),
+    ])
+    const userIds = uniqueStrings(members.map((member) => member.user_id))
+    const [devices, userKeyrings] = userIds.length > 0
+      ? await Promise.all([
+          this.query(
+            `select * from device_keys where user_id in (${userIds.map(() => '?').join(', ')}) order by coalesce(last_seen_at, created_at) desc`,
+            userIds,
+          ),
+          this.query(
+            `select * from user_keyrings where user_id in (${userIds.map(() => '?').join(', ')}) order by updated_at desc`,
+            userIds,
+          ),
+        ])
+      : [[], []]
+    const now = Date.now()
+
+    return {
+      codebaseId,
+      codebaseKeyring: summarizeCodebaseKeyring(codebaseKeyring),
+      members: members.map((member) => ({
+        userId: member.user_id,
+        role: member.role,
+        status: member.status,
+      })),
+      devices: devices.map(summarizeDeviceKey),
+      userKeyrings: userKeyrings.map(summarizeUserKeyring),
+      wrappedKeys: wraps.map((row) => {
+        const { ciphertext: _ciphertext, ...summary } = summarizeWrappedKey({ ...row, status: effectiveWrappedKeyStatus(row, now) })
+        return summary
+      }),
+    }
   }
 
   async revokeWrappedKey(options = {}) {
@@ -2551,7 +2647,7 @@ function mapD1Invitation(row) {
   }
 }
 
-function mapD1Issue(row) {
+function mapD1Issue(row, comments = []) {
   if (!row) return null
   return {
     _id: row.issue_id,
@@ -2571,10 +2667,26 @@ function mapD1Issue(row) {
     createdAt: stringOrNull(row.created_at) ?? '',
     updatedAt: stringOrNull(row.updated_at) ?? '',
     closedAt: stringOrNull(row.closed_at),
+    comments,
   }
 }
 
-function mapD1Discussion(row) {
+function mapD1IssueComment(row) {
+  if (!row) return null
+  return {
+    _id: row.comment_id,
+    id: row.comment_id,
+    codebaseId: row.codebase_id,
+    issueId: row.issue_id,
+    body: stringOrNull(row.body) ?? '',
+    createdBy: stringOrNull(row.created_by) ?? 'unknown',
+    updatedBy: stringOrNull(row.updated_by),
+    createdAt: stringOrNull(row.created_at) ?? '',
+    updatedAt: stringOrNull(row.updated_at) ?? '',
+  }
+}
+
+function mapD1Discussion(row, comments = []) {
   if (!row) return null
   return {
     _id: row.discussion_id,
@@ -2593,6 +2705,22 @@ function mapD1Discussion(row) {
     createdAt: stringOrNull(row.created_at) ?? '',
     updatedAt: stringOrNull(row.updated_at) ?? '',
     closedAt: stringOrNull(row.closed_at),
+    comments,
+  }
+}
+
+function mapD1DiscussionComment(row) {
+  if (!row) return null
+  return {
+    _id: row.comment_id,
+    id: row.comment_id,
+    codebaseId: row.codebase_id,
+    discussionId: row.discussion_id,
+    body: stringOrNull(row.body) ?? '',
+    createdBy: stringOrNull(row.created_by) ?? 'unknown',
+    updatedBy: stringOrNull(row.updated_by),
+    createdAt: stringOrNull(row.created_at) ?? '',
+    updatedAt: stringOrNull(row.updated_at) ?? '',
   }
 }
 

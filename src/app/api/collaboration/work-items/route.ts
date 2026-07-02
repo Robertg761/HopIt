@@ -10,6 +10,7 @@ import {
 } from '@/lib/cloud-backend'
 import type {
   CollaborationCapabilities,
+  CollaborationComment,
   CollaborationDiscussion,
   CollaborationIssue,
   CollaborationProject,
@@ -112,8 +113,26 @@ export async function POST(request: Request) {
         createdBy,
         actor,
       })
+    } else if (body.type === 'issueComment') {
+      await createCloudWorkItem({
+        type: 'issueComment',
+        codebaseId,
+        issueId: requireText(body.issueId, 'issueId'),
+        body: requireText(body.body, 'body'),
+        createdBy,
+        actor,
+      })
+    } else if (body.type === 'discussionComment') {
+      await createCloudWorkItem({
+        type: 'discussionComment',
+        codebaseId,
+        discussionId: requireText(body.discussionId, 'discussionId'),
+        body: requireText(body.body, 'body'),
+        createdBy,
+        actor,
+      })
     } else {
-      return workItemsError(codebaseId, 'invalid_type', 'Expected type to be issue, discussion, release, project, or projectItem.', 400)
+      return workItemsError(codebaseId, 'invalid_type', 'Expected type to be issue, discussion, release, project, projectItem, issueComment, or discussionComment.', 400)
     }
 
     return NextResponse.json(await readWorkItems(codebaseId, actor), responseInit())
@@ -231,6 +250,7 @@ function mapIssue(row: Record<string, unknown>): CollaborationIssue {
     createdAt: stringValue(row.createdAt) ?? '',
     updatedAt: stringValue(row.updatedAt) ?? '',
     closedAt: stringValue(row.closedAt),
+    comments: commentArray(row.comments),
   }
 }
 
@@ -250,6 +270,7 @@ function mapDiscussion(row: Record<string, unknown>): CollaborationDiscussion {
     createdAt: stringValue(row.createdAt) ?? '',
     updatedAt: stringValue(row.updatedAt) ?? '',
     closedAt: stringValue(row.closedAt),
+    comments: commentArray(row.comments),
   }
 }
 
@@ -307,6 +328,26 @@ function mapProjectItem(row: Record<string, unknown>): CollaborationProjectItem 
     },
     columnId: stringValue(row.columnId) ?? 'todo',
     position: numberValue(row.position) ?? 0,
+    createdBy: stringValue(row.createdBy) ?? 'unknown',
+    updatedBy: stringValue(row.updatedBy),
+    createdAt: stringValue(row.createdAt) ?? '',
+    updatedAt: stringValue(row.updatedAt) ?? '',
+  }
+}
+
+function commentArray(value: unknown): CollaborationComment[] {
+  if (!Array.isArray(value)) return []
+  return value.map(mapComment).filter((comment): comment is CollaborationComment => Boolean(comment))
+}
+
+function mapComment(value: unknown): CollaborationComment | null {
+  const row = recordValue(value)
+  if (!row) return null
+  const id = stringValue(row.id)
+  if (!id) return null
+  return {
+    id,
+    body: stringValue(row.body) ?? '',
     createdBy: stringValue(row.createdBy) ?? 'unknown',
     updatedBy: stringValue(row.updatedBy),
     createdAt: stringValue(row.createdAt) ?? '',

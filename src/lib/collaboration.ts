@@ -39,6 +39,15 @@ export type CollaborationError = {
   message: string
 }
 
+export type CollaborationComment = {
+  id: string
+  body: string
+  createdBy: string
+  updatedBy: string | null
+  createdAt: string
+  updatedAt: string
+}
+
 export type CollaborationIssue = {
   id: string
   number: number
@@ -55,6 +64,7 @@ export type CollaborationIssue = {
   createdAt: string
   updatedAt: string
   closedAt: string | null
+  comments: CollaborationComment[]
 }
 
 export type CollaborationDiscussion = {
@@ -72,6 +82,7 @@ export type CollaborationDiscussion = {
   createdAt: string
   updatedAt: string
   closedAt: string | null
+  comments: CollaborationComment[]
 }
 
 export type CollaborationRelease = {
@@ -187,6 +198,70 @@ export type MembersResponse = {
   error?: CollaborationError
 }
 
+export type KeyGrantStatusResponse = {
+  ok: boolean
+  codebaseId: string | null
+  codebaseKeyring: {
+    codebaseId: string
+    repoContentKeyId: string
+    ownerPrivateKeyId: string
+    gitInternalsKeyId: string
+    defaultSecretKeyId: string
+    rotationState: string | null
+    createdAt: string
+    updatedAt: string
+  } | null
+  members: Array<{
+    userId: string
+    role: string
+    status: string
+  }>
+  devices: Array<{
+    deviceId: string
+    userId: string
+    displayName: string | null
+    platform: string | null
+    encryptionPublicKeyAlgorithm: string
+    encryptionPublicKeyEncoding: string
+    signingPublicKeyAlgorithm: string | null
+    signingPublicKeyEncoding: string | null
+    status: string
+    createdAt: string
+    trustedAt: string | null
+    revokedAt: string | null
+    lastSeenAt: string | null
+  }>
+  userKeyrings: Array<{
+    userId: string
+    vaultKeyId: string
+    currentVersion: number
+    status: string
+    recoveryConfigured: boolean
+    createdAt: string
+    updatedAt: string
+  }>
+  wrappedKeys: Array<{
+    wrapId: string
+    wrappedKeyId: string
+    wrappedKeyType: string
+    keyVersion: number
+    recipientType: string
+    recipientId: string
+    codebaseId: string | null
+    zoneId: string | null
+    wrappingKeyId: string | null
+    wrappingPublicKeyId: string | null
+    algorithm: string
+    createdByUserId: string | null
+    createdByDeviceId: string | null
+    createdAt: string
+    expiresAt: string | null
+    revokedAt: string | null
+    status: string
+  }>
+  error?: CollaborationError
+}
+
 export type CreateIssueInput = {
   type: 'issue'
   codebaseId: string
@@ -240,12 +315,30 @@ export type CreateProjectItemInput = {
   createdBy: string
 }
 
+export type CreateIssueCommentInput = {
+  type: 'issueComment'
+  codebaseId: string
+  issueId: string
+  body: string
+  createdBy: string
+}
+
+export type CreateDiscussionCommentInput = {
+  type: 'discussionComment'
+  codebaseId: string
+  discussionId: string
+  body: string
+  createdBy: string
+}
+
 export type CreateCollaborationInput =
   | CreateIssueInput
   | CreateDiscussionInput
   | CreateReleaseInput
   | CreateProjectInput
   | CreateProjectItemInput
+  | CreateIssueCommentInput
+  | CreateDiscussionCommentInput
 
 export type UpdateCollaborationInput =
   | {
@@ -344,6 +437,12 @@ export async function fetchMembers(codebaseId: string): Promise<MembersResponse>
   return readJson<MembersResponse>(`/api/collaboration/members?codebaseId=${encodeURIComponent(codebaseId)}`, {
     cache: 'no-store',
   }, membersFallback(codebaseId))
+}
+
+export async function fetchKeyGrantStatus(codebaseId: string): Promise<KeyGrantStatusResponse> {
+  return readJson<KeyGrantStatusResponse>(`/api/collaboration/keys?codebaseId=${encodeURIComponent(codebaseId)}`, {
+    cache: 'no-store',
+  }, keyGrantStatusFallback(codebaseId))
 }
 
 export async function createInvitation(input: CreateInvitationInput): Promise<InvitationsResponse> {
@@ -505,6 +604,26 @@ function membersFallback(codebaseId: string): (response: Response) => MembersRes
       },
       members: [],
       unavailableReason: reason,
+      error: {
+        code: `http_${response.status}`,
+        message: reason,
+      },
+    }
+  }
+}
+
+function keyGrantStatusFallback(codebaseId: string): (response: Response) => KeyGrantStatusResponse {
+  return (response) => {
+    const reason = responseMessage(response)
+
+    return {
+      ok: false,
+      codebaseId,
+      codebaseKeyring: null,
+      members: [],
+      devices: [],
+      userKeyrings: [],
+      wrappedKeys: [],
       error: {
         code: `http_${response.status}`,
         message: reason,

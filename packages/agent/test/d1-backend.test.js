@@ -153,6 +153,22 @@ test('D1 backend supports members, invitations, and collaboration work items', a
     notes: 'First D1-backed collaboration release.',
     actor: owner,
   })
+  const issueComment = await backend.createWorkItem({
+    type: 'issueComment',
+    codebaseId: 'collab-core',
+    issueId: issue.id,
+    body: 'This issue now has a durable comment.',
+    actor: owner,
+  })
+  assert.equal(issueComment.issueId, issue.id)
+  const discussionComment = await backend.createWorkItem({
+    type: 'discussionComment',
+    codebaseId: 'collab-core',
+    discussionId: discussion.id,
+    body: 'This discussion also has a durable comment.',
+    actor: owner,
+  })
+  assert.equal(discussionComment.discussionId, discussion.id)
   const project = await backend.createWorkItem({
     type: 'project',
     codebaseId: 'collab-core',
@@ -200,7 +216,11 @@ test('D1 backend supports members, invitations, and collaboration work items', a
   assert.equal(items.issues.length, 1)
   assert.equal(items.issues[0].number, 1)
   assert.deepEqual(items.issues[0].labels, ['d1', 'migration'])
+  assert.equal(items.issues[0].comments.length, 1)
+  assert.equal(items.issues[0].comments[0].body, 'This issue now has a durable comment.')
   assert.equal(items.discussions.length, 1)
+  assert.equal(items.discussions[0].comments.length, 1)
+  assert.equal(items.discussions[0].comments[0].body, 'This discussion also has a durable comment.')
   assert.equal(items.releases.length, 1)
   assert.equal(items.projects.length, 1)
   assert.equal(items.projects[0].items.length, 1)
@@ -330,6 +350,14 @@ test('D1 backend supports scoped sessions and trusted device key metadata', asyn
   const wraps = await backend.listWrappedKeys({ codebaseId: 'hopit-core' })
   assert.equal(wraps.length, 1)
   assert.equal(wraps[0].recipientId, keyring.keyring.deviceId)
+  const keyStatus = await backend.readKeyGrantStatus({
+    codebaseId: 'hopit-core',
+    actor: { userId: 'user_demo_owner' },
+  })
+  assert.equal(keyStatus.devices.length, 1)
+  assert.equal(keyStatus.userKeyrings.length, 1)
+  assert.equal(keyStatus.wrappedKeys.length, 1)
+  assert.equal(Object.hasOwn(keyStatus.wrappedKeys[0], 'ciphertext'), false)
 
   const scopedBackend = createD1Backend({
     'codebase-id': 'hopit-core',

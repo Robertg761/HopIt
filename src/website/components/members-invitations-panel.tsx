@@ -18,6 +18,7 @@ import {
   acceptInvitation,
   claimCodebaseOwner,
   createInvitation,
+  fetchKeyGrantStatus,
   fetchMembers,
   fetchInvitations,
   removeCodebaseMember,
@@ -25,6 +26,7 @@ import {
   suspendCodebaseMember,
   type CodebaseMember,
   type InvitationsResponse,
+  type KeyGrantStatusResponse,
   type MembersResponse,
   type PendingInvitation,
 } from '@/lib/collaboration'
@@ -44,6 +46,8 @@ export function MembersInvitationsPanel({ status, loading, onRefreshStatus }: Me
   const [loadingMembers, setLoadingMembers] = React.useState(false)
   const [invitations, setInvitations] = React.useState<InvitationsResponse | null>(null)
   const [loadingInvites, setLoadingInvites] = React.useState(false)
+  const [keyGrantStatus, setKeyGrantStatus] = React.useState<KeyGrantStatusResponse | null>(null)
+  const [loadingKeyGrants, setLoadingKeyGrants] = React.useState(false)
   const [inviteEmail, setInviteEmail] = React.useState('')
   const [inviteRole, setInviteRole] = React.useState<PendingInvitation['role']>('member')
   const [acceptToken, setAcceptToken] = React.useState('')
@@ -104,19 +108,23 @@ export function MembersInvitationsPanel({ status, loading, onRefreshStatus }: Me
       if (!codebaseId) {
         setMembers(null)
         setInvitations(null)
+        setKeyGrantStatus(null)
         return
       }
 
       setLoadingMembers(true)
       setLoadingInvites(true)
+      setLoadingKeyGrants(true)
       try {
-        const [nextMembers, nextInvitations] = await Promise.all([
+        const [nextMembers, nextInvitations, nextKeyGrantStatus] = await Promise.all([
           fetchMembers(codebaseId),
           fetchInvitations(codebaseId),
+          fetchKeyGrantStatus(codebaseId),
         ])
         if (!cancelled) {
           setMembers(nextMembers)
           setInvitations(nextInvitations)
+          setKeyGrantStatus(nextKeyGrantStatus)
         }
       } catch (error) {
         if (!cancelled) {
@@ -152,10 +160,24 @@ export function MembersInvitationsPanel({ status, loading, onRefreshStatus }: Me
               message: error instanceof Error ? error.message : 'Invitation request failed.',
             },
           })
+          setKeyGrantStatus({
+            ok: false,
+            codebaseId,
+            codebaseKeyring: null,
+            members: [],
+            devices: [],
+            userKeyrings: [],
+            wrappedKeys: [],
+            error: {
+              code: 'key_status_fetch_failed',
+              message: error instanceof Error ? error.message : 'Key grant request failed.',
+            },
+          })
         }
       } finally {
         if (!cancelled) setLoadingMembers(false)
         if (!cancelled) setLoadingInvites(false)
+        if (!cancelled) setLoadingKeyGrants(false)
       }
     }
 
@@ -331,6 +353,7 @@ export function MembersInvitationsPanel({ status, loading, onRefreshStatus }: Me
             onTokenChange={setAcceptToken}
             onSubmit={handleAcceptSubmit}
           />
+          <KeyGrantStatusPanel status={keyGrantStatus} loading={loadingKeyGrants} canManage={canManageMembers} />
         </div>
       </div>
     </section>
@@ -790,6 +813,107 @@ function AcceptInviteForm({
       </div>
       {disabledReason ? <p className="mt-2 text-[11px] text-muted-foreground">{disabledReason}</p> : null}
     </form>
+  )
+}
+
+function KeyGrantStatusPanel({
+  status,
+  loading,
+  canManage,
+}: {
+  status: KeyGrantStatusResponse | null
+  loading: boolean
+  canManage: boolean
+}) {
+  const trustedDevices = status?.devices.filter((device) => device.status === 'trusted').length ?? 0
+  const activeWraps = status?.wrappedKeys.filter((wrap) => wrap.status === 'active').length ?? 0
+  const configuredVaults = status?.userKeyrings.filter((keyring) => keyring.status === 'active').length ?? 0
+  const codebaseKeyring = status?.codebaseKeyring
+
+  return (
+    <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-xs font-semibold">
+          <KeyRound className="size-3.5 text-hop" />
+          Key grants
+        </p>
+        <span className={cn(
+          'rounded-md px-1.5 py-0.5 text-[10px] ring-1 ring-inset',
+          status?.ok
+            ? 'bg-hop/10 text-hop ring-hop/20'
+            : 'bg-muted text-muted-foreground ring-border/60',
+        )}>
+          {loading ? '...' : status?.ok ? 'ready' : 'limited'}
+        </span>
+      </div>
+
+      {loading ? (
+        <PanelNotice icon={KeyRound} title="Loading key grants" detail="Reading trusted-device metadata." compact />
+      ) : status?.ok ? (
+        <>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            <KeyGrantMetric label="Devices" value={trustedDevices.toString()} active={trustedDevices > 0} />
+            <KeyGrantMetric label="Vaults" value={configuredVaults.toString()} active={configuredVaults > 0} />
+            <KeyGrantMetric label="Wraps" value={activeWraps.toString()} active={activeWraps > 0} />
+          </div>
+          <dl className="mt-3 space-y-2 text-[11px]">
+            <KeyGrantDatum label="Repo key" value={codebaseKeyring?.repoContentKeyId ?? 'not configured'} />
+            <KeyGrantDatum label="Private key" value={codebaseKeyring?.ownerPrivateKeyId ?? 'not configured'} />
+            <KeyGrantDatum label="Rotation" value={codebaseKeyring?.rotationState ?? 'not started'} />
+          </dl>
+          {status.devices.length > 0 ? (
+            <ol className="mt-3 max-h-40 space-y-1.5 overflow-auto scroll-thin">
+              {status.devices.slice(0, 5).map((device) => (
+                <li key={device.deviceId} className="rounded-lg bg-card px-2.5 py-2 ring-1 ring-border/50">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-xs font-semibold">{device.displayName ?? device.deviceId}</p>
+                      <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
+                        {device.userId} - {device.encryptionPublicKeyAlgorithm}
+                      </p>
+                    </div>
+                    <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                      {device.status}
+                    </span>
+                  </div>
+                </li>
+              ))}
+            </ol>
+          ) : null}
+          {!canManage ? (
+            <p className="mt-2 text-[11px] text-muted-foreground">Key grant details require member-management permission.</p>
+          ) : null}
+        </>
+      ) : (
+        <PanelNotice
+          icon={AlertCircle}
+          title="Key grants unavailable"
+          detail={status?.error?.message ?? 'Key grant status is not loaded.'}
+          compact
+        />
+      )}
+    </div>
+  )
+}
+
+function KeyGrantMetric({ label, value, active }: { label: string; value: string; active: boolean }) {
+  return (
+    <div className={cn(
+      'min-w-0 rounded-lg px-2 py-1.5 border',
+      active ? 'bg-primary/8 text-primary border-primary/20' : 'bg-card text-muted-foreground border-border/60',
+    )}>
+      <p className="truncate text-[9px] font-bold uppercase text-muted-foreground">{label}</p>
+      <p className="mt-0.5 truncate text-xs font-bold text-foreground">{value}</p>
+    </div>
+  )
+}
+
+function KeyGrantDatum({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 truncate font-medium">{value}</dd>
+    </div>
   )
 }
 

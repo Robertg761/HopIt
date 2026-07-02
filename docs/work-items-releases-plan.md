@@ -17,7 +17,7 @@ The goal is not to turn HopIt into a social Git host. HopIt should keep its curr
 
 The collaboration layer should add the missing project-management objects developers expect around that core: issues, project boards, discussions, and releases.
 
-Current live setup note: first issue, discussion, release, and member/invite slices exist behind the Clerk-protected Vercel deployment at `https://hopit.dev`, with production Google OAuth configured for the owner test user and D1 owner claim verified. Project boards, richer release artifacts, durable review linkage, notifications, and complete permission coverage remain future work. Operational setup details, active accounts, and config locations are centralized in [Personal Production Runbook](personal-production.md).
+Current live setup note: first issue, discussion, release, project-board, comment, and member/invite slices exist behind the Clerk-protected Vercel deployment at `https://hopit.dev`, with production Google OAuth configured for the owner test user and D1 owner claim verified. Richer release artifacts, dedicated detail pages, durable snapshot-anchored review linkage, notifications, and complete permission coverage remain future work. Operational setup details, active accounts, and config locations are centralized in [Personal Production Runbook](personal-production.md).
 
 ## Product Principles
 
@@ -210,7 +210,7 @@ Scope:
 - Added permission-gated Convex functions for basic create/list/status/comment/asset operations.
 - Added codebase existence validation before creating issues, projects, discussions, and releases.
 - Added first hosted UI and API routes for issue, discussion, and release list/create/update flows.
-- D1 project-board backend operations now exist for create/archive boards plus add/move items. Project-board UI, comment detail pages, and release artifact workflows remain future work.
+- D1 project-board operations and UI now exist for create/archive boards plus add/move note cards. Durable issue/discussion comments are stored in D1 and surfaced in the work UI. Dedicated detail pages, richer linked-object cards, and release artifact workflows remain future work.
 
 Proof:
 
@@ -250,7 +250,7 @@ Scope:
 
 - Add codebase-level tabs or navigation for Issues, Projects, Discussions, and Releases.
 - Keep the first UI dense and work-focused, not social-network styled.
-- Add issue/detail pages, discussion threads, project board movement, and release draft/publish views.
+- Add dedicated issue/detail pages, richer discussion threads, linked-object project cards, and release artifact views.
 - Show links from active change sets to related issues/releases.
 
 Proof:

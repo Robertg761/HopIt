@@ -13,12 +13,18 @@ import {
   Lock,
   Loader2,
   MessageSquareText,
+  RefreshCcw,
   Search,
   ShieldCheck,
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { createCollaborationItem } from '@/lib/collaboration'
+import {
+  createCollaborationItem,
+  fetchWorkItems,
+  type CollaborationIssue,
+  type WorkItemsResponse,
+} from '@/lib/collaboration'
 import type { AgentFile, AgentStatusSnapshot } from '@/website/lib/agent-status'
 
 type CodeReviewSectionProps = {
@@ -46,6 +52,10 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
   const [selectedLine, setSelectedLine] = React.useState<number | null>(null)
   const [followupMessage, setFollowupMessage] = React.useState<string | null>(null)
   const [creatingFollowup, setCreatingFollowup] = React.useState(false)
+  const [workItems, setWorkItems] = React.useState<WorkItemsResponse | null>(null)
+  const [loadingThreads, setLoadingThreads] = React.useState(false)
+  const [commentDrafts, setCommentDrafts] = React.useState<Record<string, string>>({})
+  const [commentingIssueId, setCommentingIssueId] = React.useState<string | null>(null)
   const filteredRows = React.useMemo(
     () => filterReviewRows(reviewRows, fileFilter, fileQuery),
     [fileFilter, fileQuery, reviewRows],
@@ -60,10 +70,38 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
   const reviewEvents = status.events.filter((event) =>
     isReviewHistoryEvent(event.label),
   )
+  const reviewIssues = React.useMemo(
+    () => reviewLinkedIssues(workItems?.issues ?? [], status.activeChangeSetId),
+    [status.activeChangeSetId, workItems?.issues],
+  )
   const canCreateFollowup =
     Boolean(status.codebaseId) &&
     selectedFile?.scope === 'shared' &&
     status.requester.permissions.includes('write')
+
+  const loadReviewThreads = React.useCallback(async () => {
+    if (!status.codebaseId) {
+      setWorkItems(null)
+      return
+    }
+
+    setLoadingThreads(true)
+    try {
+      setWorkItems(await fetchWorkItems(status.codebaseId))
+    } finally {
+      setLoadingThreads(false)
+    }
+  }, [status.codebaseId])
+
+  React.useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      void loadReviewThreads()
+    }, 0)
+
+    return () => {
+      window.clearTimeout(timeout)
+    }
+  }, [loadReviewThreads])
 
   async function createFollowupIssue() {
     if (!status.codebaseId || !selectedFile || !canCreateFollowup) return
@@ -90,10 +128,37 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
         createdBy: status.requester.id ?? 'browser-ui',
       })
       setFollowupMessage(result.ok ? 'Follow-up issue created.' : (result.error?.message ?? 'Issue create failed.'))
+      if (result.ok) setWorkItems(result)
     } catch (error) {
       setFollowupMessage(error instanceof Error ? error.message : 'Issue create failed.')
     } finally {
       setCreatingFollowup(false)
+    }
+  }
+
+  async function addReviewComment(issue: CollaborationIssue) {
+    const body = commentDrafts[issue.id]?.trim()
+    if (!status.codebaseId || !body || !status.requester.permissions.includes('write')) return
+
+    setCommentingIssueId(issue.id)
+    setFollowupMessage(null)
+    try {
+      const result = await createCollaborationItem({
+        type: 'issueComment',
+        codebaseId: status.codebaseId,
+        issueId: issue.id,
+        body,
+        createdBy: status.requester.id ?? 'browser-ui',
+      })
+      setWorkItems(result)
+      setFollowupMessage(result.ok ? 'Review comment added.' : (result.error?.message ?? 'Review comment failed.'))
+      if (result.ok) {
+        setCommentDrafts((current) => ({ ...current, [issue.id]: '' }))
+      }
+    } catch (error) {
+      setFollowupMessage(error instanceof Error ? error.message : 'Review comment failed.')
+    } finally {
+      setCommentingIssueId(null)
     }
   }
 
@@ -257,6 +322,16 @@ export function CodeReviewSection({ status }: CodeReviewSectionProps) {
             followupMessage={followupMessage}
             onCreateFollowup={() => void createFollowupIssue()}
           />
+          <ReviewThreadsCard
+            issues={reviewIssues}
+            loading={loadingThreads}
+            canComment={status.requester.permissions.includes('write')}
+            commentDrafts={commentDrafts}
+            commentingIssueId={commentingIssueId}
+            onRefresh={() => void loadReviewThreads()}
+            onCommentDraftChange={(issue, value) => setCommentDrafts((current) => ({ ...current, [issue.id]: value }))}
+            onAddComment={(issue) => void addReviewComment(issue)}
+          />
           <ReviewStateCard status={status} privateFileCount={privateFileCount} />
           <HistoryCard events={reviewEvents} />
         </div>
@@ -408,6 +483,109 @@ function ReviewMetric({ icon: Icon, label, value, tone }: ReviewMetricProps) {
         <span className="truncate">{label}</span>
       </p>
       <p className="mt-1 truncate text-xs font-bold text-foreground">{value}</p>
+    </div>
+  )
+}
+
+function ReviewThreadsCard({
+  issues,
+  loading,
+  canComment,
+  commentDrafts,
+  commentingIssueId,
+  onRefresh,
+  onCommentDraftChange,
+  onAddComment,
+}: {
+  issues: CollaborationIssue[]
+  loading: boolean
+  canComment: boolean
+  commentDrafts: Record<string, string>
+  commentingIssueId: string | null
+  onRefresh: () => void
+  onCommentDraftChange: (issue: CollaborationIssue, value: string) => void
+  onAddComment: (issue: CollaborationIssue) => void
+}) {
+  return (
+    <div className="rounded-lg border border-border/60 bg-muted/20 p-3">
+      <div className="flex items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-xs font-semibold">
+          <MessageSquareText className="size-3.5 text-hop" />
+          Review comments
+        </p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={loading}
+          className="h-7 rounded-md px-2 text-[11px]"
+          onClick={onRefresh}
+        >
+          <RefreshCcw className={cn('size-3.5', loading && 'animate-spin')} />
+        </Button>
+      </div>
+      {loading ? (
+        <p className="mt-2 text-xs text-muted-foreground">Loading review threads.</p>
+      ) : issues.length > 0 ? (
+        <ol className="mt-3 space-y-2">
+          {issues.slice(0, 5).map((issue) => {
+            const draft = commentDrafts[issue.id] ?? ''
+            const isSubmitting = commentingIssueId === issue.id
+            const recentComments = issue.comments.slice(-2)
+
+            return (
+              <li key={issue.id} className="rounded-lg bg-card p-2.5 ring-1 ring-border/50">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="line-clamp-2 text-xs font-semibold">#{issue.number} {issue.title}</p>
+                    <p className="mt-0.5 text-[10.5px] text-muted-foreground">
+                      {issue.status} - {issue.comments.length} comments
+                    </p>
+                  </div>
+                  <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                    {issue.priority ?? 'review'}
+                  </span>
+                </div>
+                {recentComments.length > 0 ? (
+                  <ol className="mt-2 space-y-1.5">
+                    {recentComments.map((comment) => (
+                      <li key={comment.id} className="rounded-md bg-muted/50 px-2 py-1.5">
+                        <p className="line-clamp-2 text-[11px]">{comment.body}</p>
+                        <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
+                          {comment.createdBy} - {formatDate(comment.createdAt)}
+                        </p>
+                      </li>
+                    ))}
+                  </ol>
+                ) : null}
+                <div className="mt-2 grid gap-1.5">
+                  <textarea
+                    value={draft}
+                    onChange={(event) => onCommentDraftChange(issue, event.target.value)}
+                    disabled={!canComment || isSubmitting}
+                    rows={2}
+                    placeholder="Add review comment"
+                    className="h-auto resize-none rounded-lg border border-border/60 bg-muted/40 px-2 py-1.5 text-xs outline-none transition placeholder:text-muted-foreground focus:border-hop/40 focus:ring-2 focus:ring-hop/20 disabled:cursor-not-allowed disabled:opacity-60"
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    disabled={!canComment || isSubmitting || !draft.trim()}
+                    className="h-7 justify-start rounded-md text-[11px]"
+                    onClick={() => onAddComment(issue)}
+                  >
+                    {isSubmitting ? <Loader2 className="size-3.5 animate-spin" /> : <MessageSquareText className="size-3.5" />}
+                    Comment
+                  </Button>
+                </div>
+              </li>
+            )
+          })}
+        </ol>
+      ) : (
+        <p className="mt-2 text-xs text-muted-foreground">No durable review follow-ups yet.</p>
+      )}
     </div>
   )
 }
@@ -614,6 +792,26 @@ function matchesReviewQuery(file: AgentFile, normalizedQuery: string) {
 
 function isReviewHistoryEvent(label: string) {
   return /review|merge|merged|conflict|remote[-_.]update|sync|acknowledged/.test(label.toLowerCase())
+}
+
+function reviewLinkedIssues(issues: CollaborationIssue[], activeChangeSetId: string) {
+  return issues
+    .filter((issue) => {
+      if (issue.labels.includes('review') || issue.labels.includes('code-browser')) return true
+      return activeChangeSetId !== 'None' && issue.linkedChangeSetId === activeChangeSetId
+    })
+    .sort((a, b) => Date.parse(b.updatedAt || b.createdAt) - Date.parse(a.updatedAt || a.createdAt))
+}
+
+function formatDate(value: string) {
+  const timestamp = Date.parse(value)
+  if (!Number.isFinite(timestamp)) return 'unknown'
+  return new Intl.DateTimeFormat(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(new Date(timestamp))
 }
 
 function revisionNumber(revision: string) {

@@ -34,7 +34,7 @@ Already available in this repo:
 - The dashboard has a read-only `CodeReviewSection` that lists visible files, supports path search and scope/status filters, renders capped content previews with line anchors, and groups review readiness/history signals.
 - D1 can persist the current graph, files, and agent events; legacy Convex remains a fallback/export source.
 
-Current live setup note: this browser/review work runs inside the Clerk-protected Vercel deployment at `https://hopit.dev` against Cloudflare D1 through the `hopit-d1-api` Worker. Production Google OAuth is configured for the owner test user, and D1 owner claim is verified. Routeable tree APIs, durable diffs, and review comments are still future work. Operational setup details are centralized in [Personal Production Runbook](personal-production.md).
+Current live setup note: this browser/review work runs inside the Clerk-protected Vercel deployment at `https://hopit.dev` against Cloudflare D1 through the `hopit-d1-api` Worker. Production Google OAuth is configured for the owner test user, and D1 owner claim is verified. The dashboard can create review follow-up issues and show/add durable comments on review-linked issues. Routeable tree APIs, durable diffs, snapshot-anchored inline review comments, and durable review decision records are still future work. Operational setup details are centralized in [Personal Production Runbook](personal-production.md).
 
 Not yet available:
 
@@ -42,7 +42,7 @@ Not yet available:
 - Durable merge records.
 - A true tree API separate from the status payload.
 - A diff API that compares Main, snapshots, and active change sets.
-- Review comment storage.
+- Standalone snapshot-anchored review comment storage.
 - Review decisions or requested-change state.
 - File history import from Git ancestry.
 - Dedicated routeable tree/file/compare APIs beyond the status-backed dashboard slice.

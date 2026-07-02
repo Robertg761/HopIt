@@ -54,13 +54,14 @@ HopIt has moved past a local-only spike. The current dogfood baseline is a deplo
 - `hop workspace` persists a root-level `workspaces.json` index with per-workspace hydration/cursor state, can discover the configured cloud codebase, attach it into the Workspace Root as metadata-only, list visible cloud files, hydrate one file, and dehydrate clean workspaces back to metadata-only state.
 - `hop device` / `hop session` can report local device identity. Scoped session registration, listing, touch, and revocation now work against D1 as well as the legacy Convex fallback.
 - `hop keys` can initialize a local per-codebase device keyring, report redacted key status, and export a passphrase-encrypted recovery file. The keyring stores device private keys locally and stores the user vault key only as a self-wrapped payload.
-- The dashboard now includes provider sign-in routes, owner claim, member/invite management, a read-only code browser, and first issue/discussion/release workflows. Codebase listing, file reads/edits, status, account sync, hosted action jobs, member/invite routes, and work-item collaboration routes now use the D1 backend selector, with Convex retained as a legacy fallback.
+- The dashboard now includes provider sign-in routes, owner claim, member/invite management, a read-only code browser, first issue/discussion/release workflows, project-board movement, durable issue/discussion comments, review-linked follow-up comments, and a redacted key-grant status panel. Codebase listing, file reads/edits, status, account sync, hosted action jobs, member/invite routes, work-item collaboration routes, and key-grant status now use the D1 backend selector, with Convex retained as a legacy fallback.
 - The literal mirror path supports binary files, symlinks, empty directories, `.git/`, root `.env.local` routing into `.private/env/repo-root/.env.local`, production-safe `import-git`, client-encrypted routed-secret sync, and dry-run object GC. The full repository still should not be treated as safely uploaded until the production-safe conversion flow has been run and verified.
 - Client-side encryption currently covers routed secrets only. Device keyrings,
-  user vault keys, recovery export, and D1/legacy Convex device/wrapped-key APIs now
-  exist, but full private-repo encryption, repo/private/secret zone keys,
-  invite-time key sharing, independent secret sharing, path encryption, and
-  complete revocation/rekey flows remain the next security milestone.
+  user vault keys, recovery export, D1/legacy Convex device/wrapped-key APIs, and
+  dashboard key-grant visibility now exist, but full private-repo encryption,
+  repo/private/secret zone keys, invite-time key sharing, independent secret
+  sharing, path encryption, and complete revocation/rekey flows remain the next
+  security milestone.
 - The first privacy/encryption foundation is implemented: shared agent
   crypto/envelope helpers, derived file privacy zones, local device keyrings,
   encrypted recovery export, D1 and legacy Convex key-management tables and APIs, and
@@ -82,7 +83,7 @@ The v1 target is not a Git clone manager and not yet a true native filesystem pr
 - Other same-owner devices receive acknowledged changes automatically when the local journal is clean, or get a visible conflict/blocked state when it is not.
 - Web surfaces show code, diffs, review state, history, issues, discussions, projects, releases, members, invitations, and permissions.
 
-Today HopIt has the managed-folder spike, workspace-root command surface with a durable index, configured-codebase discovery, metadata-only attach, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, service wrapper, a Cloudflare D1 graph backend, S3-compatible object-blob storage support, Clerk-protected hosted dashboard, first collaboration objects, explicit refresh-based two-session continuity, D1-backed scoped session and trusted-device/key metadata, and opt-in safe remote-pull polling plus one-shot remote-pull checks for personal dogfooding. Remote-pull uses a lightweight graph-head cursor before any full graph read, so unchanged polling does not scan the file table. The current personal production D1 database is provisioned, schema-applied, seeded from the saved Convex export, and fronted by the `hopit-d1-api` Worker for Vercel. Remaining v1 work is account-wide codebase discovery, full lazy materialization policy, production-grade push/subscription remote-update delivery, routeable diff/review/history UI, installer/tray setup, and broader cross-device verification.
+Today HopIt has the managed-folder spike, workspace-root command surface with a durable index, configured-codebase discovery, metadata-only attach, hydration/cursor status, metadata-only/dehydrate and single-file hydrate primitives, service wrapper, a Cloudflare D1 graph backend, S3-compatible object-blob storage support, Clerk-protected hosted dashboard, first collaboration/project/comment/key-grant surfaces, explicit refresh-based two-session continuity, D1-backed scoped session and trusted-device/key metadata, and opt-in safe remote-pull polling plus one-shot remote-pull checks for personal dogfooding. Remote-pull uses a lightweight graph-head cursor before any full graph read, so unchanged polling does not scan the file table. The current personal production D1 database is provisioned, schema-applied, seeded from the saved Convex export, and fronted by the `hopit-d1-api` Worker for Vercel. Remaining v1 work is account-wide codebase discovery, full lazy materialization policy, production-grade push/subscription remote-update delivery, routeable diff/review/history UI, installer/tray setup, and broader cross-device verification.
 
 ## Product Principles
 

@@ -3,10 +3,16 @@
 import * as React from 'react'
 import {
   AlertCircle,
+  Archive,
+  ArrowLeft,
+  ArrowRight,
   CheckCircle2,
   CircleDot,
+  Columns3,
   GitPullRequest,
+  KanbanSquare,
   Loader2,
+  MessageCirclePlus,
   MessageSquareText,
   PackageCheck,
   Plus,
@@ -23,6 +29,8 @@ import {
   updateCollaborationItem,
   type CollaborationDiscussion,
   type CollaborationIssue,
+  type CollaborationProject,
+  type CollaborationProjectItem,
   type CollaborationRelease,
   type WorkItemsResponse,
 } from '@/lib/collaboration'
@@ -33,7 +41,7 @@ type CollaborationSectionProps = {
   status: AgentStatusSnapshot
 }
 
-type CollaborationTab = 'issues' | 'discussions' | 'releases'
+type CollaborationTab = 'issues' | 'discussions' | 'projects' | 'releases'
 
 type WorkItemFilter = 'active' | 'all' | 'closed'
 
@@ -49,6 +57,10 @@ type FormState = {
   releaseVersion: string
   releaseTitle: string
   releaseNotes: string
+  projectName: string
+  projectDescription: string
+  projectItemTitle: string
+  projectItemBody: string
 }
 
 const initialFormState: FormState = {
@@ -63,6 +75,10 @@ const initialFormState: FormState = {
   releaseVersion: '',
   releaseTitle: '',
   releaseNotes: '',
+  projectName: '',
+  projectDescription: '',
+  projectItemTitle: '',
+  projectItemBody: '',
 }
 
 export function CollaborationSection({ status }: CollaborationSectionProps) {
@@ -72,6 +88,7 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
   const [workItems, setWorkItems] = React.useState<WorkItemsResponse | null>(null)
   const [loading, setLoading] = React.useState(false)
   const [form, setForm] = React.useState<FormState>(initialFormState)
+  const [commentDrafts, setCommentDrafts] = React.useState<Record<string, string>>({})
   const [message, setMessage] = React.useState<string | null>(null)
   const [submitting, setSubmitting] = React.useState<string | null>(null)
 
@@ -139,6 +156,13 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
     loading,
     roleReason: 'Current role cannot draft releases.',
   })
+  const projectCreateReason = disabledReason({
+    codebaseId,
+    roleAllowed: canWrite,
+    capability: workItems?.capabilities.createProject,
+    loading,
+    roleReason: 'Current role cannot create projects.',
+  })
   const issueUpdateReason = disabledReason({
     codebaseId,
     roleAllowed: canWrite,
@@ -159,6 +183,13 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
     capability: workItems?.capabilities.publishRelease,
     loading,
     roleReason: 'Current role cannot publish releases.',
+  })
+  const projectUpdateReason = disabledReason({
+    codebaseId,
+    roleAllowed: canWrite,
+    capability: workItems?.capabilities.updateProject,
+    loading,
+    roleReason: 'Current role cannot update projects.',
   })
 
   async function createIssue(event: React.FormEvent<HTMLFormElement>) {
@@ -245,6 +276,49 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
     setSubmitting(null)
   }
 
+  async function createProject(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    if (!codebaseId || projectCreateReason || !form.projectName.trim()) return
+
+    setSubmitting('create-project')
+    setMessage(null)
+    const result = await createCollaborationItem({
+      type: 'project',
+      codebaseId,
+      name: form.projectName,
+      description: form.projectDescription,
+      createdBy: actorId,
+    })
+    setWorkItems(result)
+    setMessage(result.ok ? 'Project created.' : (result.error?.message ?? 'Project create failed.'))
+    if (result.ok) {
+      setForm((current) => ({ ...current, projectName: '', projectDescription: '' }))
+    }
+    setSubmitting(null)
+  }
+
+  async function addProjectNote(project: CollaborationProject, columnId: string, title: string, body: string) {
+    if (!codebaseId || projectUpdateReason || !title.trim()) return
+
+    setSubmitting(`project-note-${project.id}`)
+    setMessage(null)
+    const result = await createCollaborationItem({
+      type: 'projectItem',
+      codebaseId,
+      projectId: project.id,
+      columnId,
+      item: {
+        type: 'note',
+        title,
+        body,
+      },
+      createdBy: actorId,
+    })
+    setWorkItems(result)
+    setMessage(result.ok ? 'Project card added.' : (result.error?.message ?? 'Project card create failed.'))
+    setSubmitting(null)
+  }
+
   async function setIssueStatus(issue: CollaborationIssue, nextStatus: CollaborationIssue['status']) {
     if (!codebaseId || issueUpdateReason) return
 
@@ -259,6 +333,27 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
     })
     setWorkItems(result)
     setMessage(result.ok ? `Issue ${nextStatus}.` : (result.error?.message ?? 'Issue update failed.'))
+    setSubmitting(null)
+  }
+
+  async function addIssueComment(issue: CollaborationIssue) {
+    const body = commentDrafts[issue.id]?.trim()
+    if (!codebaseId || issueUpdateReason || !body) return
+
+    setSubmitting(`issue-comment-${issue.id}`)
+    setMessage(null)
+    const result = await createCollaborationItem({
+      type: 'issueComment',
+      codebaseId,
+      issueId: issue.id,
+      body,
+      createdBy: actorId,
+    })
+    setWorkItems(result)
+    setMessage(result.ok ? 'Issue comment added.' : (result.error?.message ?? 'Issue comment failed.'))
+    if (result.ok) {
+      setCommentDrafts((current) => ({ ...current, [issue.id]: '' }))
+    }
     setSubmitting(null)
   }
 
@@ -282,6 +377,27 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
     setSubmitting(null)
   }
 
+  async function addDiscussionComment(discussion: CollaborationDiscussion) {
+    const body = commentDrafts[discussion.id]?.trim()
+    if (!codebaseId || discussionUpdateReason || !body) return
+
+    setSubmitting(`discussion-comment-${discussion.id}`)
+    setMessage(null)
+    const result = await createCollaborationItem({
+      type: 'discussionComment',
+      codebaseId,
+      discussionId: discussion.id,
+      body,
+      createdBy: actorId,
+    })
+    setWorkItems(result)
+    setMessage(result.ok ? 'Discussion comment added.' : (result.error?.message ?? 'Discussion comment failed.'))
+    if (result.ok) {
+      setCommentDrafts((current) => ({ ...current, [discussion.id]: '' }))
+    }
+    setSubmitting(null)
+  }
+
   async function publishRelease(release: CollaborationRelease) {
     if (!codebaseId || releasePublishReason) return
 
@@ -298,12 +414,54 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
     setSubmitting(null)
   }
 
+  async function moveProjectItem(
+    project: CollaborationProject,
+    item: CollaborationProjectItem,
+    direction: -1 | 1,
+  ) {
+    if (!codebaseId || projectUpdateReason) return
+    const columnIndex = project.columns.findIndex((column) => column.id === item.columnId)
+    const nextColumn = project.columns[columnIndex + direction]
+    if (!nextColumn) return
+
+    setSubmitting(`project-item-${item.id}`)
+    setMessage(null)
+    const result = await updateCollaborationItem({
+      action: 'moveProjectItem',
+      codebaseId,
+      projectItemId: item.id,
+      columnId: nextColumn.id,
+      updatedBy: actorId,
+    })
+    setWorkItems(result)
+    setMessage(result.ok ? 'Project card moved.' : (result.error?.message ?? 'Project card move failed.'))
+    setSubmitting(null)
+  }
+
+  async function archiveProject(project: CollaborationProject) {
+    if (!codebaseId || projectUpdateReason) return
+
+    setSubmitting(`project-${project.id}`)
+    setMessage(null)
+    const result = await updateCollaborationItem({
+      action: 'archiveProject',
+      codebaseId,
+      projectId: project.id,
+      updatedBy: actorId,
+    })
+    setWorkItems(result)
+    setMessage(result.ok ? 'Project archived.' : (result.error?.message ?? 'Project archive failed.'))
+    setSubmitting(null)
+  }
+
   const issues = workItems?.issues ?? []
   const discussions = workItems?.discussions ?? []
   const releases = workItems?.releases ?? []
+  const projects = workItems?.projects ?? []
   const openIssues = issues.filter((issue) => issue.status === 'open').length
   const activeDiscussions = discussions.filter((discussion) => discussion.status === 'open').length
   const draftReleases = releases.filter((release) => release.status === 'draft').length
+  const activeProjects = projects.filter((project) => project.status === 'active').length
   const filteredIssues = React.useMemo(
     () => filterIssues(issues, itemFilter, query),
     [issues, itemFilter, query],
@@ -316,19 +474,27 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
     () => filterReleases(releases, itemFilter, query),
     [releases, itemFilter, query],
   )
-  const filterCounts = workItemFilterCounts(tab, issues, discussions, releases)
+  const filteredProjects = React.useMemo(
+    () => filterProjects(projects, itemFilter, query),
+    [projects, itemFilter, query],
+  )
+  const filterCounts = workItemFilterCounts(tab, issues, discussions, releases, projects)
   const visibleCount =
     tab === 'issues'
       ? filteredIssues.length
       : tab === 'discussions'
         ? filteredDiscussions.length
-        : filteredReleases.length
+        : tab === 'projects'
+          ? filteredProjects.length
+          : filteredReleases.length
   const totalCount =
     tab === 'issues'
       ? issues.length
       : tab === 'discussions'
         ? discussions.length
-        : releases.length
+        : tab === 'projects'
+          ? projects.length
+          : releases.length
 
   return (
     <section className="panel-surface overflow-hidden rounded-xl border border-border shadow-sm">
@@ -341,15 +507,16 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
             <div className="min-w-0">
               <h2 className="text-base font-semibold">Collaboration</h2>
               <p className="truncate text-xs text-muted-foreground">
-                {codebaseId ?? 'No codebase'} - issues, discussions, releases
+                {codebaseId ?? 'No codebase'} - issues, discussions, projects, releases
               </p>
             </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           <MetricChip label="Open issues" value={openIssues.toString()} active={openIssues > 0} />
           <MetricChip label="Discussions" value={activeDiscussions.toString()} active={activeDiscussions > 0} />
+          <MetricChip label="Projects" value={activeProjects.toString()} active={activeProjects > 0} />
           <MetricChip label="Draft releases" value={draftReleases.toString()} active={draftReleases > 0} />
         </div>
       </div>
@@ -362,6 +529,7 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
             counts={{
               issues: issues.length,
               discussions: discussions.length,
+              projects: projects.length,
               releases: releases.length,
             }}
           />
@@ -418,7 +586,10 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
               emptyDetail={issues.length === 0 ? 'Create the first codebase issue.' : 'No issues match this filter.'}
               disabledReason={issueUpdateReason}
               submitting={submitting}
+              commentDrafts={commentDrafts}
+              onCommentDraftChange={(issue, value) => setCommentDrafts((current) => ({ ...current, [issue.id]: value }))}
               onSetStatus={(issue, nextStatus) => void setIssueStatus(issue, nextStatus)}
+              onAddComment={(issue) => void addIssueComment(issue)}
             />
           ) : tab === 'discussions' ? (
             <DiscussionsList
@@ -430,7 +601,20 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
               }
               disabledReason={discussionUpdateReason}
               submitting={submitting}
+              commentDrafts={commentDrafts}
+              onCommentDraftChange={(discussion, value) => setCommentDrafts((current) => ({ ...current, [discussion.id]: value }))}
               onSetStatus={(discussion, nextStatus) => void setDiscussionStatus(discussion, nextStatus)}
+              onAddComment={(discussion) => void addDiscussionComment(discussion)}
+            />
+          ) : tab === 'projects' ? (
+            <ProjectsList
+              projects={filteredProjects}
+              emptyDetail={projects.length === 0 ? 'Create the first project board.' : 'No projects match this filter.'}
+              disabledReason={projectUpdateReason}
+              submitting={submitting}
+              onAddNote={(project, columnId, title, body) => void addProjectNote(project, columnId, title, body)}
+              onMoveItem={(project, item, direction) => void moveProjectItem(project, item, direction)}
+              onArchive={(project) => void archiveProject(project)}
             />
           ) : (
             <ReleasesList
@@ -466,6 +650,14 @@ export function CollaborationSection({ status }: CollaborationSectionProps) {
               setForm={setForm}
               onSubmit={createDiscussion}
             />
+          ) : tab === 'projects' ? (
+            <ProjectForm
+              form={form}
+              disabledReason={projectCreateReason}
+              submitting={submitting === 'create-project'}
+              setForm={setForm}
+              onSubmit={createProject}
+            />
           ) : (
             <ReleaseForm
               form={form}
@@ -493,6 +685,7 @@ function TabList({
   const tabs: Array<{ id: CollaborationTab; label: string; icon: React.ComponentType<{ className?: string }> }> = [
     { id: 'issues', label: 'Issues', icon: CircleDot },
     { id: 'discussions', label: 'Discussions', icon: MessageSquareText },
+    { id: 'projects', label: 'Projects', icon: KanbanSquare },
     { id: 'releases', label: 'Releases', icon: PackageCheck },
   ]
 
@@ -621,13 +814,19 @@ function IssuesList({
   emptyDetail,
   disabledReason,
   submitting,
+  commentDrafts,
+  onCommentDraftChange,
   onSetStatus,
+  onAddComment,
 }: {
   issues: CollaborationIssue[]
   emptyDetail: string
   disabledReason: string | null
   submitting: string | null
+  commentDrafts: Record<string, string>
+  onCommentDraftChange: (issue: CollaborationIssue, value: string) => void
   onSetStatus: (issue: CollaborationIssue, status: CollaborationIssue['status']) => void
+  onAddComment: (issue: CollaborationIssue) => void
 }) {
   if (issues.length === 0) {
     return <StateNotice icon={CircleDot} title="No issues" detail={emptyDetail} />
@@ -651,10 +850,19 @@ function IssuesList({
               items={[
                 issue.priority ?? 'no priority',
                 issue.linkedChangeSetId ? `change set ${issue.linkedChangeSetId}` : null,
+                `${issue.comments.length} comments`,
                 `updated ${formatDate(issue.updatedAt)}`,
               ]}
             />
             <LabelRow labels={issue.labels} />
+            <CommentThread
+              comments={issue.comments}
+              draft={commentDrafts[issue.id] ?? ''}
+              disabledReason={disabledReason}
+              submitting={submitting === `issue-comment-${issue.id}`}
+              onDraftChange={(value) => onCommentDraftChange(issue, value)}
+              onSubmit={() => onAddComment(issue)}
+            />
             <div className="mt-3 flex justify-end">
               <Button
                 type="button"
@@ -681,13 +889,19 @@ function DiscussionsList({
   emptyDetail,
   disabledReason,
   submitting,
+  commentDrafts,
+  onCommentDraftChange,
   onSetStatus,
+  onAddComment,
 }: {
   discussions: CollaborationDiscussion[]
   emptyDetail: string
   disabledReason: string | null
   submitting: string | null
+  commentDrafts: Record<string, string>
+  onCommentDraftChange: (discussion: CollaborationDiscussion, value: string) => void
   onSetStatus: (discussion: CollaborationDiscussion, status: CollaborationDiscussion['status']) => void
+  onAddComment: (discussion: CollaborationDiscussion) => void
 }) {
   if (discussions.length === 0) {
     return <StateNotice icon={MessageSquareText} title="No discussions" detail={emptyDetail} />
@@ -707,8 +921,16 @@ function DiscussionsList({
               tone={discussion.status === 'open' ? 'active' : 'neutral'}
             />
             <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{discussion.body}</p>
-            <ItemMeta items={[discussion.category, `updated ${formatDate(discussion.updatedAt)}`]} />
+            <ItemMeta items={[discussion.category, `${discussion.comments.length} comments`, `updated ${formatDate(discussion.updatedAt)}`]} />
             <LabelRow labels={discussion.labels} />
+            <CommentThread
+              comments={discussion.comments}
+              draft={commentDrafts[discussion.id] ?? ''}
+              disabledReason={disabledReason}
+              submitting={submitting === `discussion-comment-${discussion.id}`}
+              onDraftChange={(value) => onCommentDraftChange(discussion, value)}
+              onSubmit={() => onAddComment(discussion)}
+            />
             <div className="mt-3 flex flex-wrap justify-end gap-2">
               <Button
                 type="button"
@@ -737,6 +959,268 @@ function DiscussionsList({
         )
       })}
     </ol>
+  )
+}
+
+function CommentThread({
+  comments,
+  draft,
+  disabledReason,
+  submitting,
+  onDraftChange,
+  onSubmit,
+}: {
+  comments: Array<{ id: string; body: string; createdBy: string; createdAt: string }>
+  draft: string
+  disabledReason: string | null
+  submitting: boolean
+  onDraftChange: (value: string) => void
+  onSubmit: () => void
+}) {
+  const recentComments = comments.slice(-3)
+
+  return (
+    <div className="mt-3 rounded-lg bg-card/70 p-2 ring-1 ring-border/50">
+      <div className="flex items-center justify-between gap-2">
+        <p className="flex items-center gap-1.5 text-[11px] font-semibold text-muted-foreground">
+          <MessageCirclePlus className="size-3 text-hop" />
+          Comments
+        </p>
+        <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{comments.length}</span>
+      </div>
+      {recentComments.length > 0 ? (
+        <ol className="mt-2 space-y-1.5">
+          {recentComments.map((comment) => (
+            <li key={comment.id} className="rounded-md bg-muted/50 px-2 py-1.5">
+              <p className="line-clamp-2 text-[11px] text-foreground">{comment.body}</p>
+              <p className="mt-0.5 truncate text-[10px] text-muted-foreground">
+                {comment.createdBy} - {formatDate(comment.createdAt)}
+              </p>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <p className="mt-2 text-[11px] text-muted-foreground">No comments yet.</p>
+      )}
+      <div className="mt-2 grid gap-1.5">
+        <textarea
+          value={draft}
+          onChange={(event) => onDraftChange(event.target.value)}
+          disabled={Boolean(disabledReason) || submitting}
+          rows={2}
+          placeholder="Add a comment"
+          className={cn(inputClassName, 'h-auto resize-none py-2 text-xs')}
+        />
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={Boolean(disabledReason) || submitting || !draft.trim()}
+          className="h-8 justify-start rounded-lg text-xs"
+          onClick={onSubmit}
+        >
+          {submitting ? <Loader2 className="size-3.5 animate-spin" /> : <MessageCirclePlus className="size-3.5" />}
+          Add comment
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function ProjectsList({
+  projects,
+  emptyDetail,
+  disabledReason,
+  submitting,
+  onAddNote,
+  onMoveItem,
+  onArchive,
+}: {
+  projects: CollaborationProject[]
+  emptyDetail: string
+  disabledReason: string | null
+  submitting: string | null
+  onAddNote: (project: CollaborationProject, columnId: string, title: string, body: string) => void
+  onMoveItem: (project: CollaborationProject, item: CollaborationProjectItem, direction: -1 | 1) => void
+  onArchive: (project: CollaborationProject) => void
+}) {
+  const [drafts, setDrafts] = React.useState<Record<string, { title: string; body: string }>>({})
+
+  if (projects.length === 0) {
+    return <StateNotice icon={KanbanSquare} title="No projects" detail={emptyDetail} />
+  }
+
+  return (
+    <ol className="grid gap-4">
+      {projects.map((project) => {
+        const firstColumn = project.columns[0]
+        const draft = drafts[project.id] ?? { title: '', body: '' }
+        const isSubmitting = submitting === `project-${project.id}` || submitting === `project-note-${project.id}`
+
+        return (
+          <li key={project.id} className="rounded-lg border border-border/60 bg-muted/20 p-3">
+            <div className="flex flex-col gap-3 border-b border-border/60 pb-3 lg:flex-row lg:items-start lg:justify-between">
+              <div className="min-w-0">
+                <ItemHeader
+                  icon={KanbanSquare}
+                  title={project.name}
+                  number={project.number}
+                  status={project.status}
+                  tone={project.status === 'active' ? 'active' : 'neutral'}
+                />
+                {project.description ? (
+                  <p className="mt-2 line-clamp-2 text-xs text-muted-foreground">{project.description}</p>
+                ) : null}
+                <ItemMeta items={[`${project.items.length} cards`, `updated ${formatDate(project.updatedAt)}`]} />
+              </div>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={Boolean(disabledReason) || isSubmitting || project.status === 'archived'}
+                className="h-8 shrink-0 justify-start rounded-lg text-xs"
+                onClick={() => onArchive(project)}
+              >
+                {submitting === `project-${project.id}` ? <Loader2 className="size-3.5 animate-spin" /> : <Archive className="size-3.5" />}
+                Archive
+              </Button>
+            </div>
+
+            {project.status === 'active' && firstColumn ? (
+              <div className="mt-3 grid gap-2 rounded-lg bg-card/70 p-2 ring-1 ring-border/50 sm:grid-cols-[minmax(0,1fr)_auto]">
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <input
+                    value={draft.title}
+                    onChange={(event) => setDrafts((current) => ({
+                      ...current,
+                      [project.id]: { ...draft, title: event.target.value },
+                    }))}
+                    disabled={Boolean(disabledReason) || isSubmitting}
+                    placeholder="Card title"
+                    className={inputClassName}
+                  />
+                  <input
+                    value={draft.body}
+                    onChange={(event) => setDrafts((current) => ({
+                      ...current,
+                      [project.id]: { ...draft, body: event.target.value },
+                    }))}
+                    disabled={Boolean(disabledReason) || isSubmitting}
+                    placeholder="Card note"
+                    className={inputClassName}
+                  />
+                </div>
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={Boolean(disabledReason) || isSubmitting || !draft.title.trim()}
+                  className="h-9 justify-start rounded-lg text-xs"
+                  onClick={() => {
+                    onAddNote(project, firstColumn.id, draft.title, draft.body)
+                    setDrafts((current) => ({ ...current, [project.id]: { title: '', body: '' } }))
+                  }}
+                >
+                  {submitting === `project-note-${project.id}` ? <Loader2 className="size-3.5 animate-spin" /> : <Plus className="size-3.5" />}
+                  Add card
+                </Button>
+              </div>
+            ) : null}
+
+            <div className="mt-3 grid gap-3 xl:grid-cols-3">
+              {project.columns.map((column, columnIndex) => {
+                const columnItems = project.items
+                  .filter((item) => item.columnId === column.id)
+                  .sort((a, b) => a.position - b.position)
+
+                return (
+                  <div key={column.id} className="min-w-0 rounded-lg bg-card p-2.5 ring-1 ring-border/50">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="truncate text-xs font-semibold">{column.name}</p>
+                      <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">{columnItems.length}</span>
+                    </div>
+                    {columnItems.length > 0 ? (
+                      <ol className="mt-2 space-y-2">
+                        {columnItems.map((item) => (
+                          <ProjectCard
+                            key={item.id}
+                            project={project}
+                            item={item}
+                            columnIndex={columnIndex}
+                            disabledReason={disabledReason}
+                            submitting={submitting === `project-item-${item.id}`}
+                            onMoveItem={onMoveItem}
+                          />
+                        ))}
+                      </ol>
+                    ) : (
+                      <p className="mt-2 rounded-md bg-muted/50 px-2 py-3 text-center text-[11px] text-muted-foreground">
+                        Empty
+                      </p>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+            {disabledReason ? <p className="mt-2 text-[11px] text-muted-foreground">{disabledReason}</p> : null}
+          </li>
+        )
+      })}
+    </ol>
+  )
+}
+
+function ProjectCard({
+  project,
+  item,
+  columnIndex,
+  disabledReason,
+  submitting,
+  onMoveItem,
+}: {
+  project: CollaborationProject
+  item: CollaborationProjectItem
+  columnIndex: number
+  disabledReason: string | null
+  submitting: boolean
+  onMoveItem: (project: CollaborationProject, item: CollaborationProjectItem, direction: -1 | 1) => void
+}) {
+  const itemTitle = item.item.version ? `${item.item.version}: ${item.item.title ?? 'Untitled'}` : item.item.title ?? item.item.id ?? 'Untitled card'
+  const canMoveLeft = columnIndex > 0
+  const canMoveRight = columnIndex < project.columns.length - 1
+
+  return (
+    <li className="rounded-lg bg-muted/50 p-2 ring-1 ring-border/40">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="line-clamp-2 text-xs font-semibold">{itemTitle}</p>
+          {item.item.body ? <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{item.item.body}</p> : null}
+          <p className="mt-1 text-[10px] text-muted-foreground">{item.item.type ?? 'note'} - updated {formatDate(item.updatedAt)}</p>
+        </div>
+        {submitting ? <Loader2 className="mt-0.5 size-3.5 shrink-0 animate-spin text-muted-foreground" /> : null}
+      </div>
+      <div className="mt-2 flex justify-end gap-1.5">
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={Boolean(disabledReason) || submitting || !canMoveLeft}
+          className="h-7 rounded-md px-2"
+          onClick={() => onMoveItem(project, item, -1)}
+        >
+          <ArrowLeft className="size-3.5" />
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={Boolean(disabledReason) || submitting || !canMoveRight}
+          className="h-7 rounded-md px-2"
+          onClick={() => onMoveItem(project, item, 1)}
+        >
+          <ArrowRight className="size-3.5" />
+        </Button>
+      </div>
+    </li>
   )
 }
 
@@ -949,6 +1433,40 @@ function ReleaseForm({
         submitting={submitting}
       >
         Draft release
+      </SubmitButton>
+    </ObjectForm>
+  )
+}
+
+function ProjectForm({
+  form,
+  disabledReason,
+  submitting,
+  setForm,
+  onSubmit,
+}: {
+  form: FormState
+  disabledReason: string | null
+  submitting: boolean
+  setForm: React.Dispatch<React.SetStateAction<FormState>>
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void
+}) {
+  return (
+    <ObjectForm title="New project" icon={Columns3} disabledReason={disabledReason} onSubmit={onSubmit}>
+      <TextInput
+        value={form.projectName}
+        onChange={(value) => setForm((current) => ({ ...current, projectName: value }))}
+        disabled={Boolean(disabledReason) || submitting}
+        placeholder="Project name"
+      />
+      <TextArea
+        value={form.projectDescription}
+        onChange={(value) => setForm((current) => ({ ...current, projectDescription: value }))}
+        disabled={Boolean(disabledReason) || submitting}
+        placeholder="Description"
+      />
+      <SubmitButton disabled={Boolean(disabledReason) || submitting || !form.projectName.trim()} submitting={submitting}>
+        Create project
       </SubmitButton>
     </ObjectForm>
   )
@@ -1213,11 +1731,34 @@ function filterReleases(
   })
 }
 
+function filterProjects(
+  projects: CollaborationProject[],
+  filter: WorkItemFilter,
+  query: string,
+) {
+  const normalizedQuery = normalizeQuery(query)
+
+  return projects.filter((project) => {
+    if (filter === 'active' && project.status !== 'active') return false
+    if (filter === 'closed' && project.status !== 'archived') return false
+    return queryMatches(
+      normalizedQuery,
+      project.name,
+      project.description,
+      project.status,
+      `#${project.number}`,
+      ...project.columns.map((column) => column.name),
+      ...project.items.map((item) => item.item.title ?? item.item.id ?? item.item.type ?? ''),
+    )
+  })
+}
+
 function workItemFilterCounts(
   tab: CollaborationTab,
   issues: CollaborationIssue[],
   discussions: CollaborationDiscussion[],
   releases: CollaborationRelease[],
+  projects: CollaborationProject[],
 ): Record<WorkItemFilter, number> {
   if (tab === 'issues') {
     return {
@@ -1235,6 +1776,14 @@ function workItemFilterCounts(
     }
   }
 
+  if (tab === 'projects') {
+    return {
+      active: projects.filter((project) => project.status === 'active').length,
+      all: projects.length,
+      closed: projects.filter((project) => project.status === 'archived').length,
+    }
+  }
+
   return {
     active: releases.filter((release) => release.status === 'draft').length,
     all: releases.length,
@@ -1245,6 +1794,7 @@ function workItemFilterCounts(
 function filterLabels(tab: CollaborationTab): Record<WorkItemFilter, string> {
   if (tab === 'issues') return { active: 'Open', all: 'All', closed: 'Closed' }
   if (tab === 'discussions') return { active: 'Open', all: 'All', closed: 'Closed/answered' }
+  if (tab === 'projects') return { active: 'Active', all: 'All', closed: 'Archived' }
   return { active: 'Draft', all: 'All', closed: 'Published' }
 }
 
