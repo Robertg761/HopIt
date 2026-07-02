@@ -911,6 +911,64 @@ export class CloudflareD1HopBackend {
     return { ok: true, codebaseId, ownerId: ownerActor.userId }
   }
 
+  async bootstrapAccount(actor = {}) {
+    const ownerActor = requireOwnerClaimActor(actor)
+    await this.ensureSchema()
+    await this.upsertUser({
+      userId: ownerActor.userId,
+      primaryEmail: ownerActor.primaryEmail,
+      displayName: ownerActor.displayName,
+      avatarUrl: ownerActor.avatarUrl,
+      emailVerified: ownerActor.currentAuthEmailVerified,
+    })
+
+    const rows = await this.query(
+      `select distinct c.codebase_id
+       from codebases c
+       left join codebase_members m on m.codebase_id = c.codebase_id
+       where c.owner_id = ?
+          or (
+            m.role = 'owner'
+            and m.status = 'active'
+            and (
+              m.user_id = ?
+              or m.source = 'graph-owner'
+            )
+          )
+       order by c.updated_at desc`,
+      ['local-owner', 'local-owner'],
+    )
+    const results = []
+
+    for (const row of rows) {
+      const codebaseId = stringOrNull(row.codebase_id)
+      if (!codebaseId) continue
+
+      try {
+        const claim = await this.claimCodebaseOwner({ codebaseId, actor: ownerActor })
+        results.push({
+          codebaseId,
+          status: 'claimed',
+          ownerId: claim.ownerId,
+        })
+      } catch (error) {
+        results.push({
+          codebaseId,
+          status: 'failed',
+          error: backendErrorMessage(error, 'Codebase owner bootstrap failed.'),
+        })
+      }
+    }
+
+    return {
+      ok: results.every((result) => result.status !== 'failed'),
+      ownerId: ownerActor.userId,
+      codebases: results,
+      claimed: results.filter((result) => result.status === 'claimed'),
+      failed: results.filter((result) => result.status === 'failed'),
+    }
+  }
+
   async suspendMember({ codebaseId, userId, actor = {} }) {
     return this.mutateMemberStatus({ codebaseId, userId, actor, action: 'suspend' })
   }
@@ -3412,6 +3470,10 @@ function claimedOwnerValue(existingOwner, actor) {
 
 function normalizeEmail(email) {
   return typeof email === 'string' ? email.trim().toLowerCase() : ''
+}
+
+function backendErrorMessage(error, fallback) {
+  return error instanceof Error ? error.message : fallback
 }
 
 function invitationRole(value) {

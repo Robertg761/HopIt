@@ -167,7 +167,7 @@ npm run d1:migrate:convex-export -- \
 
 The production import on 2026-06-30 wrote `58` files and the latest `500` events from `11,638` exported events into D1. Use `--dry-run` for future rehearsals. Use `--all-events` only if the daily D1 write budget can absorb the full event history.
 
-The D1 path currently covers agent graph reads/writes, graph-head status polling, hosted dashboard status, codebase list/create/update/delete, text file read/edit, account sync, hosted action jobs, member/invite routes, issue/discussion/release/project/comment collaboration tables, project-board UI operations, scoped D1 proxy session auth, scoped device sessions, trusted-device/key metadata, and redacted key-grant status. Full history reconstruction, retention policy, full private-repo key-grant approval/rotation flows, richer release assets, and complete product write-path coverage still need work before removing the Convex code entirely.
+The D1 path currently covers agent graph reads/writes, graph-head status polling, hosted dashboard status, codebase list/create/update/delete, text file read/edit, account sync, automatic verified-owner bootstrap for migrated `local-owner` codebases, hosted action jobs, member/invite routes, issue/discussion/release/project/comment collaboration tables, project-board UI operations, scoped D1 proxy session auth, scoped device sessions, trusted-device/key metadata, and redacted key-grant status. Full history reconstruction, retention policy, full private-repo key-grant approval/rotation flows, richer release assets, and complete product write-path coverage still need work before removing the Convex code entirely.
 
 ## Legacy Convex Backend
 

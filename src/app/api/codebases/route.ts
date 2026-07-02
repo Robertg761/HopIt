@@ -3,6 +3,8 @@ import { auth } from '@clerk/nextjs/server'
 
 import { hasValidBasicAuthFallbackCredentials } from '@/lib/basic-auth-fallback'
 import {
+  bootstrapCloudAccount,
+  configuredCloudBackend,
   createCloudCodebase,
   deleteCloudCodebase,
   listCloudCodebases,
@@ -11,6 +13,7 @@ import {
   type CloudActor,
 } from '@/lib/cloud-backend'
 import { readLocalWorkspaceDiscovery } from '@/lib/local-workspace-discovery'
+import { cloudActorFromRequest } from '@/lib/request-cloud-actor'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -21,6 +24,7 @@ export async function GET(request: Request) {
 
   try {
     const actor = await requireActor(request, { allowBasicFallback: true })
+    const accountBootstrap = await bootstrapAccountForCodebaseList(actor)
     const codebases = await listCloudCodebases(actor)
     const localDiscovery = await readLocalWorkspaceDiscovery()
     const mergedCodebases = mergeLocalWorkspaceDiscovery(
@@ -31,6 +35,7 @@ export async function GET(request: Request) {
       ok: true,
       codebases: mergedCodebases,
       workspaceDiscovery: summarizeLocalWorkspaceDiscovery(localDiscovery),
+      accountBootstrap,
     }, responseInit())
   } catch (error) {
     return codebaseError('codebase_list_failed', errorMessage(error), 400)
@@ -151,10 +156,25 @@ async function unavailableReason(request: Request, { allowBasicFallback = false 
 }
 
 async function requireActor(request: Request, { allowBasicFallback = false } = {}): Promise<CloudActor> {
-  if (allowBasicFallback && hasValidBasicAuthFallbackCredentials(request.headers)) return {}
-  const { userId } = await auth()
-  if (!userId) throw new Error('Product auth is required.')
-  return { userId }
+  const actor = await cloudActorFromRequest(request, { allowBasicFallback })
+  if (!actor) throw new Error('Product auth is required.')
+  return actor
+}
+
+async function bootstrapAccountForCodebaseList(actor: CloudActor) {
+  if (!actor.userId || configuredCloudBackend() !== 'd1') return null
+
+  try {
+    return bootstrapSummary(await bootstrapCloudAccount(actor))
+  } catch (error) {
+    return {
+      ok: false,
+      codebases: [],
+      claimed: [],
+      failed: [],
+      error: errorMessage(error),
+    }
+  }
 }
 
 async function readBody(request: Request): Promise<Record<string, unknown>> {
@@ -307,6 +327,32 @@ function codebaseError(code: string, message: string, status = 400) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'Codebase request failed.'
+}
+
+function bootstrapSummary(value: unknown) {
+  const result = recordValue(value)
+  const codebases = Array.isArray(result?.codebases) ? result.codebases.map(bootstrapCodebaseSummary) : []
+  const claimed = Array.isArray(result?.claimed) ? result.claimed.map(bootstrapCodebaseSummary) : []
+  const failed = Array.isArray(result?.failed) ? result.failed.map(bootstrapCodebaseSummary) : []
+
+  return {
+    ok: result?.ok === true,
+    ownerId: optionalText(result?.ownerId) ?? null,
+    codebases,
+    claimed,
+    failed,
+    error: optionalText(result?.error) ?? null,
+  }
+}
+
+function bootstrapCodebaseSummary(value: unknown) {
+  const row = recordValue(value)
+  return {
+    codebaseId: optionalText(row?.codebaseId) ?? null,
+    status: optionalText(row?.status) ?? null,
+    ownerId: optionalText(row?.ownerId) ?? null,
+    error: optionalText(row?.error) ?? null,
+  }
 }
 
 function numberValue(value: unknown) {

@@ -18,6 +18,14 @@ const commandMap = {
   merge: { label: 'Merge', cliCommand: 'merge' },
   setupWorkspace: { label: 'Set up workspace', cliCommand: 'workspace', subcommand: 'attach', timeoutMs: 30_000 },
   attachWorkspace: { label: 'Attach workspace', cliCommand: 'workspace', subcommand: 'attach', timeoutMs: 30_000 },
+  hydrateWorkspace: { label: 'Hydrate workspace', cliCommand: 'refresh', timeoutMs: 60_000 },
+  dehydrateWorkspace: {
+    label: 'Dehydrate workspace',
+    cliCommand: 'workspace',
+    subcommand: 'dehydrate',
+    staticArgs: ['--force'],
+    timeoutMs: 60_000,
+  },
   importGitUrl: { label: 'Import Git URL', cliCommand: 'import-git-url', timeoutMs: 10 * 60 * 1000 },
 } as const
 
@@ -70,10 +78,12 @@ export async function POST(request: Request) {
     }
     const extraArgs = commandArgsFromRequest(command, body)
     if (extraArgs instanceof NextResponse) return extraArgs
+    const staticArgs = 'staticArgs' in commandConfig ? [...commandConfig.staticArgs] : []
 
     const result = await runAgentCli(commandConfig.cliCommand, codebaseId, extraArgs, {
       env: commandEnv,
       prefixArgs: 'subcommand' in commandConfig ? [commandConfig.subcommand] : [],
+      staticArgs,
       timeoutMs: 'timeoutMs' in commandConfig ? commandConfig.timeoutMs : undefined,
     })
 
@@ -125,6 +135,8 @@ function summarizeCommandResult(
   if (command === 'merge') return 'Merged the active change set into Main.'
   if (command === 'setupWorkspace') return summarizeSetupWorkspace(result.stdout)
   if (command === 'attachWorkspace') return summarizeAttachWorkspace(result.stdout)
+  if (command === 'hydrateWorkspace') return summarizeHydrateWorkspace(result.stdout)
+  if (command === 'dehydrateWorkspace') return summarizeDehydrateWorkspace(result.stdout)
   if (command === 'importGitUrl') return summarizeGitUrlImport(result.stdout)
 
   return 'Agent command completed.'
@@ -171,6 +183,22 @@ function summarizeSetupWorkspace(stdout: string) {
   return 'Workspace Root is ready.'
 }
 
+function summarizeHydrateWorkspace(stdout: string) {
+  const written = matchNumber(stdout, /"written":\s*(\d+)/)
+  const deleted = matchNumber(stdout, /"deleted":\s*(\d+)/)
+  if (written === null && deleted === null) return 'Hydrated the workspace into a managed local folder.'
+  return `Hydrated workspace: ${written ?? 0} written, ${deleted ?? 0} deleted.`
+}
+
+function summarizeDehydrateWorkspace(stdout: string) {
+  const parsed = parseLastJsonObject(stdout)
+  const removed = nestedNumber(parsed, ['removed'])
+  if (removed !== null) {
+    return `Returned workspace to metadata-only state and removed ${removed} cached file${removed === 1 ? '' : 's'}.`
+  }
+  return 'Returned workspace to metadata-only state.'
+}
+
 function summarizeGitUrlImport(stdout: string) {
   const parsed = parseLastJsonObject(stdout)
   if (!parsed || typeof parsed !== 'object') return 'Imported the remote Git repository.'
@@ -193,7 +221,7 @@ function runAgentCli(
   command: string,
   codebaseId: string,
   extraArgs: string[] = [],
-  config: { env?: NodeJS.ProcessEnv; prefixArgs?: string[]; timeoutMs?: number } = {},
+  config: { env?: NodeJS.ProcessEnv; prefixArgs?: string[]; staticArgs?: string[]; timeoutMs?: number } = {},
 ) {
   return new Promise<{ exitCode: number | null; stdout: string; stderr: string }>((resolve, reject) => {
     const commandEnv = config.env ?? localCommandEnv()
@@ -202,6 +230,7 @@ function runAgentCli(
       command,
       ...(config.prefixArgs ?? []),
       ...stateArgsForCodebase(codebaseId, commandEnv),
+      ...(config.staticArgs ?? []),
       ...extraArgs,
     ], {
       cwd,

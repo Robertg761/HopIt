@@ -154,6 +154,54 @@ test('workspace discover lists account-visible D1 codebases with local readiness
   assert.equal(beta.cloud.service, 'cloudflare-d1-graph')
 })
 
+test('D1 account bootstrap claims local-owner codebases for the verified owner', async (t) => {
+  const server = await startD1ApiServer(t)
+  const previousOwnerEmail = process.env.HOPIT_OWNER_EMAIL
+  process.env.HOPIT_OWNER_EMAIL = 'owner@example.com'
+  t.after(() => {
+    if (previousOwnerEmail === undefined) delete process.env.HOPIT_OWNER_EMAIL
+    else process.env.HOPIT_OWNER_EMAIL = previousOwnerEmail
+  })
+
+  const backend = createD1Backend({
+    'codebase-id': 'bootstrap-core',
+    'd1-api-base-url': server.baseUrl,
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_test',
+    'd1-api-token': 'token_test',
+  })
+  const owner = {
+    userId: 'user_owner',
+    primaryEmail: 'owner@example.com',
+    displayName: 'Owner',
+    currentAuthEmailVerified: true,
+  }
+
+  await backend.createCodebase({
+    codebaseId: 'bootstrap-core',
+    name: 'Bootstrap Core',
+    actor: {},
+  })
+
+  const beforeBootstrap = await backend.listCodebases(owner)
+  assert.equal(beforeBootstrap.length, 0)
+
+  const bootstrap = await backend.bootstrapAccount(owner)
+  assert.equal(bootstrap.ok, true)
+  assert.deepEqual(bootstrap.claimed.map((row) => row.codebaseId), ['bootstrap-core'])
+  assert.equal(bootstrap.failed.length, 0)
+
+  const afterBootstrap = await backend.listCodebases(owner)
+  assert.equal(afterBootstrap.length, 1)
+  assert.equal(afterBootstrap[0].codebase.id, 'bootstrap-core')
+  assert.equal(afterBootstrap[0].codebase.ownerId, 'user_owner')
+  assert.equal(afterBootstrap[0].access.role, 'owner')
+
+  const secondBootstrap = await backend.bootstrapAccount(owner)
+  assert.equal(secondBootstrap.ok, true)
+  assert.equal(secondBootstrap.claimed.length, 0)
+})
+
 test('D1 backend supports members, invitations, and collaboration work items', async (t) => {
   const server = await startD1ApiServer(t)
   const previousOwnerEmail = process.env.HOPIT_OWNER_EMAIL

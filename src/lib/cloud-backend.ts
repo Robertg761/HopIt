@@ -244,6 +244,22 @@ export async function claimCloudCodebaseOwner(input: { codebaseId: string; actor
   throw new Error('No HopIt cloud backend is configured for members.')
 }
 
+export async function bootstrapCloudAccount(actor: CloudActor) {
+  const backend = configuredCloudBackend()
+  if (backend === 'd1') return d1Backend().bootstrapAccount(actor)
+  if (backend === 'convex') {
+    return {
+      ok: true,
+      backend,
+      codebases: [],
+      claimed: [],
+      failed: [],
+      skipped: [{ reason: 'Convex owner bootstrap is a legacy manual flow.' }],
+    }
+  }
+  throw new Error('No HopIt cloud backend is configured for account bootstrap.')
+}
+
 export async function suspendCloudMember(input: { codebaseId: string; userId: string; actor: CloudActor }) {
   const backend = configuredCloudBackend()
   if (backend === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).suspendMember(input)
@@ -408,7 +424,7 @@ export async function upsertCloudUser(input: CloudActor & {
       primaryEmail: input.primaryEmail,
       displayName: input.displayName,
       avatarUrl: input.avatarUrl,
-      emailVerified: input.emailVerified,
+      emailVerified: input.emailVerified ?? input.currentAuthEmailVerified,
     })
   }
   if (backend === 'convex') {

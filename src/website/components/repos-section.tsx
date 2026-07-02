@@ -123,6 +123,8 @@ export function ReposSection({
   const [creating, setCreating] = React.useState(false)
   const [attachingCodebaseId, setAttachingCodebaseId] = React.useState<string | null>(null)
   const [settingUpCodebaseId, setSettingUpCodebaseId] = React.useState<string | null>(null)
+  const [hydratingCodebaseId, setHydratingCodebaseId] = React.useState<string | null>(null)
+  const [dehydratingCodebaseId, setDehydratingCodebaseId] = React.useState<string | null>(null)
 
   const loadCodebases = React.useCallback(async () => {
     setLoading(true)
@@ -262,6 +264,60 @@ export function ReposSection({
     }
   }
 
+  async function hydrateCodebase(codebase: CodebaseRow) {
+    const codebaseId = codebase.codebase.id
+
+    if (!status.commandsAvailable) {
+      setError('Workspace hydrate requires the local HopIt agent.')
+      return
+    }
+
+    setHydratingCodebaseId(codebaseId)
+    onSelectCodebase(codebaseId)
+
+    try {
+      const result = await runCommand('hydrateWorkspace', { codebaseId })
+      if (!result.ok) {
+        throw new Error(result.summary || result.stderr || result.error?.message || 'Workspace hydrate failed.')
+      }
+
+      await loadCodebases()
+      await onChanged()
+      setError(null)
+    } catch (hydrateError) {
+      setError(hydrateError instanceof Error ? hydrateError.message : 'Workspace hydrate failed.')
+    } finally {
+      setHydratingCodebaseId(null)
+    }
+  }
+
+  async function dehydrateCodebase(codebase: CodebaseRow) {
+    const codebaseId = codebase.codebase.id
+
+    if (!status.commandsAvailable) {
+      setError('Workspace dehydrate requires the local HopIt agent.')
+      return
+    }
+
+    setDehydratingCodebaseId(codebaseId)
+    onSelectCodebase(codebaseId)
+
+    try {
+      const result = await runCommand('dehydrateWorkspace', { codebaseId })
+      if (!result.ok) {
+        throw new Error(result.summary || result.stderr || result.error?.message || 'Workspace dehydrate failed.')
+      }
+
+      await loadCodebases()
+      await onChanged()
+      setError(null)
+    } catch (dehydrateError) {
+      setError(dehydrateError instanceof Error ? dehydrateError.message : 'Workspace dehydrate failed.')
+    } finally {
+      setDehydratingCodebaseId(null)
+    }
+  }
+
   async function updateCodebase(
     codebaseId: string,
     payload: Record<string, unknown>,
@@ -313,7 +369,12 @@ export function ReposSection({
           codebase={setupTarget}
           discovery={workspaceDiscovery}
           settingUp={settingUpCodebaseId === setupTarget.codebase.id}
-          disabledReason={setupDisabledReason(status, runningCommand, settingUpCodebaseId, attachingCodebaseId)}
+          disabledReason={workspaceActionDisabledReason(status, runningCommand, {
+            attachingCodebaseId,
+            settingUpCodebaseId,
+            hydratingCodebaseId,
+            dehydratingCodebaseId,
+          })}
           onSetup={() => setupCodebase(setupTarget)}
         />
       ) : null}
@@ -330,8 +391,17 @@ export function ReposSection({
               onRename={() => renameCodebase(codebase)}
               onDelete={() => deleteCodebase(codebase)}
               onAttach={() => attachCodebase(codebase)}
+              onHydrate={() => hydrateCodebase(codebase)}
+              onDehydrate={() => dehydrateCodebase(codebase)}
               attaching={attachingCodebaseId === codebase.codebase.id}
-              attachDisabledReason={attachDisabledReason(status, runningCommand, attachingCodebaseId, settingUpCodebaseId)}
+              hydrating={hydratingCodebaseId === codebase.codebase.id}
+              dehydrating={dehydratingCodebaseId === codebase.codebase.id}
+              actionDisabledReason={workspaceActionDisabledReason(status, runningCommand, {
+                attachingCodebaseId,
+                settingUpCodebaseId,
+                hydratingCodebaseId,
+                dehydratingCodebaseId,
+              })}
             />
           ))
         ) : (
@@ -490,8 +560,12 @@ function CodebaseCard({
   onRename,
   onDelete,
   onAttach,
+  onHydrate,
+  onDehydrate,
   attaching,
-  attachDisabledReason,
+  hydrating,
+  dehydrating,
+  actionDisabledReason,
 }: {
   codebase: CodebaseRow
   index: number
@@ -500,8 +574,12 @@ function CodebaseCard({
   onRename: () => void
   onDelete: () => void
   onAttach: () => void
+  onHydrate: () => void
+  onDehydrate: () => void
   attaching: boolean
-  attachDisabledReason: string | null
+  hydrating: boolean
+  dehydrating: boolean
+  actionDisabledReason: string | null
 }) {
   const visibility = codebase.selectedState?.effectiveVisibility ?? 'private'
   const role = codebase.access?.role ?? 'member'
@@ -514,6 +592,8 @@ function CodebaseCard({
   const remoteUpdateState = codebase.remoteUpdate?.state ?? 'cloud-head-ready'
   const workspaceLabel = formatStateLabel(workspaceState)
   const isAttached = codebase.workspace?.attached === true
+  const canHydrate = isAttached && workspaceState !== 'materialized'
+  const canDehydrate = isAttached && workspaceState !== 'metadata-only'
   const behindByRevisions = codebase.remoteUpdate?.behindByRevisions
   const remoteUpdateLabel =
     behindByRevisions === null || behindByRevisions === undefined
@@ -644,13 +724,41 @@ function CodebaseCard({
               type="button"
               size="sm"
               variant="outline"
-              disabled={Boolean(attachDisabledReason) || attaching}
-              title={attachDisabledReason ?? 'Attach to Workspace Root'}
+              disabled={Boolean(actionDisabledReason) || attaching}
+              title={actionDisabledReason ?? 'Attach to Workspace Root'}
               onClick={onAttach}
               className="h-7 gap-1.5 rounded-md px-2 text-[10px]"
             >
               <FolderPlus className={cn('size-3', attaching && 'animate-pulse')} />
               <span>{attaching ? 'Attaching' : 'Attach'}</span>
+            </Button>
+          ) : null}
+          {canHydrate ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={Boolean(actionDisabledReason) || hydrating}
+              title={actionDisabledReason ?? 'Hydrate local workspace'}
+              onClick={onHydrate}
+              className="h-7 gap-1.5 rounded-md px-2 text-[10px]"
+            >
+              <RefreshCcw className={cn('size-3', hydrating && 'animate-spin')} />
+              <span>{hydrating ? 'Hydrating' : 'Hydrate'}</span>
+            </Button>
+          ) : null}
+          {canDehydrate ? (
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              disabled={Boolean(actionDisabledReason) || dehydrating}
+              title={actionDisabledReason ?? 'Return to metadata-only'}
+              onClick={onDehydrate}
+              className="h-7 gap-1.5 rounded-md px-2 text-[10px]"
+            >
+              <FileStack className={cn('size-3', dehydrating && 'animate-pulse')} />
+              <span>{dehydrating ? 'Dehydrating' : 'Metadata'}</span>
             </Button>
           ) : null}
           <span className="hidden items-center gap-1 text-[10px] font-medium text-muted-foreground sm:flex">
@@ -663,29 +771,22 @@ function CodebaseCard({
   )
 }
 
-function attachDisabledReason(
+function workspaceActionDisabledReason(
   status: AgentStatusSnapshot,
   runningCommand: AgentCommand | null,
-  attachingCodebaseId: string | null,
-  settingUpCodebaseId: string | null,
+  active: {
+    attachingCodebaseId: string | null
+    settingUpCodebaseId: string | null
+    hydratingCodebaseId: string | null
+    dehydratingCodebaseId: string | null
+  },
 ) {
-  if (!status.commandsAvailable) return 'Workspace attach requires the local HopIt agent.'
+  if (!status.commandsAvailable) return 'Workspace actions require the local HopIt agent.'
   if (runningCommand) return `Running ${runningCommand}`
-  if (settingUpCodebaseId) return 'Workspace setup is running.'
-  if (attachingCodebaseId) return 'Another codebase is attaching.'
-  return null
-}
-
-function setupDisabledReason(
-  status: AgentStatusSnapshot,
-  runningCommand: AgentCommand | null,
-  settingUpCodebaseId: string | null,
-  attachingCodebaseId: string | null,
-) {
-  if (!status.commandsAvailable) return 'Workspace setup requires the local HopIt agent.'
-  if (runningCommand) return `Running ${runningCommand}`
-  if (settingUpCodebaseId) return 'Workspace setup is running.'
-  if (attachingCodebaseId) return 'Another codebase is attaching.'
+  if (active.settingUpCodebaseId) return 'Workspace setup is running.'
+  if (active.attachingCodebaseId) return 'Another codebase is attaching.'
+  if (active.hydratingCodebaseId) return 'Workspace hydrate is running.'
+  if (active.dehydratingCodebaseId) return 'Workspace dehydrate is running.'
   return null
 }
 

@@ -3,9 +3,21 @@ import { auth, currentUser } from '@clerk/nextjs/server'
 
 import { shouldUseClerkAuth } from '@/lib/auth-config'
 import { hasValidBasicAuthFallbackCredentials } from '@/lib/basic-auth-fallback'
-import { configuredCloudBackend, upsertCloudUser } from '@/lib/cloud-backend'
+import {
+  bootstrapCloudAccount,
+  configuredCloudBackend,
+  upsertCloudUser,
+  type CloudActor,
+} from '@/lib/cloud-backend'
 
 export const dynamic = 'force-dynamic'
+
+type AuthenticatedCloudActor = CloudActor & {
+  userId: string
+  primaryEmail: string | null
+  displayName: string | null
+  avatarUrl: string | null
+}
 
 export async function GET(request: Request) {
   if (!shouldUseClerkAuth()) {
@@ -63,13 +75,18 @@ export async function GET(request: Request) {
   }
 
   const user = await currentUser()
-  const accountSync = await syncCloudAccount({
+  const actor: AuthenticatedCloudActor = {
     userId: authState.userId,
+    sessionId: authState.sessionId,
     primaryEmail: user?.primaryEmailAddress?.emailAddress ?? null,
     displayName: user?.fullName ?? user?.username ?? null,
     avatarUrl: user?.imageUrl ?? null,
-    emailVerified: user?.primaryEmailAddress?.verification?.status === 'verified',
-  })
+    currentAuthEmailVerified: user?.primaryEmailAddress?.verification?.status === 'verified',
+  }
+  const accountSync = await syncCloudAccount(actor)
+  const accountBootstrap = accountSync.ok
+    ? await bootstrapAccount(actor)
+    : { ok: false, error: accountSync.error, codebases: [], claimed: [], failed: [] }
   const cloudBackend = configuredCloudBackend()
 
   return NextResponse.json(
@@ -88,6 +105,7 @@ export async function GET(request: Request) {
         backend: cloudBackend,
         configured: cloudBackend !== 'unavailable',
         accountSynced: accountSync.ok,
+        bootstrap: accountBootstrap,
         error: accountSync.error,
       },
       convex: {
@@ -106,10 +124,12 @@ export async function GET(request: Request) {
 
 async function syncCloudAccount(input: {
   userId: string
+  sessionId?: string | null
   primaryEmail: string | null
   displayName: string | null
   avatarUrl: string | null
-  emailVerified: boolean
+  currentAuthEmailVerified?: boolean
+  emailVerified?: boolean
 }) {
   if (configuredCloudBackend() === 'unavailable') {
     return { ok: false, account: null, error: 'No HopIt cloud backend is configured.' }
@@ -119,6 +139,51 @@ async function syncCloudAccount(input: {
     return { ok: true, account: accountSummary(account), error: undefined }
   } catch (error) {
     return { ok: false, account: null, error: errorMessage(error) }
+  }
+}
+
+async function bootstrapAccount(actor: CloudActor) {
+  if (!actor.userId || configuredCloudBackend() === 'unavailable') {
+    return { ok: false, codebases: [], claimed: [], failed: [], error: 'No HopIt cloud backend is configured.' }
+  }
+
+  try {
+    const result = await bootstrapCloudAccount(actor)
+    return bootstrapSummary(result)
+  } catch (error) {
+    return {
+      ok: false,
+      codebases: [],
+      claimed: [],
+      failed: [],
+      error: errorMessage(error),
+    }
+  }
+}
+
+function bootstrapSummary(value: unknown) {
+  const result = recordValue(value)
+  const codebases = Array.isArray(result?.codebases) ? result.codebases.map(bootstrapCodebaseSummary) : []
+  const claimed = Array.isArray(result?.claimed) ? result.claimed.map(bootstrapCodebaseSummary) : []
+  const failed = Array.isArray(result?.failed) ? result.failed.map(bootstrapCodebaseSummary) : []
+
+  return {
+    ok: result?.ok === true,
+    ownerId: stringValue(result?.ownerId),
+    codebases,
+    claimed,
+    failed,
+    error: stringValue(result?.error),
+  }
+}
+
+function bootstrapCodebaseSummary(value: unknown) {
+  const row = recordValue(value)
+  return {
+    codebaseId: stringValue(row?.codebaseId),
+    status: stringValue(row?.status),
+    ownerId: stringValue(row?.ownerId),
+    error: stringValue(row?.error),
   }
 }
 

@@ -29,6 +29,8 @@ export type AgentCommand =
   | 'merge'
   | 'setupWorkspace'
   | 'attachWorkspace'
+  | 'hydrateWorkspace'
+  | 'dehydrateWorkspace'
   | 'importGitUrl'
 
 export type AgentCommandPayload = {
