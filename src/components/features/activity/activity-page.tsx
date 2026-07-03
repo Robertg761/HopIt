@@ -24,7 +24,7 @@ export function ActivityPage() {
 function CadenceNote({
   backend,
 }: {
-  backend: 'local-agent' | 'convex' | 'd1' | 'unknown'
+  backend: 'local-agent' | 'd1' | 'unknown'
 }) {
   if (backend === 'local-agent') {
     return (
@@ -34,7 +34,7 @@ function CadenceNote({
       </span>
     )
   }
-  if (backend === 'd1' || backend === 'convex') {
+  if (backend === 'd1') {
     return <span className="text-xs text-muted-foreground">Updates every 30s</span>
   }
   return null

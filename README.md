@@ -8,14 +8,14 @@ Git compatibility still matters, but Git is not the primary day-to-day workspace
 
 HopIt does not use an ignore-file model for product sharing. Files under `.private/` are still snapshotted, synced, and versioned, but they are owner-visible only. Files outside `.private/` are eligible for collaboration, review, and merge according to the active change set's visibility settings and the codebase's permissions.
 
-Temporary secret-safety exception: `.private/env/` stays local-only unless object storage and a local decrypt-capable key source are configured. Today that source can be either the legacy local-only `HOPIT_CLIENT_ENCRYPTION_KEY` or the new `hop keys init-device` keyring, which unwraps the user vault key locally and feeds the secret-sync bridge in memory. Env files routed there are usable on this device and can sync only as client-encrypted object blobs; raw secret bytes must never be uploaded to Convex, R2, B2, or another cloud provider.
+Temporary secret-safety exception: `.private/env/` stays local-only unless object storage and a local decrypt-capable key source are configured. Today that source can be either the legacy local-only `HOPIT_CLIENT_ENCRYPTION_KEY` or the new `hop keys init-device` keyring, which unwraps the user vault key locally and feeds the secret-sync bridge in memory. Env files routed there are usable on this device and can sync only as client-encrypted object blobs; raw secret bytes must never be uploaded to D1, R2, B2, or another cloud provider.
 
 The long-term privacy contract is broader than the current routed-secret bridge:
 private repo files, owner-private files, secrets, Git internals, and public
 published snapshots need separate encryption zones and separate sharing grants.
 The implementation plan lives in [docs/privacy-encryption-plan.md](docs/privacy-encryption-plan.md).
 
-The current setup source of truth is [docs/personal-production.md](docs/personal-production.md). That runbook records the active Vercel, D1, legacy Convex export, Cloudflare R2, LaunchAgent, local env, workspace, backup, and export locations without exposing secret values.
+The current setup source of truth is [docs/personal-production.md](docs/personal-production.md). That runbook records the active Vercel, D1, historical Convex export, Cloudflare R2, LaunchAgent, local env, workspace, backup, and export locations without exposing secret values.
 
 ## Initial Scope
 
@@ -28,7 +28,7 @@ The current setup source of truth is [docs/personal-production.md](docs/personal
 - Active change sets that receive live synced edits before review or merge into Main.
 - Change-set visibility controls with global defaults, per-codebase overrides, and per-change-set overrides.
 - Automatic remote-update delivery so same-owner devices can receive current active change-set state without a manual refresh ritual.
-- Production storage based on Cloudflare D1 graph metadata, S3-compatible object blobs, content hashes, and per-file revision guards rather than whole-graph overwrites. Convex remains a disabled legacy fallback and export source, not the free-first production path.
+- Production storage based on Cloudflare D1 graph metadata, S3-compatible object blobs, content hashes, and per-file revision guards rather than whole-graph overwrites.
 - Scoped device/session auth separate from human product auth.
 - Client-side encryption, device trust, and wrapped key grants so private repos,
   `.private/`, and secrets are decrypted only by intended users/devices.
@@ -41,30 +41,30 @@ HopIt has moved past a local-only spike. The current dogfood baseline is a deplo
 
 - Vercel production dashboard at `https://hopit.dev` with `https://www.hopit.dev` and generated Vercel aliases attached to the same deployment.
 - Vercel project `robertg761s-projects/hopit`, project id `prj_hO8U1QmyliQjGODz4R339UkgE86S`, org/team id `team_x1SyEPIryEghBSkkwoXSTIZ2`.
-- Cloudflare D1 is now the free-first graph backend target. The codebase includes a D1 HTTP backend, schema at `cloudflare/d1/schema.sql`, D1 API proxy worker at `cloudflare/d1/api-worker.js`, and Convex-export migration script `npm run d1:migrate:convex-export`.
-- Legacy Convex production graph at `https://sincere-jaguar-17.convex.cloud`; as of 2026-06-30 the deployment is disabled for Convex Free-plan limits. A snapshot backup is available for D1 migration.
+- Cloudflare D1 is now the graph backend target. The codebase includes a D1 HTTP backend, schema at `cloudflare/d1/schema.sql`, D1 API proxy worker at `cloudflare/d1/api-worker.js`, and export migration script `npm run d1:migrate:convex-export`.
+- History: the old hosted graph was exported from the disabled service on 2026-06-30. A snapshot backup is available at `/Users/robert/HopIt-Backups/convex/`; WS1 in `docs/remediation-plan-2026-07.md` removes the retired backend code while keeping the migration script.
 - Cloudflare R2 bucket `hopit-blobs`, private/public access disabled, configured as the first S3-compatible object-blob provider.
 - Porkbun domain `hopit.dev` points at Vercel, and Clerk production DNS for `clerk.hopit.dev`, `accounts.hopit.dev`, and mail/DKIM subdomains is verified.
 - A seeded `hopit` codebase graph with 58 source files.
 - A production-profile managed workspace at `/Users/robert/HopIt Workspaces/hopit`.
 - An installed and running local LaunchAgent service, `com.hopit.agent.hopit`, for the packaged `hop-darwin-arm64` runtime from `/Users/robert/Library/Application Support/HopIt/Runtime`; it now reports D1-backed cloud status on `http://127.0.0.1:4785`.
 - Hosted dashboard now uses Clerk product auth on `hopit.dev`; Google OAuth is enabled through the production Clerk instance and allowed for `robertgordon761@gmail.com` while the Google app remains in Testing mode. Owner sign-in and owner claim are verified, so Basic Auth fallback is no longer part of the production posture.
-- Hosted status reads from D1 when `HOPIT_CLOUD_BACKEND=d1` is configured, with Convex as a legacy fallback. Hosted workspace commands are intentionally disabled.
+- Hosted status reads from D1 when `HOPIT_CLOUD_BACKEND=d1` is configured. Hosted workspace commands are intentionally disabled.
 - Local production-profile `hop` commands can import, attach, hydrate, sync, refresh, recover, review, merge, export, publish, and validate.
 - `hop workspace` persists a root-level `workspaces.json` index with per-workspace hydration/cursor and per-path local cache state, can discover account-visible D1 cloud codebases with local readiness when credentials allow it, falls back to the configured codebase under scoped device tokens, can attach a cloud codebase into the Workspace Root as metadata-only, list visible cloud files with local states, hydrate one file or recursive folder prefix, pin/unpin paths that should stay local, safely prune clean acknowledged cached bodies without cloud deletes, safely hydrate the full workspace through refresh, and dehydrate clean workspaces back to metadata-only state.
-- `hop device` / `hop session` can report local device identity. Scoped session registration, listing, touch, and revocation now work against D1 as well as the legacy Convex fallback.
+- `hop device` / `hop session` can report local device identity. Scoped session registration, listing, touch, and revocation now work against D1.
 - `hop keys` can initialize a local per-codebase device keyring, report redacted key status, and export a passphrase-encrypted recovery file. The keyring stores device private keys locally and stores the user vault key only as a self-wrapped payload.
-- The dashboard now includes provider sign-in routes, automatic owner bootstrap for verified owner accounts, member/invite management, first-run Workspace Root setup and attach for discovered cloud codebases, hydrate/dehydrate workspace controls, file-level local cache state pills plus hydrate/pin/free-space actions, a read-only code browser, routeable codebase review/compare/history pages, first issue/discussion/release workflows, release assets, project-board movement, durable issue/discussion comments, snapshot-anchored inline review threads, review-linked follow-up comments, and a redacted key-grant status/rotation panel. Codebase listing, file reads/edits, status, account sync, hosted action jobs, member/invite routes, work-item collaboration routes, review-thread routes, and key-grant status now use the D1 backend selector, with scoped-token configured-codebase fallback and Convex retained as a legacy fallback.
+- The dashboard now includes provider sign-in routes, automatic owner bootstrap for verified owner accounts, member/invite management, first-run Workspace Root setup and attach for discovered cloud codebases, hydrate/dehydrate workspace controls, file-level local cache state pills plus hydrate/pin/free-space actions, a read-only code browser, routeable codebase review/compare/history pages, first issue/discussion/release workflows, release assets, project-board movement, durable issue/discussion comments, snapshot-anchored inline review threads, review-linked follow-up comments, and a redacted key-grant status/rotation panel. Codebase listing, file reads/edits, status, account sync, hosted action jobs, member/invite routes, work-item collaboration routes, review-thread routes, and key-grant status now use the D1 backend selector with scoped-token configured-codebase fallback.
 - The literal mirror path supports binary files, symlinks, empty directories, `.git/`, root `.env.local` routing into `.private/env/repo-root/.env.local`, production-safe `import-git`, client-encrypted routed-secret sync, and dry-run object GC. The full repository still should not be treated as safely uploaded until the production-safe conversion flow has been run and verified.
 - Client-side encryption currently covers routed secrets only. Device keyrings,
-  user vault keys, recovery export, D1/legacy Convex device/wrapped-key APIs, and
+  user vault keys, recovery export, D1 device/wrapped-key APIs, and
   dashboard key-grant visibility and key-rotation state tracking now exist, but full private-repo encryption,
   repo/private/secret zone keys, invite-time key sharing, independent secret
   sharing, path encryption, and complete cryptographic revocation/rekey flows remain the next
   security milestone.
 - The first privacy/encryption foundation is implemented: shared agent
   crypto/envelope helpers, derived file privacy zones, local device keyrings,
-  encrypted recovery export, D1 and legacy Convex key-management tables and APIs, and
+  encrypted recovery export, D1 key-management tables and APIs, and
   validation that rejects plaintext secret-zone files.
 
 The system is now usable as a one-person private dogfood environment, but it is not yet a full GitHub or Git replacement. The next major product phase is a solid v1 workspace: HopIt Workspace Root, managed-folder/lazy materialization, automatic remote update delivery, broader history/review reconstruction on top of object blobs, deeper client-side privacy/key grants, and GitHub-like collaboration surfaces. The owned-domain work is no longer blocked: `hopit.dev` is live, Clerk production auth is the primary hosted auth layer, production Google OAuth is configured for owner testing, and the owner identity is claimed in D1.
@@ -141,7 +141,7 @@ plus macOS LaunchAgent and Linux systemd user-service support scripts under
 
 ## Hosted Backend
 
-HopIt now supports a Cloudflare D1-backed cloud graph for the free-first shared backend. The local JSON graph remains useful for offline development, and Convex remains a legacy fallback, but D1 is the intended no-budget production source of truth when these variables are configured:
+HopIt now supports a Cloudflare D1-backed cloud graph for the shared backend. The local JSON graph remains useful for offline development, and D1 is the intended no-budget production source of truth when these variables are configured:
 
 ```bash
 HOPIT_CODEBASE_ID=hopit
@@ -183,7 +183,7 @@ HOPIT_CLIENT_ENCRYPTION_SCOPE=secrets
 
 D1 is the graph, event, codebase, file-metadata, account-sync, and hosted-action queue backend. File bytes should use the object-blob layer for real production. `HOPIT_BLOB_PROVIDER=r2` targets Cloudflare R2 through HopIt's S3-compatible adapter. For current personal use, keep `HOPIT_BLOB_FREE_ONLY=1` and the 8 GB storage budget so HopIt stops before crossing Cloudflare R2's free storage tier. The same adapter can migrate to Backblaze B2 later by switching to `HOPIT_BLOB_PROVIDER=b2` plus the B2 S3 endpoint/key variables.
 
-`HOPIT_CLIENT_ENCRYPTION_KEY` is local-only; it must not be configured in Vercel, D1, Convex, R2, docs, commits, or chat. It lets routed `.private/env/` secrets sync as encrypted object blobs that only trusted devices with the key can hydrate. For new devices, prefer `hop keys init-device`: it stores device private keys locally, keeps the user vault key self-wrapped, and exposes the vault key to the current secret-sync bridge only in memory. The remaining encryption model still needs repo/zone keys, file data-encryption keys, invite-time wrapped grants, and rotation/revocation flows. That work is planned in [docs/privacy-encryption-plan.md](docs/privacy-encryption-plan.md).
+`HOPIT_CLIENT_ENCRYPTION_KEY` is local-only; it must not be configured in Vercel, D1, R2, docs, commits, or chat. It lets routed `.private/env/` secrets sync as encrypted object blobs that only trusted devices with the key can hydrate. For new devices, prefer `hop keys init-device`: it stores device private keys locally, keeps the user vault key self-wrapped, and exposes the vault key to the current secret-sync bridge only in memory. The remaining encryption model still needs repo/zone keys, file data-encryption keys, invite-time wrapped grants, and rotation/revocation flows. That work is planned in [docs/privacy-encryption-plan.md](docs/privacy-encryption-plan.md).
 
 Important local config locations for the current setup:
 
@@ -194,7 +194,7 @@ Important local config locations for the current setup:
 - `/Users/robert/HopIt Workspaces`: managed workspace root.
 - `/Users/robert/HopIt-Backups` and `/Users/robert/HopIt-Exports`: operational recovery and Git escape hatches.
 
-Create/apply the D1 schema from `cloudflare/d1/schema.sql`, then migrate the saved Convex export:
+Create/apply the D1 schema from `cloudflare/d1/schema.sql`, then rehearse the saved historical export migration:
 
 ```bash
 npm run d1:migrate:convex-export -- \
@@ -205,23 +205,7 @@ npm run d1:migrate:convex-export -- \
 
 Remove `--dry-run` only after `HOPIT_D1_ACCOUNT_ID`, `HOPIT_D1_DATABASE_ID`, and `HOPIT_D1_API_TOKEN` are configured. When using Vercel, set `HOPIT_D1_API_BASE_URL` to the deployed `hopit-d1-api` Worker so production does not need a broad Cloudflare account API token. The migration imports the graph and latest 500 events by default; pass `--all-events` only if the D1 daily write budget can absorb the full history.
 
-Legacy Convex development is still available with:
-
-```bash
-npm run convex:dev
-```
-
-That command prompts for Convex login/project setup, pushes the `convex/` backend functions, and writes the real development deployment URL. Production updates should use the explicit production deployment script so `.env.local` does not accidentally aim at the dev deployment:
-
-```bash
-npm run convex:deploy:prod
-```
-
-For the legacy Convex fallback, set the same `HOPIT_AGENT_TOKEN` in Convex with:
-
-```bash
-npx convex env set HOPIT_AGENT_TOKEN replace-with-a-long-random-secret
-```
+History: the retired backend export remains in `/Users/robert/HopIt-Backups/convex/` for migration/recovery reference. The old backend code path was removed by WS1 in `docs/remediation-plan-2026-07.md`; use git history if that implementation ever needs inspection.
 
 Import a real local project into the active cloud backend with:
 
@@ -235,7 +219,7 @@ Register a scoped device session against the active D1 backend with:
 npm run hop -- session register --profile production --codebase-id "$HOPIT_CODEBASE_ID" --device-name "$HOPIT_DEVICE_NAME"
 ```
 
-Store the returned `sessionToken` as `HOPIT_AGENT_SESSION_TOKEN` on that device. When the device talks to the `hopit-d1-api` Worker, that scoped token can replace `HOPIT_D1_API_TOKEN` for codebase-scoped graph reads/writes. The deployment-wide `HOPIT_AGENT_TOKEN` remains only the legacy Convex bootstrap/admin secret.
+Store the returned `sessionToken` as `HOPIT_AGENT_SESSION_TOKEN` on that device. When the device talks to the `hopit-d1-api` Worker, that scoped token can replace `HOPIT_D1_API_TOKEN` for codebase-scoped graph reads/writes.
 
 For current personal production hosting, deploy the Next.js app to Vercel and set `HOPIT_CODEBASE_ID`, `HOPIT_CLOUD_BACKEND=d1`, `HOPIT_D1_ACCOUNT_ID`, `HOPIT_D1_DATABASE_ID`, `HOPIT_D1_API_TOKEN`, `HOPIT_D1_API_BASE_URL`, `HOPIT_D1_ASSUME_SCHEMA=1`, `HOPIT_AUTH_PROVIDER=clerk`, Clerk live-key variables, and the object-storage variables beginning with `HOPIT_BLOB_`/`HOPIT_R2_` as environment variables. The hosted dashboard reads from D1 through `/api/agent/status`; local workspace commands still run through the local HopIt agent on your machine and are refused on Vercel. Local dashboard server routes merge `~/.config/hopit/production.env` under the Next.js process env, and command routes use `--profile production` when installed-agent paths are configured, so D1 credentials and Workspace Root paths stay aligned even when `.env.local` is stale. Installed devices should use scoped session tokens for normal D1 proxy access after registration. Google OAuth provider credentials live in Clerk/Google Cloud, not in Vercel env or repo files. Keep `HOPIT_ALLOW_BASIC_AUTH_FALLBACK` unset in production unless you are deliberately using the emergency fallback path.
 

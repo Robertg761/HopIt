@@ -1992,7 +1992,7 @@ test('production profile refuses local JSON cloud unless an explicit cloud backe
     path.join(state.root, 'managed-workspaces'),
   ])
 
-  assert.match(failure.stderr, /Production profile requires Cloudflare D1 or Convex backend configuration/)
+  assert.match(failure.stderr, /Production profile requires Cloudflare D1 backend configuration/)
 })
 
 test('service start exposes status and service stop cleans up the pid file', async (t) => {
@@ -2075,7 +2075,7 @@ test('service start fails cleanly when the status port is already occupied', asy
   assert.equal(await pathExists(pid), false)
 })
 
-test('production service start fails cleanly when Convex is not configured', async (t) => {
+test('production service start fails cleanly when D1 is not configured', async (t) => {
   const state = await makeState()
   const stateRoot = path.join(state.root, 'agent-state')
   const workspaceRoot = path.join(state.root, 'managed-workspaces')

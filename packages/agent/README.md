@@ -12,7 +12,7 @@ It is intentionally not a real FUSE, OS filesystem provider, or clone manager. I
 
 The selected cloud state remains the source of truth for the managed folder. In the production model, day-to-day edits should sync into an active change set; Main advances only after review or merge. The local folder is a materialized cache that HopIt manages so OS file pickers, editors, CLIs, and search tools can work without a special mount or a user-managed clone.
 
-The solid v1 target is a HopIt Workspace Root, such as `~/HopIt Workspaces`, where cloud codebases appear as HopIt-managed project folders. This package currently proves selected managed folders, a durable workspace-root index, D1 account-visible codebase discovery with local readiness when credentials allow it, scoped-token configured-codebase fallback, automatic verified-owner bootstrap for migrated `local-owner` codebases, metadata-only attach, hydration/cursor status, metadata-only/dehydrate, per-path local cache state, single-file and recursive-prefix hydrate primitives, pin/unpin controls, clean cached-body pruning that does not become a cloud delete, safe full hydrate through refresh, an explicit metadata-first lazy-materialization policy, S3-compatible object-blob storage for file bodies, activity-gated safe remote-pull plus one-shot remote-pull checks, Cloudflare D1 graph storage, and legacy scoped Convex agent-session tokens. It does not yet provide editor/tool demand hydration, complete D1 device-session auth hardening, or production-grade push/subscription remote-update delivery.
+The solid v1 target is a HopIt Workspace Root, such as `~/HopIt Workspaces`, where cloud codebases appear as HopIt-managed project folders. This package currently proves selected managed folders, a durable workspace-root index, D1 account-visible codebase discovery with local readiness when credentials allow it, scoped-token configured-codebase fallback, automatic verified-owner bootstrap for migrated `local-owner` codebases, metadata-only attach, hydration/cursor status, metadata-only/dehydrate, per-path local cache state, single-file and recursive-prefix hydrate primitives, pin/unpin controls, clean cached-body pruning that does not become a cloud delete, safe full hydrate through refresh, an explicit metadata-first lazy-materialization policy, S3-compatible object-blob storage for file bodies, activity-gated safe remote-pull plus one-shot remote-pull checks, Cloudflare D1 graph storage, and scoped D1 agent-session tokens. It does not yet provide editor/tool demand hydration, complete D1 device-session auth hardening, or production-grade push/subscription remote-update delivery.
 
 HopIt does not use ignore files as product sharing controls. Files under `.private/` are still snapshotted, synced, and versioned, but owner-visible only. Files outside `.private/` are governed by the active change set's effective visibility and the codebase's permissions.
 
@@ -29,7 +29,7 @@ classification, legacy secret-envelope encryption/decryption, device key
 generation, wrapped-key helpers, passphrase recovery export, blob wrap/unwrap,
 and envelope validation shared by the CLI and tests.
 
-Current personal production setup details, including the `hopit.dev` domain, active Vercel/D1/legacy Convex/Clerk/R2 accounts, LaunchAgent paths, env file locations, and temporary safety boundaries, live in [../../docs/personal-production.md](../../docs/personal-production.md).
+Current personal production setup details, including the `hopit.dev` domain, active Vercel/D1/Clerk/R2 accounts, historical export location, LaunchAgent paths, env file locations, and temporary safety boundaries, live in [../../docs/personal-production.md](../../docs/personal-production.md).
 
 ## Commands
 
@@ -114,8 +114,7 @@ encrypts the user vault key with a passphrase; set the passphrase only for that
 one command through `--recovery-passphrase` or `HOPIT_RECOVERY_PASSPHRASE`, and
 do not leave it in persistent env files. Use `--skip-cloud-registration` only
 for local fixture tests or offline setup; production device cloud registration
-now works with the D1 backend and remains available through the legacy Convex
-fallback.
+now works with the D1 backend.
 
 Point the same import at the real D1 backend with:
 
@@ -132,10 +131,10 @@ Any command can use `--cloud-backend d1` plus `HOPIT_D1_API_BASE_URL` and the
 D1 identity fields; server/bootstrap contexts use `HOPIT_D1_API_TOKEN`, while
 installed devices can use `HOPIT_AGENT_SESSION_TOKEN` against the D1 proxy after
 session registration. The selected cloud graph is then read from and written to
-D1 instead of the local JSON file. Convex flags remain as a legacy fallback.
+D1 instead of the local JSON file.
 Local journal and event files still exist as the device safety log.
 
-Production file bytes should use the object-blob layer instead of D1/Convex document storage:
+Production file bytes should use the object-blob layer instead of D1 document storage:
 
 ```bash
 HOPIT_BLOB_PROVIDER=r2
@@ -280,9 +279,9 @@ The local fixture models Main, the selected active change set, owner identity,
 session identity, and effective change-set visibility. The development fixture
 still stores that graph in JSON, but commands reach it through a cloud graph
 service boundary. That keeps demos dependency-free while allowing the same
-command flow to target Convex for the real shared backend.
+command flow to target D1 for the real shared backend.
 
-Requester-aware reads are explicit in both the fixture path and hosted Convex
+Requester-aware reads are explicit in both the fixture path and hosted D1
 dashboard path. Owner requesters see shared and `.private/` files. Collaborator
 requesters see no active change-set files when visibility is `private`, see
 shared files when visibility is `team-visible` or `review-visible`, and never
@@ -340,12 +339,7 @@ duplicating workspace content.
 
 `hop device` is an alias for `hop session`. `device status` reports the local
 session id, device name, and whether the command is using a scoped per-device
-session token. Session register/list/touch/revoke work on the D1 backend and
-the legacy Convex fallback.
-
-When both a legacy bootstrap token and `HOPIT_AGENT_SESSION_TOKEN` are present,
-normal cloud commands prefer the scoped session token. Pass the bootstrap token
-explicitly only for legacy Convex bootstrap/admin work.
+session token. Session register/list/touch/revoke work on the D1 backend.
 
 `hop backup` writes a restorable diagnostic folder with cloud/status/event
 state. `hop export` and `hop publish` are the current Git escape hatch. They create a
@@ -389,7 +383,7 @@ npm run hop -- service start \
 The remote-pull scheduler wakes only after local workspace activity has drained
 through the local sync scheduler, then checks for a clean local journal, an idle
 local sync scheduler, a fully materialized workspace, and the workspace index
-cursor before calling the same safe `hop refresh` path. For D1 and legacy Convex
+cursor before calling the same safe `hop refresh` path. For D1
 workspaces, it first reads only the codebase-level graph head. It performs the
 heavier local hash-manifest scan and full graph refresh only after that cursor
 shows the cloud revision moved. `hop remote-pull` runs that decision once, which

@@ -210,7 +210,7 @@ export function WorkspaceProvider({
     load()
     const interval = window.setInterval(
       load,
-      status.backend === 'd1' || status.backend === 'convex' ? HOSTED_POLL_MS : LOCAL_POLL_MS,
+      status.backend === 'd1' ? HOSTED_POLL_MS : LOCAL_POLL_MS,
     )
     return () => {
       cancelled = true

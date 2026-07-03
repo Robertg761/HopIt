@@ -451,10 +451,7 @@ function backendArgs(env: NodeJS.ProcessEnv) {
       ...optionArg('--d1-api-base-url', env.HOPIT_D1_API_BASE_URL),
     ]
   }
-  return [
-    ...optionArg('--convex-url', env.HOPIT_CONVEX_URL ?? env.CONVEX_URL),
-    ...optionArg('--agent-token', env.HOPIT_AGENT_TOKEN),
-  ]
+  return []
 }
 
 function localCommandEnv(): NodeJS.ProcessEnv {

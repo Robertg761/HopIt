@@ -4,15 +4,11 @@ import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ConvexHttpClient } from 'convex/browser'
-import { anyApi } from 'convex/server'
 import { createD1Backend, isD1Configured } from '../../../src/lib/d1-backend.js'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const agentCli = path.join(repoRoot, 'packages/agent/src/cli.js')
 const runnerId = process.env.HOPIT_ACTION_RUNNER_ID ?? `${os.hostname()}-${process.pid}`
-const convexUrl = process.env.HOPIT_CONVEX_URL ?? process.env.CONVEX_URL
-const agentToken = process.env.HOPIT_AGENT_TOKEN
 const cloudBackend = configuredCloudBackend()
 const workspaceRoot = process.env.HOPIT_ACTION_WORKSPACE_ROOT ?? path.join(os.tmpdir(), 'hopit-actions-workspaces')
 const stateRoot = process.env.HOPIT_ACTION_STATE_ROOT ?? path.join(os.tmpdir(), 'hopit-actions-state')
@@ -21,11 +17,9 @@ const pollIntervalMs = Number(process.env.HOPIT_ACTION_POLL_INTERVAL_MS ?? 5000)
 const mode = process.argv[2] ?? 'run-once'
 
 if (cloudBackend === 'unavailable') {
-  throw new Error('Set HOPIT_CLOUD_BACKEND=d1 with HOPIT_D1_* values, or set HOPIT_CONVEX_URL/CONVEX_URL for the actions runner.')
+  throw new Error('Set HOPIT_CLOUD_BACKEND=d1 with HOPIT_D1_* values for the actions runner.')
 }
-if (cloudBackend === 'convex' && !agentToken) throw new Error('Set HOPIT_AGENT_TOKEN for the Convex actions runner.')
 
-const convexClient = cloudBackend === 'convex' ? new ConvexHttpClient(convexUrl, { logger: false }) : null
 const d1Backend = cloudBackend === 'd1' ? createD1Backend() : null
 
 if (mode === 'loop') {
@@ -113,22 +107,14 @@ async function claimNextJob() {
   if (cloudBackend === 'd1') {
     return await d1Backend.claimNextActionJob({ runnerId })
   }
-
-  return await convexClient.mutation(anyApi.agent.claimNextActionJob, {
-    runnerId,
-    token: agentToken,
-  })
+  return null
 }
 
 async function completeClaimedJob(payload) {
   if (cloudBackend === 'd1') {
     return await d1Backend.completeActionJob(payload)
   }
-
-  return await convexClient.mutation(anyApi.agent.completeActionJob, {
-    ...payload,
-    token: agentToken,
-  })
+  throw new Error('No HopIt cloud backend is configured for action completion.')
 }
 
 async function prepareWorkspaceDependencies(workspace, env) {
@@ -207,15 +193,13 @@ function trustedAgentEnv() {
 
 function backendArgs() {
   if (cloudBackend === 'd1') return ['--cloud-backend', 'd1']
-  return ['--convex-url', convexUrl, '--agent-token', agentToken]
+  return []
 }
 
 function configuredCloudBackend() {
   const preferred = process.env.HOPIT_CLOUD_BACKEND
   if (preferred === 'd1' || preferred === 'cloudflare-d1') return 'd1'
-  if (preferred === 'convex') return convexUrl ? 'convex' : 'unavailable'
   if (isD1Configured()) return 'd1'
-  if (convexUrl) return 'convex'
   return 'unavailable'
 }
 

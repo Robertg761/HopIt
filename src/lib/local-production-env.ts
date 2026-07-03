@@ -49,7 +49,6 @@ export function mergeLocalProductionEnv(baseEnv: NodeJS.ProcessEnv = process.env
 export function normalizeCloudBackend(value: string | undefined) {
   const normalized = value?.trim().toLowerCase()
   if (normalized === 'd1' || normalized === 'cloudflare-d1') return 'd1'
-  if (normalized === 'convex') return 'convex'
   return normalized ?? null
 }
 

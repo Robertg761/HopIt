@@ -15,7 +15,7 @@ import { InfoRow, ManagedCaption, MonoId } from './shared'
 
 export function SettingsPage() {
   const { status } = useWorkspace()
-  const hostedBackend = status.backend === 'd1' || status.backend === 'convex'
+  const hostedBackend = status.backend === 'd1'
 
   return (
     <PageScaffold

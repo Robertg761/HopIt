@@ -276,10 +276,6 @@ HOPIT_CLIENT_ENCRYPTION_SCOPE=secrets
 # HOPIT_B2_KEY_ID=replace-with-b2-key-id
 # HOPIT_B2_APPLICATION_KEY=replace-with-b2-application-key
 
-# Legacy Convex fallback only. Leave unset for the free-first D1 path.
-# HOPIT_AGENT_TOKEN=replace-with-a-long-random-bootstrap-token
-# HOPIT_CONVEX_URL=https://your-convex-deployment.convex.cloud
-# NEXT_PUBLIC_CONVEX_URL=https://your-convex-deployment.convex.cloud
 `,
     'utf8',
   )

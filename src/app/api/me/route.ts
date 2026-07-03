@@ -45,10 +45,6 @@ export async function GET(request: Request) {
           configured: cloudBackend !== 'unavailable',
           accountSynced: false,
         },
-        convex: {
-          configured: cloudBackend === 'convex',
-          accountSynced: false,
-        },
       },
       {
         headers: {
@@ -107,11 +103,6 @@ export async function GET(request: Request) {
         accountSynced: accountSync.ok,
         bootstrap: accountBootstrap,
         error: accountSync.error,
-      },
-      convex: {
-        configured: cloudBackend === 'convex',
-        accountSynced: cloudBackend === 'convex' ? accountSync.ok : false,
-        error: cloudBackend === 'convex' ? accountSync.error : undefined,
       },
     },
     {

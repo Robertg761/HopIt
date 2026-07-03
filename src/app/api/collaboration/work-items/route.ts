@@ -228,7 +228,6 @@ export async function PATCH(request: Request) {
 async function readActor(request: Request, codebaseId: string): Promise<CloudActor | null> {
   const actor = await cloudActorFromRequest(request, { allowBasicFallback: true, codebaseId, agentCapability: 'read' })
   if (actor) return actor
-  if (configuredCloudBackend() === 'convex' && process.env.HOPIT_AGENT_TOKEN) return {}
   return null
 }
 

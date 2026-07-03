@@ -26,19 +26,10 @@ if (cloudBackend === 'd1') {
   if (env.HOPIT_D1_API_BASE_URL) checks.push(urlCheck('HOPIT_D1_API_BASE_URL'))
   if (env.HOPIT_D1_ASSUME_SCHEMA) checks.push(truthy('HOPIT_D1_ASSUME_SCHEMA'))
   else warnings.push('HOPIT_D1_ASSUME_SCHEMA is unset; production D1 reads will re-run schema checks and can waste the free query budget.')
-  if (env.HOPIT_CONVEX_URL || env.CONVEX_URL || env.NEXT_PUBLIC_CONVEX_URL) {
-    warnings.push('Convex URL variables are still set, but HOPIT_CLOUD_BACKEND=d1 will use Cloudflare D1 for graph/status/actions.')
-  }
-} else if (cloudBackend === 'convex') {
-  checks.push(exactNormalized('HOPIT_CLOUD_BACKEND', ['convex'], { allowUnset: true }))
-  checks.push(requiredOneOf(['HOPIT_CONVEX_URL', 'CONVEX_URL']))
-  checks.push(required('NEXT_PUBLIC_CONVEX_URL'))
-  checks.push(secret('HOPIT_AGENT_TOKEN', { minLength: 32 }))
-  warnings.push('Convex is a legacy production backend for this repo. Prefer HOPIT_CLOUD_BACKEND=d1 for the free-first path.')
 } else {
   checks.push({
     name: 'HOPIT_CLOUD_BACKEND',
-    failures: ['Configure HOPIT_CLOUD_BACKEND=d1 with HOPIT_D1_* values, or set Convex URL/token variables for the legacy backend.'],
+    failures: ['Configure HOPIT_CLOUD_BACKEND=d1 with HOPIT_D1_* values.'],
   })
 }
 
@@ -84,12 +75,9 @@ if (!env.HOPIT_WORKSPACE_INDEX) {
   checks.push(absolutePath('HOPIT_WORKSPACE_INDEX'))
 }
 if (!env.HOPIT_AGENT_SESSION_TOKEN) {
-  warnings.push(cloudBackend === 'd1'
-    ? 'HOPIT_AGENT_SESSION_TOKEN is unset; installed devices should use a scoped D1 proxy session token after registration. Server/bootstrap tasks can use HOPIT_D1_API_TOKEN.'
-    : 'HOPIT_AGENT_SESSION_TOKEN is unset; bootstrap can use HOPIT_AGENT_TOKEN, but installed devices should use scoped session tokens.')
+  warnings.push('HOPIT_AGENT_SESSION_TOKEN is unset; installed devices should use a scoped D1 proxy session token after registration. Server/bootstrap tasks can use HOPIT_D1_API_TOKEN.')
 } else {
   checks.push(secret('HOPIT_AGENT_SESSION_TOKEN', { minLength: 32 }))
-  if (env.HOPIT_AGENT_TOKEN) checks.push(notEqual('HOPIT_AGENT_SESSION_TOKEN', 'HOPIT_AGENT_TOKEN'))
 }
 if (!env.HOPIT_SESSION_ID) {
   warnings.push('HOPIT_SESSION_ID is unset; hop device register can allocate one for this device.')
@@ -300,16 +288,6 @@ function nonPlaceholder(name) {
   return { name, failures }
 }
 
-function notEqual(name, otherName) {
-  const value = env[name]
-  const otherValue = env[otherName]
-  const failures = []
-  if (value && otherValue && value === otherValue) {
-    failures.push(`${name} must not match ${otherName}; installed devices should use scoped session tokens.`)
-  }
-  return { name: `${name} != ${otherName}`, failures }
-}
-
 function absolutePath(name) {
   const value = env[name]
   const failures = []
@@ -404,9 +382,7 @@ function normalizeBlobProvider(value) {
 
 function normalizeCloudBackend(value) {
   if (value === 'd1' || value === 'cloudflare-d1') return 'd1'
-  if (value === 'convex') return 'convex'
   if (env.HOPIT_D1_DATABASE_ID || env.HOPIT_D1_ACCOUNT_ID || env.HOPIT_D1_API_TOKEN) return 'd1'
-  if (env.HOPIT_CONVEX_URL || env.CONVEX_URL || env.NEXT_PUBLIC_CONVEX_URL) return 'convex'
   return 'unavailable'
 }
 

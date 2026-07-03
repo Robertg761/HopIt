@@ -221,10 +221,10 @@ function codebaseIdFromRequest(request: Request) {
 }
 
 function isHostedRuntime() {
-  return process.env.VERCEL === '1' || process.env.HOPIT_REQUIRE_CONVEX === '1' || process.env.HOPIT_REQUIRE_CLOUD === '1'
+  return process.env.VERCEL === '1' || process.env.HOPIT_REQUIRE_CLOUD === '1'
 }
 
-function agentCapabilities(backend: 'd1' | 'convex' | 'local-agent' | 'unavailable') {
+function agentCapabilities(backend: 'd1' | 'local-agent' | 'unavailable') {
   return {
     backend,
     hosted: isHostedRuntime(),

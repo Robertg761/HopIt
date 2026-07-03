@@ -19,8 +19,6 @@ function backendLabel(backend: AgentStatusSnapshot['backend']): string {
       return 'Local agent'
     case 'd1':
       return 'Hosted D1'
-    case 'convex':
-      return 'Convex'
     default:
       return 'Unknown backend'
   }

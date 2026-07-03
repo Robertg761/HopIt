@@ -8,8 +8,6 @@ import { createServer } from 'node:http'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ConvexHttpClient } from 'convex/browser'
-import { anyApi } from 'convex/server'
 import {
   CloudflareD1HopBackend,
   d1CloudServiceType,
@@ -61,7 +59,6 @@ const workspaceMode = {
 const workspaceIndexVersion = 1
 const localCacheSchemaVersion = 1
 const cloudServiceType = 'fixture-json-cloud-graph'
-const convexCloudServiceType = 'convex-cloud-graph'
 
 const fileScope = {
   shared: 'shared',
@@ -81,8 +78,6 @@ const entryEncoding = {
 
 const contentStorageMode = {
   inline: 'inline',
-  convexFileBlob: 'convex-file-blob',
-  convexFileBlobBase64: 'convex-file-blob-base64',
   objectBlob: 'object-blob',
 }
 
@@ -93,7 +88,7 @@ const objectBlobProvider = {
   b2: 'b2',
 }
 
-const convexFreeFileStorageBudgetBytes = 1_000_000_000
+const defaultFileStorageBudgetBytes = 1_000_000_000
 const r2FreeStorageTierBytes = 10_000_000_000
 const r2DefaultFreeOnlyBudgetBytes = 8_000_000_000
 const serviceReadyTimeoutMs = 60_000
@@ -562,7 +557,7 @@ async function mirrorLocalProject(options, context = {}) {
   }
   await assertWorkspacePathSafe(options, { source })
 
-  const storageBudgetBytes = Number(options['storage-budget-bytes'] ?? process.env.HOPIT_STORAGE_BUDGET_BYTES ?? convexFreeFileStorageBudgetBytes)
+  const storageBudgetBytes = Number(options['storage-budget-bytes'] ?? process.env.HOPIT_STORAGE_BUDGET_BYTES ?? defaultFileStorageBudgetBytes)
   if (!Number.isFinite(storageBudgetBytes) || storageBudgetBytes < 0) {
     throw new Error(`Invalid --storage-budget-bytes value: ${options['storage-budget-bytes']}`)
   }
@@ -2681,8 +2676,6 @@ async function startService(options) {
   const childEnv = {
     ...process.env,
   }
-  const token = agentTokenFromOptions(options)
-  if (token) childEnv.HOPIT_AGENT_TOKEN = token
   const sessionToken = agentSessionTokenFromOptions(options)
   if (sessionToken) childEnv.HOPIT_AGENT_SESSION_TOKEN = sessionToken
   if (options['session-id']) childEnv.HOPIT_SESSION_ID = options['session-id']
@@ -2921,7 +2914,6 @@ function runtimeArgsFromOptions(options) {
     ['--pid', options.pid],
     ['--host', options.host],
     ['--port', options.port],
-    ['--convex-url', convexUrlFromOptions(options)],
     ['--state-root', options['state-root']],
     ['--workspace-root', options['workspace-root']],
     ['--workspace-index', options['workspace-index']],
@@ -4293,7 +4285,6 @@ async function runSessionCommand(action, options) {
         cloudSessionId: state.status.sessionId,
       },
       credentials: {
-        serviceTokenConfigured: Boolean(agentTokenFromOptions(options)),
         sessionTokenConfigured: Boolean(agentSessionTokenFromOptions(options)),
       },
       cloud: {
@@ -4307,7 +4298,7 @@ async function runSessionCommand(action, options) {
 
   const cloudService = createCloudGraphService(options)
   if (!supportsAgentSessions(cloudService)) {
-    throw new Error(`Session ${action} requires a cloud backend with scoped session support. Configure Cloudflare D1 or legacy Convex.`)
+    throw new Error(`Session ${action} requires a cloud backend with scoped session support. Configure Cloudflare D1.`)
   }
 
   if (action === 'register') {
@@ -5650,8 +5641,6 @@ HOPIT_D1_ACCOUNT_ID=${options['d1-account-id'] ?? 'replace-with-cloudflare-accou
 HOPIT_D1_DATABASE_ID=${options['d1-database-id'] ?? 'replace-with-d1-database-id'}
 HOPIT_D1_API_TOKEN=replace-with-cloudflare-d1-api-token-or-hopit-d1-proxy-token
 HOPIT_D1_API_BASE_URL=${options['d1-api-base-url'] ?? 'https://hopit-d1-api.<account-subdomain>.workers.dev'}
-# Legacy Convex fallback only; leave unset for the free-first D1 path.
-# HOPIT_CONVEX_URL=${convexUrlFromOptions(options) ?? 'https://your-convex-deployment.convex.cloud'}
 HOPIT_AGENT_STATE_ROOT=${JSON.stringify(path.resolve(agentStateRootFromOptions(options)))}
 HOPIT_WORKSPACE_ROOT=${JSON.stringify(path.resolve(workspaceRootFromOptions(options)))}
 HOPIT_WORKSPACE_INDEX=${JSON.stringify(path.resolve(workspaceIndexPath(options)))}
@@ -6879,15 +6868,11 @@ function cloudLocationFromOptions(options, codebaseId = options['codebase-id'] ?
   if (shouldUseD1Backend(options)) {
     return codebaseId ? `d1:${codebaseId}` : 'd1:unconfigured'
   }
-  if (shouldUseConvexBackend(options)) {
-    return codebaseId ? `convex:${codebaseId}` : `convex:${convexUrlFromOptions(options)}`
-  }
   return path.resolve(options.cloud)
 }
 
 function cloudServiceTypeFromOptions(options) {
   if (shouldUseD1Backend(options)) return d1CloudServiceType
-  if (shouldUseConvexBackend(options)) return convexCloudServiceType
   return cloudServiceType
 }
 
@@ -7321,7 +7306,7 @@ function integerOption(value, defaultValue, name) {
 }
 
 function normalizeBlobProvider(value) {
-  if (!value || value === 'inline' || value === 'convex') return null
+  if (!value || value === 'inline') return null
   if (value === 'local' || value === 'fs' || value === objectBlobProvider.filesystem) return objectBlobProvider.filesystem
   if (value === objectBlobProvider.r2) return objectBlobProvider.r2
   if (value === objectBlobProvider.b2 || value === 'backblaze') return objectBlobProvider.b2
@@ -7863,12 +7848,8 @@ function createCloudGraphService(options) {
     return new D1CloudGraphService(options)
   }
 
-  if (shouldUseConvexBackend(options)) {
-    return new ConvexCloudGraphService(options)
-  }
-
   if (options.profile === 'production' && !options['allow-local-cloud']) {
-    throw new Error('Production profile requires Cloudflare D1 or Convex backend configuration. Set HOPIT_CLOUD_BACKEND=d1 with HOPIT_D1_* values, or set --convex-url/HOPIT_CONVEX_URL. Use --allow-local-cloud only for local dry runs.')
+    throw new Error('Production profile requires Cloudflare D1 backend configuration. Set HOPIT_CLOUD_BACKEND=d1 with HOPIT_D1_* values. Use --allow-local-cloud only for local dry runs.')
   }
 
   return new FixtureJsonCloudGraphService(options)
@@ -7947,258 +7928,6 @@ class FixtureJsonCloudGraphService {
   async readBlob(file, context = {}) {
     if (!this.blobStore) throw new Error('Object-backed file requires HOPIT_BLOB_PROVIDER.')
     return await this.blobStore.getBlob(file, context)
-  }
-}
-
-class ConvexCloudGraphService {
-  constructor(options) {
-    this.url = convexUrlFromOptions(options)
-    this.token = agentTokenFromOptions(options)
-    this.sessionToken = agentSessionTokenFromOptions(options)
-    this.preferSessionToken = preferSessionTokenFromOptions(options)
-    this.codebaseId = options['codebase-id'] || process.env.HOPIT_CODEBASE_ID || null
-    this.type = convexCloudServiceType
-    this.location = this.codebaseId ? `convex:${this.codebaseId}` : `convex:${this.url}`
-    this.client = new ConvexHttpClient(this.url, { logger: false })
-    this.usesAtomicFileMutations = true
-    this.blobStore = createObjectBlobStore(options)
-  }
-
-  async exists() {
-    return Boolean(await this.readGraphHead())
-  }
-
-  async initialize(fixture) {
-    const cloud = withComputedMetadata(fixture)
-    this.codebaseId = cloud.codebase.id
-    this.location = `convex:${this.codebaseId}`
-    await prepareGraphForBlobStorage(this, cloud)
-    await this.writeGraph(cloud)
-    return cloud
-  }
-
-  async readGraph() {
-    const graph = await this.readOptionalGraph()
-    if (!graph) {
-      throw new Error(`Convex graph not found for codebase ${this.codebaseId ?? '(unset)'}.`)
-    }
-    return graph
-  }
-
-  async readVisibleGraph(request = {}) {
-    return filterVisibleGraphForRequester(await this.readGraph(), request)
-  }
-
-  async readGraphHead() {
-    if (!this.codebaseId) return null
-
-    const args = { codebaseId: this.codebaseId }
-    Object.assign(args, this.credentialArgs())
-
-    const head = await this.client.query(anyApi.agent.getGraphHead, args)
-    return normalizeCloudGraphHead(head)
-  }
-
-  async readOptionalGraph() {
-    if (!this.codebaseId) return null
-
-    const args = { codebaseId: this.codebaseId }
-    Object.assign(args, this.credentialArgs())
-
-    const graph = await this.client.query(anyApi.agent.getGraph, args)
-    return graph ? normalizeValidatedCloudGraph(graph) : null
-  }
-
-  async readOptionalVisibleGraph(request = {}) {
-    const graph = await this.readOptionalGraph()
-    if (!graph) return null
-    return filterVisibleGraphForRequester(graph, request)
-  }
-
-  async listCodebases() {
-    const args = {}
-    Object.assign(args, this.credentialArgs())
-    const codebases = await this.client.query(anyApi.agent.listCodebases, args)
-    return Array.isArray(codebases) ? codebases.map(normalizeCloudGraphHead).filter(Boolean) : []
-  }
-
-  async writeGraph(cloud) {
-    const normalized = normalizeValidatedCloudGraph(cloud)
-    this.codebaseId = normalized.codebase.id
-    this.location = `convex:${this.codebaseId}`
-    await prepareGraphForBlobStorage(this, normalized)
-    const args = { graph: normalized }
-    Object.assign(args, this.credentialArgs())
-
-    await this.client.mutation(anyApi.agent.saveGraph, args)
-  }
-
-  applyJournalEntry(cloud, entry, options = {}) {
-    return applyJournalEntryToCloud(cloud, entry, options)
-  }
-
-  async commitJournalEntry(cloud, entry, options = {}) {
-    const payload = options.entry
-      ? await prepareEntryForBlobStorage(this.blobStore, cloud.codebase?.id ?? this.codebaseId ?? 'hopit', entry.path, options.entry)
-      : null
-    const args = {
-      codebaseId: cloud.codebase.id,
-      type: entry.type,
-      path: entry.path,
-      kind: payload?.kind ?? entry.kind,
-      baseRevision: Object.hasOwn(entry, 'baseRevision') ? entry.baseRevision : undefined,
-      targetStateRevision: Object.hasOwn(entry, 'targetStateRevision') ? entry.targetStateRevision : undefined,
-    }
-    if (payload?.hash ?? entry.hash) args.hash = payload?.hash ?? entry.hash
-    if (Number.isInteger(payload?.size ?? entry.bytes)) args.size = payload?.size ?? entry.bytes
-    if (payload?.encoding) args.encoding = payload.encoding
-    if (payload?.target) args.target = payload.target
-    if (payload?.contentStorage) args.contentStorage = payload.contentStorage
-    if (payload?.blobProvider) args.blobProvider = payload.blobProvider
-    if (payload?.blobKey) args.blobKey = payload.blobKey
-    if (payload?.blobHash) args.blobHash = payload.blobHash
-    if (Number.isInteger(payload?.blobSize)) args.blobSize = payload.blobSize
-    if (payload?.clientEncryption) args.clientEncryption = payload.clientEncryption
-    if (payload?.privacyZone) args.privacyZone = payload.privacyZone
-    if (payload && typeof payload.content === 'string') args.content = payload.content
-    else if (typeof options.content === 'string') args.content = options.content
-    Object.assign(args, this.credentialArgs())
-
-    let remoteAcknowledgement
-    try {
-      remoteAcknowledgement = await this.client.mutation(anyApi.agent.applyFileMutation, args)
-    } catch (error) {
-      if (!isMissingConvexFunctionError(error)) throw error
-
-      const legacyAcknowledgement = this.applyJournalEntry(cloud, entry, options)
-      await this.writeGraph(cloud)
-      return {
-        ...legacyAcknowledgement,
-        storageMode: 'legacy-save-graph-fallback',
-      }
-    }
-
-    const localAcknowledgement = this.applyJournalEntry(cloud, entry, {
-      ...options,
-      entry: payload ?? options.entry,
-    })
-    return {
-      ...localAcknowledgement,
-      ...remoteAcknowledgement,
-      storageMode: 'per-file-mutation',
-    }
-  }
-
-  async readBlob(file, context = {}) {
-    if (!this.blobStore) throw new Error('Object-backed file requires HOPIT_BLOB_PROVIDER.')
-    return await this.blobStore.getBlob(file, context)
-  }
-
-  async registerAgentSession(options = {}) {
-    const args = {
-      codebaseId: requireConvexCodebaseId(this.codebaseId),
-      deviceName: options.deviceName,
-      capabilities: options.capabilities,
-    }
-    if (options.sessionId) args.sessionId = options.sessionId
-    if (options.expiresAt) args.expiresAt = options.expiresAt
-    Object.assign(args, this.credentialArgs())
-
-    return await this.client.mutation(anyApi.agent.registerAgentSession, args)
-  }
-
-  async listAgentSessions(options = {}) {
-    const args = { codebaseId: requireConvexCodebaseId(this.codebaseId) }
-    if (options.status) args.status = options.status
-    Object.assign(args, this.credentialArgs())
-
-    return await this.client.query(anyApi.agent.listAgentSessions, args)
-  }
-
-  async touchAgentSession(options = {}) {
-    const args = {
-      sessionId: options.sessionId,
-    }
-    Object.assign(args, this.credentialArgs())
-
-    return await this.client.mutation(anyApi.agent.touchAgentSession, args)
-  }
-
-  async revokeAgentSession(options = {}) {
-    const args = {
-      sessionId: options.sessionId,
-    }
-    Object.assign(args, this.credentialArgs())
-
-    return await this.client.mutation(anyApi.agent.revokeAgentSession, args)
-  }
-
-  async registerDeviceKey(options = {}) {
-    const args = {
-      codebaseId: requireConvexCodebaseId(this.codebaseId),
-      ...options,
-    }
-    Object.assign(args, this.credentialArgs())
-
-    return await this.client.mutation(anyApi.agent.registerDeviceKey, args)
-  }
-
-  async listDeviceKeys(options = {}) {
-    const args = {
-      codebaseId: requireConvexCodebaseId(this.codebaseId),
-      ...options,
-    }
-    Object.assign(args, this.credentialArgs())
-
-    return await this.client.query(anyApi.agent.listDeviceKeys, args)
-  }
-
-  async ensureUserKeyring(options = {}) {
-    const args = {
-      codebaseId: requireConvexCodebaseId(this.codebaseId),
-      ...options,
-    }
-    Object.assign(args, this.credentialArgs())
-
-    return await this.client.mutation(anyApi.agent.ensureUserKeyring, args)
-  }
-
-  async createWrappedKey(options = {}) {
-    const args = {
-      codebaseId: requireConvexCodebaseId(this.codebaseId),
-      ...options,
-    }
-    Object.assign(args, this.credentialArgs())
-
-    return await this.client.mutation(anyApi.agent.createWrappedKey, args)
-  }
-
-  async listWrappedKeys(options = {}) {
-    const args = {
-      codebaseId: requireConvexCodebaseId(this.codebaseId),
-      ...options,
-    }
-    Object.assign(args, this.credentialArgs())
-
-    return await this.client.query(anyApi.agent.listWrappedKeys, args)
-  }
-
-  async revokeWrappedKey(options = {}) {
-    const args = {
-      codebaseId: requireConvexCodebaseId(this.codebaseId),
-      ...options,
-    }
-    Object.assign(args, this.credentialArgs())
-
-    return await this.client.mutation(anyApi.agent.revokeWrappedKey, args)
-  }
-
-  credentialArgs() {
-    return convexCredentialArgs({
-      token: this.token,
-      sessionToken: this.sessionToken,
-      preferSessionToken: this.preferSessionToken,
-    })
   }
 }
 
@@ -8921,8 +8650,6 @@ function isObjectStoredFileEntry(file) {
 
 function normalizeContentStorageMode(value) {
   if (value === contentStorageMode.objectBlob) return contentStorageMode.objectBlob
-  if (value === contentStorageMode.convexFileBlob) return contentStorageMode.convexFileBlob
-  if (value === contentStorageMode.convexFileBlobBase64) return contentStorageMode.convexFileBlobBase64
   return contentStorageMode.inline
 }
 
@@ -9023,10 +8750,7 @@ async function emit(options, event, detail) {
 async function appendRemoteEvent(options, payload) {
   if (shouldUseD1Backend(options)) {
     await appendD1Event(options, payload)
-    return
   }
-
-  await appendConvexEvent(options, payload)
 }
 
 async function appendD1Event(options, payload) {
@@ -9051,31 +8775,6 @@ async function appendD1Event(options, payload) {
   }
 }
 
-async function appendConvexEvent(options, payload) {
-  const url = convexUrlFromOptions(options)
-  if (!url) return
-
-  const codebaseId = codebaseIdFromEvent(options, payload.detail)
-  if (!codebaseId) return
-
-  try {
-    const client = new ConvexHttpClient(url, { logger: false })
-    const args = {
-      codebaseId,
-      event: payload.event,
-      detail: payload.detail,
-      at: payload.at,
-      source: 'local-agent',
-    }
-    Object.assign(args, convexCredentialArgsFromOptions(options))
-
-    await client.mutation(anyApi.agent.appendEvent, args)
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Unknown Convex event error'
-    console.error(`convex.event_failed ${JSON.stringify({ event: payload.event, reason: message })}`)
-  }
-}
-
 function codebaseIdFromEvent(options, detail) {
   return (
     detail?.contract?.codebaseId ??
@@ -9086,10 +8785,6 @@ function codebaseIdFromEvent(options, detail) {
   )
 }
 
-function convexUrlFromOptions(options) {
-  return options['convex-url'] ?? process.env.HOPIT_CONVEX_URL ?? process.env.CONVEX_URL ?? null
-}
-
 function cloudBackendPreference(options) {
   return options['cloud-backend'] ?? process.env.HOPIT_CLOUD_BACKEND ?? null
 }
@@ -9097,42 +8792,12 @@ function cloudBackendPreference(options) {
 function shouldUseD1Backend(options) {
   const preference = cloudBackendPreference(options)
   if (preference === 'd1' || preference === 'cloudflare-d1') return true
-  if (preference === 'convex' || preference === 'fixture' || preference === 'local') return false
+  if (preference === 'fixture' || preference === 'local') return false
   return isD1Configured(options)
-}
-
-function shouldUseConvexBackend(options) {
-  const preference = cloudBackendPreference(options)
-  if (preference === 'convex') return true
-  if (preference === 'd1' || preference === 'cloudflare-d1' || preference === 'fixture' || preference === 'local') return false
-  return Boolean(convexUrlFromOptions(options))
-}
-
-function agentTokenFromOptions(options) {
-  return options['agent-token'] ?? process.env.HOPIT_AGENT_TOKEN ?? null
 }
 
 function agentSessionTokenFromOptions(options) {
   return options['session-token'] ?? process.env.HOPIT_AGENT_SESSION_TOKEN ?? null
-}
-
-function preferSessionTokenFromOptions(options) {
-  return Boolean(agentSessionTokenFromOptions(options) && !options._provided?.has('agent-token'))
-}
-
-function convexCredentialArgsFromOptions(options) {
-  return convexCredentialArgs({
-    token: agentTokenFromOptions(options),
-    sessionToken: agentSessionTokenFromOptions(options),
-    preferSessionToken: preferSessionTokenFromOptions(options),
-  })
-}
-
-function convexCredentialArgs({ token, sessionToken, preferSessionToken }) {
-  if (preferSessionToken && sessionToken) return { sessionToken }
-  if (token) return { token }
-  if (sessionToken) return { sessionToken }
-  return {}
 }
 
 function sessionCapabilitiesFromOptions(options) {
@@ -9161,18 +8826,6 @@ function supportsKeyRegistration(cloudService) {
     typeof cloudService.ensureUserKeyring === 'function' &&
     typeof cloudService.createWrappedKey === 'function',
   )
-}
-
-function requireConvexCodebaseId(codebaseId) {
-  if (!codebaseId) {
-    throw new Error('Convex session commands require --codebase-id or HOPIT_CODEBASE_ID.')
-  }
-  return codebaseId
-}
-
-function isMissingConvexFunctionError(error) {
-  const message = error instanceof Error ? error.message : String(error)
-  return /applyFileMutation|not found|Could not find public function|No function/i.test(message)
 }
 
 function findLastEvent(events, eventName) {
@@ -9254,14 +8907,12 @@ Options:
   --workspace-root <path> Root that contains managed HopIt codebase folders
   --workspace-index <path> Optional workspace root index path
   --cloud <path>      Cloud graph JSON path
-  --cloud-backend <name> d1, convex, or local. Defaults to D1 when HOPIT_D1_* is configured
+  --cloud-backend <name> d1 or local. Defaults to D1 when HOPIT_D1_* is configured
   --d1-account-id <id> Cloudflare account id for D1
   --d1-database-id <id> Cloudflare D1 database id
   --d1-api-token <token> Cloudflare API token with D1 edit/read access
   --d1-api-base-url <url> Override Cloudflare API base URL for tests/proxies
-  --convex-url <url>  Convex deployment URL for the real cloud graph
-  --agent-token <token> Legacy Convex agent token
-  --session-token <token> Legacy Convex per-device session token
+  --session-token <token> D1 scoped per-device session token
   --workspace <path>  Managed workspace folder path
   --journal <path>    Pending write journal path
   --events <path>     Event log path
