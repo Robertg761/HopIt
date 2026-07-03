@@ -1,0 +1,19 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "hopit-qa",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "HOPIT_AUTH_PROVIDER=basic",
+        "HOPIT_DISABLE_DASHBOARD_AUTH=1",
+        "npx",
+        "next",
+        "dev",
+        "-p",
+        "3100"
+      ],
+      "port": 3100
+    }
+  ]
+}
