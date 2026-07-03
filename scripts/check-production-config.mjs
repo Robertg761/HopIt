@@ -41,6 +41,13 @@ if (authProvider === 'clerk') {
 
   if (env.HOPIT_ALLOW_BASIC_AUTH_FALLBACK === '1') {
     checks.push(secret('HOPIT_DASHBOARD_PASSWORD', { minLength: 16 }))
+    warnings.push('HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1 is enabled. This bypass is for temporary emergency recovery only and should stay unset for normal production.')
+    if (env.VERCEL_ENV === 'production' && env.HOPIT_ACKNOWLEDGE_BASIC_AUTH_RISK !== '1') {
+      checks.push({
+        name: 'HOPIT_ACKNOWLEDGE_BASIC_AUTH_RISK',
+        failures: ['HOPIT_ACKNOWLEDGE_BASIC_AUTH_RISK=1 is required when Basic Auth fallback is enabled in Vercel production.'],
+      })
+    }
     if (!env.HOPIT_DASHBOARD_USERNAME) {
       warnings.push('HOPIT_DASHBOARD_USERNAME is unset; Basic Auth fallback will use "hopit".')
     }
@@ -48,6 +55,12 @@ if (authProvider === 'clerk') {
 } else if (authProvider === 'basic') {
   checks.push(exact('HOPIT_ALLOW_BASIC_AUTH_FALLBACK', '1'))
   checks.push(secret('HOPIT_DASHBOARD_PASSWORD', { minLength: 16 }))
+  if (env.VERCEL_ENV === 'production' && env.HOPIT_ACKNOWLEDGE_BASIC_AUTH_RISK !== '1') {
+    checks.push({
+      name: 'HOPIT_ACKNOWLEDGE_BASIC_AUTH_RISK',
+      failures: ['HOPIT_ACKNOWLEDGE_BASIC_AUTH_RISK=1 is required when Basic Auth is enabled in Vercel production.'],
+    })
+  }
   warnings.push('HOPIT_AUTH_PROVIDER=basic is a rollback/recovery mode. Normal production should use Clerk with only HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1 kept temporarily until owner sign-in/OAuth and owner mapping are verified.')
   if (!env.HOPIT_DASHBOARD_USERNAME) {
     warnings.push('HOPIT_DASHBOARD_USERNAME is unset; hosted dashboard auth will use "hopit".')

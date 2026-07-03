@@ -4,6 +4,7 @@ import { applyLocalProductionEnvFallback } from '@/lib/local-production-env'
 applyLocalProductionEnvFallback()
 
 const defaultD1ApiBaseUrl = 'https://api.cloudflare.com/client/v4'
+const reportedMissingD1Config = new Set<string>()
 
 export type CloudBackendKind = 'd1' | 'unavailable'
 
@@ -24,9 +25,14 @@ export type CloudRequester = {
 
 export function configuredCloudBackend(): CloudBackendKind {
   const preferred = process.env.HOPIT_CLOUD_BACKEND?.trim()
-  if (preferred === 'd1' || preferred === 'cloudflare-d1') return isD1Configured() ? 'd1' : 'unavailable'
+  if (preferred === 'd1' || preferred === 'cloudflare-d1') {
+    if (isD1Configured()) return 'd1'
+    logMissingD1ConfigOnce()
+    return 'unavailable'
+  }
   if (preferred) return 'unavailable'
   if (isD1Configured()) return 'd1'
+  if (hasPartialD1Config()) logMissingD1ConfigOnce()
   return 'unavailable'
 }
 
@@ -60,6 +66,26 @@ export function missingCloudBackendConfig() {
 function usesD1ProxyBaseUrl() {
   const baseUrl = process.env.HOPIT_D1_API_BASE_URL?.trim().replace(/\/+$/, '')
   return Boolean(baseUrl && baseUrl !== defaultD1ApiBaseUrl)
+}
+
+function hasPartialD1Config() {
+  return [
+    'HOPIT_D1_ACCOUNT_ID',
+    'CLOUDFLARE_ACCOUNT_ID',
+    'HOPIT_D1_DATABASE_ID',
+    'HOPIT_D1_API_TOKEN',
+    'CLOUDFLARE_API_TOKEN',
+    'HOPIT_AGENT_SESSION_TOKEN',
+    'HOPIT_D1_API_BASE_URL',
+  ].some((name) => Boolean(process.env[name]?.trim()))
+}
+
+function logMissingD1ConfigOnce() {
+  const missing = missingCloudBackendConfig()
+  const key = missing.join('|') || 'unknown'
+  if (reportedMissingD1Config.has(key)) return
+  reportedMissingD1Config.add(key)
+  console.warn(`[HopIt cloud] Cloudflare D1 backend is unavailable. Missing: ${missing.join(', ')}.`)
 }
 
 export async function readCloudAgentDashboard(requester: CloudRequester = {}, codebaseId = process.env.HOPIT_CODEBASE_ID ?? 'hopit') {

@@ -1,7 +1,9 @@
 import { shouldAllowBasicAuthFallback } from '@/lib/auth-config'
+import { warnBasicAuthFallbackEnabledOnce } from './basic-auth-fallback-guard'
 
 export function hasValidBasicAuthFallbackCredentials(headers: Headers) {
   if (!shouldAllowBasicAuthFallback()) return false
+  warnBasicAuthFallbackEnabledOnce()
   const expectedPassword = process.env.HOPIT_DASHBOARD_PASSWORD
   if (!expectedPassword) return false
 

@@ -166,6 +166,26 @@ The production import on 2026-06-30 wrote `58` files and the latest `500` events
 
 The D1 path currently covers agent graph reads/writes, graph-head status polling, hosted dashboard status, codebase list/create/update/delete, text file read/edit, account sync, automatic verified-owner bootstrap for migrated `local-owner` codebases, hosted action jobs, member/invite routes, issue/discussion/release/project/comment collaboration tables, project-board UI operations, scoped D1 proxy session auth, scoped device sessions, trusted-device/key metadata, and redacted key-grant status. Full history reconstruction, retention policy, full private-repo key-grant approval/rotation flows, richer release assets, and complete product write-path coverage still need work.
 
+### D1 Proxy Token Rotation
+
+The `hopit-d1-api` Worker accepts `HOPIT_D1_PROXY_TOKEN` for trusted server-side calls and scoped `hst_` agent session tokens for device calls. Rotate the proxy token without exposing the value in logs, docs, issues, commits, or chat:
+
+1. Mint a new long random secret locally and store it only in the password manager or provider env UI.
+2. Update the Worker secret `HOPIT_D1_PROXY_TOKEN` in Cloudflare and deploy/reload the Worker.
+3. Update Vercel `HOPIT_D1_API_TOKEN` for Production, Preview, and Development if those environments call the Worker with the proxy token.
+4. Update `.env.local` and `/Users/robert/.config/hopit/production.env` only if this Mac still needs proxy-token access; prefer `HOPIT_AGENT_SESSION_TOKEN` for installed-device paths.
+5. Verify the dashboard and local agent can read D1 status, then remove the old token from every provider/local secret store where it was present.
+6. Run `npm run check:production-config` from a shell with the intended env loaded and confirm it does not print secret values.
+
+Cloudflare dashboard rate-limit rule to configure alongside the in-worker failed-auth throttle:
+
+- Name: `hopit-d1-api-failed-auth`
+- Scope/filter: requests where `http.host` equals the D1 Worker hostname and `http.request.uri.path` ends with `/query`
+- Counting expression: same as the scope/filter, grouped by source IP
+- Mitigation: block or managed challenge after `20` requests per `5 minutes`
+- Response code: `429` when using a block action
+- Notes: keep Worker logs enabled for `hopit.d1.proxy.request`; never log bearer tokens, SQL text, or SQL params.
+
 ## Historical Graph Export
 
 The retired hosted graph export remains at `/Users/robert/HopIt-Backups/convex/` for migration/recovery reference. The backend implementation was removed by WS1 in [HopIt Remediation Plan July 2026](remediation-plan-2026-07.md); inspect git history if that code is ever needed again.

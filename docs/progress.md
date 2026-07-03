@@ -92,7 +92,7 @@ Current verified result:
 - `npm run lint`: passes.
 - `npm run typecheck`: passes.
 - `npm run typecheck:agent`: passes the WS4 checkJs allowlist.
-- `npm run check:production-config`: passes when the current local production env is loaded; the checker now requires D1 backend config.
+- `npm run check:production-config`: passes when the current local production env is loaded; the checker now requires D1 backend config and fails Vercel production when Basic Auth fallback is enabled without `HOPIT_ACKNOWLEDGE_BASIC_AUTH_RISK=1`.
 - `npm run build`: passes when rerun with network permission for Next Google Fonts fetches.
 - `npm run package:hop`: builds the current macOS artifact with env/install support files.
 - `npm run d1:migrate:convex-export -- --export /Users/robert/HopIt-Backups/convex/hopit-convex-prod-2026-06-30-disabled-snapshot.zip --codebase-id hopit`: live D1 import completed with `58` files and the latest `500` events selected from `11,638` exported events; dry-run mode is still useful for future rehearsals.
@@ -104,6 +104,31 @@ Current verified result:
 - `curl -I https://hopit.dev/`: returns `HTTP/2 307` to `/sign-in` for signed-out users, confirming Clerk protects the dashboard.
 - Production Clerk sign-in and D1 owner claim were smoke-tested on `https://hopit.dev`; Basic Auth fallback is no longer needed for the owner handoff.
 - Google Auth Platform Audience for project `hopit-auth-prod-rg`: shows `1 user (1 test, 0 other) / 100 user cap` and the test-user row `robertgordon761@gmail.com`.
+
+## 2026-07-03 WS5 Auth Hardening Log
+
+WS5 from [HopIt Remediation Plan — July 2026](remediation-plan-2026-07.md) hardens the Cloudflare D1 Worker proxy-token path and makes emergency Basic Auth fallback noisy and explicitly acknowledged in production.
+
+Implemented:
+
+- Replaced direct D1 proxy-token equality checks in `cloudflare/d1/api-worker.js` with a SHA-256 digest comparison and added an in-worker soft failed-auth throttle keyed by client IP.
+- Added structured Worker request logging for success and 4xx paths with auth mode, codebase id, statement count, status, and rejected reason while avoiding bearer tokens, SQL text, and SQL params.
+- Added `cloudflare/d1/api-worker.test.js` as a Node test harness with mocked D1 bindings for proxy-token auth, scoped session auth, failed-auth throttling, and rejected request logging.
+- Added a Basic Auth fallback guard that logs one prominent server-side warning per process when `HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1` is first used.
+- Updated `scripts/check-production-config.mjs` so Basic Auth fallback emits a warning and fails Vercel production checks unless `HOPIT_ACKNOWLEDGE_BASIC_AUTH_RISK=1` is also set.
+- Updated `src/lib/cloud-backend.ts` to log the missing D1 variables once when partial or explicitly requested D1 config leaves the backend unavailable.
+- Added the D1 proxy-token rotation runbook and Cloudflare WAF rate-limit rule spec to [Personal Production Runbook](personal-production.md).
+
+Proof commands:
+
+- `node --test cloudflare/d1/api-worker.test.js`: passes with 4 tests.
+- `node --test src/lib/basic-auth-fallback-guard.test.js scripts/check-production-config.test.js`: passes with 3 tests.
+- `node --test packages/agent/test/d1-backend.test.js`: passes with 6 tests after the Worker fixture disables request logs for test readability.
+- `npm run lint`: passes.
+- `npx tsc --noEmit`: passes.
+- `npm run build`: passes when rerun with network permission for Next Google Fonts fetches.
+- `node packages/agent/src/cli.js help`: passes.
+- `npm run agent:test`: rerun with loopback permission reaches 83 passing tests and 4 service-start readiness failures with empty service logs; the failures are in pre-existing service lifecycle tests outside the WS5 files, while the D1 backend subset passes.
 
 ## 2026-07-03 WS4 Agent CLI Split Log
 

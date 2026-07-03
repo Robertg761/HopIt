@@ -699,6 +699,7 @@ async function startD1ApiServer(t, { statements = null } = {}) {
   const env = {
     HOPIT_D1_DB: d1Binding(db, statements),
     HOPIT_D1_PROXY_TOKEN: 'token_test',
+    HOPIT_D1_PROXY_LOG_REQUESTS: '0',
   }
   const server = createServer(async (request, response) => {
     try {
