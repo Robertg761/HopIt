@@ -97,6 +97,29 @@ Current verified result:
 - Production Clerk sign-in and D1 owner claim were smoke-tested on `https://hopit.dev`; Basic Auth fallback is no longer needed for the owner handoff.
 - Google Auth Platform Audience for project `hopit-auth-prod-rg`: shows `1 user (1 test, 0 other) / 100 user cap` and the test-user row `robertgordon761@gmail.com`.
 
+## 2026-07-03 WS3 D1 Backend Split Log
+
+WS3 from [HopIt Remediation Plan — July 2026](remediation-plan-2026-07.md) splits the monolithic `@hopit/backend-d1` implementation into focused modules without changing the package root public API.
+
+Implemented:
+
+- Replaced the 4,773-line `packages/backend-d1/src/index.js` with a small package root that keeps `CloudflareD1HopBackend`, `createD1Backend`, `d1ConfigFromOptions`, `isD1Configured`, `d1CloudServiceType`, and `d1SchemaStatements` exported from the package root.
+- Extracted client plumbing, schema setup, graph I/O/status, access filtering, action jobs, members/invitations, collaboration/review/notifications, sessions, key management, and shared helpers into focused modules under `packages/backend-d1/src/`.
+- Added JSDoc type-import boundaries from `@hopit/core` in the extracted method modules.
+- Kept callers on `@hopit/backend-d1`; no web, CLI, runner, or script import moved to an internal backend path.
+- Verified every backend source file is under 800 lines; largest files after the split are `collaboration.js` at 711 lines and `graph.js` at 656 lines.
+
+Proof commands:
+
+- `node --test packages/agent/test/d1-backend.test.js`: passes with 6 tests, 6 passing, 0 failures. A sandboxed first run failed only on loopback `listen EPERM`; rerunning with loopback permission passed.
+- `npm run agent:test`: passes with 87 tests, 87 passing, 0 failures.
+- `npm run lint`: passes.
+- `npm run build`: passes. A sandboxed first run could not fetch Google Fonts; rerunning with network permission passed.
+- `npx tsc --noEmit`: passes.
+- `node packages/agent/src/cli.js help`: passes.
+- `npm run package:hop`: passes and builds `artifacts/hop-darwin-arm64.tar.gz`.
+- Temporary scratch imports comparing the pre-split file to `@hopit/backend-d1`: root `Object.keys()` match exactly, and `CloudflareD1HopBackend.prototype` has the same 103 method names before and after.
+
 ## 2026-07-03 WS2 Workspaces and Core Package Log
 
 WS2 from [HopIt Remediation Plan — July 2026](remediation-plan-2026-07.md) converts the repo into npm workspaces and extracts shared contracts into package boundaries.
