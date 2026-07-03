@@ -5,7 +5,7 @@ import {
   configuredCloudBackend,
   missingCloudBackendConfig,
 } from '@/lib/cloud-backend'
-import { createD1Backend } from '@/lib/d1-backend.js'
+import { createD1Backend } from '@hopit/backend-d1'
 import type { NotificationItem, NotificationsResponse } from '@/lib/collaboration'
 import { cloudActorFromRequest } from '@/lib/request-cloud-actor'
 

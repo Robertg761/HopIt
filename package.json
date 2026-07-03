@@ -3,15 +3,22 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
+  "workspaces": [
+    "packages/*"
+  ],
   "bin": {
     "hop": "./packages/agent/src/cli.js"
   },
   "scripts": {
     "dev": "next dev",
+    "prebuild": "npm run build:core",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
+    "pretest": "npm run build:core",
     "test": "npm run agent:test",
+    "build:core": "npm run build --workspace @hopit/core",
+    "typecheck": "tsc --noEmit && npm run typecheck --workspace @hopit/core",
     "hop": "node packages/agent/src/cli.js",
     "hop:service:start": "node packages/agent/src/cli.js service start --profile production",
     "hop:service:run": "node packages/agent/src/cli.js service run --profile production",
@@ -41,9 +48,13 @@
     "agent:status": "node packages/agent/src/cli.js status",
     "agent:serve": "node packages/agent/src/cli.js serve",
     "agent:status-server": "node packages/agent/src/cli.js serve",
-    "agent:test": "node --test packages/agent/test/*.test.js"
+    "preagent:test": "npm run build:core",
+    "agent:test": "node --test packages/agent/test/*.test.js",
+    "prepackage:hop": "npm run build:core"
   },
   "dependencies": {
+    "@hopit/backend-d1": "file:packages/backend-d1",
+    "@hopit/core": "file:packages/core",
     "@clerk/nextjs": "^7.5.7",
     "@radix-ui/react-dropdown-menu": "^2.1.15",
     "@radix-ui/react-slot": "^1.2.3",

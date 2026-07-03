@@ -1,131 +1,28 @@
-export type AgentEventTone = 'ready' | 'syncing' | 'queued' | 'observed' | 'blocked'
+import type {
+  AgentCodebaseRole,
+  AgentEvent,
+  AgentEventTone,
+  AgentFile,
+  AgentFileLocal,
+  AgentFileLocalState,
+  AgentMember,
+  AgentPanelState,
+  AgentRequester,
+  AgentStatusSnapshot,
+} from '@hopit/core'
 
-export type AgentPanelState = 'online' | 'syncing' | 'offline' | 'blocked'
-
-export type AgentCodebaseRole = 'owner' | 'maintainer' | 'member' | 'viewer' | 'guest'
-
-export type AgentEvent = {
-  id: string
-  label: string
-  detail: string
-  when: string
-  tone: AgentEventTone
-}
-
-export type AgentRequester = {
-  id: string | null
-  sessionId: string | null
-  role: AgentCodebaseRole
-  isOwner: boolean
-  isCollaborator: boolean
-  membershipSource: string
-  permissions: string[]
-  visibleFileCount: number | null
-  hiddenFileCount: number | null
-}
-
-export type AgentMember = {
-  id: string
-  name: string
-  email: string | null
-  role: Exclude<AgentCodebaseRole, 'guest'>
-  status: 'active' | 'suspended' | 'unknown'
-  source: string
-  isOwner: boolean
-  joinedAt: string | null
-  avatarUrl: string | null
-}
-
-export type AgentStatusSnapshot = {
-  id: string
-  state: AgentPanelState
-  healthLabel: string
-  codebaseId: string | null
-  managedWorkspacePath: string
-  codebaseName: string
-  activeChangeSetId: string
-  mainId: string
-  cloudRevision: string
-  mainRevision: string
-  fileCount: number
-  hiddenFileCount: number
-  pendingWrites: number
-  failedWrites: number
-  acknowledgedWrites: number
-  lastSync: string
-  lastAck: string
-  cacheState: 'ready' | 'syncing' | 'offline' | 'blocked'
-  privateScope: 'scoped' | 'none'
-  privateScopePath: string
-  visibility: string
-  reviewState: string
-  mergeState: string
-  conflictState: string
-  remoteUpdateState: string
-  remotePullState: string
-  remotePullEnabled: boolean
-  remotePullMode: string
-  remotePullCadence: string
-  workspaceHydrationState: string
-  workspaceMaterializedRevision: number | null
-  workspaceIndexPath: string | null
-  remoteBehindByRevisions: number | null
-  commandsAvailable: boolean
-  backend: 'local-agent' | 'd1' | 'unknown'
-  requester: AgentRequester
-  members: AgentMember[]
-  files: AgentFile[]
-  events: AgentEvent[]
-  rawUpdatedAt: string | null
-  unavailableReason?: string
-}
-
-export type AgentFile = {
-  path: string
-  name: string
-  directory: string
-  kind: 'file' | 'symlink' | 'directory'
-  encoding: 'utf8' | 'base64' | null
-  target: string | null
-  scope: 'shared' | 'owner-private'
-  revision: number | null
-  size: number | null
-  hash: string | null
-  contentStorage: string | null
-  blobProvider: string | null
-  blobKey: string | null
-  blobHash: string | null
-  contentPreview: string | null
-  contentPreviewTruncated: boolean
-  local: AgentFileLocal
-}
-
-export type AgentFileLocalState =
-  | 'cloud-only'
-  | 'hydrated'
-  | 'dirty'
-  | 'pending-upload'
-  | 'uploaded'
-  | 'prunable'
-  | 'pinned'
-  | 'blocked'
-
-export type AgentFileLocal = {
-  path: string | null
-  exists: boolean
-  hydrated: boolean
-  state: AgentFileLocalState
-  pinned: boolean
-  dirty: boolean
-  pending: boolean
-  blocked: boolean
-  prunable: boolean
-  bytesOnDisk: number | null
-  lastHydratedAt: string | null
-  lastEditedAt: string | null
-  lastSyncedAt: string | null
-  lastPrunedAt: string | null
-}
+export type {
+  AgentCodebaseRole,
+  AgentEvent,
+  AgentEventTone,
+  AgentFile,
+  AgentFileLocal,
+  AgentFileLocalState,
+  AgentMember,
+  AgentPanelState,
+  AgentRequester,
+  AgentStatusSnapshot,
+} from '@hopit/core'
 
 type RawAgentResponse = {
   status?: RawAgentStatus | null

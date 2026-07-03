@@ -2,7 +2,8 @@
 
 import { spawnSync } from 'node:child_process'
 import path from 'node:path'
-import { createD1Backend } from '../src/lib/d1-backend.js'
+import { createD1Backend } from '@hopit/backend-d1'
+import { privacyZoneForPath, privacyZoneIdForPath, scopeForPath } from '@hopit/core/privacy-zone'
 
 const args = parseArgs(process.argv.slice(2))
 const exportPath = args.export
@@ -106,7 +107,7 @@ function fileRowToGraphEntry(row) {
     clientEncryption: row.clientEncryption ?? null,
     encryption: row.encryption ?? null,
     privacyZone: row.privacyZone ?? privacyZoneForPath(row.path),
-    zoneId: row.zoneId ?? `${row.codebaseId}:${privacyZoneForPath(row.path)}`,
+    zoneId: row.zoneId ?? privacyZoneIdForPath(row.codebaseId, row.path),
     contentStorage: row.contentStorage ?? 'inline',
     hash: row.hash ?? null,
     size: row.size ?? byteLength(row.content ?? ''),
@@ -114,17 +115,6 @@ function fileRowToGraphEntry(row) {
     revision: row.revision,
     updatedAt: row.updatedAt,
   }
-}
-
-function scopeForPath(filePath) {
-  return filePath === '.private' || filePath.startsWith('.private/') ? 'owner-private' : 'shared'
-}
-
-function privacyZoneForPath(filePath) {
-  if (filePath === '.private/env' || filePath.startsWith('.private/env/')) return 'secrets'
-  if (filePath === '.private/git' || filePath.startsWith('.private/git/')) return 'git-internals'
-  if (scopeForPath(filePath) === 'owner-private') return 'owner-private'
-  return 'repo-content'
 }
 
 function byteLength(value) {

@@ -1,5 +1,7 @@
 node_modules
 dist
+!packages/core/dist/
+!packages/core/dist/**
 .next
 .vercel
 out

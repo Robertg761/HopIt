@@ -1,0 +1,13 @@
+{
+  "name": "@hopit/agent",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "hop": "./src/cli.js"
+  },
+  "dependencies": {
+    "@hopit/backend-d1": "file:../backend-d1",
+    "@hopit/core": "file:../core"
+  }
+}

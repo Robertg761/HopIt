@@ -2,7 +2,7 @@ import { auth, currentUser } from '@clerk/nextjs/server'
 
 import { hasValidBasicAuthFallbackCredentials } from '@/lib/basic-auth-fallback'
 import { configuredCloudBackend } from '@/lib/cloud-backend'
-import { createD1Backend } from '@/lib/d1-backend.js'
+import { createD1Backend } from '@hopit/backend-d1'
 import type { CloudActor } from '@/lib/cloud-backend'
 
 type CloudActorOptions = {

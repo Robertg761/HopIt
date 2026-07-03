@@ -9,7 +9,7 @@ import { test } from 'node:test'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import d1ApiWorker from '../../../cloudflare/d1/api-worker.js'
-import { createD1Backend, d1SchemaStatements } from '../../../src/lib/d1-backend.js'
+import { createD1Backend, d1SchemaStatements } from '@hopit/backend-d1'
 
 const execFileAsync = promisify(execFile)
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')

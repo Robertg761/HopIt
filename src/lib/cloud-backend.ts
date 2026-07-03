@@ -1,4 +1,4 @@
-import { createD1Backend, d1CloudServiceType, isD1Configured } from '@/lib/d1-backend.js'
+import { createD1Backend, d1CloudServiceType, isD1Configured } from '@hopit/backend-d1'
 import { applyLocalProductionEnvFallback } from '@/lib/local-production-env'
 
 applyLocalProductionEnvFallback()

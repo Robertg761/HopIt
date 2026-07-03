@@ -97,6 +97,31 @@ Current verified result:
 - Production Clerk sign-in and D1 owner claim were smoke-tested on `https://hopit.dev`; Basic Auth fallback is no longer needed for the owner handoff.
 - Google Auth Platform Audience for project `hopit-auth-prod-rg`: shows `1 user (1 test, 0 other) / 100 user cap` and the test-user row `robertgordon761@gmail.com`.
 
+## 2026-07-03 WS2 Workspaces and Core Package Log
+
+WS2 from [HopIt Remediation Plan — July 2026](remediation-plan-2026-07.md) converts the repo into npm workspaces and extracts shared contracts into package boundaries.
+
+Implemented:
+
+- Added npm workspaces for `packages/*`, plus package manifests for `@hopit/agent`, `@hopit/actions-runner`, `@hopit/core`, and `@hopit/backend-d1`.
+- Added `@hopit/core` as a TypeScript package that builds ESM JS and declarations into `dist/`.
+- Moved privacy-zone classification into `@hopit/core/privacy-zone`; the CLI, D1 backend, and migration script now import one shared implementation.
+- Moved crypto/key-material helpers into `@hopit/core/crypto`; `packages/agent/src/crypto.js` remains as a thin compatibility re-export until the CLI split workstream removes it.
+- Added shared graph, journal, change-set, agent status, session, and capability types in `@hopit/core`, and wired the web status normalizer to consume those shared status types.
+- Moved the monolithic D1 backend to `@hopit/backend-d1` unchanged in shape, with a broad declaration file for the current pre-WS3 dynamic surface.
+- Updated web, CLI, runner, test, and script imports so no `packages/` code imports from `src/`.
+- Added build hooks so `npm run agent:test`, `npm run build`, and `npm run package:hop` build `@hopit/core` first.
+
+Proof commands:
+
+- `npm run agent:test`: passes with 87 tests, 87 passing, 0 failures. A sandboxed first run failed only on loopback `listen EPERM`; rerunning with loopback permission passed.
+- `npm run lint`: passes.
+- `npm run build`: passes. A sandboxed first run could not fetch Google Fonts; rerunning with network permission passed.
+- `npx tsc --noEmit`: passes.
+- `node packages/agent/src/cli.js help`: passes.
+- `npm run package:hop`: passes and builds `artifacts/hop-darwin-arm64.tar.gz`.
+- `rg -n "src/lib/d1-backend|@/lib/d1-backend|\\.\\./\\.\\./\\.\\./src/lib/d1-backend|function privacyZoneForPath|function scopeForPath|function zoneIdForPath" packages src scripts --glob '!packages/core/dist/**'`: returns only the shared definitions in `packages/core/src/privacy-zone.ts`.
+
 ## 2026-07-03 WS1 Legacy Backend Removal Log
 
 WS1 from [HopIt Remediation Plan — July 2026](remediation-plan-2026-07.md) removes the retired hosted backend implementation while keeping the historical export migration script.

@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createD1Backend, isD1Configured } from '../../../src/lib/d1-backend.js'
+import { createD1Backend, isD1Configured } from '@hopit/backend-d1'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const agentCli = path.join(repoRoot, 'packages/agent/src/cli.js')

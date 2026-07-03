@@ -13,7 +13,7 @@ import {
   d1CloudServiceType,
   d1ConfigFromOptions,
   isD1Configured,
-} from '../../../src/lib/d1-backend.js'
+} from '@hopit/backend-d1'
 import {
   clientEncryptionConfigFromOptions,
   clientEncryptionScopeFromOptions,
@@ -32,6 +32,7 @@ import {
   unwrapBlobPayload,
   validateClientEncryptionMetadata,
 } from './crypto.js'
+import { scopeForPath } from '@hopit/core/privacy-zone'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -8497,15 +8498,6 @@ function normalizeCloudScopes(cloud) {
   for (const [relativePath, file] of Object.entries(cloud.files ?? {})) {
     cloud.files[relativePath] = normalizeCloudFileEntry(relativePath, file)
   }
-}
-
-function scopeForPath(relativePath) {
-  return relativePath === '.private' ||
-    relativePath.startsWith('.private/') ||
-    relativePath === '.git' ||
-    relativePath.startsWith('.git/')
-    ? fileScope.ownerPrivate
-    : fileScope.shared
 }
 
 function countCloudScopes(cloud) {

@@ -1,0 +1,9 @@
+{
+  "name": "@hopit/actions-runner",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@hopit/backend-d1": "file:../backend-d1"
+  }
+}

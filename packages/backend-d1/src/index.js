@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { privacyZoneForPath, privacyZoneIdForPath, scopeForPath } from '@hopit/core/privacy-zone'
 
 export const d1CloudServiceType = 'cloudflare-d1-graph'
 
@@ -2640,7 +2641,7 @@ export class CloudflareD1HopBackend {
         normalized.clientEncryption ? stringifyJson(normalized.clientEncryption) : null,
         normalized.encryption ? stringifyJson(normalized.encryption) : null,
         normalized.privacyZone ?? privacyZoneForPath(filePath),
-        normalized.zoneId ?? zoneIdForPath(codebaseId, filePath),
+        normalized.zoneId ?? privacyZoneIdForPath(codebaseId, filePath),
         normalized.contentStorage ?? 'inline',
         normalized.hash ?? null,
         normalized.size ?? byteLength(normalized.content ?? ''),
@@ -4116,7 +4117,7 @@ function fileRowToEntry(row) {
     clientEncryption: parseJson(row.client_encryption_json, null),
     encryption: parseJson(row.encryption_json, null),
     privacyZone: row.privacy_zone ?? privacyZoneForPath(row.path),
-    zoneId: row.zone_id ?? zoneIdForPath(row.codebase_id, row.path),
+    zoneId: row.zone_id ?? privacyZoneIdForPath(row.codebase_id, row.path),
     contentStorage: row.content_storage ?? 'inline',
     hash: row.hash ?? null,
     size: integerOrNull(row.size) ?? byteLength(row.content ?? ''),
@@ -4193,7 +4194,7 @@ function normalizeFileEntry(filePath, file, revision, now) {
       size: 0,
       scope,
       privacyZone,
-      zoneId: stringOrNull(value.zoneId) ?? zoneIdForPath('unknown', filePath),
+      zoneId: stringOrNull(value.zoneId) ?? privacyZoneIdForPath('unknown', filePath),
       revision: integerValue(value.revision, revision),
       updatedAt: stringOrNull(value.updatedAt) ?? now,
     }
@@ -4210,7 +4211,7 @@ function normalizeFileEntry(filePath, file, revision, now) {
       size: integerOrNull(value.size) ?? byteLength(target),
       scope,
       privacyZone,
-      zoneId: stringOrNull(value.zoneId) ?? zoneIdForPath('unknown', filePath),
+      zoneId: stringOrNull(value.zoneId) ?? privacyZoneIdForPath('unknown', filePath),
       revision: integerValue(value.revision, revision),
       updatedAt: stringOrNull(value.updatedAt) ?? now,
     }
@@ -4237,7 +4238,7 @@ function normalizeFileEntry(filePath, file, revision, now) {
     size: integerOrNull(value.size) ?? byteLength(content),
     scope,
     privacyZone,
-    zoneId: stringOrNull(value.zoneId) ?? zoneIdForPath('unknown', filePath),
+    zoneId: stringOrNull(value.zoneId) ?? privacyZoneIdForPath('unknown', filePath),
     revision: integerValue(value.revision, revision),
     updatedAt: stringOrNull(value.updatedAt) ?? now,
   }
@@ -4724,21 +4725,6 @@ function countPathScopes(paths) {
     else counts.shared += 1
   }
   return counts
-}
-
-function scopeForPath(filePath) {
-  return filePath === '.private' || filePath.startsWith('.private/') ? 'owner-private' : 'shared'
-}
-
-function privacyZoneForPath(filePath) {
-  if (filePath === '.private/env' || filePath.startsWith('.private/env/')) return 'secrets'
-  if (filePath === '.private/git' || filePath.startsWith('.private/git/')) return 'git-internals'
-  if (scopeForPath(filePath) === 'owner-private') return 'owner-private'
-  return 'repo-content'
-}
-
-function zoneIdForPath(codebaseId, filePath) {
-  return `${codebaseId}:${privacyZoneForPath(filePath)}`
 }
 
 function assertSafeGraphPath(filePath) {
