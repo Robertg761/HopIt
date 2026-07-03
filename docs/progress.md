@@ -72,20 +72,28 @@ Current proof commands:
 
 ```bash
 node --test packages/agent/test/agent-cli.test.js
+node --test packages/agent/test/crypto.test.js
+node --test packages/agent/test/d1-backend.test.js
 npm run agent:test
 npm run lint
-set -a; source .env.local; set +a
+npm run typecheck
+npm run typecheck:agent
+set -a; source /Users/robert/.config/hopit/production.env; set +a
 npm run check:production-config
+npm run build
 npm run package:hop
 ```
 
 Current verified result:
 
-- `npm run agent:test`: passes with 82 tests total, 82 passing, and 0 failures; coverage includes object blobs, budget guard, literal mirror secret routing, binary files, symlinks, empty directories, `.git` owner-private scope, bounded dirty detection for large added workspace trees, encrypted routed-secret sync, device keyrings, encrypted recovery export, import-git production-safe behavior, activity-gated remote pull, D1 account-visible workspace discovery, object GC, D1 graph round-trip coverage, and regression coverage for sync/refresh/recovery/export.
+- `node --test packages/agent/test/agent-cli.test.js`: passes with 73 tests total, 67 passing, 6 skipped, and 0 failures; skipped tests are the local service loopback cases in the sandbox.
+- `node --test packages/agent/test/crypto.test.js`: passes with 8 tests, 8 passing, and 0 failures.
+- `node --test packages/agent/test/d1-backend.test.js`: passes with 6 tests, 6 passing, and 0 failures when rerun with loopback permission after the sandbox blocks `127.0.0.1` listeners.
 - `npm run lint`: passes.
-- `npx tsc --noEmit --pretty false`: passes.
+- `npm run typecheck`: passes.
+- `npm run typecheck:agent`: passes the WS4 checkJs allowlist.
 - `npm run check:production-config`: passes when the current local production env is loaded; the checker now requires D1 backend config.
-- `npm run build`: passes.
+- `npm run build`: passes when rerun with network permission for Next Google Fonts fetches.
 - `npm run package:hop`: builds the current macOS artifact with env/install support files.
 - `npm run d1:migrate:convex-export -- --export /Users/robert/HopIt-Backups/convex/hopit-convex-prod-2026-06-30-disabled-snapshot.zip --codebase-id hopit`: live D1 import completed with `58` files and the latest `500` events selected from `11,638` exported events; dry-run mode is still useful for future rehearsals.
 - Installed packaged runtime: LaunchAgent `com.hopit.agent.hopit` reports activity-gated remote pull enabled with a 300000 ms cooldown and no fixed interval polling.
@@ -96,6 +104,32 @@ Current verified result:
 - `curl -I https://hopit.dev/`: returns `HTTP/2 307` to `/sign-in` for signed-out users, confirming Clerk protects the dashboard.
 - Production Clerk sign-in and D1 owner claim were smoke-tested on `https://hopit.dev`; Basic Auth fallback is no longer needed for the owner handoff.
 - Google Auth Platform Audience for project `hopit-auth-prod-rg`: shows `1 user (1 test, 0 other) / 100 user cap` and the test-user row `robertgordon761@gmail.com`.
+
+## 2026-07-03 WS4 Agent CLI Split Log
+
+WS4 from [HopIt Remediation Plan — July 2026](remediation-plan-2026-07.md) splits the monolithic agent CLI into focused modules while keeping `packages/agent/src/cli.js` as the package/bin entrypoint.
+
+Implemented:
+
+- Replaced the 8,937-line `packages/agent/src/cli.js` with a 78-line dispatcher that keeps command normalization, option parsing, profile/keyring setup, and command routing at the public bin path.
+- Extracted object blob stores, the cloud graph service adapters, journal/content helpers, workspace index/cache helpers, watch/remote-pull scheduling, service lifecycle/status serving, command families, options, constants, status readers, path helpers, and help text under `packages/agent/src/`.
+- Removed the old `packages/agent/src/crypto.js` compatibility shim; agent modules and the crypto regression test now import the shared helpers from `@hopit/core/crypto` directly.
+- Added `// @ts-check` to the extracted agent modules and introduced `tsconfig.agent.json` plus `npm run typecheck:agent` as an incremental checkJs allowlist for low-dynamic modules.
+- Verified every extracted agent source file is under 1,000 lines; the largest files after the split are `commands/import.js` at 932 lines and `status-state.js` at 763 lines.
+- Left full CLI TypeScript conversion as a follow-up after the checkJs allowlist expands beyond the low-dynamic modules.
+
+Proof commands:
+
+- `node packages/agent/src/cli.js help`: passes.
+- `node --test packages/agent/test/agent-cli.test.js`: passes with 73 tests, 67 passing, 6 skipped, and 0 failures. The skipped cases are the expected local service loopback tests in this sandbox.
+- `node --test packages/agent/test/crypto.test.js`: passes with 8 tests, 8 passing, and 0 failures.
+- `node --test packages/agent/test/d1-backend.test.js`: passes with 6 tests, 6 passing, and 0 failures when rerun with loopback permission after the sandbox blocks `127.0.0.1` listeners.
+- `npm run lint`: passes.
+- `npm run typecheck`: passes.
+- `npm run typecheck:agent`: passes.
+- `npm run build`: passes when rerun with network permission for Next Google Fonts fetches.
+- `npm run package:hop`: passes and builds `artifacts/hop-darwin-arm64.tar.gz`.
+- `artifacts/hop-darwin-arm64/bin/hop help`: passes.
 
 ## 2026-07-03 WS3 D1 Backend Split Log
 
@@ -820,10 +854,10 @@ Current foundation:
 - The agent can upload routed secrets as client-encrypted object blobs with the
   current local key bridge.
 - Object blob metadata can carry encrypted-payload metadata.
-- `packages/agent/src/crypto.js` now owns key decoding, privacy-zone
-  classification, AES-GCM envelope encrypt/decrypt, X25519 device key wrapping,
-  user-vault unwrap, PBKDF2 recovery export, blob wrap/unwrap, and envelope
-  validation for the current secret-sync bridge.
+- `@hopit/core/crypto` owns key decoding, privacy-zone classification,
+  AES-GCM envelope encrypt/decrypt, X25519 device key wrapping, user-vault
+  unwrap, PBKDF2 recovery export, blob wrap/unwrap, and envelope validation for
+  the current secret-sync bridge.
 - File metadata now carries a derived `privacyZone`; D1 rows carry the
   associated privacy zone metadata.
 - D1 schema includes first-pass `privacyZones`, `deviceKeys`,

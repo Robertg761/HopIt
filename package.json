@@ -19,6 +19,7 @@
     "test": "npm run agent:test",
     "build:core": "npm run build --workspace @hopit/core",
     "typecheck": "tsc --noEmit && npm run typecheck --workspace @hopit/core",
+    "typecheck:agent": "tsc -p tsconfig.agent.json",
     "hop": "node packages/agent/src/cli.js",
     "hop:service:start": "node packages/agent/src/cli.js service start --profile production",
     "hop:service:run": "node packages/agent/src/cli.js service run --profile production",

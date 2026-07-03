@@ -20,7 +20,7 @@ import {
   unwrapUserVaultKey,
   validateClientEncryptionMetadata,
   wrapSymmetricKeyForDevice,
-} from '../src/crypto.js'
+} from '@hopit/core/crypto'
 
 const testKey = `base64:${Buffer.alloc(32, 7).toString('base64')}`
 
