@@ -1,13 +1,9 @@
 import { humanizeApiError } from '@/lib/client/errors'
+import { apiErrorFromUnknown, apiFetch } from '@/lib/client/api'
 
 export type ApiError = { code: string | null; message: string }
 
 export type ApiResult = { ok: true } | { ok: false; error: ApiError }
-
-type RawEnvelope = {
-  ok?: boolean
-  error?: { code?: string; message?: string }
-}
 
 async function requestCodebases(
   method: 'POST' | 'PATCH' | 'DELETE',
@@ -15,28 +11,13 @@ async function requestCodebases(
   fallback: string,
 ): Promise<ApiResult> {
   try {
-    const response = await fetch('/api/codebases', {
+    await apiFetch('/api/codebases', {
       method,
-      headers: { 'Content-Type': 'application/json' },
-      cache: 'no-store',
       body: JSON.stringify(body),
     })
-    const payload = (await response.json().catch(() => null)) as RawEnvelope | null
-    if (!payload || payload.ok !== true) {
-      return {
-        ok: false,
-        error: {
-          code: typeof payload?.error?.code === 'string' ? payload.error.code : null,
-          message: typeof payload?.error?.message === 'string' ? payload.error.message : fallback,
-        },
-      }
-    }
     return { ok: true }
   } catch (error) {
-    return {
-      ok: false,
-      error: { code: null, message: error instanceof Error ? error.message : fallback },
-    }
+    return { ok: false, error: apiErrorFromUnknown(error, fallback) }
   }
 }
 

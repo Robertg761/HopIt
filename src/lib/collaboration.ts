@@ -1,3 +1,5 @@
+import { ApiFetchError, apiErrorFromUnknown, apiFetch, apiPayloadFromError } from './client/api'
+
 export type CollaborationBackend = 'd1' | 'unavailable'
 
 export type CollaborationActionCapability = {
@@ -771,17 +773,18 @@ export async function removeCodebaseMember(input: MutateMemberInput): Promise<Me
 async function readJson<T>(
   input: RequestInfo | URL,
   init: RequestInit | undefined,
-  fallback: (response: Response) => T,
+  fallback: (response: Pick<Response, 'status' | 'statusText'>) => T,
 ): Promise<T> {
-  const response = await fetch(input, init)
-  const body = (await response.json().catch(() => null)) as T | null
-
-  if (body) return body
-
-  return fallback(response)
+  try {
+    return await apiFetch<T>(input, { ...init, allowErrorEnvelope: true })
+  } catch (error) {
+    const payload = apiPayloadFromError<T>(error)
+    if (payload) return payload
+    return fallback(responseFromError(error))
+  }
 }
 
-function workItemsFallback(codebaseId: string): (response: Response) => WorkItemsResponse {
+function workItemsFallback(codebaseId: string): (response: Pick<Response, 'status' | 'statusText'>) => WorkItemsResponse {
   return (response) => {
     const reason = responseMessage(response)
 
@@ -813,7 +816,7 @@ function workItemsFallback(codebaseId: string): (response: Response) => WorkItem
   }
 }
 
-function reviewThreadsFallback(codebaseId: string, changeSetId: string | null): (response: Response) => ReviewThreadsResponse {
+function reviewThreadsFallback(codebaseId: string, changeSetId: string | null): (response: Pick<Response, 'status' | 'statusText'>) => ReviewThreadsResponse {
   return (response) => {
     const reason = responseMessage(response)
 
@@ -830,7 +833,7 @@ function reviewThreadsFallback(codebaseId: string, changeSetId: string | null): 
   }
 }
 
-function reviewDecisionsFallback(codebaseId: string, changeSetId: string | null): (response: Response) => ReviewDecisionsResponse {
+function reviewDecisionsFallback(codebaseId: string, changeSetId: string | null): (response: Pick<Response, 'status' | 'statusText'>) => ReviewDecisionsResponse {
   return (response) => {
     const reason = responseMessage(response)
 
@@ -847,7 +850,7 @@ function reviewDecisionsFallback(codebaseId: string, changeSetId: string | null)
   }
 }
 
-function notificationsFallback(codebaseId: string): (response: Response) => NotificationsResponse {
+function notificationsFallback(codebaseId: string): (response: Pick<Response, 'status' | 'statusText'>) => NotificationsResponse {
   return (response) => {
     const reason = responseMessage(response)
 
@@ -863,7 +866,7 @@ function notificationsFallback(codebaseId: string): (response: Response) => Noti
   }
 }
 
-function invitationsFallback(codebaseId: string): (response: Response) => InvitationsResponse {
+function invitationsFallback(codebaseId: string): (response: Pick<Response, 'status' | 'statusText'>) => InvitationsResponse {
   return (response) => {
     const reason = responseMessage(response)
 
@@ -887,7 +890,7 @@ function invitationsFallback(codebaseId: string): (response: Response) => Invita
   }
 }
 
-function membersFallback(codebaseId: string): (response: Response) => MembersResponse {
+function membersFallback(codebaseId: string): (response: Pick<Response, 'status' | 'statusText'>) => MembersResponse {
   return (response) => {
     const reason = responseMessage(response)
 
@@ -911,7 +914,7 @@ function membersFallback(codebaseId: string): (response: Response) => MembersRes
   }
 }
 
-function keyGrantStatusFallback(codebaseId: string): (response: Response) => KeyGrantStatusResponse {
+function keyGrantStatusFallback(codebaseId: string): (response: Pick<Response, 'status' | 'statusText'>) => KeyGrantStatusResponse {
   return (response) => {
     const reason = responseMessage(response)
 
@@ -938,6 +941,14 @@ function disabled(reason: string): CollaborationActionCapability {
   }
 }
 
-function responseMessage(response: Response) {
+function responseMessage(response: Pick<Response, 'status' | 'statusText'>) {
   return response.statusText || `Collaboration request returned ${response.status}.`
+}
+
+function responseFromError(error: unknown): Pick<Response, 'status' | 'statusText'> {
+  const details = apiErrorFromUnknown(error, 'Collaboration request failed.')
+  return {
+    status: error instanceof ApiFetchError && error.status !== null ? error.status : 0,
+    statusText: details.message,
+  }
 }

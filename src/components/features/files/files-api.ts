@@ -1,21 +1,24 @@
+import { apiErrorFromUnknown, apiFetch } from '@/lib/client/api'
+
 export type FileApiFailure = { ok: false; code: string | null; message: string }
 
 export type FileContentResult = { ok: true; content: string; revision: number | null } | FileApiFailure
 
 export type FileSaveResult = { ok: true; revision: number | null } | FileApiFailure
 
-type RawEnvelope = {
+type FileEnvelope = {
   ok?: boolean
   error?: { code?: string; message?: string }
   file?: { content?: unknown; revision?: unknown }
   result?: { revision?: unknown }
 }
 
-function failure(payload: RawEnvelope | null, fallback: string): FileApiFailure {
+function failure(error: unknown, fallback: string): FileApiFailure {
+  const details = apiErrorFromUnknown(error, fallback)
   return {
     ok: false,
-    code: typeof payload?.error?.code === 'string' ? payload.error.code : null,
-    message: typeof payload?.error?.message === 'string' ? payload.error.message : fallback,
+    code: details.code,
+    message: details.message,
   }
 }
 
@@ -27,16 +30,14 @@ export async function fetchCodebaseFile(codebaseId: string, path: string): Promi
   const fallback = 'Could not load the file.'
   try {
     const query = `codebaseId=${encodeURIComponent(codebaseId)}&path=${encodeURIComponent(path)}`
-    const response = await fetch(`/api/codebase-files?${query}`, { cache: 'no-store' })
-    const payload = (await response.json().catch(() => null)) as RawEnvelope | null
-    if (!payload || payload.ok !== true) return failure(payload, fallback)
+    const payload = await apiFetch<FileEnvelope>(`/api/codebase-files?${query}`)
     return {
       ok: true,
       content: typeof payload.file?.content === 'string' ? payload.file.content : '',
       revision: numberOrNull(payload.file?.revision),
     }
   } catch (error) {
-    return { ok: false, code: null, message: error instanceof Error ? error.message : fallback }
+    return failure(error, fallback)
   }
 }
 
@@ -54,16 +55,12 @@ export async function saveCodebaseFile(input: {
   }
   if (typeof input.baseRevision === 'number') body.baseRevision = input.baseRevision
   try {
-    const response = await fetch('/api/codebase-files', {
+    const payload = await apiFetch<FileEnvelope>('/api/codebase-files', {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      cache: 'no-store',
       body: JSON.stringify(body),
     })
-    const payload = (await response.json().catch(() => null)) as RawEnvelope | null
-    if (!payload || payload.ok !== true) return failure(payload, fallback)
     return { ok: true, revision: numberOrNull(payload.result?.revision) }
   } catch (error) {
-    return { ok: false, code: null, message: error instanceof Error ? error.message : fallback }
+    return failure(error, fallback)
   }
 }

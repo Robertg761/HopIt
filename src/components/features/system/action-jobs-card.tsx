@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { RelativeTime } from '@/components/features/members/shared'
+import { apiFetch } from '@/lib/client/api'
 
 import { QuietNote } from './shared'
 
@@ -38,10 +39,9 @@ export function ActionJobsCard({ codebaseId }: { codebaseId: string | null }) {
   const load = React.useCallback(async () => {
     if (!codebaseId) return
     try {
-      const response = await fetch(`/api/actions?codebaseId=${encodeURIComponent(codebaseId)}`, {
-        cache: 'no-store',
+      const body: unknown = await apiFetch(`/api/actions?codebaseId=${encodeURIComponent(codebaseId)}`, {
+        allowErrorEnvelope: true,
       })
-      const body: unknown = await response.json().catch(() => null)
       const record = asRecord(body)
       if (!record || record.ok === false) {
         setJobs([])
@@ -69,12 +69,11 @@ export function ActionJobsCard({ codebaseId }: { codebaseId: string | null }) {
     if (!codebaseId) return
     setQueueing(kind)
     try {
-      const response = await fetch('/api/actions', {
+      const body: unknown = await apiFetch('/api/actions', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        allowErrorEnvelope: true,
         body: JSON.stringify({ codebaseId, kind }),
       })
-      const body: unknown = await response.json().catch(() => null)
       const record = asRecord(body)
       if (!record || record.ok === false) {
         setNote(quietFailureNote(record))

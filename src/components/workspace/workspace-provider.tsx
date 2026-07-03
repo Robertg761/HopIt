@@ -6,6 +6,7 @@ import {
   mapAgentStatusResponse,
   offlineAgentStatus,
 } from '@/lib/client/agent-status'
+import { apiErrorFromUnknown, apiFetch } from '@/lib/client/api'
 import { humanizeApiError } from '@/lib/client/errors'
 
 const LOCAL_POLL_MS = 2500
@@ -94,6 +95,15 @@ type WorkspaceContextValue = {
   actorId: string
 }
 
+type CodebasesEnvelope = {
+  ok?: boolean
+  error?: {
+    message?: string
+  }
+  codebases?: unknown
+  workspaceDiscovery?: unknown
+}
+
 const WorkspaceContext = React.createContext<WorkspaceContextValue | null>(null)
 
 export function useWorkspace(): WorkspaceContextValue {
@@ -126,14 +136,13 @@ export function WorkspaceProvider({
       const statusUrl = selectedCodebaseId
         ? `/api/agent/status?codebaseId=${encodeURIComponent(selectedCodebaseId)}`
         : '/api/agent/status'
-      const response = await fetch(statusUrl, { cache: 'no-store' })
-      const body = await response.json()
+      const body = await apiFetch(statusUrl, { allowErrorEnvelope: true })
       const nextStatus = mapAgentStatusResponse(body)
 
       setStatus(nextStatus)
       if (!selectedCodebaseId && nextStatus.codebaseId) setSelectedCodebaseId(nextStatus.codebaseId)
     } catch (error) {
-      setStatus(offlineAgentStatus(error instanceof Error ? error.message : 'Agent status request failed.'))
+      setStatus(offlineAgentStatus(apiErrorFromUnknown(error, 'Agent status request failed.').message))
     } finally {
       setLoading(false)
     }
@@ -141,8 +150,7 @@ export function WorkspaceProvider({
 
   const refreshCodebases = React.useCallback(async () => {
     try {
-      const response = await fetch('/api/codebases', { cache: 'no-store' })
-      const body = (await response.json()) as Record<string, unknown>
+      const body = await apiFetch<CodebasesEnvelope>('/api/codebases', { allowErrorEnvelope: true })
       if (body && body.ok === false) {
         const error = asRecord(body.error)
         setCodebasesError(
@@ -154,9 +162,7 @@ export function WorkspaceProvider({
       setCodebases(normalizeCodebases(body?.codebases))
       setWorkspaceDiscovery(normalizeDiscovery(body?.workspaceDiscovery))
     } catch (error) {
-      setCodebasesError(
-        humanizeApiError(error instanceof Error ? error.message : 'Codebase list request failed.'),
-      )
+      setCodebasesError(apiErrorFromUnknown(error, 'Codebase list request failed.').message)
     } finally {
       setCodebasesLoading(false)
     }
@@ -176,12 +182,11 @@ export function WorkspaceProvider({
 
       setRunningCommand(command)
       try {
-        const response = await fetch('/api/agent/command', {
+        const result = await apiFetch<AgentCommandResult>('/api/agent/command', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          allowErrorEnvelope: true,
           body: JSON.stringify({ command, codebaseId: selectedCodebaseId ?? status.codebaseId, ...payload }),
         })
-        const result = (await response.json()) as AgentCommandResult
         const nextResult = { ...result, command }
         setCommandResult(nextResult)
         return nextResult
@@ -195,8 +200,7 @@ export function WorkspaceProvider({
         return result
       } finally {
         setRunningCommand(null)
-        await refresh()
-        void refreshCodebases()
+        await Promise.all([refresh(), refreshCodebases()])
       }
     },
     [refresh, refreshCodebases, selectedCodebaseId, status.codebaseId, status.commandsAvailable],

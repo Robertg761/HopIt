@@ -105,6 +105,30 @@ Current verified result:
 - Production Clerk sign-in and D1 owner claim were smoke-tested on `https://hopit.dev`; Basic Auth fallback is no longer needed for the owner handoff.
 - Google Auth Platform Audience for project `hopit-auth-prod-rg`: shows `1 user (1 test, 0 other) / 100 user cap` and the test-user row `robertgordon761@gmail.com`.
 
+## 2026-07-03 WS6 Frontend Hardening Log
+
+WS6 from [HopIt Remediation Plan — July 2026](remediation-plan-2026-07.md) hardens frontend failure handling, centralizes client API envelope parsing, fixes the command-refresh race, and adds web-focused normalization tests.
+
+Implemented:
+
+- Added Next.js error boundaries at `src/app/global-error.tsx` and `src/app/(app)/error.tsx` using the existing `Card`, `Button`, and `EmptyState` primitives with humanized error text and reset actions.
+- Added `src/lib/client/api.ts` as the shared JSON/envelope client for browser-side feature fetches, with humanized `ApiFetchError` details and an opt-in path for routes that intentionally return `{ ok: false }` payloads.
+- Migrated codebase mutations, file reads/writes, action jobs, the collaboration client, and the workspace provider to the shared API helper; `rg -n "fetch\\(|response\\.json\\(|\\.json\\(\\)\\.catch|RawEnvelope" src/components src/lib/client src/lib/collaboration.ts` now finds only `src/lib/client/api.ts`.
+- Fixed the workspace command completion race by awaiting both `refresh()` and `refreshCodebases()` before `runCommand` returns.
+- Split `src/lib/client/agent-status.ts` into `src/lib/client/agent-status/normalize.ts`, `defaults.ts`, `formatters.ts`, `mappers.ts`, and `index.ts` while preserving the existing import surface.
+- Added Vitest, `npm run test:web`, and normalization/error-humanization coverage for local-agent payloads, hosted-D1 payloads built from `packages/agent/fixtures/demo-cloud.json`, missing-status fallbacks, `offlineAgentStatus`, and `humanizeApiError`.
+
+Proof commands:
+
+- `npm run test:web`: passes with 1 Vitest file and 9 tests.
+- `npm run lint`: passes.
+- `npm run typecheck`: passes.
+- `npm run typecheck:agent`: passes.
+- `npm test`: sandboxed run reaches 75 passing tests and 6 skipped loopback service cases, then the D1 subset fails only on `listen EPERM: operation not permitted 127.0.0.1`.
+- `node --test packages/agent/test/d1-backend.test.js`: passes with 6 tests when rerun with loopback permission.
+- `npm run build`: passes when rerun with network permission for Next Google Fonts fetches.
+- Temporary page-throw verification on `/status`: the in-app browser rendered the `(app)/error.tsx` boundary with "This page hit a snag" and a working reset affordance, then the temporary throw was removed and `/status` rendered the normal Agent page again.
+
 ## 2026-07-03 WS5 Auth Hardening Log
 
 WS5 from [HopIt Remediation Plan — July 2026](remediation-plan-2026-07.md) hardens the Cloudflare D1 Worker proxy-token path and makes emergency Basic Auth fallback noisy and explicitly acknowledged in production.
