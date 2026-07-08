@@ -69,7 +69,7 @@ This is intentionally close to the future installed-device model: packaged binar
 - Basic Auth fallback is not the long-term product auth model and is no longer needed after owner sign-in and D1 owner claim were verified. Keep `HOPIT_ALLOW_BASIC_AUTH_FALLBACK` unset in production unless deliberately re-enabled for emergency recovery.
 - Clerk production auth is configured for `hopit.dev` with live Vercel env vars, a verified Clerk frontend API DNS target, a verified account portal DNS target, issued SSL certificates, production Google OAuth, owner sign-in, and D1 owner claim.
 - Google Auth Platform remains in Testing mode for personal dogfooding. Before public release, add public privacy policy and terms pages for `hopit.dev`, publish/verify the Google OAuth app, and re-check the OAuth consent screen branding/scopes.
-- Cloudflare R2 is the first object-storage provider because it has a useful free tier and an S3-compatible API. Personal use keeps `HOPIT_BLOB_FREE_ONLY=1`, an 8 GB app budget, public access disabled, and a 1-day auto-delete lifecycle. A public release should move to a production storage posture before storing real customer data long term.
+- Cloudflare R2 is the first object-storage provider because it has a useful free tier and an S3-compatible API. Personal use keeps `HOPIT_BLOB_FREE_ONLY=1`, an 8 GB app budget, and public access disabled. The former `free-only-auto-delete` 1-day object-expiry lifecycle rule was removed on 2026-07-08 because it silently deleted blob bodies that graph metadata still referenced, breaking cross-device hydration and future object-backed history; durable blob retention now relies on `hop storage gc` plus the free-only budget. A public release should still move to a production storage posture before storing real customer data long term.
 - The repo has D1 graph/status/file/codebase/account/action-job/member/invite/work-item/session/key backend support and a historical-export migration script. The live D1 database is created, schema-applied, seeded from the historical export, reachable through the `hopit-d1-api` Worker, deployed through Vercel, and used by the restarted local LaunchAgent for cloud status.
 - A production snapshot export from the retired hosted graph is saved at `/Users/robert/HopIt-Backups/convex/hopit-convex-prod-2026-06-30-disabled-snapshot.zip` with SHA-256 `0e83df9ab7e80a81a9a3b06e1cd3399ff5b532fa968bded3c14334640b4c9f3d`.
 - Backblaze B2 remains the planned compatible object-storage migration path, but it is not active in the current personal setup.
@@ -220,7 +220,7 @@ Current no-charge R2 posture:
 - Public `r2.dev` access: disabled
 - HopIt-managed stored objects: `0` under the configured `production/codebases/hopit/blobs/sha256/` prefix as verified by `hop storage status`
 - HopIt-managed stored bytes: `0 B` under the configured HopIt prefix
-- Lifecycle: `free-only-auto-delete` expires objects after 1 day and aborts incomplete multipart uploads after 1 day
+- Lifecycle: only the default rule aborting incomplete multipart uploads after 7 days. The former `free-only-auto-delete` rule (expire all objects after 1 day) was removed on 2026-07-08 — it deleted referenced blob bodies out from under D1 metadata. Verified at removal time: production D1 had `0` object-backed file rows (all 58 files `content_storage='inline'`), so no referenced blobs were lost while the rule was active.
 - Agent credentials: configured locally in `.env.local` and `~/.config/hopit/production.env` as a scoped account token with Object Read & Write access to `hopit-blobs` only
 - Verification: a 44-byte HopIt object-blob smoke file was uploaded through the R2 adapter, hydrated back through HopIt, and deleted; `hop storage status --profile production` and dry-run `hop storage gc --profile production` both report the HopIt-managed prefix at `0` objects / `0 B`
 
@@ -586,7 +586,7 @@ If you are using the manual pid-file debug service instead of LaunchAgent, use
   private path metadata, invite-time key wrapping, independent secret grants,
   dashboard recovery import, and complete revocation/rekey flows remain future
   work before HopIt should claim full private-repo encryption.
-- The current R2 setup is no-charge/private dogfood storage, not a public-release storage commitment. It has a free-only app budget and a 1-day lifecycle rule, so it is intentionally unsuitable for permanent customer repository storage as configured.
+- The current R2 setup is no-charge/private dogfood storage, not a public-release storage commitment. It has a free-only app budget; the former 1-day object-expiry lifecycle rule was removed on 2026-07-08 so stored blobs now persist, but the posture is still not a permanent customer repository storage commitment.
 - Full literal cloud sync of the current HopIt repository should be performed through the production-safe import/mirror flow, not by raw copying. Treat `/Users/robert/HopIt Workspaces/hopit` as the local managed workspace and verify cloud object counts before assuming large file bodies are uploaded.
 - Git export/publish creates a clean local Git repo; it does not push to a remote.
 - The standalone artifact includes start-on-login support scripts, but it is not signed, notarized, or packaged as a native installer yet.

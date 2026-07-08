@@ -29,7 +29,7 @@ The current real-use setup is a private dogfood baseline, not the final public p
 - Hosted dashboard: Vercel project `robertg761s-projects/hopit`, project id `prj_hO8U1QmyliQjGODz4R339UkgE86S`, at `https://hopit.dev`.
 - Domain and product auth: Porkbun-owned `hopit.dev` points at Vercel; Clerk production DNS, SSL, live Vercel env, legacy Convex issuer, `HOPIT_AUTH_PROVIDER=clerk`, production Google OAuth, owner sign-in, and D1 owner claim are active. Basic Auth fallback is no longer needed for normal production access.
 - Cloud graph: Cloudflare D1 database `hopit`, fronted for Vercel by the `hopit-d1-api` Worker. Legacy Convex project `robertgordon761/hopit` remains disabled and retained as an export/fallback source.
-- Object storage: Cloudflare R2 bucket `hopit-blobs`, private public-access-disabled bucket, free-only app budget enabled, 1-day lifecycle rule for current no-charge dogfooding.
+- Object storage: Cloudflare R2 bucket `hopit-blobs`, private public-access-disabled bucket, free-only app budget enabled; the 1-day object-expiry lifecycle rule was removed on 2026-07-08 so stored blobs persist durably.
 - Local device: packaged `hop-darwin-arm64` runtime installed under `/Users/robert/Library/Application Support/HopIt/Runtime`, supervised by LaunchAgent `com.hopit.agent.hopit`.
 - Local workspace root: `/Users/robert/HopIt Workspaces`, with current codebase folder `/Users/robert/HopIt Workspaces/hopit`.
 - Config source of truth: `.env.local` for this checkout and `/Users/robert/.config/hopit/production.env` for the installed agent. Both contain secrets and must not be committed.

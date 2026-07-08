@@ -18,7 +18,7 @@ devices can decrypt private repo content, `.private/`, and secrets.
 - Vercel project: `robertg761s-projects/hopit`, project id `prj_hO8U1QmyliQjGODz4R339UkgE86S`, org/team id `team_x1SyEPIryEghBSkkwoXSTIZ2`
 - Cloud graph target: Cloudflare D1 with schema at `cloudflare/d1/schema.sql`
 - Legacy Convex graph/export source: `https://sincere-jaguar-17.convex.cloud`, project `robertgordon761/hopit`
-- Object storage: private Cloudflare R2 bucket `hopit-blobs`, currently free-only/lifecycle-limited for personal dogfooding
+- Object storage: private Cloudflare R2 bucket `hopit-blobs`, currently free-only with durable blob retention for personal dogfooding
 - Current codebase id: `hopit`
 - Current production graph contents: 58 source files
 - Current workspace: `/Users/robert/HopIt Workspaces/hopit`

@@ -41,7 +41,7 @@ Solid v1 storage requirements:
 - file metadata and file content are separate records
 - file content is addressed by SHA-256/object key and deduplicated where practical
 - the first production provider is Cloudflare R2; Backblaze B2 remains a compatible migration target through the same S3 adapter
-- personal dogfood keeps R2 private, free-only, and lifecycle-limited; public release storage needs a longer-term retention and billing posture
+- personal dogfood keeps R2 private and free-only with durable blob retention (the 1-day object-expiry lifecycle rule was removed 2026-07-08); public release storage needs a longer-term retention and billing posture
 - writes are per-file mutations, not whole-graph replacement as the concurrency boundary
 - every write carries a base revision or known cloud revision
 - stale base revisions return explicit conflict state instead of silently winning
