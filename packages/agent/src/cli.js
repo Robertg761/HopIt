@@ -3,6 +3,7 @@
 
 import { applyLocalDeviceKeyring, runKeysCommand } from './commands/keys.js'
 import { backupAgentState, exportGitSnapshot, runDoctor, validateCloud } from './commands/export.js'
+import { compareCloudRevisions } from './commands/compare.js'
 import { hydrateWorkspace } from './commands/hydrate.js'
 import { importGitProject, importLocalProject, importRemoteGitProject, initCloud, mirrorLocalProject } from './commands/import.js'
 import { installAgent } from './commands/install.js'
@@ -38,6 +39,7 @@ async function main() {
   if (command === 'import-git') return importGitProject(options)
   if (command === 'import-git-url') return importRemoteGitProject(options)
   if (command === 'storage') return manageStorage(options, args)
+  if (command === 'compare') return compareCloudRevisions(options)
   if (command === 'hydrate') return hydrateWorkspace(options)
   if (command === 'refresh') return refreshWorkspace(options)
   if (command === 'remote-pull') return remotePullOnce(options)

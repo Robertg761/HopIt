@@ -1075,6 +1075,10 @@ test('storage gc dry-runs and deletes only orphaned managed filesystem blobs wit
   await runCli('hydrate', [...stateArgs(state), ...blobArgs])
   await fs.writeFile(path.join(state.workspace, 'kept.txt'), 'kept blob\n', 'utf8')
   await runCli('sync-once', [...stateArgs(state), ...blobArgs])
+  const firstCloud = await readJson(state.cloud)
+  const retainedOldKeptKey = firstCloud.files['kept.txt'].blobKey
+  await fs.writeFile(path.join(state.workspace, 'kept.txt'), 'kept blob v2\n', 'utf8')
+  await runCli('sync-once', [...stateArgs(state), ...blobArgs])
   const cloud = await readJson(state.cloud)
   const keptKey = cloud.files['kept.txt'].blobKey
   const orphanHash = createHash('sha256').update('orphan blob\n').digest('hex')
@@ -1090,6 +1094,7 @@ test('storage gc dry-runs and deletes only orphaned managed filesystem blobs wit
   assert.equal(planned.mode, 'dry-run')
   assert.equal(planned.orphanedObjects, 1)
   assert.equal(planned.deletedObjects, 0)
+  assert.ok(planned.retainedVersionReferenceObjects > planned.currentReferenceObjects)
   assert.equal(await pathExists(path.join(blobRoot, orphanKey)), true)
 
   const executed = parseLastJsonObject((await runCli('storage', [
@@ -1102,6 +1107,146 @@ test('storage gc dry-runs and deletes only orphaned managed filesystem blobs wit
   assert.equal(executed.deletedObjects, 1)
   assert.equal(await pathExists(path.join(blobRoot, orphanKey)), false)
   assert.equal(await pathExists(path.join(blobRoot, keptKey)), true)
+  assert.equal(await pathExists(path.join(blobRoot, retainedOldKeptKey)), true)
+})
+
+test('demo creates object-backed revision chain and compare reads README blobs lazily', async () => {
+  const state = await makeState()
+  const blobRoot = path.join(state.root, 'blob-store')
+  const blobArgs = ['--blob-provider', 'filesystem', '--blob-root', blobRoot]
+  const demo = parseLastJsonObject((await runCli('demo', [...stateArgs(state), ...blobArgs])).stdout)
+  assert.equal(demo.ok, true)
+  assert.deepEqual(demo.revisions, [1, 2, 3])
+  assert.deepEqual(demo.summary, {
+    added: 1,
+    modified: 2,
+    deleted: 0,
+    unchanged: 2,
+    missingBlob: 0,
+    integrityFailures: 0,
+    requiresLocalKey: 0,
+    binaryChanged: 0,
+  })
+  assert.deepEqual(demo.readmeDiff.addedLines, ['', 'Edited through the HopIt managed workspace folder.'])
+
+  const cloud = await readJson(state.cloud)
+  assert.equal(cloud.fileVersions.length, 7)
+  assert.equal(cloud.fileVersions.every((row) => row.newFile === null || row.newFile.contentStorage === 'object-blob'), true)
+
+  const directoryCompare = JSON.parse((await runCli('compare', [
+    ...stateArgs(state),
+    ...blobArgs,
+    '--from',
+    '1',
+    '--to',
+    '3',
+    '--requester-id',
+    'user_demo_owner',
+  ])).stdout)
+  assert.equal(directoryCompare.bodyFetches, 0)
+  assert.equal(directoryCompare.entries.find((entry) => entry.path === 'README.md').body, undefined)
+
+  const readmeCompare = JSON.parse((await runCli('compare', [
+    ...stateArgs(state),
+    ...blobArgs,
+    '--from',
+    '1',
+    '--to',
+    '3',
+    '--path',
+    'README.md',
+    '--requester-id',
+    'user_demo_owner',
+  ])).stdout)
+  assert.equal(readmeCompare.bodyFetches, 2)
+  assert.deepEqual(readmeCompare.entries.find((entry) => entry.path === 'README.md').body.diff.addedLines, [
+    '',
+    'Edited through the HopIt managed workspace folder.',
+  ])
+
+  cloud.visibility.effective = 'team-visible'
+  cloud.visibility.changeSetOverride = 'team-visible'
+  cloud.selectedState.effectiveVisibility = 'team-visible'
+  cloud.selectedState.visibility = 'team-visible'
+  await writeJson(state.cloud, cloud)
+
+  const ownerCompare = JSON.parse((await runCli('compare', [
+    ...stateArgs(state),
+    ...blobArgs,
+    '--from',
+    '1',
+    '--to',
+    '3',
+    '--requester-id',
+    'user_demo_owner',
+  ])).stdout)
+  const collaboratorCompare = JSON.parse((await runCli('compare', [
+    ...stateArgs(state),
+    ...blobArgs,
+    '--from',
+    '1',
+    '--to',
+    '3',
+    '--requester-id',
+    'user_demo_collaborator',
+  ])).stdout)
+  assert.equal(ownerCompare.entries.some((entry) => entry.path === '.private/agent-note.md'), true)
+  assert.equal(collaboratorCompare.entries.some((entry) => entry.path.startsWith('.private/')), false)
+  assert.equal(collaboratorCompare.entries.some((entry) => entry.path === 'README.md'), true)
+})
+
+test('compare reports binary metadata and missing object blobs without crashing', async () => {
+  const state = await makeState()
+  const blobRoot = path.join(state.root, 'blob-store')
+  const blobArgs = ['--blob-provider', 'filesystem', '--blob-root', blobRoot]
+  await runCli('init', [...stateArgs(state), ...blobArgs, '--force'])
+  await runCli('hydrate', [...stateArgs(state), ...blobArgs])
+
+  await fs.writeFile(path.join(state.workspace, 'binary.bin'), Buffer.from([0, 1, 2, 3]))
+  await runCli('sync-once', [...stateArgs(state), ...blobArgs])
+  await fs.writeFile(path.join(state.workspace, 'binary.bin'), Buffer.from([0, 1, 2, 4]))
+  await runCli('sync-once', [...stateArgs(state), ...blobArgs])
+
+  const binaryCompare = JSON.parse((await runCli('compare', [
+    ...stateArgs(state),
+    ...blobArgs,
+    '--from',
+    '2',
+    '--to',
+    '3',
+    '--path',
+    'binary.bin',
+  ])).stdout)
+  const binaryEntry = binaryCompare.entries.find((entry) => entry.path === 'binary.bin')
+  assert.equal(binaryEntry.state, 'binary_changed')
+  assert.equal(binaryEntry.body.state, 'binary_changed')
+  assert.equal(binaryEntry.body.left.size, 4)
+  assert.equal(binaryCompare.bodyFetches, 0)
+
+  const demoState = await makeState()
+  const demoBlobRoot = path.join(demoState.root, 'blob-store')
+  const demoBlobArgs = ['--blob-provider', 'filesystem', '--blob-root', demoBlobRoot]
+  await runCli('demo', [...stateArgs(demoState), ...demoBlobArgs])
+  const demoCloud = await readJson(demoState.cloud)
+  const readmeInitialVersion = demoCloud.fileVersions.find((row) => row.path === 'README.md' && row.graphRevision === 1)
+  await fs.rm(path.join(demoBlobRoot, readmeInitialVersion.newFile.blobKey), { force: true })
+
+  const missingCompare = JSON.parse((await runCli('compare', [
+    ...stateArgs(demoState),
+    ...demoBlobArgs,
+    '--from',
+    '1',
+    '--to',
+    '3',
+    '--path',
+    'README.md',
+    '--requester-id',
+    'user_demo_owner',
+  ])).stdout)
+  const readmeEntry = missingCompare.entries.find((entry) => entry.path === 'README.md')
+  assert.equal(readmeEntry.state, 'missing_blob')
+  assert.equal(readmeEntry.body.state, 'missing_blob')
+  assert.equal(missingCompare.summary.missingBlob, 1)
 })
 
 test('import-local hydrates a real folder while skipping generated and sensitive files', async () => {

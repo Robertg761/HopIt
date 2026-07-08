@@ -88,9 +88,10 @@ npm run package:hop
 
 Current verified result:
 
-- `node --test packages/agent/test/agent-cli.test.js`: passes with 73 tests total, 67 passing, 6 skipped, and 0 failures; skipped tests are the local service loopback cases in the sandbox.
+- `node --test packages/agent/test/agent-cli.test.js`: passes with 88 tests, 88 passing, and 0 failures.
 - `node --test packages/agent/test/crypto.test.js`: passes with 8 tests, 8 passing, and 0 failures.
-- `node --test packages/agent/test/d1-backend.test.js`: passes with 6 tests, 6 passing, and 0 failures when rerun with loopback permission after the sandbox blocks `127.0.0.1` listeners.
+- `node --test packages/agent/test/d1-backend.test.js`: passes with 7 tests, 7 passing, and 0 failures.
+- `npm run agent:test`: passes with 113 tests, 113 passing, and 0 failures.
 - `npm run lint`: passes.
 - `npm run typecheck`: passes.
 - `npm run typecheck:agent`: passes the WS4 checkJs allowlist.
@@ -106,6 +107,52 @@ Current verified result:
 - `curl -I https://hopit.dev/`: returns `HTTP/2 307` to `/sign-in` for signed-out users, confirming Clerk protects the dashboard.
 - Production Clerk sign-in and D1 owner claim were smoke-tested on `https://hopit.dev`; Basic Auth fallback is no longer needed for the owner handoff.
 - Google Auth Platform Audience for project `hopit-auth-prod-rg`: shows `1 user (1 test, 0 other) / 100 user cap` and the test-user row `robertgordon761@gmail.com`.
+
+## 2026-07-08 WS7c Object-Backed Diff History Log
+
+WS7c from [HopIt Remediation Plan — July 2026](remediation-plan-2026-07.md) implements the owner-approved Option 2 model from [WS7c Object-Backed Diff And History Reconstruction Design](ws7c-object-backed-diff-history-design.md): per-file version rows, snapshot reconstruction by latest version at or before a graph revision, and full content-addressed blobs rather than delta chains.
+
+Implemented:
+
+- Added D1 `file_versions` schema and backend setup statements with indexes by codebase/revision/path and codebase/path/revision.
+- Added per-file version recording to D1 and fixture JSON graph writes, including tombstones for deletes and old/new file metadata with blob references.
+- Added `compareRevisions(leftRevision, rightRevision, requester)` to `@hopit/backend-d1` and equivalent fixture compare support used by the agent.
+- Added lazy selected-file body diffing with per-call blob fetch cache, text diff summaries, binary metadata states, `requiresLocalKey` encrypted states, `revision_expired`, `missing_blob`, and integrity-failure handling.
+- Added read-only `hop compare --from <revision> --to <revision>` JSON output with `--requester-id`, `--session-id`, and optional `--path` body diff.
+- Made `hop storage status` and dry-run-by-default `hop storage gc` retention-aware by retaining blobs referenced by current graph files and retained file-version rows.
+- Extended `hop demo` to reset its deterministic demo paths, create revisions 1, 2, and 3, store demo bodies in local object blobs, and print a compare proof for revision 1 to 3 plus a README text diff reconstructed from blobs.
+
+Proof commands run:
+
+```bash
+npm run agent:test
+node --test --test-concurrency=1 packages/agent/test/agent-cli.test.js
+node --test packages/agent/test/d1-backend.test.js
+npm run lint
+npm run typecheck
+npm run typecheck:agent
+node packages/agent/src/cli.js help
+npm run agent:demo
+node packages/agent/src/cli.js demo
+node packages/agent/src/cli.js compare --from 1 --to 3 --path README.md --cloud .hopit-agent/demo/cloud.json --workspace .hopit-agent/demo/workspaces/hopit-core --journal .hopit-agent/demo/journal.ndjson --events .hopit-agent/demo/events.ndjson --blob-provider filesystem --blob-root .hopit-agent/demo/blobs --requester-id user_demo_owner
+```
+
+Current WS7c test coverage:
+
+- Three-revision demo chain.
+- Added, modified, deleted, and unchanged compare counts between revisions 1 and 3.
+- Deterministic README text diff reconstructed from object blobs.
+- Directory-level compare with zero body fetches.
+- Binary change metadata without text body diff.
+- Owner-visible `.private/` compare and collaborator-hidden private path names.
+- Retention-aware GC keeping blobs referenced only by retained version rows.
+- Missing retained blob reported as `missing_blob` without crashing compare.
+- D1-side version row recording and `compareRevisions` reconstruction.
+
+Known follow-up:
+
+- Web compare/review UI wiring is intentionally out of scope for WS7c; the dashboard can later call `compareRevisions`/`hop compare` and request selected-file body diffs lazily.
+- Production migration is documented in [Personal Production Runbook](personal-production.md), but no live D1 migration was run in this session.
 
 ## 2026-07-03 WS6 Frontend Hardening Log
 
@@ -325,7 +372,7 @@ Still open:
 | Git compatibility | In progress | Safe export/publish now creates clean Git repos while omitting `.private/` from publish, but ancestry preservation and remote publishing are still not started. |
 | Real accounts/auth | In progress | The repo now has Clerk sign-in routes, middleware, `/api/me`, provider-token forwarding, owner email config, and D1-backed account sync. The production Clerk instance, DNS, SSL, Vercel live env, `HOPIT_AUTH_PROVIDER=clerk`, production Google OAuth, owner sign-in, and D1 owner claim are active for `hopit.dev`; Basic Auth fallback is no longer needed for production owner access. |
 | Permissions and invitations | In progress | Durable memberships, invitation tables, requester-aware dashboard filtering, owner claim, member management, invite create/accept/revoke UI, and scoped agent-session token groundwork are in place; complete permission coverage remains. |
-| Code browsing/reviews/issues/releases | In progress | The dashboard now has a read-only code-review browser slice, review-linked follow-up issue comments, D1-backed issue/discussion/release/project-board UI, durable issue/discussion comments, and project card movement. Real diffs, snapshot-anchored inline review comments, routeable history, and immutable release publishing remain. |
+| Code browsing/reviews/issues/releases | In progress | The dashboard now has a read-only code-review browser slice, review-linked follow-up issue comments, D1-backed issue/discussion/release/project-board UI, durable issue/discussion comments, project card movement, and an object-backed compare/history API foundation. Web diff UI wiring, snapshot-anchored inline review comments, richer routeable history, and immutable release publishing remain. |
 | Native mount/FUSE/RAM-only cache | Later | Explicitly not the first v1 implementation path. Revisit only after the managed-folder Workspace Root proves core value. |
 
 ## Milestone Tracker
@@ -877,7 +924,7 @@ Current foundation:
 - D1 stores graph metadata, file rows, object-blob references, hashes, sizes, revisions, and agent events for the new free-first path.
 - Production agent sync should upload file bytes to S3-compatible object storage before committing metadata with revision guards.
 - The local fixture validates graph shape and detects stale selected-state/file/Main revisions.
-- Bootstrap/import can still replace the graph as an admin operation; full history reconstruction, object retention, garbage collection, and non-agent product write paths remain.
+- Bootstrap/import can still replace the graph as an admin operation; per-file version history reconstruction and retention-aware object GC now exist for the agent/D1 path, while production retention policy and non-agent product write paths remain.
 
 ### 0.6. Privacy, Encryption, And Key Grants
 
@@ -1230,11 +1277,11 @@ Deferred:
   key grants, invite-time wrapping, independent secret grants, revocation, and
   recovery remain.
 - D1-backed graph storage and auth-backed user APIs exist for the first collaboration slice, but not every product command has moved to user-scoped auth yet.
-- D1 separates file metadata from file bytes for agent sync, and the agent has dry-run-by-default orphan object GC. Durable history reconstruction, production retention policy, history-aware garbage collection, and full product write-path coverage are not complete yet.
+- D1 separates file metadata from file bytes for agent sync, records per-file version rows, exposes object-backed revision compare, and has dry-run-by-default retention-aware object GC. Production retention policy and full product write-path coverage are not complete yet.
 - Per-file revision-guarded mutation exists for the agent path, but the full product write surface has not moved to the same model yet.
 - Graph contract validators exist for the agent/D1 graph path, but product-level validation is not yet comprehensive across every future object type.
 - Requester-aware dashboard filtering exists, but the auth-backed collaborator permission model is not enforced across every user-facing write yet.
-- A first read-only code-review browser slice exists, now with routeable codebase review/compare/history pages, durable review-linked follow-up issues/comments, D1-backed snapshot-anchored inline review threads, and durable review decisions. A true tree/diff API and object-backed history reconstruction are still pending.
+- A first read-only code-review browser slice exists, now with routeable codebase review/compare/history pages, durable review-linked follow-up issues/comments, D1-backed snapshot-anchored inline review threads, durable review decisions, and object-backed revision compare support. Web UI wiring for the compare API and richer tree/diff interactions are still pending.
 - Issue, discussion, release, durable comments, release-asset attachment, project-board UI, routeable work-item detail pages, and first codebase notification feed exist for the first slice; richer linked-object cards and complete permission coverage are still pending.
 - Cloudflare push/subscription remote-update delivery is implemented locally through WS7a Stage 2, but it has not been deployed or dogfooded in personal production yet. Explicit refresh, per-workspace cursor state, and opt-in activity-gated remote-pull remain the production fallback layers.
 - Service mode syncs local edits and serves status. Local two-service simulation proves device A edits sync through the watcher, while device B pulls them through explicit safe refresh before switching devices.

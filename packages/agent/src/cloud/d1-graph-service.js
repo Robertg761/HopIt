@@ -9,6 +9,7 @@ import { countPathScopes, normalizeCloudFileEntry, normalizeCloudScopes } from '
 import { applyJournalEntryToCloud } from '../status-state.js'
 import { assertSafeCloudPath } from '../workspace-manifest.js'
 import { CloudflareD1HopBackend, d1CloudServiceType, d1ConfigFromOptions } from '@hopit/backend-d1'
+import { attachTextDiff, buildFileVersionRows, compareVersionRows, createCompareBlobReader, retainedBlobKeysForVersions } from '@hopit/backend-d1'
 import { scopeForPath } from '@hopit/core/privacy-zone'
 import { existsSync } from 'node:fs'
 
@@ -72,9 +73,22 @@ export class FixtureJsonCloudGraphService {
     return graph ? [graphHeadFromGraph(graph)] : []
   }
 
-  async writeGraph(cloud) {
+  async writeGraph(cloud, options = {}) {
+    const beforeGraph = (await this.exists()) ? await this.readGraph() : null
+    const previousVersions = Array.isArray(beforeGraph?.fileVersions) ? beforeGraph.fileVersions : []
     const normalized = normalizeValidatedCloudGraph(cloud)
     await prepareGraphForBlobStorage(this, normalized)
+    const versionRows = buildFileVersionRows({
+      beforeGraph,
+      afterGraph: normalized,
+      createdAt: options.now ?? new Date().toISOString(),
+      actor: options.actor ?? {},
+    })
+    const nextVersionId = previousVersions.reduce((max, row) => Math.max(max, Number(row.versionId ?? 0)), 0) + 1
+    normalized.fileVersions = [
+      ...previousVersions,
+      ...versionRows.map((row, index) => ({ versionId: nextVersionId + index, ...row })),
+    ]
     await writeJson(this.path, normalized)
   }
 
@@ -90,13 +104,49 @@ export class FixtureJsonCloudGraphService {
       ...options,
       entry: payload ?? options.entry,
     })
-    await this.writeGraph(cloud)
+    await this.writeGraph(cloud, {
+      now: options.now,
+      actor: {
+        actorUserId: entry.actorUserId ?? entry.ownerId ?? entry.userId ?? entry.requesterId ?? null,
+        sessionId: entry.sessionId ?? cloud.session?.id ?? null,
+        deviceName: entry.deviceName ?? cloud.session?.deviceName ?? null,
+      },
+    })
     return acknowledgement
   }
 
   async readBlob(file, context = {}) {
     if (!this.blobStore) throw new Error('Object-backed file requires HOPIT_BLOB_PROVIDER.')
     return await this.blobStore.getBlob(file, context)
+  }
+
+  async listFileVersions() {
+    const cloud = await this.readGraph()
+    return Array.isArray(cloud.fileVersions) ? cloud.fileVersions : []
+  }
+
+  async retainedBlobKeysForFileVersions() {
+    return retainedBlobKeysForVersions(await this.listFileVersions())
+  }
+
+  async compareRevisions(leftRevision, rightRevision, requester = {}) {
+    const cloud = await this.readGraph()
+    const context = visibilityContextForGraph(cloud, requester)
+    const result = compareVersionRows(await this.listFileVersions(), leftRevision, rightRevision, {
+      canSeePath: (filePath) => canRequesterSeePath(context, filePath),
+    })
+    if (!result.ok) return result
+
+    const diffPath = requester.path ?? requester.filePath ?? requester.diffPath ?? null
+    if (diffPath) {
+      const blobReader = createCompareBlobReader({
+        readBlob: (file) => this.readBlob(file, requester),
+      })
+      await attachTextDiff(result, diffPath, blobReader.readFileBody)
+      result.bodyFetches = blobReader.stats.fetches
+      result.blobCacheHits = blobReader.stats.cacheHits
+    }
+    return result
   }
 }
 
@@ -153,12 +203,12 @@ export class D1CloudGraphService extends CloudflareD1HopBackend {
     return Array.isArray(codebases) ? codebases.map(normalizeCloudGraphHead).filter(Boolean) : []
   }
 
-  async writeGraph(cloud) {
+  async writeGraph(cloud, options = {}) {
     const normalized = normalizeValidatedCloudGraph(cloud)
     this.codebaseId = normalized.codebase.id
     this.location = `d1:${this.codebaseId}`
     await prepareGraphForBlobStorage(this, normalized)
-    return await super.writeGraph(normalized)
+    return await super.writeGraph(normalized, options)
   }
 
   applyJournalEntry(cloud, entry, options = {}) {
@@ -173,7 +223,14 @@ export class D1CloudGraphService extends CloudflareD1HopBackend {
       ...options,
       entry: payload ?? options.entry,
     })
-    await this.writeGraph(cloud)
+    await this.writeGraph(cloud, {
+      now: options.now,
+      actor: {
+        actorUserId: entry.actorUserId ?? entry.ownerId ?? entry.userId ?? entry.requesterId ?? null,
+        sessionId: entry.sessionId ?? cloud.session?.id ?? null,
+        deviceName: entry.deviceName ?? cloud.session?.deviceName ?? null,
+      },
+    })
     return {
       ...acknowledgement,
       storageMode: 'd1-graph-save',

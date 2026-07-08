@@ -26,6 +26,7 @@ Commands:
   session     Manage this device/session registration (alias: device)
   keys        Manage local encryption device keys and recovery exports
   storage     Inspect object storage usage and dry-run or execute blob GC
+  compare     Compare retained graph revisions as JSON
   service     Manage the local agent service: start, stop, restart, status, run
   watch       Hydrate and watch the workspace for edits
   status      Print read-only local agent status JSON
@@ -54,6 +55,8 @@ Options:
   --launch-agent-label <label> mirror: macOS LaunchAgent label to stop/restart
   --output <path>     Output folder for Git export/publish
   --path <cloud-path> Cloud file/folder path for workspace hydrate-file, hydrate-path, prune, pin, or unpin
+  --from <revision>   compare: left retained graph revision
+  --to <revision>     compare: right retained graph revision
   --recursive        workspace hydrate-path/pin/unpin/prune: include visible files under a folder prefix
   --with-siblings    workspace hydrate-file: also hydrate nearby source-root siblings within budget
   --open-max-files <n> workspace open: maximum files for open-time hydration, default 64

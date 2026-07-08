@@ -146,7 +146,7 @@ function statementIsScopedToCodebase(normalizedSql, params, codebaseId) {
 }
 
 function touchesCodebaseScopedTable(normalizedSql) {
-  return /\b(codebases|files|file_blobs|agent_events|action_jobs|collaboration_counters|issues|issue_comments|projects|project_items|discussions|discussion_comments|releases|release_assets|review_threads|review_thread_comments|review_decisions|notifications|codebase_members|codebase_invitations|agent_sessions|codebase_keyrings|wrapped_keys|key_audit_events)\b/.test(normalizedSql)
+  return /\b(codebases|files|file_versions|file_blobs|agent_events|action_jobs|collaboration_counters|issues|issue_comments|projects|project_items|discussions|discussion_comments|releases|release_assets|review_threads|review_thread_comments|review_decisions|notifications|codebase_members|codebase_invitations|agent_sessions|codebase_keyrings|wrapped_keys|key_audit_events)\b/.test(normalizedSql)
 }
 
 function agentSessionHasCapability(session, capability) {
@@ -468,7 +468,7 @@ function affectedGraphCodebaseIds({ request, statements, authorization }) {
 function statementMutatesGraphState(statement) {
   const normalized = statement?.sql?.trim().replace(/\s+/g, ' ').toLowerCase()
   if (!normalized || !/^(insert|update|delete)\b/.test(normalized)) return false
-  return /\b(codebases|files|file_blobs)\b/.test(normalized)
+  return /\b(codebases|files|file_versions|file_blobs)\b/.test(normalized)
 }
 
 async function readRemoteUpdateEnvelope(db, codebaseId) {

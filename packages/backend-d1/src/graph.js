@@ -3,6 +3,7 @@ import { privacyZoneForPath, privacyZoneIdForPath, scopeForPath } from '@hopit/c
 import { defineBackendMethods } from './method-support.js'
 import { d1CloudServiceType, d1AuthorizationToken, schemaCacheKey, usesCloudflareD1Api, usesScopedD1SessionAuth } from './config.js'
 import { d1SchemaStatements } from './schema.js'
+import { attachTextDiff, buildFileVersionRows, compareVersionRows, createCompareBlobReader, retainedBlobKeysForVersions } from './history.js'
 import { summarizeAccessContext, normalizeEmail, normalizeCodebaseName, normalizeNewCodebaseId, backendErrorMessage, normalizeFutureTimestamp, normalizePositiveInteger, nullablePositiveInteger, nullableNonNegativeInteger, actorAuditId, requireTextValue, uniqueStrings, parseStringArray, normalizeRole, graphMemberCount, countPathScopes, assertSafeGraphPath, hashText, byteLength, parseJson, stringifyJson, stringOrNull, integerOrNull, integerValue, boundedLimit, requireAuthenticatedActor, requireVerifiedEmailActor, requireOwnerClaimActor, isBootstrapOwnerMember, claimedOwnerValue, graphFromRows, codebaseRowToRecord, codebaseRecordFromGraph, fileRowToEntry, normalizeGraph, normalizeFileEntry, normalizeVisibilityContract, normalizeOptionalVisibility, normalizeVisibilityValue, summarizeCodebaseHead, summarizeCodebaseRemoteUpdate, buildStatus, buildSyncHealth, buildRefreshHealth, mapD1AgentEvent, latestEventOf, applyJournalEntryToCloud, slugifyCodebaseId, hasCapability, visibilityContextForGraph, filterVisibleGraphForRequester, filterVisibleGraphForAccess, canRequesterSeePath, canRead, canWrite, permissionsForRole, accessContextForCodebaseHead, memberSelectSql, mapD1Member, mapD1Invitation, invitationRole, invitationStatusOrNull, isInvitationExpired, invitationStatusForRead, hashInvitationToken, createAgentSessionId, createAgentSessionToken, hashAgentSessionToken, normalizeAgentSessionId, assertReusableAgentSession, normalizeAgentSessionCapabilities, agentSessionStatusOrNull, agentSessionHasCapability, codebaseCapabilityForAgentCapability, agentCapabilityForCodebaseCapability, isExpiredTimestamp, summarizeAgentSession, normalizeKeyEntityId, assertDevicePublicKeyDescriptor, looksLikePem, assertSameDevicePublicKeys, assertSameCodebaseKeyring, wrappedKeyType, wrappedKeyRecipientType, capabilityForWrappedKey, isPrivateZoneId, assertWrappedKeyEnvelope, assertSameWrappedKey, effectiveWrappedKeyStatus, canActorReadWrappedKey, createWrappedKeyId, summarizeDeviceKey, summarizeUserKeyring, summarizeCodebaseKeyring, summarizeWrappedKey, deviceKeyStatusOrNull, keyRotationState, mapD1Issue, mapD1IssueComment, mapD1Discussion, mapD1DiscussionComment, mapD1Release, mapD1ReleaseAsset, mapD1ReviewThread, mapD1ReviewThreadComment, mapD1ReviewDecision, mapD1Notification, mapD1Project, mapD1ProjectItem, issuePriorityOrNull, issueStatus, discussionCategory, discussionStatus, releaseStatus, releaseAssetKind, reviewDecision, notificationKind, reviewDecisionTitle, reviewDecisionBody, reviewHref, workItemHref, projectStatus, normalizeProjectColumns, normalizeProjectColumnId, normalizeProjectPosition, projectItemType, normalizeReleaseTarget, collaborationScope, actionCommandForKind, summarizeActionJob, actionSummary, capOutput } from './helpers/index.js'
 
 /** @typedef {import('@hopit/core').CloudGraph} CloudGraph */
@@ -56,13 +57,14 @@ export function attachGraphMethods(Backend) {
     return normalizeGraph(graphFromRows(codebaseRow, fileRows))
   },
 
-  async writeGraph(graph) {
+  async writeGraph(graph, options = {}) {
     await this.ensureSchema()
     const normalized = normalizeGraph(graph)
     const codebaseId = normalized.codebase.id
+    const beforeGraph = await this.readOptionalGraph(codebaseId)
     this.codebaseId = codebaseId
     this.location = `d1:${this.config.databaseId}:${codebaseId}`
-    const now = new Date().toISOString()
+    const now = options.now ?? new Date().toISOString()
     const files = Object.entries(normalized.files ?? {})
     const fileCount = files.length
     const privateFileCount = files.filter(([filePath]) => scopeForPath(filePath) === 'owner-private').length
@@ -131,7 +133,108 @@ export function attachGraphMethods(Backend) {
       }
     }
 
+    const versionRows = buildFileVersionRows({
+      beforeGraph,
+      afterGraph: normalized,
+      createdAt: now,
+      actor: options.actor ?? {},
+    })
+    for (const row of versionRows) {
+      await this.insertFileVersion(row)
+    }
+
     return { ok: true, codebaseId, revision: normalized.revision, fileCount }
+  },
+
+  async insertFileVersion(row) {
+    await this.query(
+      `insert into file_versions (
+        codebase_id, selected_state_type, selected_state_id, main_state_id,
+        graph_revision, path, operation, kind, old_revision, new_revision,
+        old_file_json, new_file_json, scope, privacy_zone, zone_id,
+        content_storage, blob_provider, blob_key, blob_hash, encoding,
+        target, size, actor_user_id, session_id, device_name, created_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        row.codebaseId,
+        row.selectedStateType,
+        row.selectedStateId,
+        row.mainStateId,
+        row.graphRevision,
+        row.path,
+        row.operation,
+        row.kind,
+        row.oldRevision,
+        row.newRevision,
+        row.oldFile ? stringifyJson(row.oldFile) : null,
+        row.newFile ? stringifyJson(row.newFile) : null,
+        row.scope,
+        row.privacyZone,
+        row.zoneId,
+        row.contentStorage,
+        row.blobProvider,
+        row.blobKey,
+        row.blobHash,
+        row.encoding,
+        row.target,
+        row.size,
+        row.actorUserId,
+        row.sessionId,
+        row.deviceName,
+        row.createdAt,
+      ],
+    )
+  },
+
+  async listFileVersions(codebaseId = this.codebaseId) {
+    if (!codebaseId) return []
+    await this.ensureSchema()
+    const rows = await this.query(
+      `select * from file_versions where codebase_id = ? order by graph_revision asc, version_id asc`,
+      [codebaseId],
+    )
+    return rows.map(mapD1FileVersion)
+  },
+
+  async retainedBlobKeysForFileVersions(codebaseId = this.codebaseId) {
+    return retainedBlobKeysForVersions(await this.listFileVersions(codebaseId))
+  },
+
+  async compareRevisions(leftRevision, rightRevision, requester = {}) {
+    const codebaseId = requester.codebaseId ?? this.codebaseId
+    const graph = await this.readGraph(codebaseId)
+    const access = await this.readAccessContext(graph, {
+      userId: requester.requesterId ?? requester.userId,
+      sessionId: requester.sessionId,
+    })
+    if (!canRead(access)) throw new Error(`User cannot read ${codebaseId}.`)
+    const versions = await this.listFileVersions(codebaseId)
+    const result = compareVersionRows(versions, leftRevision, rightRevision, {
+      canSeePath: (filePath) => canRequesterSeePath(access, filePath),
+    })
+    if (!result.ok) return result
+
+    const diffPath = requester.path ?? requester.filePath ?? requester.diffPath ?? null
+    if (diffPath) {
+      const blobReader = createCompareBlobReader({
+        readBlob: typeof this.readBlob === 'function' ? (file) => this.readBlob(file, requester) : null,
+        readInlineBlob: (file) => this.readFileBlob(codebaseId, file),
+      })
+      await attachTextDiff(result, diffPath, blobReader.readFileBody)
+      result.bodyFetches = blobReader.stats.fetches
+      result.blobCacheHits = blobReader.stats.cacheHits
+    }
+    return result
+  },
+
+  async readFileBlob(codebaseId, file) {
+    const hash = stringOrNull(file?.blobHash) ?? stringOrNull(file?.hash)
+    if (!hash) return null
+    const row = await this.first(
+      `select content, encoding, size from file_blobs where codebase_id = ? and hash = ? limit 1`,
+      [codebaseId, hash],
+    )
+    return row ? { content: row.content ?? '', encoding: row.encoding ?? 'utf8', size: row.size ?? null } : null
   },
 
   async ensureGraphMembers(graph, now = new Date().toISOString()) {
@@ -180,7 +283,13 @@ export function attachGraphMethods(Backend) {
 
   async commitJournalEntry(cloud, entry, options = {}) {
     const acknowledgement = this.applyJournalEntry(cloud, entry, options)
-    await this.writeGraph(cloud)
+    await this.writeGraph(cloud, {
+      actor: {
+        actorUserId: entry.actorUserId ?? entry.ownerId ?? entry.userId ?? entry.requesterId ?? null,
+        sessionId: entry.sessionId ?? cloud.session?.id ?? null,
+        deviceName: entry.deviceName ?? cloud.session?.deviceName ?? null,
+      },
+    })
     return {
       ...acknowledgement,
       storageMode: 'd1-graph-save',
@@ -460,7 +569,7 @@ export function attachGraphMethods(Backend) {
       revision: 0,
       files: {},
     })
-    await this.writeGraph(graph)
+    await this.writeGraph(graph, { actor })
     await this.upsertMember({
       codebaseId: id,
       userId: ownerId,
@@ -500,7 +609,7 @@ export function attachGraphMethods(Backend) {
     }
     graph.revision += 1
     graph.main.revision = graph.revision
-    await this.writeGraph(graph)
+    await this.writeGraph(graph, { actor })
     await this.appendEvent({
       codebaseId,
       event: 'codebase.updated',
@@ -515,6 +624,7 @@ export function attachGraphMethods(Backend) {
     const access = await this.readAccessContext(graph, actor)
     if (!access.isOwner) throw new Error('Only the codebase owner can delete a codebase.')
     await this.query(`delete from files where codebase_id = ?`, [codebaseId])
+    await this.query(`delete from file_versions where codebase_id = ?`, [codebaseId])
     await this.query(`delete from file_blobs where codebase_id = ?`, [codebaseId])
     await this.query(`delete from agent_events where codebase_id = ?`, [codebaseId])
     await this.query(`delete from codebase_members where codebase_id = ?`, [codebaseId])
@@ -584,7 +694,7 @@ export function attachGraphMethods(Backend) {
       revision: graph.revision,
       updatedAt: now,
     }, graph.revision, now)
-    await this.writeGraph(graph)
+    await this.writeGraph(graph, { actor })
     await this.appendEvent({
       codebaseId,
       event: 'file.mutated',
@@ -653,4 +763,36 @@ export function attachGraphMethods(Backend) {
     )
   },
   })
+}
+
+function mapD1FileVersion(row) {
+  return {
+    versionId: integerOrNull(row.version_id) ?? 0,
+    codebaseId: row.codebase_id,
+    selectedStateType: row.selected_state_type ?? null,
+    selectedStateId: row.selected_state_id ?? null,
+    mainStateId: row.main_state_id ?? null,
+    graphRevision: integerValue(row.graph_revision, 0),
+    path: row.path,
+    operation: row.operation ?? 'modify',
+    kind: row.kind ?? 'file',
+    oldRevision: integerOrNull(row.old_revision),
+    newRevision: integerOrNull(row.new_revision),
+    oldFile: parseJson(row.old_file_json, null),
+    newFile: parseJson(row.new_file_json, null),
+    scope: row.scope ?? scopeForPath(row.path),
+    privacyZone: row.privacy_zone ?? privacyZoneForPath(row.path),
+    zoneId: row.zone_id ?? privacyZoneIdForPath(row.codebase_id, row.path),
+    contentStorage: row.content_storage ?? 'inline',
+    blobProvider: row.blob_provider ?? null,
+    blobKey: row.blob_key ?? null,
+    blobHash: row.blob_hash ?? null,
+    encoding: row.encoding ?? 'utf8',
+    target: row.target ?? null,
+    size: integerOrNull(row.size),
+    actorUserId: row.actor_user_id ?? null,
+    sessionId: row.session_id ?? null,
+    deviceName: row.device_name ?? null,
+    createdAt: row.created_at,
+  }
 }

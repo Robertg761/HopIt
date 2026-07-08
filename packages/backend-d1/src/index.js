@@ -11,6 +11,13 @@ import { attachSessionMethods } from './sessions.js'
 
 export { d1CloudServiceType, d1ConfigFromOptions, isD1Configured } from './config.js'
 export { d1SchemaStatements } from './schema.js'
+export {
+  attachTextDiff,
+  buildFileVersionRows,
+  compareVersionRows,
+  createCompareBlobReader,
+  retainedBlobKeysForVersions,
+} from './history.js'
 
 export function createD1Backend(options = {}, env = process.env) {
   return new CloudflareD1HopBackend(d1ConfigFromOptions(options, env))

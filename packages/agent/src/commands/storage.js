@@ -23,7 +23,11 @@ export async function storageStatus(options) {
   }
   const usage = await cloudService.blobStore.readUsage()
   const cloud = await cloudService.readGraph()
-  const reachableKeys = reachableBlobKeysForCloud(cloud)
+  const currentReachableKeys = reachableBlobKeysForCloud(cloud)
+  const retainedVersionKeys = cloudService.retainedBlobKeysForFileVersions
+    ? await cloudService.retainedBlobKeysForFileVersions(cloud.codebase?.id)
+    : new Set()
+  const reachableKeys = new Set([...currentReachableKeys, ...retainedVersionKeys])
   const result = {
     ok: true,
     action: 'storage.status',
@@ -32,6 +36,8 @@ export async function storageStatus(options) {
     codebaseId: cloud.codebase?.id ?? options['codebase-id'] ?? null,
     usage,
     reachableObjects: reachableKeys.size,
+    currentReferenceObjects: currentReachableKeys.size,
+    retainedVersionReferenceObjects: retainedVersionKeys.size,
   }
   await emit(options, 'storage.status', result)
   console.log(JSON.stringify(result, null, 2))
@@ -48,7 +54,11 @@ export async function storageGc(options) {
 
   const cloud = await cloudService.readGraph()
   const codebaseId = cloud.codebase?.id ?? options['codebase-id'] ?? 'hopit'
-  const reachableKeys = reachableBlobKeysForCloud(cloud)
+  const currentReachableKeys = reachableBlobKeysForCloud(cloud)
+  const retainedVersionKeys = cloudService.retainedBlobKeysForFileVersions
+    ? await cloudService.retainedBlobKeysForFileVersions(codebaseId)
+    : new Set()
+  const reachableKeys = new Set([...currentReachableKeys, ...retainedVersionKeys])
   const listed = await cloudService.blobStore.listBlobs({ codebaseId })
   const retentionMs = storageRetentionMsFromOptions(options)
   const now = Date.now()
@@ -81,6 +91,8 @@ export async function storageGc(options) {
     listedObjects: listed.length,
     listedBytes: listed.reduce((sum, blob) => sum + (blob.size ?? 0), 0),
     reachableObjects: reachableKeys.size,
+    currentReferenceObjects: currentReachableKeys.size,
+    retainedVersionReferenceObjects: retainedVersionKeys.size,
     orphanedObjects: orphaned.length,
     orphanedBytes: orphaned.reduce((sum, blob) => sum + (blob.size ?? 0), 0),
     deletedObjects: deleted,
@@ -95,4 +107,3 @@ export async function storageGc(options) {
   await emit(options, execute ? 'storage.gc.deleted' : 'storage.gc.planned', result)
   console.log(JSON.stringify(result, null, 2))
 }
-

@@ -164,7 +164,7 @@ npm run d1:migrate:convex-export -- \
 
 The production import on 2026-06-30 wrote `58` files and the latest `500` events from `11,638` exported events into D1. Use `--dry-run` for future rehearsals. Use `--all-events` only if the daily D1 write budget can absorb the full event history.
 
-The D1 path currently covers agent graph reads/writes, graph-head status polling, hosted dashboard status, codebase list/create/update/delete, text file read/edit, account sync, automatic verified-owner bootstrap for migrated `local-owner` codebases, hosted action jobs, member/invite routes, issue/discussion/release/project/comment collaboration tables, project-board UI operations, scoped D1 proxy session auth, scoped device sessions, trusted-device/key metadata, and redacted key-grant status. Full history reconstruction, retention policy, full private-repo key-grant approval/rotation flows, richer release assets, and complete product write-path coverage still need work.
+The D1 path currently covers agent graph reads/writes, graph-head status polling, hosted dashboard status, codebase list/create/update/delete, text file read/edit, account sync, automatic verified-owner bootstrap for migrated `local-owner` codebases, hosted action jobs, member/invite routes, issue/discussion/release/project/comment collaboration tables, project-board UI operations, scoped D1 proxy session auth, scoped device sessions, trusted-device/key metadata, redacted key-grant status, per-file version rows, and object-backed revision compare. Production retention policy, web compare UI wiring, full private-repo key-grant approval/rotation flows, richer release assets, and complete product write-path coverage still need work.
 
 ### D1 Proxy Token Rotation
 
@@ -176,6 +176,47 @@ The `hopit-d1-api` Worker accepts `HOPIT_D1_PROXY_TOKEN` for trusted server-side
 4. Update `.env.local` and `/Users/robert/.config/hopit/production.env` only if this Mac still needs proxy-token access; prefer `HOPIT_AGENT_SESSION_TOKEN` for installed-device paths.
 5. Verify the dashboard and local agent can read D1 status, then remove the old token from every provider/local secret store where it was present.
 6. Run `npm run check:production-config` from a shell with the intended env loaded and confirm it does not print secret values.
+
+### File Versions Migration
+
+WS7c adds per-file version rows for object-backed history reconstruction. Do not run this from Codex; the owner applies it to the existing production D1 database when ready.
+
+```sql
+create table if not exists file_versions (
+  version_id integer primary key autoincrement,
+  codebase_id text not null,
+  selected_state_type text,
+  selected_state_id text,
+  main_state_id text,
+  graph_revision integer not null,
+  path text not null,
+  operation text not null,
+  kind text not null default 'file',
+  old_revision integer,
+  new_revision integer,
+  old_file_json text,
+  new_file_json text,
+  scope text not null,
+  privacy_zone text,
+  zone_id text,
+  content_storage text not null default 'inline',
+  blob_provider text,
+  blob_key text,
+  blob_hash text,
+  encoding text not null default 'utf8',
+  target text,
+  size integer,
+  actor_user_id text,
+  session_id text,
+  device_name text,
+  created_at text not null,
+  foreign key (codebase_id) references codebases(codebase_id) on delete cascade
+);
+
+create index if not exists idx_file_versions_codebase_revision_path on file_versions(codebase_id, graph_revision, path);
+create index if not exists idx_file_versions_codebase_path_revision on file_versions(codebase_id, path, graph_revision);
+create index if not exists idx_file_versions_codebase_blob_key on file_versions(codebase_id, blob_key);
+```
 
 Cloudflare dashboard rate-limit rule to configure alongside the in-worker failed-auth throttle:
 
@@ -632,7 +673,7 @@ If you are using the manual pid-file debug service instead of LaunchAgent, use
 
 - Hosted workspace commands are intentionally disabled; local workspace commands run through the local agent. Hosted collaboration/member/work-item APIs exist behind Clerk product auth.
 - Basic Auth is now emergency-only code and should stay disabled in production. The repo has Clerk-backed product auth code, production Google OAuth, durable users, memberships, invitations, D1 owner claim, and first server-side permission checks.
-- D1 separates graph/file metadata from file bytes and supports object-backed blobs through the agent sync path with per-file revision-guarded mutations. Client-encrypted routed-secret blobs and dry-run-by-default object GC are implemented in the agent. Durable history reconstruction, production retention policy, and full product write-path coverage are still incomplete.
+- D1 separates graph/file metadata from file bytes and supports object-backed blobs through the agent sync path with per-file revision-guarded mutations, per-file version rows, object-backed compare, and retention-aware dry-run-by-default object GC. Production retention policy and full product write-path coverage are still incomplete.
 - The full privacy/key-grant model is documented in [HopIt Privacy And
   Encryption Plan](privacy-encryption-plan.md). The first device keyring,
   encrypted recovery export, trusted-device public-key registration, and
@@ -647,4 +688,4 @@ If you are using the manual pid-file debug service instead of LaunchAgent, use
 - The standalone artifact includes start-on-login support scripts, but it is not signed, notarized, or packaged as a native installer yet.
 - LaunchAgent health is currently verified with `launchctl print` plus the loopback `/status` endpoint. `hop service status` is still pid-file oriented and should be tightened so direct supervisor-owned `service run` installs report as running.
 - Token rotation is CLI/runbook driven; there is no dashboard UX for device credential recovery yet.
-- The dashboard now has a first read-only code browser plus issue, discussion, release, project-board, durable comment, member/invite, and key-grant status surfaces. Real diffs, snapshot-anchored inline review comments, durable merge records, richer release artifacts, key approval/rotation UX, and push-style live updates remain future work.
+- The dashboard now has a first read-only code browser plus issue, discussion, release, project-board, durable comment, member/invite, and key-grant status surfaces. Web compare UI wiring, snapshot-anchored inline review comments, durable merge records, richer release artifacts, key approval/rotation UX, and push-style live updates remain future work.

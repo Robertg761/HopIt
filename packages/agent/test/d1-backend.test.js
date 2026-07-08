@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import { createServer } from 'node:http'
 import { DatabaseSync } from 'node:sqlite'
@@ -692,6 +693,169 @@ test('D1 assume-schema mode skips schema setup queries', async (t) => {
 
   assert.equal(dashboard.cloud.exists, true)
   assert.equal(statements.some((sql) => /^\s*create\s+/i.test(sql)), false)
+})
+
+test('D1 backend records file versions and compares retained revisions', async (t) => {
+  const server = await startD1ApiServer(t)
+  const backend = createD1Backend({
+    'codebase-id': 'history-core',
+    'd1-api-base-url': server.baseUrl,
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_test',
+    'd1-api-token': 'token_test',
+  })
+  const now = '2026-07-08T00:00:00.000Z'
+  await backend.initialize({
+    schemaVersion: 2,
+    codebase: {
+      id: 'history-core',
+      name: 'History Core',
+      ownerId: 'user_owner',
+    },
+    main: {
+      id: 'main',
+      revision: 1,
+      updatedAt: now,
+      mergedChangeSetId: null,
+    },
+    selectedState: {
+      type: 'active-change-set',
+      id: 'cs_history_core',
+      ownerId: 'user_owner',
+      baseMainId: 'main',
+      baseRevision: 1,
+      revision: 1,
+      visibility: 'team-visible',
+      effectiveVisibility: 'team-visible',
+      reviewState: 'not-open',
+      mergeState: 'unmerged',
+      conflictState: 'none',
+      conflict: null,
+      review: null,
+      merge: null,
+    },
+    owner: {
+      id: 'user_owner',
+      name: 'Owner',
+    },
+    collaborators: [{ id: 'user_collab', role: 'member' }],
+    session: {
+      id: 'session_history',
+      deviceName: 'test',
+    },
+    visibility: {
+      productDefault: 'private',
+      globalUserDefault: null,
+      codebaseOverride: null,
+      changeSetOverride: 'team-visible',
+      effective: 'team-visible',
+    },
+    revision: 1,
+    files: {
+      'README.md': {
+        kind: 'file',
+        content: '# History\n',
+        encoding: 'utf8',
+        revision: 1,
+        updatedAt: now,
+      },
+      '.private/note.md': {
+        kind: 'file',
+        content: 'owner note\n',
+        encoding: 'utf8',
+        revision: 1,
+        updatedAt: now,
+      },
+    },
+  })
+
+  await backend.mutateTextFile({
+    codebaseId: 'history-core',
+    path: 'README.md',
+    content: '# History\n\nEdited in D1.\n',
+    baseRevision: 1,
+    actor: { userId: 'user_owner' },
+  })
+  await backend.mutateTextFile({
+    codebaseId: 'history-core',
+    path: 'src/new.js',
+    content: 'export const added = true\n',
+    actor: { userId: 'user_owner' },
+  })
+
+  const versions = await backend.listFileVersions('history-core')
+  assert.equal(versions.length, 4)
+  assert.deepEqual(versions.map((row) => [row.path, row.graphRevision]), [
+    ['.private/note.md', 1],
+    ['README.md', 1],
+    ['README.md', 2],
+    ['src/new.js', 3],
+  ])
+
+  const ownerCompare = await backend.compareRevisions(1, 3, {
+    codebaseId: 'history-core',
+    requesterId: 'user_owner',
+    path: 'README.md',
+  })
+  assert.equal(ownerCompare.ok, true)
+  assert.deepEqual(ownerCompare.summary, {
+    added: 1,
+    modified: 1,
+    deleted: 0,
+    unchanged: 1,
+    missingBlob: 0,
+    integrityFailures: 0,
+    requiresLocalKey: 0,
+    binaryChanged: 0,
+  })
+  assert.deepEqual(ownerCompare.entries.find((entry) => entry.path === 'README.md').body.diff.addedLines, [
+    '',
+    'Edited in D1.',
+  ])
+
+  const collaboratorCompare = await backend.compareRevisions(1, 3, {
+    codebaseId: 'history-core',
+    requesterId: 'user_collab',
+  })
+  assert.equal(collaboratorCompare.entries.some((entry) => entry.path.startsWith('.private/')), false)
+  assert.equal(collaboratorCompare.entries.some((entry) => entry.path === 'README.md'), true)
+
+  const objectHash = createHash('sha256').update('object body\n').digest('hex')
+  const objectGraph = await backend.readGraph('history-core')
+  objectGraph.revision = 4
+  objectGraph.selectedState.revision = 4
+  objectGraph.files['OBJECT.md'] = {
+    kind: 'file',
+    content: '',
+    encoding: 'utf8',
+    contentStorage: 'object-blob',
+    blobProvider: 'filesystem',
+    blobKey: `codebases/history-core/blobs/sha256/${objectHash.slice(0, 2)}/${objectHash}`,
+    blobHash: objectHash,
+    blobSize: Buffer.byteLength('object body\n'),
+    hash: objectHash,
+    size: Buffer.byteLength('object body\n'),
+    scope: 'shared',
+    privacyZone: 'repo-content',
+    revision: 4,
+    updatedAt: now,
+  }
+  await backend.writeGraph(objectGraph, { actor: { userId: 'user_owner' } })
+  await backend.mutateTextFile({
+    codebaseId: 'history-core',
+    path: 'OBJECT.md',
+    content: 'object body changed\n',
+    baseRevision: 4,
+    actor: { userId: 'user_owner' },
+  })
+  const missingCompare = await backend.compareRevisions(4, 5, {
+    codebaseId: 'history-core',
+    requesterId: 'user_owner',
+    path: 'OBJECT.md',
+  })
+  const objectEntry = missingCompare.entries.find((entry) => entry.path === 'OBJECT.md')
+  assert.equal(objectEntry.state, 'missing_blob')
+  assert.equal(missingCompare.summary.missingBlob, 1)
 })
 
 async function startD1ApiServer(t, { statements = null } = {}) {
