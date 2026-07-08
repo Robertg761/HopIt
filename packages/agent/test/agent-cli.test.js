@@ -3300,3 +3300,196 @@ test('refresh refuses to overwrite device B files with pending or failed journal
     })
   }
 })
+
+test('adversarial same-file two-device edits surface a conflict and preserve device B draft', async () => {
+  const { deviceA, deviceB } = await makeTwoSessionState()
+  await runCli('init', [...stateArgs(deviceA), '--force'])
+  await runCli('hydrate', stateArgs(deviceA))
+  await runCli('hydrate', stateArgs(deviceB))
+
+  const initialCloud = await readJson(deviceA.cloud)
+  const deviceBContent = '# hopit-core\n\nDevice B simultaneous local draft.\n'
+  await fs.writeFile(path.join(deviceB.workspace, 'README.md'), deviceBContent, 'utf8')
+  await appendJournalEntry(deviceB, {
+    id: randomUUID(),
+    type: 'write',
+    path: 'README.md',
+    kind: 'file',
+    scope: 'shared',
+    hash: hashContent(deviceBContent),
+    bytes: Buffer.byteLength(deviceBContent),
+    baseRevision: initialCloud.files['README.md'].revision,
+    createdAt: new Date().toISOString(),
+    status: 'pending',
+    targetStateType: 'active-change-set',
+    targetStateId: initialCloud.selectedState.id,
+    targetStateRevision: initialCloud.selectedState.revision,
+    ownerId: initialCloud.owner.id,
+    sessionId: initialCloud.session.id,
+    effectiveChangeSetVisibility: initialCloud.visibility.effective,
+  })
+
+  const deviceAContent = '# hopit-core\n\nDevice A simultaneous cloud winner.\n'
+  await fs.writeFile(path.join(deviceA.workspace, 'README.md'), deviceAContent, 'utf8')
+  await runCli('sync-once', stateArgs(deviceA))
+
+  const failure = await runCliFailure('recover', stateArgs(deviceB))
+  assert.equal(failure.code, 1)
+  assert.match(failure.stdout, /change_set\.conflict_detected/)
+  assert.equal(await fs.readFile(path.join(deviceB.workspace, 'README.md'), 'utf8'), deviceBContent)
+
+  const status = JSON.parse((await runCli('status', stateArgs(deviceB))).stdout)
+  assert.equal(status.conflict.state, 'conflicted')
+  assert.equal(status.conflict.detail.reason, 'selected_state_revision_mismatch')
+  assert.equal(status.journal.failedCount, 1)
+
+  const cloud = await readJson(deviceA.cloud)
+  assert.equal(cloud.files['README.md'].content, deviceAContent)
+})
+
+test('recover replays a crash-left pending journal entry without losing local content', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+
+  const cloud = await readJson(state.cloud)
+  const recoveredContent = '# hopit-core\n\nRecovered after simulated process crash.\n'
+  await fs.writeFile(path.join(state.workspace, 'README.md'), recoveredContent, 'utf8')
+  await appendJournalEntry(state, {
+    id: randomUUID(),
+    type: 'write',
+    path: 'README.md',
+    kind: 'file',
+    scope: 'shared',
+    hash: hashContent(recoveredContent),
+    bytes: Buffer.byteLength(recoveredContent),
+    baseRevision: cloud.files['README.md'].revision,
+    createdAt: new Date().toISOString(),
+    status: 'pending',
+    targetStateType: 'active-change-set',
+    targetStateId: cloud.selectedState.id,
+    targetStateRevision: cloud.selectedState.revision,
+    ownerId: cloud.owner.id,
+    sessionId: cloud.session.id,
+    effectiveChangeSetVisibility: cloud.visibility.effective,
+  })
+
+  const recovery = await runCli('recover', stateArgs(state))
+  assert.match(recovery.stdout, /journal\.recovery_complete/)
+
+  const recoveredCloud = await readJson(state.cloud)
+  assert.equal(recoveredCloud.files['README.md'].content, recoveredContent)
+  assert.equal(await fs.readFile(path.join(state.workspace, 'README.md'), 'utf8'), recoveredContent)
+
+  const status = JSON.parse((await runCli('status', stateArgs(state))).stdout)
+  assert.equal(status.journal.pendingCount, 0)
+  assert.equal(status.journal.failedCount, 0)
+  const events = await readNdjson(state.events)
+  const recoveryComplete = events.findLast((event) => event.event === 'journal.recovery_complete')
+  assert.equal(recoveryComplete.detail.acknowledged, 1)
+})
+
+test('remote pull follows graph revisions instead of skewed file mtimes', async () => {
+  const { deviceA, deviceB } = await makeTwoSessionState()
+  await runCli('init', [...stateArgs(deviceA), '--force'])
+  await runCli('hydrate', stateArgs(deviceA))
+  await runCli('hydrate', stateArgs(deviceB))
+
+  const readmeA = path.join(deviceA.workspace, 'README.md')
+  const readmeB = path.join(deviceB.workspace, 'README.md')
+  const futureContent = '# hopit-core\n\nFuture-mtime edit.\n'
+  await fs.writeFile(readmeA, futureContent, 'utf8')
+  await fs.utimes(readmeA, new Date('2040-01-01T00:00:00Z'), new Date('2040-01-01T00:00:00Z'))
+  await runCli('sync-once', stateArgs(deviceA))
+  await runCli('remote-pull', stateArgs(deviceB))
+  assert.equal(await fs.readFile(readmeB, 'utf8'), futureContent)
+
+  const pastContent = '# hopit-core\n\nPast-mtime edit that still has a newer graph revision.\n'
+  await fs.writeFile(readmeA, pastContent, 'utf8')
+  await fs.utimes(readmeA, new Date('2001-01-01T00:00:00Z'), new Date('2001-01-01T00:00:00Z'))
+  await runCli('sync-once', stateArgs(deviceA))
+
+  const applied = parseLastJsonObject((await runCli('remote-pull', stateArgs(deviceB))).stdout)
+  assert.equal(applied.state, 'applied')
+  assert.equal(await fs.readFile(readmeB, 'utf8'), pastContent)
+
+  const status = JSON.parse((await runCli('status', stateArgs(deviceB))).stdout)
+  assert.equal(status.remotePull.cursor.behindByRevisions, 0)
+  assert.equal(status.workspace.localChanges.state, 'clean')
+})
+
+test('watch-mode local sync racing refresh preserves device B work', async (t) => {
+  const { deviceA, deviceB } = await makeTwoSessionState()
+  await runCli('init', [...stateArgs(deviceA), '--force'])
+  await runCli('hydrate', stateArgs(deviceA))
+  await runCli('hydrate', stateArgs(deviceB))
+
+  const watchProcess = await startWatch(deviceB, t, { pollingWatch: true })
+  await waitForOutput(watchProcess, /watch\.started/)
+
+  const deviceBContent = '# hopit-core\n\nDevice B edit while refresh races watch sync.\n'
+  const deviceBReadme = path.join(deviceB.workspace, 'README.md')
+  await fs.writeFile(deviceBReadme, deviceBContent, 'utf8')
+
+  const deviceAContent = '# hopit-core\n\nDevice A update during B watch race.\n'
+  await fs.writeFile(path.join(deviceA.workspace, 'README.md'), deviceAContent, 'utf8')
+  await runCli('sync-once', stateArgs(deviceA))
+
+  const refreshResult = await runCli('refresh', stateArgs(deviceB)).catch((error) => error)
+
+  await waitFor(
+    async () => {
+      const cloud = await readJson(deviceA.cloud)
+      return cloud.files['README.md']?.content === deviceBContent || cloud.selectedState?.conflictState === 'conflicted'
+    },
+    {
+      timeout: 5000,
+      message: 'Timed out waiting for watch race to converge or conflict.',
+    },
+  )
+
+  const finalCloud = await readJson(deviceA.cloud)
+  const finalDisk = await fs.readFile(deviceBReadme, 'utf8')
+  if (finalCloud.selectedState?.conflictState === 'conflicted') {
+    assert.equal(finalDisk, deviceBContent)
+  } else {
+    assert.equal(finalCloud.files['README.md'].content, deviceBContent)
+    assert.equal(finalDisk, deviceBContent)
+  }
+
+  if (refreshResult instanceof Error) {
+    assert.match(`${refreshResult.stdout}\n${refreshResult.stderr}`, /blocked|journal|unjournaled|conflict/i)
+  }
+})
+
+test('object storage budget failure leaves local edit pending and absent from a remote device', async () => {
+  const { deviceA, deviceB } = await makeTwoSessionState()
+  const blobRoot = path.join(deviceA.root, 'blob-store')
+  const blobArgs = ['--blob-provider', 'filesystem', '--blob-root', blobRoot]
+  await runCli('init', [...stateArgs(deviceA), ...blobArgs, '--force'])
+  await runCli('hydrate', [...stateArgs(deviceA), ...blobArgs])
+  await runCli('hydrate', [...stateArgs(deviceB), ...blobArgs])
+
+  const oversizedContent = 'this local edit is too expensive for the configured budget\n'
+  const oversizedPath = path.join(deviceA.workspace, 'oversized.txt')
+  await fs.writeFile(oversizedPath, oversizedContent, 'utf8')
+  const failure = await runCliFailure('sync-once', [
+    ...stateArgs(deviceA),
+    ...blobArgs,
+    '--blob-storage-budget-bytes',
+    '1',
+  ])
+  assert.match(failure.stdout, /sync\.failed/)
+  assert.match(failure.stdout, /object_blob_budget_exceeded/)
+  assert.equal(await fs.readFile(oversizedPath, 'utf8'), oversizedContent)
+
+  const statusA = JSON.parse((await runCli('status', [...stateArgs(deviceA), ...blobArgs])).stdout)
+  assert.equal(statusA.journal.pendingCount, 1)
+  assert.equal(statusA.workspace.localChanges.state, 'dirty')
+
+  await runCli('refresh', [...stateArgs(deviceB), ...blobArgs])
+  assert.equal(await pathExists(path.join(deviceB.workspace, 'oversized.txt')), false)
+
+  const cloud = await readJson(deviceA.cloud)
+  assert.equal(cloud.files['oversized.txt'], undefined)
+})

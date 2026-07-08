@@ -255,6 +255,13 @@ recover, clock skew, watch-mode sync during refresh, storage-budget exhaustion m
 Every scenario must end in either converged state or a surfaced conflict — never silent loss.
 This one needs no design doc; it can run in parallel with 7a–7c and will pressure-test them.
 
+**Completion note (2026-07-03):** WS7a, WS7b, and WS7c design docs are complete in
+`docs/ws7a-push-remote-update-design.md`, `docs/ws7b-demand-hydration-design.md`, and
+`docs/ws7c-object-backed-diff-history-design.md`. WS7d fixture coverage is implemented in
+`packages/agent/test/agent-cli.test.js` and is proven by:
+`node --test --test-name-pattern "adversarial|crash-left|skewed|racing refresh|storage budget failure" packages/agent/test/agent-cli.test.js`.
+Implementation of WS7a-WS7c remains gated on owner approval of those design docs.
+
 **Size:** each sub-workstream is 1 design session + 1–3 implementation sessions.
 
 ---

@@ -1,7 +1,7 @@
 // @ts-check
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { __filename, serviceReadyTimeoutMs, serviceStatusFetchTimeoutMs } from './constants.js'
+import { serviceReadyTimeoutMs, serviceStatusFetchTimeoutMs } from './constants.js'
 import { agentSessionTokenFromOptions, readJson, sendJson, writeJson } from './io.js'
 import { assertWorkspacePathSafe, remotePullEnabled } from './paths.js'
 import { readAgentCloudEndpoint, readAgentEventsEndpoint, readAgentJournalEndpoint, readAgentStatusEndpoint } from './status-endpoints.js'
@@ -9,6 +9,9 @@ import { watchWorkspace } from './watch.js'
 import { spawn } from 'node:child_process'
 import { existsSync, watch } from 'node:fs'
 import { createServer } from 'node:http'
+import { fileURLToPath } from 'node:url'
+
+const defaultCliEntrypoint = fileURLToPath(new URL('./cli.js', import.meta.url))
 
 export async function serveStatus(options) {
   const host = options.host
@@ -142,7 +145,7 @@ export async function startService(options) {
   if (options['device-name']) childEnv.HOPIT_DEVICE_NAME = options['device-name']
   if (options.capabilities) childEnv.HOPIT_AGENT_SESSION_CAPABILITIES = options.capabilities
 
-  const child = spawn(process.execPath, [__filename, 'service-run', ...runtimeArgsFromOptions(options)], {
+  const child = spawn(process.execPath, [serviceEntrypoint(), 'service-run', ...runtimeArgsFromOptions(options)], {
     cwd: process.cwd(),
     detached: true,
     env: childEnv,
@@ -177,6 +180,10 @@ export async function startService(options) {
     await fs.rm(pidPath, { force: true })
     throw error
   }
+}
+
+export function serviceEntrypoint() {
+  return process.argv[1] ? path.resolve(process.argv[1]) : defaultCliEntrypoint
 }
 
 export async function waitForServiceReady(options, waitOptions) {
@@ -402,4 +409,3 @@ export function runtimeArgsFromOptions(options) {
   }
   return args
 }
-

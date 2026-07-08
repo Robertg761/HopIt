@@ -1107,6 +1107,32 @@ Definition of done:
 - Add remote Git publish and rollback.
 - Eventually design immutable/content-addressed history, clone/fetch/push equivalents, tags, releases, and offline-first sync.
 
+### July 2026 WS7 Remediation Gate
+
+Status: `Design complete; adversarial tests added`
+
+Definition of done:
+
+- Write the WS7a push remote-update delivery design before implementation.
+- Write the WS7b demand hydration design before implementation.
+- Write the WS7c object-backed diff/history reconstruction design before implementation.
+- Add WS7d hostile cross-device fixture coverage so the sync engine either converges or surfaces conflicts instead of silently losing work.
+
+Current foundation:
+
+- [WS7a Push Remote-Update Delivery Design](ws7a-push-remote-update-design.md) selects Durable Objects plus WebSocket hibernation as the preferred push path, preserves the existing safe refresh decision gate, and keeps head-cursor polling as fallback.
+- [WS7b Demand Hydration Design](ws7b-demand-hydration-design.md) chooses open-time and intent-driven hydration for v1, rejects source-code placeholder files for the managed-folder adapter, and defers true read-triggered hydration to native filesystem-provider research.
+- [WS7c Object-Backed Diff And History Reconstruction Design](ws7c-object-backed-diff-history-design.md) defines per-file object-backed version rows, retention-aware storage GC, lazy blob fetches for compare views, and fixture demo acceptance criteria.
+- `packages/agent/test/agent-cli.test.js` now covers same-file two-device conflict preservation, crash-left pending journal recovery, skewed mtime/clock behavior, watch-mode sync racing refresh, and object-storage budget exhaustion.
+
+Proof command:
+
+```bash
+node --test --test-name-pattern "adversarial|crash-left|skewed|racing refresh|storage budget failure" packages/agent/test/agent-cli.test.js
+```
+
+WS7a, WS7b, and WS7c implementation remains intentionally gated on owner approval of the design docs.
+
 ## Known Gaps
 
 - No full HopIt Workspace Root contract yet: the root-level codebase/workspace index, D1 account-visible discovery with scoped-token fallback, automatic account bootstrap, metadata-only attach, dashboard setup/attach/hydrate/dehydrate actions, hydration cursor, metadata-only state, per-file cache state, path-level hydrate/pin/prune primitives, and explicit metadata-first lazy materialization policy exist, but editor/tool demand hydration remains.
