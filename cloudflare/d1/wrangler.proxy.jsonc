@@ -5,6 +5,20 @@
   "compatibility_date": "2026-06-30",
   "workers_dev": true,
   "preview_urls": false,
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "HOPIT_PUSH_HUB",
+        "class_name": "CodebasePushHub"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["CodebasePushHub"]
+    }
+  ],
   "d1_databases": [
     {
       "binding": "HOPIT_D1_DB",

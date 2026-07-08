@@ -1,6 +1,6 @@
 # HopIt Progress Tracker
 
-Last updated: 2026-07-03
+Last updated: 2026-07-08
 
 This tracker is the working view of what is done, what is in progress, what is next, and what is still deliberately out of scope. The roadmap source remains [MVP Plan](mvp-plan.md), and the agent contract source remains [Local Agent Architecture](agent-architecture.md). This file turns those plans into a practical implementation ledger.
 
@@ -73,7 +73,9 @@ Current proof commands:
 ```bash
 node --test packages/agent/test/agent-cli.test.js
 node --test packages/agent/test/crypto.test.js
+node --test cloudflare/d1/api-worker.test.js
 node --test packages/agent/test/d1-backend.test.js
+node --test packages/agent/test/remote-push.test.js
 npm run agent:test
 npm run lint
 npm run typecheck
@@ -313,7 +315,7 @@ Still open:
 | Fixture cloud graph service boundary | Done | Commands now use a fixture-backed service boundary instead of direct command-level cloud JSON access. |
 | Main/change-set/owner/session/visibility contract | Done for fixture | The fixture graph and status surface include these identities and visibility fields. |
 | Same-owner two-session continuity | Done for spike | Device/session B can refresh acknowledged shared and `.private/` changes from device/session A. |
-| Automatic remote-update delivery | In progress | Remote-update events, explicit safe refresh, per-workspace materialization cursors, opt-in activity-gated `--remote-pull` with a five-minute default cooldown, graph-head cursor checks that avoid unchanged full graph reads, one-shot `hop remote-pull`, and WS7a Stage 1 agent-side `--remote-push` NDJSON hint delivery with fixture hub coverage exist. Cloudflare Durable Object hub wiring, D1-route notifications, default policy, and broader production verification remain. |
+| Automatic remote-update delivery | In progress | Remote-update events, explicit safe refresh, per-workspace materialization cursors, opt-in activity-gated `--remote-pull` with a five-minute default cooldown, graph-head cursor checks that avoid unchanged full graph reads, one-shot `hop remote-pull`, WS7a Stage 1 agent-side NDJSON push, and WS7a Stage 2 Cloudflare Durable Object WebSocket hub/D1 notify wiring with local tests exist. Default policy, deployment, and broader production verification remain. |
 | Collaborator visibility simulation | Done for fixture | Tests prove private change sets hide non-owner content, team/review-visible change sets expose non-private paths, and `.private/` remains owner-only. |
 | Remote-update events | Done for spike | Refresh emits first-class `remote-update` events and status exposes the latest update. |
 | Review and merge | Done for fixture | Fixture commands open the selected active change set for review, merge it into Main, emit review/merge events, and expose review/merge state through status. |
@@ -1112,7 +1114,7 @@ Definition of done:
 
 ### July 2026 WS7 Remediation Gate
 
-Status: `Design complete; adversarial tests added; WS7a Stage 1 implemented`
+Status: `Design complete; adversarial tests added; WS7a Stage 2 implemented locally`
 
 Definition of done:
 
@@ -1127,7 +1129,8 @@ Current foundation:
 - [WS7b Demand Hydration Design](ws7b-demand-hydration-design.md) chooses open-time and intent-driven hydration for v1, rejects source-code placeholder files for the managed-folder adapter, and defers true read-triggered hydration to native filesystem-provider research.
 - [WS7c Object-Backed Diff And History Reconstruction Design](ws7c-object-backed-diff-history-design.md) defines per-file object-backed version rows, retention-aware storage GC, lazy blob fetches for compare views, and fixture demo acceptance criteria.
 - `packages/agent/test/agent-cli.test.js` now covers same-file two-device conflict preservation, crash-left pending journal recovery, skewed mtime/clock behavior, watch-mode sync racing refresh, and object-storage budget exhaustion.
-- WS7a Stage 1 implements the agent-side push client plus local fake push hub tests only. Stage 2 remains the Cloudflare Durable Object hub and D1-route notify integration.
+- WS7a Stage 1 implements the agent-side push client plus local fake push hub tests.
+- WS7a Stage 2 implements the Cloudflare Durable Object WebSocket fan-out hub, D1-route notify-after-commit wiring, Worker auth-gated WebSocket routing, Wrangler Durable Object config, and agent WebSocket transport selection. It is not deployed yet.
 
 Proof command:
 
@@ -1135,7 +1138,7 @@ Proof command:
 node --test --test-name-pattern "adversarial|crash-left|skewed|racing refresh|storage budget failure" packages/agent/test/agent-cli.test.js
 ```
 
-WS7b and WS7c implementation remains intentionally gated on owner approval of the design docs. WS7a Stage 2 remains pending after the agent-side fixture-first slice.
+WS7b and WS7c implementation remains intentionally gated on owner approval of the design docs. WS7a Stage 2 remains local-only until the owner runs the documented Cloudflare deployment.
 
 ### 2026-07-08 WS7a Stage 1 — Agent Push Delivery
 
@@ -1160,6 +1163,34 @@ Deferred to Stage 2:
 - D1 mutation route notification after commit.
 - Production push rollout/default policy beyond the opt-in agent flag.
 
+### 2026-07-08 WS7a Stage 2 — Cloudflare Push Hub And WebSocket Transport
+
+Implemented:
+
+- Added `cloudflare/d1/push-hub.js` with `CodebasePushHub`, one Durable Object hub per codebase, hibernating WebSocket acceptance through `state.acceptWebSocket`, compact cursor storage, stale-cursor catch-up, validated `codebase.remote_update` envelopes, and fan-out through `state.getWebSockets()`.
+- Extended `cloudflare/d1/api-worker.js` so authenticated WebSocket upgrades route to `HOPIT_PUSH_HUB.idFromName(codebaseId)` and scoped session/proxy-token auth stays mandatory. The same token can be supplied as Bearer auth or an `access_token`/`token` query param for WebSocket clients.
+- Added best-effort notify-after-commit wiring for successful graph-state mutations against `codebases`, `files`, or `file_blobs`. The worker reads the compact D1 head/file summary, sends it to the codebase Durable Object, and logs notify failures without failing the committed mutation.
+- Extended `packages/agent/src/remote-push.js` to select transport by URL scheme: `ws://`/`wss://` use Node's global WebSocket, while `http://`/`https://` keep the Stage 1 NDJSON stream. Both transports share envelope validation, safe refresh decisions, reconnect/backoff, and reconnect fallback polling.
+- Updated `cloudflare/d1/wrangler.proxy.jsonc` with `HOPIT_PUSH_HUB` and a `new_sqlite_classes` Durable Object migration.
+- Added Worker/DO tests with mocked hibernation APIs and agent WebSocket tests using a small stdlib RFC 6455 loopback server.
+
+Proof commands:
+
+```bash
+node --test cloudflare/d1/api-worker.test.js
+node --test packages/agent/test/remote-push.test.js
+npm run agent:test
+npm run lint
+npm run typecheck
+npm run typecheck:agent
+node packages/agent/src/cli.js help
+```
+
+Deferred:
+
+- Owner-side Cloudflare deployment and live same-owner production dogfood verification.
+- Default enabling policy; push remains opt-in through `--remote-push` / `HOPIT_REMOTE_PUSH=1`.
+
 ## Known Gaps
 
 - No full HopIt Workspace Root contract yet: the root-level codebase/workspace index, D1 account-visible discovery with scoped-token fallback, automatic account bootstrap, metadata-only attach, dashboard setup/attach/hydrate/dehydrate actions, hydration cursor, metadata-only state, per-file cache state, path-level hydrate/pin/prune primitives, and explicit metadata-first lazy materialization policy exist, but editor/tool demand hydration remains.
@@ -1178,7 +1209,7 @@ Deferred to Stage 2:
 - Requester-aware dashboard filtering exists, but the auth-backed collaborator permission model is not enforced across every user-facing write yet.
 - A first read-only code-review browser slice exists, now with routeable codebase review/compare/history pages, durable review-linked follow-up issues/comments, D1-backed snapshot-anchored inline review threads, and durable review decisions. A true tree/diff API and object-backed history reconstruction are still pending.
 - Issue, discussion, release, durable comments, release-asset attachment, project-board UI, routeable work-item detail pages, and first codebase notification feed exist for the first slice; richer linked-object cards and complete permission coverage are still pending.
-- No production-grade Cloudflare push/subscription remote-update delivery yet; explicit refresh, per-workspace cursor state, opt-in activity-gated remote-pull, and WS7a Stage 1 local fake-hub push are proof layers rather than the final v1 delivery model.
+- Cloudflare push/subscription remote-update delivery is implemented locally through WS7a Stage 2, but it has not been deployed or dogfooded in personal production yet. Explicit refresh, per-workspace cursor state, and opt-in activity-gated remote-pull remain the production fallback layers.
 - Service mode syncs local edits and serves status. Local two-service simulation proves device A edits sync through the watcher, while device B pulls them through explicit safe refresh before switching devices.
 - No conflict resolution UI yet; fixture conflict detection/status exists.
 - `hop import-git` now provides a production-safe literal Git checkout conversion path for snapshot-style repo migration, including `.git/` as owner-private metadata and encrypted routed secrets. Full Git history import, ancestry preservation, and remote publish are still pending.

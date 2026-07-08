@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 
-import worker from './api-worker.js'
+import worker, { CodebasePushHub } from './api-worker.js'
 
 test('proxy token auth executes statements and logs structured request metadata', async () => {
   const logs = await captureLogs(async () => {
@@ -120,6 +120,154 @@ test('non-query requests are logged as rejected requests', async () => {
   assert.equal(log.statementCount, 0)
 })
 
+test('authenticated WebSocket upgrade is routed to the codebase Durable Object', async () => {
+  const namespace = createMockPushNamespace()
+  const response = await worker.fetch(new Request('https://worker.example/events?codebaseId=codebase-1&selectedStateId=cs_1', {
+    headers: {
+      upgrade: 'websocket',
+      authorization: 'Bearer proxy-secret',
+      'cf-connecting-ip': '203.0.113.14',
+    },
+  }), {
+    HOPIT_D1_PROXY_TOKEN: 'proxy-secret',
+    HOPIT_D1_DB: createMockDb(),
+    HOPIT_PUSH_HUB: namespace,
+  })
+
+  assert.equal(response.status, 200)
+  assert.deepEqual(namespace.idNames, ['codebase-1'])
+  assert.equal(namespace.fetches.length, 1)
+  assert.equal(new URL(namespace.fetches[0].request.url).searchParams.get('codebaseId'), 'codebase-1')
+})
+
+test('unauthenticated WebSocket upgrade is rejected before Durable Object routing', async () => {
+  const namespace = createMockPushNamespace()
+  const response = await worker.fetch(new Request('https://worker.example/events?codebaseId=codebase-1', {
+    headers: {
+      upgrade: 'websocket',
+      'cf-connecting-ip': '203.0.113.15',
+    },
+  }), {
+    HOPIT_D1_PROXY_TOKEN: 'proxy-secret',
+    HOPIT_D1_DB: createMockDb(),
+    HOPIT_PUSH_HUB: namespace,
+  })
+
+  assert.equal(response.status, 403)
+  assert.equal(namespace.fetches.length, 0)
+})
+
+test('Durable Object hub fans out envelopes and persists the cursor for stale reconnects', async () => {
+  const state = createMockDurableObjectState()
+  const hub = new CodebasePushHub(state, {})
+  const socketA = createMockSocket()
+  const socketB = createMockSocket()
+
+  await hub.connectWebSocket(new Request('https://push.example/events?codebaseId=codebase-1&lastRevision=1'), socketA)
+  await hub.connectWebSocket(new Request('https://push.example/events?codebaseId=codebase-1&lastRevision=1'), socketB)
+  const response = await hub.notify({
+    type: 'codebase.remote_update',
+    codebaseId: 'codebase-1',
+    selectedStateId: 'cs_1',
+    revision: 2,
+    eventId: 'evt_2',
+    changedPaths: ['README.md'],
+    scopeCounts: { shared: 1, private: 0 },
+  })
+
+  assert.equal(response.status, 200)
+  assert.equal(socketA.sent.length, 1)
+  assert.equal(socketB.sent.length, 1)
+  const cursor = await state.storage.get('last-cursor')
+  assert.equal(cursor.eventId, 'evt_2')
+  assert.equal(cursor.revision, 2)
+  assert.match(cursor.updatedAt, /\d{4}-/)
+
+  const staleSocket = createMockSocket()
+  await hub.connectWebSocket(new Request('https://push.example/events?codebaseId=codebase-1&lastRevision=1'), staleSocket)
+  assert.equal(staleSocket.sent.length, 1)
+  assert.equal(JSON.parse(staleSocket.sent[0]).eventId, 'evt_2')
+
+  const freshSocket = createMockSocket()
+  await hub.connectWebSocket(new Request('https://push.example/events?codebaseId=codebase-1&lastEventId=evt_2&lastRevision=2'), freshSocket)
+  assert.equal(freshSocket.sent.length, 0)
+})
+
+test('successful graph mutation emits a compact push envelope after commit', async () => {
+  const namespace = createMockPushNamespace()
+  const db = createMockDb({
+    codebase: {
+      codebase_id: 'codebase-1',
+      revision: 2,
+      selected_state_json: JSON.stringify({ id: 'cs_1' }),
+    },
+    files: [
+      { path: 'README.md', scope: 'shared', revision: 2 },
+      { path: '.private/notes.md', scope: 'owner-private', revision: 2 },
+    ],
+  })
+
+  const response = await worker.fetch(new Request('https://worker.example/query', {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer proxy-secret',
+      'content-type': 'application/json',
+      'x-hopit-codebase-id': 'codebase-1',
+      'cf-connecting-ip': '203.0.113.16',
+    },
+    body: JSON.stringify({ sql: 'update codebases set revision = ? where codebase_id = ?', params: [2, 'codebase-1'] }),
+  }), {
+    HOPIT_D1_PROXY_TOKEN: 'proxy-secret',
+    HOPIT_D1_DB: db,
+    HOPIT_PUSH_HUB: namespace,
+  })
+
+  assert.equal(response.status, 200)
+  assert.equal(namespace.notifications.length, 1)
+  const envelope = namespace.notifications[0]
+  assert.equal(envelope.type, 'codebase.remote_update')
+  assert.equal(envelope.codebaseId, 'codebase-1')
+  assert.equal(envelope.selectedStateId, 'cs_1')
+  assert.equal(envelope.revision, 2)
+  assert.deepEqual(envelope.changedPaths, ['README.md'])
+  assert.deepEqual(envelope.scopeCounts, { shared: 1, private: 1 })
+  assert.equal(Object.hasOwn(envelope, 'files'), false)
+  assert.equal(Object.hasOwn(envelope, 'bytes'), false)
+})
+
+test('push notify failure is logged without failing the committed mutation', async () => {
+  const namespace = createMockPushNamespace({ notifyStatus: 503 })
+  const db = createMockDb({
+    codebase: {
+      codebase_id: 'codebase-1',
+      revision: 3,
+      selected_state_json: JSON.stringify({ id: 'cs_1' }),
+    },
+    files: [{ path: 'README.md', scope: 'shared', revision: 3 }],
+  })
+
+  const logs = await captureLogs(async () => {
+    const response = await worker.fetch(new Request('https://worker.example/query', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer proxy-secret',
+        'content-type': 'application/json',
+        'x-hopit-codebase-id': 'codebase-1',
+        'cf-connecting-ip': '203.0.113.17',
+      },
+      body: JSON.stringify({ sql: 'update files set revision = ? where codebase_id = ?', params: [3, 'codebase-1'] }),
+    }), {
+      HOPIT_D1_PROXY_TOKEN: 'proxy-secret',
+      HOPIT_D1_DB: db,
+      HOPIT_PUSH_HUB: namespace,
+    })
+
+    assert.equal(response.status, 200)
+  })
+
+  assert.ok(logs.some((line) => JSON.parse(line).event === 'hopit.d1.proxy.push_notify_failed'))
+})
+
 async function captureLogs(callback) {
   const logs = []
   const originalLog = console.log
@@ -132,18 +280,30 @@ async function captureLogs(callback) {
   return logs
 }
 
-function createMockDb({ session = null } = {}) {
+function createMockDb({ session = null, codebase = null, files = [] } = {}) {
   const db = {
     executedStatements: [],
     sessionLookups: 0,
     prepare(sql) {
+      const normalized = sql.toLowerCase()
       return {
         bind(...params) {
           return {
             async all() {
-              if (sql.includes('from agent_sessions')) {
+              if (normalized.includes('from agent_sessions')) {
                 db.sessionLookups += 1
                 return { results: session ? [session] : [] }
+              }
+              if (normalized.includes('select codebase_id, revision, selected_state_json from codebases')) {
+                return { results: codebase ? [codebase] : [] }
+              }
+              if (normalized.includes('select path, scope from files')) {
+                const revision = params[1]
+                return {
+                  results: files
+                    .filter((file) => !Number.isInteger(revision) || file.revision === revision)
+                    .sort((left, right) => left.path.localeCompare(right.path)),
+                }
               }
               db.executedStatements.push({ sql, params })
               return {
@@ -157,4 +317,72 @@ function createMockDb({ session = null } = {}) {
     },
   }
   return db
+}
+
+function createMockPushNamespace({ notifyStatus = 200 } = {}) {
+  const namespace = {
+    idNames: [],
+    fetches: [],
+    notifications: [],
+    idFromName(name) {
+      namespace.idNames.push(name)
+      return `id:${name}`
+    },
+    get(id) {
+      return {
+        async fetch(request, init) {
+          const normalizedRequest = request instanceof Request ? request : new Request(request, init)
+          namespace.fetches.push({ id, request: normalizedRequest })
+          if (normalizedRequest.method === 'POST') {
+            namespace.notifications.push(await normalizedRequest.json())
+            return new Response(JSON.stringify({ success: notifyStatus < 400 }), { status: notifyStatus })
+          }
+          return new Response('upgrade-ok')
+        },
+      }
+    },
+  }
+  return namespace
+}
+
+function createMockDurableObjectState() {
+  const values = new Map()
+  const sockets = new Set()
+  return {
+    storage: {
+      async get(key) {
+        return values.get(key)
+      },
+      async put(key, value) {
+        values.set(key, value)
+      },
+    },
+    acceptWebSocket(socket, tags = []) {
+      socket.tags = tags
+      sockets.add(socket)
+    },
+    getWebSockets() {
+      return [...sockets]
+    },
+  }
+}
+
+function createMockSocket() {
+  return {
+    sent: [],
+    tags: [],
+    attachment: null,
+    send(message) {
+      this.sent.push(message)
+    },
+    close() {
+      this.closed = true
+    },
+    serializeAttachment(value) {
+      this.attachment = value
+    },
+    deserializeAttachment() {
+      return this.attachment
+    },
+  }
 }

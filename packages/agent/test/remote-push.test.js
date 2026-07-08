@@ -209,6 +209,127 @@ async function startFakePushHub(t) {
   }
 }
 
+async function startFakeWebSocketPushHub(t) {
+  if (typeof WebSocket !== 'function') {
+    t.skip('global WebSocket is unavailable in this Node runtime')
+    return null
+  }
+
+  const connections = new Set()
+  let totalConnections = 0
+  let accepting = true
+  const server = createServer((request, response) => {
+    response.writeHead(404)
+    response.end()
+  })
+
+  server.on('upgrade', (request, socket) => {
+    if (request.socket.remoteAddress !== '127.0.0.1' && request.socket.remoteAddress !== '::ffff:127.0.0.1') {
+      socket.destroy()
+      return
+    }
+    const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+    if (url.pathname !== '/events' || !accepting) {
+      socket.destroy()
+      return
+    }
+    const key = String(request.headers['sec-websocket-key'] ?? '')
+    if (!key) {
+      socket.destroy()
+      return
+    }
+    const acceptKey = createHash('sha1')
+      .update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`)
+      .digest('base64')
+    socket.write([
+      'HTTP/1.1 101 Switching Protocols',
+      'Upgrade: websocket',
+      'Connection: Upgrade',
+      `Sec-WebSocket-Accept: ${acceptKey}`,
+      '',
+      '',
+    ].join('\r\n'))
+
+    const connection = {
+      socket,
+      query: Object.fromEntries(url.searchParams.entries()),
+    }
+    connections.add(connection)
+    totalConnections += 1
+    writeWebSocketText(socket, JSON.stringify({ type: 'hub.ready' }))
+    socket.on('close', () => {
+      connections.delete(connection)
+    })
+    socket.on('error', () => {
+      connections.delete(connection)
+    })
+    socket.on('data', (chunk) => {
+      if ((chunk[0] & 0x0f) === 0x08) socket.end()
+    })
+  })
+
+  try {
+    await new Promise((resolve, reject) => {
+      server.once('error', reject)
+      server.listen(0, '127.0.0.1', resolve)
+    })
+  } catch (error) {
+    if (error?.code === 'EPERM' || error?.code === 'EACCES') {
+      t.skip(`local loopback listen is unavailable in this environment: ${error.message}`)
+      return null
+    }
+    throw error
+  }
+
+  t.after(async () => {
+    for (const connection of connections) connection.socket.destroy()
+    await new Promise((resolve) => server.close(resolve))
+  })
+
+  const address = server.address()
+  const port = typeof address === 'object' && address ? address.port : null
+  assert.ok(port)
+
+  return {
+    url: `ws://127.0.0.1:${port}/events`,
+    publish(envelope) {
+      for (const connection of connections) {
+        writeWebSocketText(connection.socket, JSON.stringify(envelope))
+      }
+    },
+    disconnectAll() {
+      for (const connection of [...connections]) {
+        connection.socket.destroy()
+      }
+    },
+    connectionCount: () => totalConnections,
+    activeConnectionCount: () => connections.size,
+    latestQuery: () => [...connections].at(-1)?.query ?? null,
+    setAccepting(value) {
+      accepting = Boolean(value)
+    },
+    waitForConnections(count) {
+      return waitFor(() => totalConnections >= count)
+    },
+  }
+}
+
+function writeWebSocketText(socket, text) {
+  const payload = Buffer.from(text)
+  let header
+  if (payload.length < 126) {
+    header = Buffer.from([0x81, payload.length])
+  } else if (payload.length <= 0xffff) {
+    header = Buffer.alloc(4)
+    header[0] = 0x81
+    header[1] = 126
+    header.writeUInt16BE(payload.length, 2)
+  } else {
+    throw new Error('Test WebSocket frame is too large.')
+  }
+  socket.write(Buffer.concat([header, payload]))
+}
+
 async function initAndHydratePair(deviceA, deviceB) {
   await runCli('init', [...stateArgs(deviceA), '--force'])
   await runCli('hydrate', stateArgs(deviceA))
@@ -464,6 +585,53 @@ test('remote-push reconnect runs fallback head poll and catches a missed revisio
   })
   const events = await readNdjson(deviceB.events)
   assert.ok(events.find((event) => event.event === 'remote-push.fallback_polling'))
+  assert.equal(applied.detail.trigger, 'remote-push-fallback')
+})
+
+test('remote-push WebSocket transport applies a pushed revision', async (t) => {
+  const hub = await startFakeWebSocketPushHub(t)
+  if (!hub) return
+  const { deviceA, deviceB } = await makeRemotePushState()
+  await initAndHydratePair(deviceA, deviceB)
+  await startPushClient(deviceB, t, hub)
+  await hub.waitForConnections(1)
+  assert.equal(hub.latestQuery()?.codebaseId, 'hopit-core')
+  assert.equal(hub.latestQuery()?.selectedStateId, 'cs_demo_active')
+
+  const remoteContent = '# hopit-core\n\nWebSocket pushed remote edit.\n'
+  const cloud = await syncDeviceA(deviceA, 'README.md', remoteContent)
+  hub.publish(envelopeFromCloud(cloud, 'evt_websocket_apply'))
+
+  await waitFor(async () => {
+    return (await fs.readFile(path.join(deviceB.workspace, 'README.md'), 'utf8')) === remoteContent
+  })
+  const status = JSON.parse((await runCli('status', [...stateArgs(deviceB), '--remote-push'])).stdout)
+  assert.equal(status.remotePush.state, 'push-applied')
+  assert.equal(status.remotePush.lastPushedRevision, cloud.revision)
+})
+
+test('remote-push WebSocket reconnect runs fallback head poll after a missed revision', async (t) => {
+  const hub = await startFakeWebSocketPushHub(t)
+  if (!hub) return
+  const { deviceA, deviceB } = await makeRemotePushState()
+  await initAndHydratePair(deviceA, deviceB)
+  await startPushClient(deviceB, t, hub)
+  await hub.waitForConnections(1)
+  hub.setAccepting(false)
+  hub.disconnectAll()
+
+  const missedContent = '# hopit-core\n\nWebSocket missed while disconnected, caught by fallback.\n'
+  await syncDeviceA(deviceA, 'README.md', missedContent)
+  hub.setAccepting(true)
+
+  await hub.waitForConnections(2)
+  await waitFor(async () => {
+    return (await fs.readFile(path.join(deviceB.workspace, 'README.md'), 'utf8')) === missedContent
+  })
+  const applied = await waitFor(async () => {
+    const events = await readNdjson(deviceB.events)
+    return events.findLast((event) => event.event === 'remote-push.applied')
+  })
   assert.equal(applied.detail.trigger, 'remote-push-fallback')
 })
 

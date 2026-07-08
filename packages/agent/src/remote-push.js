@@ -62,7 +62,7 @@ export async function createRemotePushClient(options, clientOptions) {
     while (!closed) {
       try {
         controller = new AbortController()
-        await connectAndReadRemotePushStream(options, hubUrl, state, {
+        await connectAndReadRemotePush(options, hubUrl, state, {
           signal: controller.signal,
           runFallbackAfterConnect: shouldRunFallbackAfterConnect,
           localSyncIdle,
@@ -106,6 +106,19 @@ export async function createRemotePushClient(options, clientOptions) {
   }
 }
 
+async function connectAndReadRemotePush(options, hubUrl, state, streamOptions) {
+  const protocol = new URL(hubUrl).protocol
+  if (protocol === 'ws:' || protocol === 'wss:') {
+    await connectAndReadRemotePushWebSocket(options, hubUrl, state, streamOptions)
+    return
+  }
+  if (protocol === 'http:' || protocol === 'https:') {
+    await connectAndReadRemotePushStream(options, hubUrl, state, streamOptions)
+    return
+  }
+  throw new Error(`remote_push_unsupported_url_scheme: ${protocol}`)
+}
+
 async function connectAndReadRemotePushStream(options, hubUrl, state, streamOptions) {
   const connectUrl = await remotePushConnectUrl(options, hubUrl, state)
   const response = await fetch(connectUrl, {
@@ -113,6 +126,7 @@ async function connectAndReadRemotePushStream(options, hubUrl, state, streamOpti
     signal: streamOptions.signal,
     headers: {
       accept: 'application/x-ndjson, application/json',
+      ...remotePushAuthorizationHeaders(options),
     },
   })
 
@@ -143,6 +157,101 @@ async function connectAndReadRemotePushStream(options, hubUrl, state, streamOpti
   })
 
   throw new Error('remote_push_stream_closed')
+}
+
+async function connectAndReadRemotePushWebSocket(options, hubUrl, state, streamOptions) {
+  if (typeof WebSocket !== 'function') {
+    throw new Error('remote_push_websocket_unavailable')
+  }
+
+  const connectUrl = await remotePushConnectUrl(options, hubUrl, state, { includeAuthQuery: true })
+  const socket = new WebSocket(connectUrl.toString())
+  let settled = false
+  let messageChain = Promise.resolve()
+
+  const closeOnAbort = () => {
+    socket.close()
+  }
+  streamOptions.signal?.addEventListener('abort', closeOnAbort, { once: true })
+
+  try {
+    await new Promise((resolve, reject) => {
+      const onOpen = () => {
+        cleanup()
+        resolve()
+      }
+      const onError = () => {
+        cleanup()
+        reject(new Error('remote_push_websocket_error'))
+      }
+      const onClose = () => {
+        cleanup()
+        reject(new Error('remote_push_websocket_closed'))
+      }
+      const cleanup = () => {
+        socket.removeEventListener('open', onOpen)
+        socket.removeEventListener('error', onError)
+        socket.removeEventListener('close', onClose)
+      }
+      socket.addEventListener('open', onOpen)
+      socket.addEventListener('error', onError)
+      socket.addEventListener('close', onClose)
+    })
+
+    await emit(options, 'remote-push.connected', {
+      state: 'push-connected',
+      workspace: options.workspace,
+      hubUrl: redactUrl(hubUrl),
+      codebaseId: state.codebaseId,
+      selectedStateId: state.selectedStateId,
+      sessionId: options['session-id'] ?? null,
+      deviceName: options['device-name'] ?? null,
+      lastEventId: state.lastEventId,
+      lastPushedRevision: state.lastPushedRevision,
+      transport: 'websocket',
+      safeRefreshOnly: true,
+    })
+
+    if (streamOptions.runFallbackAfterConnect) {
+      await runRemotePushFallbackPoll(options, state, streamOptions)
+    }
+
+    await new Promise((resolve, reject) => {
+      const fail = (error) => {
+        if (settled) return
+        settled = true
+        cleanup()
+        reject(error)
+      }
+      const onMessage = (event) => {
+        messageChain = messageChain.then(async () => {
+          const text = await textFromWebSocketData(event.data)
+          const message = JSON.parse(text)
+          if (message?.type !== 'codebase.remote_update') return
+          await handleRemotePushEnvelope(options, message, state, streamOptions)
+        }).catch(fail)
+      }
+      const onError = () => {
+        fail(new Error('remote_push_websocket_error'))
+      }
+      const onClose = () => {
+        messageChain.finally(() => {
+          fail(new Error('remote_push_websocket_closed'))
+        })
+      }
+      const cleanup = () => {
+        socket.removeEventListener('message', onMessage)
+        socket.removeEventListener('error', onError)
+        socket.removeEventListener('close', onClose)
+      }
+      socket.addEventListener('message', onMessage)
+      socket.addEventListener('error', onError)
+      socket.addEventListener('close', onClose)
+    })
+  } finally {
+    streamOptions.signal?.removeEventListener('abort', closeOnAbort)
+    socket.close()
+  }
 }
 
 async function handleRemotePushEnvelope(options, envelope, state, streamOptions) {
@@ -246,7 +355,7 @@ async function runRemotePushDecision(options, state, streamOptions, detail) {
   }
 }
 
-async function remotePushConnectUrl(options, hubUrl, state) {
+async function remotePushConnectUrl(options, hubUrl, state, connectOptions = {}) {
   const cloudService = createCloudGraphService(options)
   const head = await cloudService.readGraphHead()
   state.codebaseId = head?.codebase?.id ?? options['codebase-id'] ?? state.codebaseId ?? null
@@ -261,6 +370,10 @@ async function remotePushConnectUrl(options, hubUrl, state) {
   if (state.lastEventId) url.searchParams.set('lastEventId', state.lastEventId)
   if (Number.isInteger(state.lastPushedRevision)) {
     url.searchParams.set('lastRevision', String(state.lastPushedRevision))
+  }
+  if (connectOptions.includeAuthQuery && !url.searchParams.has('access_token') && !url.searchParams.has('token')) {
+    const token = remotePushAuthToken(options)
+    if (token) url.searchParams.set('access_token', token)
   }
   return url
 }
@@ -338,6 +451,29 @@ function delay(ms) {
   })
 }
 
+function remotePushAuthorizationHeaders(options) {
+  const token = remotePushAuthToken(options)
+  return token ? { authorization: `Bearer ${token}` } : {}
+}
+
+function remotePushAuthToken(options) {
+  return options['session-token']
+    ?? options.agentSessionToken
+    ?? process.env.HOPIT_AGENT_SESSION_TOKEN
+    ?? options['d1-api-token']
+    ?? process.env.HOPIT_D1_API_TOKEN
+    ?? process.env.CLOUDFLARE_API_TOKEN
+    ?? null
+}
+
+async function textFromWebSocketData(data) {
+  if (typeof data === 'string') return data
+  if (data instanceof ArrayBuffer) return new TextDecoder().decode(data)
+  if (ArrayBuffer.isView(data)) return new TextDecoder().decode(data)
+  if (data && typeof data.text === 'function') return await data.text()
+  return String(data ?? '')
+}
+
 function integerOrNull(value) {
   return Number.isInteger(value) ? value : null
 }
@@ -347,6 +483,9 @@ function redactUrl(value) {
     const url = new URL(value)
     if (url.username) url.username = 'redacted'
     if (url.password) url.password = 'redacted'
+    for (const name of ['access_token', 'token']) {
+      if (url.searchParams.has(name)) url.searchParams.set(name, 'redacted')
+    }
     return url.toString()
   } catch {
     return null

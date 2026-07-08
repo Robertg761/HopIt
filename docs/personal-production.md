@@ -186,6 +186,61 @@ Cloudflare dashboard rate-limit rule to configure alongside the in-worker failed
 - Response code: `429` when using a block action
 - Notes: keep Worker logs enabled for `hopit.d1.proxy.request`; never log bearer tokens, SQL text, or SQL params.
 
+### Push Hub Deployment
+
+WS7a Stage 2 adds the D1 API Worker's `HOPIT_PUSH_HUB` Durable Object binding
+and the SQLite-backed `CodebasePushHub` migration in
+`cloudflare/d1/wrangler.proxy.jsonc`. The owner deployment step is:
+
+```bash
+npx wrangler deploy --config cloudflare/d1/wrangler.proxy.jsonc
+```
+
+Expected Cloudflare bindings and secrets:
+
+- D1 binding `HOPIT_D1_DB` points at the `hopit` database.
+- Durable Object binding `HOPIT_PUSH_HUB` points at class `CodebasePushHub`.
+- Migration tag `v1` includes `new_sqlite_classes = ["CodebasePushHub"]`.
+- Secret `HOPIT_D1_PROXY_TOKEN` remains configured for trusted proxy-token calls.
+- Scoped `hst_` agent sessions continue to work through the same auth layer.
+
+Agent opt-in example after deployment:
+
+```bash
+HOPIT_REMOTE_PUSH=1
+HOPIT_REMOTE_PUSH_URL=wss://hopit-d1-api.<account-subdomain>.workers.dev/events
+```
+
+For Node's standard WebSocket transport, Bearer headers are not assumed. Use a
+scoped `HOPIT_AGENT_SESSION_TOKEN` in the agent env; the agent will attach it as
+an auth query param for `ws://`/`wss://` push connections and redact it from
+event-log hub URLs. Keep proxy tokens out of checked-in URLs and prefer scoped
+session tokens for device installs.
+
+Verification after the owner deploys:
+
+```bash
+curl http://127.0.0.1:4785/status
+curl http://127.0.0.1:4785/events
+npm run hop -- status --profile production --codebase-id "$HOPIT_CODEBASE_ID"
+```
+
+Healthy push state should show `remotePush.state` moving through
+`push-connected`, `push-applied`, `push-skipped`, or
+`push-fallback-polling`. If a pushed event is missed, reconnect fallback should
+still catch up through the graph-head decision path. Use Cloudflare Worker logs
+as the connection-count source: each active agent should produce an
+authenticated `hopit.d1.proxy.request` entry for `/events` on connect or
+reconnect. Normal D1 writes should not produce
+`hopit.d1.proxy.push_notify_failed`.
+
+Rollback: redeploy the previous Worker version from Cloudflare's deployment
+history or from the previous git revision of `cloudflare/d1/api-worker.js` and
+`cloudflare/d1/wrangler.proxy.jsonc`. Agents fall back to remote-pull/safe
+refresh automatically when the push socket disconnects; disabling
+`HOPIT_REMOTE_PUSH` on the local service returns the device to polling-only
+handoff.
+
 ## Historical Graph Export
 
 The retired hosted graph export remains at `/Users/robert/HopIt-Backups/convex/` for migration/recovery reference. The backend implementation was removed by WS1 in [HopIt Remediation Plan July 2026](remediation-plan-2026-07.md); inspect git history if that code is ever needed again.
