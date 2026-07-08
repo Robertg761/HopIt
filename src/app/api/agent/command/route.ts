@@ -18,6 +18,7 @@ const commandMap = {
   merge: { label: 'Merge', cliCommand: 'merge' },
   setupWorkspace: { label: 'Set up workspace', cliCommand: 'workspace', subcommand: 'attach', timeoutMs: 30_000 },
   attachWorkspace: { label: 'Attach workspace', cliCommand: 'workspace', subcommand: 'attach', timeoutMs: 30_000 },
+  openWorkspace: { label: 'Open workspace', cliCommand: 'workspace', subcommand: 'open', timeoutMs: 60_000 },
   hydrateWorkspace: { label: 'Hydrate workspace', cliCommand: 'refresh', timeoutMs: 60_000 },
   hydratePath: { label: 'Hydrate path', cliCommand: 'workspace', subcommand: 'hydrate-path', timeoutMs: 60_000 },
   pruneWorkspace: { label: 'Free local cache', cliCommand: 'workspace', subcommand: 'prune', timeoutMs: 60_000 },
@@ -143,6 +144,7 @@ function summarizeCommandResult(
   if (command === 'merge') return 'Merged the active change set into Main.'
   if (command === 'setupWorkspace') return summarizeSetupWorkspace(result.stdout)
   if (command === 'attachWorkspace') return summarizeAttachWorkspace(result.stdout)
+  if (command === 'openWorkspace') return summarizeOpenWorkspace(result.stdout)
   if (command === 'hydrateWorkspace') return summarizeHydrateWorkspace(result.stdout)
   if (command === 'hydratePath') return summarizeHydratePath(result.stdout)
   if (command === 'pruneWorkspace') return summarizePruneWorkspace(result.stdout)
@@ -200,6 +202,17 @@ function summarizeHydrateWorkspace(stdout: string) {
   const deleted = matchNumber(stdout, /"deleted":\s*(\d+)/)
   if (written === null && deleted === null) return 'Hydrated the workspace into a managed local folder.'
   return `Hydrated workspace: ${written ?? 0} written, ${deleted ?? 0} deleted.`
+}
+
+function summarizeOpenWorkspace(stdout: string) {
+  const parsed = parseLastJsonObject(stdout)
+  const state = nestedString(parsed, ['state'])
+  const reason = nestedString(parsed, ['reason'])
+  const hydrated = nestedNumber(parsed, ['hydratedPathCount'])
+  const planned = nestedNumber(parsed, ['plannedPathCount'])
+  if (state === 'skipped') return `Open-time hydration skipped${reason ? ` (${reason})` : ''}.`
+  if (hydrated !== null && planned !== null) return `Opened workspace and hydrated ${hydrated} of ${planned} planned file${planned === 1 ? '' : 's'}.`
+  return 'Opened the workspace and refreshed the first working set.'
 }
 
 function summarizeDehydrateWorkspace(stdout: string) {

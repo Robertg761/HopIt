@@ -301,9 +301,9 @@ Still open:
 | --- | --- | --- |
 | Product concept | Done | The repo has converged on cloud-native managed workspaces, active change sets, explicit Main, and `.private/` owner-only workspace scope. |
 | Web product shell | Mostly done | The prototype UI polls live local agent state through `/api/agent/status`, maps files/events/revisions/review/merge/conflict/cache state, can read D1 dashboard state when configured, merges local workspace discovery into codebase cards, shows codebase-level workspace/remote-update readiness in the topology cards, and can run first-run Workspace Root setup/attach, hydrate/dehydrate, and file-level hydrate/pin/free-space actions through the local agent. |
-| HopIt Workspace Root | In progress | Production-profile paths, a root-level workspace index, per-path local cache state, D1 account-visible codebase discovery when credentials allow it, scoped-token configured-codebase fallback, automatic verified-owner bootstrap for migrated `local-owner` codebases, local attach/readiness summaries, metadata-only attach, dashboard setup/attach/hydrate/dehydrate actions, hydration/materialized revision state, metadata-only/dehydrate, single-file and recursive-prefix hydrate, explicit pin/unpin, clean-cache prune, explicit metadata-first lazy materialization policy, and a remote cursor are in place; editor/tool demand hydration remains. |
+| HopIt Workspace Root | In progress | Production-profile paths, a root-level workspace index, per-path local cache state, D1 account-visible codebase discovery when credentials allow it, scoped-token configured-codebase fallback, automatic verified-owner bootstrap for migrated `local-owner` codebases, local attach/readiness summaries, metadata-only attach, dashboard setup/attach/hydrate/dehydrate actions, `workspace open`, hydration/materialized revision state, metadata-only/dehydrate, single-file and recursive-prefix hydrate, sibling hydrate opt-in, explicit pin/unpin, clean-cache prune, explicit metadata-first lazy materialization policy, and a remote cursor are in place; true read-triggered hydration remains deferred to native filesystem-provider research. |
 | Local managed-folder agent | Done for spike | The agent proves hydration, journaling, sync acknowledgement, recovery, watch startup gating, safe refresh, status, and same-owner continuity. |
-| Lazy materialization | In progress | `workspace attach`, `workspace files`, `workspace hydrate-file`, `workspace hydrate-path --recursive`, safe full hydrate through `refresh`, `workspace pin|unpin`, dry-run-by-default `workspace prune`, dashboard file cache controls, and `workspace dehydrate --force` prove metadata-first attach, metadata listing, path-level hydration, explicit full materialization, clean local-body eviction, and metadata-only state. V1 still needs editor/tool demand hydration and an automatic pruning policy. |
+| Lazy materialization | In progress | `workspace attach`, `workspace open`, `workspace files`, `workspace hydrate-file`, `workspace hydrate-file --with-siblings`, `workspace hydrate-path --recursive`, safe full hydrate through `refresh`, `workspace pin|unpin`, dry-run-by-default `workspace prune`, dashboard file cache controls, and `workspace dehydrate --force` prove metadata-first attach, open-time first-working-set hydration, metadata listing, path-level hydration, explicit full materialization, clean local-body eviction, and metadata-only/partial/materialized state. V1 still needs native provider-backed read-triggered hydration and an automatic pruning policy. |
 | Vercel/D1 production baseline | Active dogfood | Vercel hosts the protected dashboard and Clerk sign-in routing is live. The D1 database/env/seeding sequence is complete, `hopit-d1-api` proxies D1 for Vercel, hosted D1 reads can skip schema re-checks with `HOPIT_D1_ASSUME_SCHEMA=1`, hosted status reads are cached/coalesced and the hosted client polls less often to protect the free D1 budget, `hopit.dev` live API smoke checks pass, and the packaged LaunchAgent reports D1 cloud status. Automatic remote-pull is now activity-gated with a five-minute cooldown when enabled. |
 | D1 cloud graph | In progress | D1 now has schema, HTTP API backend, agent service integration, hosted status/codebase/file/account/action-job/member/invite/work-item/key-grant routes, automatic verified-owner bootstrap for `local-owner` migrations, account-visible codebase heads with actor access summaries, scoped-token configured-codebase fallback, actions-runner support, scoped D1 proxy session auth, scoped agent sessions, device key/user keyring/wrapped key metadata, project-board operations and UI, durable issue/discussion comments, historical export migration script, and D1 graph/collaboration/session/key round-trip tests. History reconstruction, retention policy, richer release assets, and full product write-path coverage remain to port or complete. |
 | Historical hosted graph export | Done | The retired export backup is retained under `/Users/robert/HopIt-Backups/convex/` as a migration/recovery source; the backend implementation was removed by WS1. |
@@ -1131,6 +1131,7 @@ Current foundation:
 - `packages/agent/test/agent-cli.test.js` now covers same-file two-device conflict preservation, crash-left pending journal recovery, skewed mtime/clock behavior, watch-mode sync racing refresh, and object-storage budget exhaustion.
 - WS7a Stage 1 implements the agent-side push client plus local fake push hub tests.
 - WS7a Stage 2 implements the Cloudflare Durable Object WebSocket fan-out hub, D1-route notify-after-commit wiring, Worker auth-gated WebSocket routing, Wrangler Durable Object config, and agent WebSocket transport selection. It is not deployed yet.
+- WS7b implements open-time and intent-driven demand hydration for managed folders: `hop workspace open`, bounded metadata-driven open plans, sibling hydration opt-in, last-open status, missing-key/blocked-path reporting, and collaborator-safe visibility filtering.
 
 Proof command:
 
@@ -1138,7 +1139,7 @@ Proof command:
 node --test --test-name-pattern "adversarial|crash-left|skewed|racing refresh|storage budget failure" packages/agent/test/agent-cli.test.js
 ```
 
-WS7b and WS7c implementation remains intentionally gated on owner approval of the design docs. WS7a Stage 2 remains local-only until the owner runs the documented Cloudflare deployment.
+WS7c implementation remains intentionally gated on owner approval of the design doc. WS7a Stage 2 remains local-only until the owner runs the documented Cloudflare deployment.
 
 ### 2026-07-08 WS7a Stage 1 — Agent Push Delivery
 
@@ -1191,10 +1192,36 @@ Deferred:
 - Owner-side Cloudflare deployment and live same-owner production dogfood verification.
 - Default enabling policy; push remains opt-in through `--remote-push` / `HOPIT_REMOTE_PUSH=1`.
 
+### 2026-07-08 WS7b — Open-Time And Intent-Driven Demand Hydration
+
+Implemented:
+
+- Added `hop workspace open`, which records `workspace.opened`, gates open-time hydration on a clean journal plus clean content manifest, and emits/persists `workspace.open_hydration.applied`, `partial`, or `skipped` results.
+- Open-time plans are computed from the visibility-filtered cloud graph metadata only. The priority order is root docs/package/config files, recently changed active-change-set files, pinned paths, then small files under common source roots.
+- Added bounded open budgets with defaults of 64 files and 1 MiB, plus a 64 KiB small-source-file ceiling. CLI overrides are `--open-max-files`, `--open-max-bytes`, and `--open-small-file-bytes`.
+- Added `hop workspace hydrate-file --with-siblings`, behind an explicit flag, with defaults of 8 files and 128 KiB for same-folder source-root sibling hydration.
+- Shared path hydration now records per-path skipped and blocked outcomes so one missing blob or missing decryption key blocks only that path. Already hydrated clean files are skipped without re-fetching.
+- `hop status` and the status server expose `workspace.openHydration` with planned paths, hydrated paths, skipped paths, blocked paths, bytes hydrated, budget reason, and state. Hydration state continues to distinguish `metadata-only`, `partial`, and `materialized`.
+- The local command API allowlist now includes `openWorkspace` mapped to `workspace open`; no dashboard UI was added in this session.
+- Added eight fixture-backed acceptance tests covering metadata-only open hydration, pending-journal skip, unjournaled-drift skip, sibling/prefix hydration and sync delete safety, clean reopen no-refetch, pinned paths, missing secret-zone decryption key, and collaborator `.private/` redaction.
+
+Proof commands:
+
+```bash
+node --test --test-name-pattern "workspace open|hydrate-file with siblings|pinned paths|collaborator workspace open|reopening a clean workspace" packages/agent/test/agent-cli.test.js
+node --test --test-name-pattern "workspace files and hydrate-file|workspace hydrate-path|metadata-only workspaces|workspace prune|workspace pin" packages/agent/test/agent-cli.test.js
+npm run typecheck:agent
+```
+
+Deferred:
+
+- True read-triggered hydration remains deferred until HopIt chooses a native filesystem provider such as macOS File Provider, FSKit, or FUSE. The v1 managed-folder adapter does not create source-code placeholder files and cannot intercept arbitrary OS reads.
+- Editor-specific signals, automatic pruning policy, and production dogfood rollout of open-time hydration remain follow-up work.
+
 ## Known Gaps
 
-- No full HopIt Workspace Root contract yet: the root-level codebase/workspace index, D1 account-visible discovery with scoped-token fallback, automatic account bootstrap, metadata-only attach, dashboard setup/attach/hydrate/dehydrate actions, hydration cursor, metadata-only state, per-file cache state, path-level hydrate/pin/prune primitives, and explicit metadata-first lazy materialization policy exist, but editor/tool demand hydration remains.
-- The current managed folder path has a safe metadata-first policy and dashboard controls, but metadata-only, path hydration, and cache pruning are still explicit operations rather than a complete editor/tool demand-hydration and automatic pruning system.
+- No full HopIt Workspace Root contract yet: the root-level codebase/workspace index, D1 account-visible discovery with scoped-token fallback, automatic account bootstrap, metadata-only attach, dashboard setup/attach/hydrate/dehydrate/open actions, hydration cursor, metadata-only/partial/materialized state, per-file cache state, path-level hydrate/pin/prune primitives, open-time first-working-set hydration, and explicit metadata-first lazy materialization policy exist, but true read-triggered hydration is deferred until a native filesystem provider is chosen.
+- The current managed folder path has a safe metadata-first policy and dashboard controls, but metadata-only, path hydration, open-time hydration, and cache pruning are still bounded explicit/intent-driven operations rather than a complete native demand-hydration and automatic pruning system.
 - Real account provider code exists and production Clerk DNS/issuer/live-key plus Google OAuth rollout is active; owner sign-in and D1 owner mapping are smoke-tested, and Basic Auth fallback env vars are removed from production.
 - Durable membership, role, invitation, hosted member/invite UI, and scoped agent-session token groundwork exist, but complete permission coverage is not done yet.
 - The full private-repo encryption/key-grant model is documented but not
@@ -1213,7 +1240,7 @@ Deferred:
 - Service mode syncs local edits and serves status. Local two-service simulation proves device A edits sync through the watcher, while device B pulls them through explicit safe refresh before switching devices.
 - No conflict resolution UI yet; fixture conflict detection/status exists.
 - `hop import-git` now provides a production-safe literal Git checkout conversion path for snapshot-style repo migration, including `.git/` as owner-private metadata and encrypted routed secrets. Full Git history import, ancestry preservation, and remote publish are still pending.
-- Explicit local cache pruning exists through `hop workspace prune`; automatic pruning policy and editor/tool demand hydration are still pending.
+- Explicit local cache pruning exists through `hop workspace prune`; automatic pruning policy and native provider-backed read-triggered hydration are still pending.
 - No offline mode yet.
 - No signed production installer, notarization, native package manager integration, or tray/menu agent wrapper yet.
 - Start-on-login setup is script/template based and expects the operator to create a correct local env file.

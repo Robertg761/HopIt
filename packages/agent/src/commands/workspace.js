@@ -10,7 +10,7 @@ import { assertWorkspacePathSafe, cloudLocationFromOptions } from '../paths.js'
 import { classifyJournalEntries, readAgentState, workspaceRootFromOptions } from '../status-state.js'
 import { findIndexedCodebase, localCacheSummary, mergeIndexedCodebases, readWorkspaceIndex, upsertWorkspaceIndex, workspaceIndexSummary } from '../workspace-index.js'
 import { manifestEntryChanged, readWorkspaceFiles, workspaceFilePath } from '../workspace-manifest.js'
-import { attachWorkspace, dehydrateWorkspace, discoverWorkspaces, hydrateWorkspaceFile, hydrateWorkspacePath, pruneWorkspaceCache, setWorkspaceCachePin } from './hydrate.js'
+import { attachWorkspace, dehydrateWorkspace, discoverWorkspaces, hydrateWorkspaceFile, hydrateWorkspacePath, openWorkspace, pruneWorkspaceCache, setWorkspaceCachePin } from './hydrate.js'
 import { existsSync } from 'node:fs'
 
 export async function runWorkspaceCommand(action, options) {
@@ -20,6 +20,7 @@ export async function runWorkspaceCommand(action, options) {
     'discover',
     'ensure',
     'attach',
+    'open',
     'files',
     'hydrate-file',
     'hydrate-path',
@@ -39,6 +40,11 @@ export async function runWorkspaceCommand(action, options) {
 
   if (action === 'attach') {
     await attachWorkspace(options)
+    return
+  }
+
+  if (action === 'open') {
+    await openWorkspace(options)
     return
   }
 
@@ -185,6 +191,7 @@ export function workspaceCodebaseSummary(options, state) {
     hiddenFileCount: status.hiddenFileCount,
     materialization,
     hydration: status.workspace.hydration,
+    openHydration: status.workspace.openHydration ?? null,
     localChanges: status.workspace.localChanges,
     contentManifest: status.workspace.contentManifest,
     remoteCursor: status.remotePull.cursor,
@@ -440,7 +447,7 @@ export function workspaceFileLocalState(options, relativePath, file, context = {
   const pinned = Boolean(cached.pinned)
   let state = cached.state ?? (exists ? 'hydrated' : 'cloud-only')
 
-  if (failed) state = 'blocked'
+  if (failed || cached.state === 'blocked') state = 'blocked'
   else if (pending) state = 'pending-upload'
   else if (dirty) state = 'dirty'
   else if (!exists) state = 'cloud-only'
@@ -507,4 +514,3 @@ export async function writeWorkspaceMetadataManifest(options, cloud, detail = {}
     files,
   })
 }
-

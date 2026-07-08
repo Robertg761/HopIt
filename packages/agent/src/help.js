@@ -55,6 +55,11 @@ Options:
   --output <path>     Output folder for Git export/publish
   --path <cloud-path> Cloud file/folder path for workspace hydrate-file, hydrate-path, prune, pin, or unpin
   --recursive        workspace hydrate-path/pin/unpin/prune: include visible files under a folder prefix
+  --with-siblings    workspace hydrate-file: also hydrate nearby source-root siblings within budget
+  --open-max-files <n> workspace open: maximum files for open-time hydration, default 64
+  --open-max-bytes <n> workspace open: maximum bytes for open-time hydration, default 1048576
+  --sibling-max-files <n> workspace hydrate-file --with-siblings: sibling file budget, default 8
+  --sibling-max-bytes <n> workspace hydrate-file --with-siblings: sibling byte budget, default 128000
   --inactive-ms <n>  workspace prune: only prune clean cached files inactive for this many ms
   --codebase-id <id>  Codebase id for import
   --codebase-name <name> Codebase display name for import

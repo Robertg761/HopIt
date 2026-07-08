@@ -20,6 +20,7 @@ export type AgentCommand =
   | 'merge'
   | 'setupWorkspace'
   | 'attachWorkspace'
+  | 'openWorkspace'
   | 'hydrateWorkspace'
   | 'hydratePath'
   | 'pruneWorkspace'

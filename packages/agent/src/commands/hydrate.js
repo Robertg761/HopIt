@@ -2,16 +2,17 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createCloudGraphService, graphHeadFromGraph, normalizeCloudGraphHead, removeEmptyAncestorDirectories, summarizeGraphContract, summarizeRequester, visibilityRequestFromOptions } from '../cloud/d1-graph-service.js'
-import { localCacheSchemaVersion, workspaceMode } from '../constants.js'
-import { privacyZoneForPath } from '@hopit/core/crypto'
+import { defaultOpenHydrationMaxBytes, defaultOpenHydrationMaxFiles, defaultOpenHydrationSmallFileBytes, localCacheSchemaVersion, workspaceMode } from '../constants.js'
+import { privacyZoneForPath, rawClientEncryptionKey } from '@hopit/core/crypto'
 import { emit, readNdjson } from '../io.js'
 import { countCloudScopes, countPathScopes, normalizeCloudFileEntry } from '../journal.js'
 import { assertWorkspacePathSafe, cloudLocationFromOptions } from '../paths.js'
 import { classifyJournalEntries, readJournalSafety, workspaceRootFromOptions } from '../status-state.js'
 import { findIndexedCodebase, hydratedPathUnion, hydratedPathsAfterPrune, hydrationStateForHydratedPaths, latestIsoTimestamp, localCachePatchForPaths, materializationForHydrationState, parseNonNegativeIntegerOption, readWorkspaceIndex, selectedCloudPaths, upsertWorkspaceIndex, upsertWorkspaceIndexFromCloud, workspaceIndexEntryFromCloud, workspaceIndexEntryKey, workspaceIndexRoot, workspaceIndexSummary } from '../workspace-index.js'
-import { manifestEntryChanged, readWorkspaceFiles, workspaceFilePath } from '../workspace-manifest.js'
+import { manifestEntryChanged, readWorkspaceFiles, workspaceFilePath, workspaceLocalChanges } from '../workspace-manifest.js'
 import { materializeCloudEntry, sortPathsDeepestFirst } from './sync.js'
 import { assertAttachWorkspaceSafe, discoveredCloudCodebase, discoveredCloudCodebaseHead, workspaceFileMetadata, workspaceOptionsForCloudCodebase, writeWorkspaceMetadataManifest } from './workspace.js'
+import { buildOpenHydrationPlan, selectedHydrationPathsForCommand } from './hydration-plan.js'
 import { scopeForPath } from '@hopit/core/privacy-zone'
 import { existsSync } from 'node:fs'
 
@@ -63,6 +64,7 @@ export async function hydrateWorkspaceFile(options) {
     reason: 'lazy-hydrate',
     event: 'file.lazy_hydrated',
     recursive: false,
+    withSiblings: Boolean(options['with-siblings']),
   })
 }
 
@@ -83,58 +85,49 @@ export async function hydrateWorkspacePaths(options, command) {
   await assertWorkspacePathSafe(options)
   const cloudService = createCloudGraphService(options)
   const cloud = await cloudService.readVisibleGraph(visibilityRequestFromOptions(options))
-  const paths = selectedCloudPaths(cloud, requestedPath, { recursive: command.recursive })
-  const hydratedFiles = []
-
-  for (const relativePath of paths) {
-    const file = cloud.files?.[relativePath]
-    if (!file) continue
-    const entry = normalizeCloudFileEntry(relativePath, file)
-    await materializeCloudEntry(options.workspace, relativePath, entry, cloudService, {
-      codebaseId: cloud.codebase?.id ?? options['codebase-id'] ?? 'hopit',
-    })
-    hydratedFiles.push({
-      path: relativePath,
-      file,
-      entry,
-    })
-  }
-
-  const now = new Date().toISOString()
-  const hydratedPaths = await hydratedPathUnion(options, cloud.codebase?.id, hydratedFiles.map((file) => file.path))
+  const selection = selectedHydrationPathsForCommand(cloud, requestedPath, options, command)
+  const hydrationResult = await materializeHydrationPaths(options, cloud, cloudService, selection.paths, {
+    reason: command.reason,
+    lastEvent: command.event,
+  })
+  const hydratedFiles = hydrationResult.hydrated.map((file) => ({
+    path: file.path,
+    file: cloud.files[file.path],
+    entry: file.entry,
+  }))
+  const hydratedPaths = hydrationResult.indexedHydratedPaths
 
   await emit(options, command.event, {
     path: hydratedFiles.length === 1 ? hydratedFiles[0].path : null,
     paths: hydratedFiles.map((file) => file.path),
+    requestedPath,
+    plannedPaths: selection.paths,
     recursive: command.recursive,
+    withSiblings: Boolean(command.withSiblings),
     scope: hydratedFiles.length === 1 ? scopeForPath(hydratedFiles[0].path) : null,
     scopeCounts: countPathScopes(hydratedFiles.map((file) => file.path)),
-    bytes: hydratedFiles.reduce((sum, file) => sum + (file.entry.size ?? 0), 0),
+    bytes: hydrationResult.bytesHydrated,
     workspace: options.workspace,
     service: cloudService.type,
     contract: summarizeGraphContract(cloud),
     hydratedPathCount: hydratedPaths.length,
+    skipped: hydrationResult.skipped,
+    blocked: hydrationResult.blocked,
   })
-  const index = await upsertWorkspaceIndexFromCloud(options, cloud, {
-    reason: command.reason,
-    lastEvent: command.event,
-    hydrationState: 'partial',
-    hydratedPaths,
-    materialization: 'partial-managed-folder',
-    localCache: localCachePatchForPaths(cloud, hydratedFiles.map((file) => file.path), {
-      now,
-      state: 'hydrated',
-      lastHydratedAt: now,
-    }),
-  })
+  const index = hydrationResult.index
 
   console.log(JSON.stringify({
     ok: true,
     action: command.action,
     path: hydratedFiles.length === 1 ? hydratedFiles[0].path : null,
     paths: hydratedFiles.map((file) => file.path),
+    plannedPaths: selection.paths,
     recursive: command.recursive,
+    withSiblings: Boolean(command.withSiblings),
+    budgetReason: selection.budgetReason,
     hydrated: hydratedFiles.length,
+    skipped: hydrationResult.skipped,
+    blocked: hydrationResult.blocked,
     workspace: path.resolve(options.workspace),
     file: hydratedFiles.length === 1
       ? workspaceFileMetadata(options, hydratedFiles[0].path, hydratedFiles[0].file, {
@@ -151,6 +144,274 @@ export async function hydrateWorkspacePaths(options, command) {
     index: workspaceIndexSummary(options, index),
     hydration: findIndexedCodebase(index, cloud.codebase?.id ?? options['codebase-id'], options.workspace)?.hydration ?? null,
   }, null, 2))
+}
+
+export async function openWorkspace(options) {
+  await assertWorkspacePathSafe(options)
+  const cloudService = createCloudGraphService(options)
+  const cloud = await cloudService.readVisibleGraph(visibilityRequestFromOptions(options))
+  const requester = summarizeRequester(cloud.visibilityContext)
+  const workspaceIndex = await readWorkspaceIndex(options)
+  const indexedCodebase = findIndexedCodebase(workspaceIndex, cloud.codebase?.id ?? options['codebase-id'], options.workspace)
+  const maxFiles = parseNonNegativeIntegerOption(options['open-max-files'], defaultOpenHydrationMaxFiles)
+  const maxBytes = parseNonNegativeIntegerOption(options['open-max-bytes'], defaultOpenHydrationMaxBytes)
+  const smallFileBytes = parseNonNegativeIntegerOption(options['open-small-file-bytes'], defaultOpenHydrationSmallFileBytes)
+  const started = {
+    workspace: options.workspace,
+    revision: cloud.revision,
+    service: cloudService.type,
+    contract: summarizeGraphContract(cloud),
+    requester,
+    adapter: workspaceMode.adapter,
+    cacheMode: workspaceMode.cacheMode,
+    budgets: {
+      maxFiles,
+      maxBytes,
+      smallFileBytes,
+    },
+    scopeCounts: countCloudScopes(cloud),
+    hiddenScopeCounts: cloud.visibilityContext?.hiddenScopeCounts ?? { shared: 0, private: 0 },
+  }
+
+  await emit(options, 'workspace.opened', started)
+
+  const journalSafety = await readJournalSafety(options)
+  if (!journalSafety.safe) {
+    const result = openHydrationSkippedResult(started, 'journal_has_unresolved_entries', {
+      journal: journalSafety.summary,
+      pendingCount: journalSafety.pendingEntries.length,
+      failedCount: journalSafety.failedEntries.length,
+    })
+    await persistOpenHydrationResult(options, cloud, indexedCodebase, result)
+    await emit(options, 'workspace.open_hydration.skipped', result)
+    console.log(JSON.stringify(result, null, 2))
+    return
+  }
+
+  const localChanges = existsSync(options.workspace)
+    ? await workspaceLocalChanges(options, indexedCodebase)
+    : { safe: true, state: 'missing', reason: null }
+  if (!localChanges.safe) {
+    const result = openHydrationSkippedResult(started, 'workspace_has_unjournaled_changes', {
+      localChanges,
+    })
+    await persistOpenHydrationResult(options, cloud, indexedCodebase, result)
+    await emit(options, 'workspace.open_hydration.skipped', result)
+    console.log(JSON.stringify(result, null, 2))
+    return
+  }
+
+  const plan = buildOpenHydrationPlan(cloud, indexedCodebase, {
+    maxFiles,
+    maxBytes,
+    smallFileBytes,
+  })
+  const hydrated = await materializeHydrationPaths(options, cloud, cloudService, plan.paths, {
+    reason: 'workspace-open',
+    lastEvent: 'workspace.open_hydration',
+  })
+  const state = plan.budgetReason || hydrated.blocked.length > 0 ? 'partial' : 'applied'
+  const result = {
+    ok: true,
+    action: 'open',
+    state,
+    reason: null,
+    workspace: path.resolve(options.workspace),
+    revision: cloud.revision,
+    service: cloudService.type,
+    requester,
+    budgets: started.budgets,
+    plannedPathCount: plan.paths.length,
+    plannedPaths: plan.paths,
+    hydratedPathCount: hydrated.hydrated.length,
+    hydratedPaths: hydrated.hydrated.map((entry) => entry.path),
+    skippedPathCount: hydrated.skipped.length,
+    skippedPaths: hydrated.skipped,
+    blockedPathCount: hydrated.blocked.length,
+    blockedPaths: hydrated.blocked,
+    bytesHydrated: hydrated.bytesHydrated,
+    budgetReason: plan.budgetReason,
+    consideredPathCount: plan.consideredPathCount,
+    hiddenScopeCounts: cloud.visibilityContext?.hiddenScopeCounts ?? { shared: 0, private: 0 },
+    hydration: findIndexedCodebase(hydrated.index, cloud.codebase?.id ?? options['codebase-id'], options.workspace)?.hydration ?? null,
+  }
+  const eventName = state === 'partial' ? 'workspace.open_hydration.partial' : 'workspace.open_hydration.applied'
+  const index = await persistOpenHydrationResult(options, cloud, indexedCodebase, result, hydrated.indexedHydratedPaths)
+  result.index = workspaceIndexSummary(options, index)
+  await emit(options, eventName, result)
+  console.log(JSON.stringify(result, null, 2))
+}
+
+export async function materializeHydrationPaths(options, cloud, cloudService, paths, metadata = {}) {
+  await fs.mkdir(options.workspace, { recursive: true })
+  const now = new Date().toISOString()
+  const codebaseId = cloud.codebase?.id ?? options['codebase-id'] ?? 'hopit'
+  const workspaceIndex = await readWorkspaceIndex(options)
+  const indexedCodebase = findIndexedCodebase(workspaceIndex, codebaseId, options.workspace)
+  const diskEntries = await readWorkspaceFiles(options.workspace, options)
+  const hydrated = []
+  const skipped = []
+  const blocked = []
+  let bytesHydrated = 0
+
+  for (const relativePath of uniqueHydrationPaths(paths)) {
+    const file = cloud.files?.[relativePath]
+    if (!file) {
+      blocked.push({ path: relativePath, reason: 'not_visible_or_missing' })
+      continue
+    }
+
+    const entry = normalizeCloudFileEntry(relativePath, file)
+    const manifestEntry = indexedCodebase?.contentManifest?.files?.[relativePath] ?? null
+    if (diskEntries[relativePath] && manifestMatchesCloudEntry(manifestEntry, entry)) {
+      skipped.push({ path: relativePath, reason: 'already_hydrated_clean' })
+      continue
+    }
+
+    if (entry.clientEncryption?.state === 'client-encrypted' && !rawClientEncryptionKey(options)) {
+      blocked.push({ path: relativePath, reason: 'client_encryption_key_missing' })
+      continue
+    }
+
+    try {
+      await materializeCloudEntry(options.workspace, relativePath, entry, cloudService, {
+        codebaseId,
+      })
+      await emit(options, 'file.hydrated', {
+        path: relativePath,
+        scope: scopeForPath(relativePath),
+        privacyZone: entry.privacyZone ?? privacyZoneForPath(relativePath),
+        kind: entry.kind,
+        bytes: entry.size,
+        revision: entry.revision,
+      })
+      hydrated.push({ path: relativePath, entry })
+      bytesHydrated += entry.size ?? 0
+    } catch (error) {
+      blocked.push({
+        path: relativePath,
+        reason: error instanceof Error ? error.message : 'hydrate_failed',
+      })
+    }
+  }
+
+  const hydratedPaths = await hydratedPathUnion(options, codebaseId, hydrated.map((file) => file.path))
+  const visiblePaths = Object.keys(cloud.files ?? {})
+  const hydrationState = hydrationStateForHydratedPaths(hydratedPaths, visiblePaths)
+  const localCache = localCachePatchForHydrationResult(cloud, {
+    hydrated,
+    blocked,
+    now,
+  })
+  const index = await upsertWorkspaceIndexFromCloud(options, cloud, {
+    reason: metadata.reason ?? 'hydrate-path',
+    lastEvent: metadata.lastEvent ?? 'file.hydrated',
+    hydrationState,
+    hydratedPaths,
+    materialization: materializationForHydrationState(hydrationState),
+    localCache,
+  })
+
+  return {
+    hydrated,
+    skipped,
+    blocked,
+    bytesHydrated,
+    indexedHydratedPaths: hydratedPaths,
+    index,
+  }
+}
+
+function openHydrationSkippedResult(started, reason, detail = {}) {
+  return {
+    ok: true,
+    action: 'open',
+    state: 'skipped',
+    reason,
+    workspace: path.resolve(started.workspace),
+    revision: started.revision,
+    service: started.service,
+    requester: started.requester,
+    budgets: started.budgets,
+    plannedPathCount: 0,
+    plannedPaths: [],
+    hydratedPathCount: 0,
+    hydratedPaths: [],
+    skippedPathCount: 0,
+    skippedPaths: [],
+    blockedPathCount: 0,
+    blockedPaths: [],
+    bytesHydrated: 0,
+    budgetReason: null,
+    hiddenScopeCounts: started.hiddenScopeCounts,
+    ...detail,
+  }
+}
+
+async function persistOpenHydrationResult(options, cloud, indexedCodebase, result, hydratedPaths = null) {
+  const existingHydratedPaths = hydratedPaths ?? indexedCodebase?.hydratedPaths ?? []
+  const hydrationState = hydrationStateForHydratedPaths(existingHydratedPaths, Object.keys(cloud.files ?? {}))
+  return upsertWorkspaceIndexFromCloud(options, cloud, {
+    reason: 'workspace-open',
+    lastEvent: result.state === 'skipped' ? 'workspace.open_hydration.skipped' : 'workspace.open_hydration',
+    hydrationState,
+    hydratedPaths: existingHydratedPaths,
+    materialization: materializationForHydrationState(hydrationState),
+    openHydration: {
+      at: new Date().toISOString(),
+      state: result.state,
+      reason: result.reason,
+      plannedPathCount: result.plannedPathCount,
+      plannedPaths: result.plannedPaths,
+      hydratedPathCount: result.hydratedPathCount,
+      hydratedPaths: result.hydratedPaths,
+      skippedPathCount: result.skippedPathCount,
+      skippedPaths: result.skippedPaths,
+      blockedPathCount: result.blockedPathCount,
+      blockedPaths: result.blockedPaths,
+      bytesHydrated: result.bytesHydrated,
+      budgetReason: result.budgetReason,
+      budgets: result.budgets,
+    },
+  })
+}
+
+function localCachePatchForHydrationResult(cloud, result) {
+  const files = {}
+  for (const { path: relativePath, entry } of result.hydrated) {
+    files[relativePath] = {
+      state: 'hydrated',
+      lastHydratedAt: result.now,
+      bytesOnDisk: entry.size ?? null,
+    }
+  }
+  for (const blocked of result.blocked) {
+    files[blocked.path] = {
+      state: 'blocked',
+      bytesOnDisk: null,
+    }
+  }
+  return {
+    schemaVersion: localCacheSchemaVersion,
+    updatedAt: result.now,
+    files,
+  }
+}
+
+function uniqueHydrationPaths(paths) {
+  return Array.from(new Set(paths.map((value) => String(value)))).sort()
+}
+
+function manifestMatchesCloudEntry(manifestEntry, cloudEntry) {
+  if (!manifestEntry) return false
+  return (
+    manifestEntry.kind === cloudEntry.kind &&
+    manifestEntry.hash === cloudEntry.hash &&
+    manifestEntry.size === cloudEntry.size &&
+    manifestEntry.scope === cloudEntry.scope &&
+    (manifestEntry.privacyZone ?? null) === (cloudEntry.privacyZone ?? null) &&
+    (manifestEntry.target ?? null) === (cloudEntry.target ?? null)
+  )
 }
 
 export async function dehydrateWorkspace(options) {
@@ -543,4 +804,3 @@ export async function attachWorkspace(options) {
     index: workspaceIndexSummary(attachOptions, attachedIndex),
   }, null, 2))
 }
-

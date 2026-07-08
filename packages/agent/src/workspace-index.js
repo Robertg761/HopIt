@@ -101,7 +101,7 @@ export function localCachePatchForPaths(cloud, paths, detail = {}) {
       lastEditedAt: detail.lastEditedAt,
       lastSyncedAt: detail.lastSyncedAt,
       lastPrunedAt: detail.lastPrunedAt,
-      bytesOnDisk: detail.bytesOnDisk ?? cloudEntry?.size ?? null,
+      bytesOnDisk: Object.hasOwn(detail, 'bytesOnDisk') ? detail.bytesOnDisk : cloudEntry?.size ?? null,
     })
   }
 
@@ -442,6 +442,7 @@ export function workspaceIndexEntryFromCloud(options, cloud, metadata = {}) {
     hiddenFileCount: cloud.visibilityContext?.hiddenFileCount ?? null,
     materialization: metadata.materialization ?? (hydrationState === 'materialized' ? 'managed-folder' : 'metadata-only'),
     hydration,
+    ...(metadata.openHydration ? { openHydration: metadata.openHydration } : {}),
     hydratedPaths,
     contentManifest,
     ...(localCache ? { localCache } : {}),
@@ -483,4 +484,3 @@ export function workspaceIndexSummary(options, index) {
     codebaseCount: index?.codebases?.length ?? 0,
   }
 }
-

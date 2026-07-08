@@ -41,6 +41,12 @@ export async function readAgentState(options) {
   const lastRefreshBlocked = findLastEvent(eventEntries, 'refresh.blocked')
   const lastRefreshComplete = findLastEvent(eventEntries, 'refresh.complete')
   const lastWorkspaceReady = findLastEvent(eventEntries, 'workspace.ready')
+  const lastWorkspaceOpened = findLastEvent(eventEntries, 'workspace.opened')
+  const lastWorkspaceOpenHydration = findLastEventOf(eventEntries, [
+    'workspace.open_hydration.applied',
+    'workspace.open_hydration.partial',
+    'workspace.open_hydration.skipped',
+  ])
   const lastRemoteUpdate = findLastEvent(eventEntries, 'remote-update')
   const lastRemotePullStarted = findLastEvent(eventEntries, 'remote-pull.started')
   const lastRemotePullSkipped = findLastEvent(eventEntries, 'remote-pull.skipped')
@@ -219,6 +225,8 @@ export async function readAgentState(options) {
     lastRecoveredSync,
     latestSyncEvent,
     lastWorkspaceReady,
+    lastWorkspaceOpened,
+    lastWorkspaceOpenHydration,
     lastRefreshStarted,
     lastRefreshBlocked,
     lastRefreshComplete,
@@ -320,6 +328,7 @@ export async function readAgentState(options) {
         localChanges,
         contentManifest: contentManifestSummary(indexedCodebase?.contentManifest),
         cache: localCache.summary,
+        openHydration: indexedCodebase?.openHydration ?? null,
         files: localCache.files,
         index: workspaceIndexSummary(options, workspaceIndex),
         virtualized: false,
@@ -358,6 +367,8 @@ export async function readAgentState(options) {
         lastRecoveredSync,
         latestSyncEvent,
         lastWorkspaceReady,
+        lastWorkspaceOpened,
+        lastWorkspaceOpenHydration,
         lastRefreshStarted,
         lastRefreshBlocked,
         lastRefreshComplete,

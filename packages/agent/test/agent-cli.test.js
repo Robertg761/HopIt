@@ -513,6 +513,25 @@ async function setChangeSetVisibility(state, visibility) {
   await writeJson(state.cloud, cloud)
 }
 
+async function addCloudFiles(state, files) {
+  const cloud = await readJson(state.cloud)
+  for (const [relativePath, content] of Object.entries(files)) {
+    cloud.revision += 1
+    if (cloud.selectedState) cloud.selectedState.revision = cloud.revision
+    cloud.files[relativePath] = {
+      kind: 'file',
+      content,
+      encoding: 'utf8',
+      hash: hashContent(content),
+      size: Buffer.byteLength(content),
+      scope: relativePath.startsWith('.private/') ? 'owner-private' : 'shared',
+      revision: cloud.revision,
+      updatedAt: new Date(Date.UTC(2026, 0, cloud.revision)).toISOString(),
+    }
+  }
+  await writeJson(state.cloud, cloud)
+}
+
 async function pathExists(filePath) {
   try {
     await fs.access(filePath)
@@ -1302,6 +1321,252 @@ test('workspace discover and attach bind a cloud codebase without hydrating file
   assert.equal(hydrated.hydration.state, 'partial')
   assert.equal(await pathExists(path.join(workspace, 'README.md')), true)
   assert.equal(await pathExists(path.join(workspace, 'src/presence.ts')), false)
+})
+
+test('workspace open hydrates root metadata under explicit budgets from a metadata-only attach', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await addCloudFiles(state, {
+    'package.json': '{"scripts":{"test":"node --test"}}\n',
+    'package-lock.json': '{"lockfileVersion":3}\n',
+    'src/app.js': 'export const app = true\n',
+  })
+  await runCli('workspace', ['attach', ...stateArgs(state)])
+
+  const opened = parseLastJsonObject((await runCli('workspace', [
+    'open',
+    ...stateArgs(state),
+    '--open-max-files',
+    '2',
+    '--open-max-bytes',
+    '100000',
+  ])).stdout)
+
+  assert.equal(opened.action, 'open')
+  assert.equal(opened.state, 'partial')
+  assert.equal(opened.plannedPathCount, 2)
+  assert.deepEqual(opened.plannedPaths, ['README.md', 'package.json'])
+  assert.equal(opened.budgetReason, 'max_files')
+  assert.equal(opened.hydratedPathCount, 2)
+  assert.equal(await pathExists(path.join(state.workspace, 'README.md')), true)
+  assert.equal(await pathExists(path.join(state.workspace, 'package.json')), true)
+  assert.equal(await pathExists(path.join(state.workspace, 'package-lock.json')), false)
+  assert.equal(await pathExists(path.join(state.workspace, 'src/app.js')), false)
+
+  const status = JSON.parse((await runCli('status', stateArgs(state))).stdout)
+  assert.equal(status.workspace.hydration.state, 'partial')
+  assert.equal(status.workspace.openHydration.state, 'partial')
+  assert.equal(status.workspace.openHydration.plannedPathCount, 2)
+  assert.equal(status.workspace.openHydration.budgetReason, 'max_files')
+})
+
+test('workspace open skips hydration while the local journal has unresolved entries', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('workspace', ['attach', ...stateArgs(state)])
+  await appendJournalEntry(state, {
+    id: randomUUID(),
+    type: 'write',
+    path: 'README.md',
+    scope: 'shared',
+    hash: hashContent('pending local edit\n'),
+    bytes: Buffer.byteLength('pending local edit\n'),
+    createdAt: new Date().toISOString(),
+    status: 'pending',
+  })
+
+  const opened = parseLastJsonObject((await runCli('workspace', ['open', ...stateArgs(state)])).stdout)
+  assert.equal(opened.state, 'skipped')
+  assert.equal(opened.reason, 'journal_has_unresolved_entries')
+  assert.equal(opened.hydratedPathCount, 0)
+  assert.equal(await pathExists(path.join(state.workspace, 'README.md')), false)
+
+  const events = await readNdjson(state.events)
+  assert.equal(events.at(-1).event, 'workspace.open_hydration.skipped')
+  assert.equal(events.at(-1).detail.reason, 'journal_has_unresolved_entries')
+})
+
+test('workspace open skips on unjournaled local drift and preserves disk files', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('workspace', ['attach', ...stateArgs(state)])
+  const localDraftPath = path.join(state.workspace, 'local-draft.md')
+  await fs.writeFile(localDraftPath, 'must survive skipped open\n', 'utf8')
+
+  const opened = parseLastJsonObject((await runCli('workspace', ['open', ...stateArgs(state)])).stdout)
+  assert.equal(opened.state, 'skipped')
+  assert.equal(opened.reason, 'workspace_has_unjournaled_changes')
+  assert.equal(opened.localChanges.safe, false)
+  assert.equal(await fs.readFile(localDraftPath, 'utf8'), 'must survive skipped open\n')
+  assert.equal(await pathExists(path.join(state.workspace, 'README.md')), false)
+})
+
+test('hydrate-file with siblings keeps unhydrated cloud-only files out of delete candidates on sync', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await addCloudFiles(state, {
+    'src/alpha.js': 'export const alpha = 1\n',
+    'src/beta.js': 'export const beta = 2\n',
+    'docs/guide.md': '# Guide\n',
+  })
+  await runCli('workspace', ['attach', ...stateArgs(state)])
+
+  const hydrated = parseLastJsonObject((await runCli('workspace', [
+    'hydrate-file',
+    ...stateArgs(state),
+    '--path',
+    'src/alpha.js',
+    '--with-siblings',
+  ])).stdout)
+  assert.equal(hydrated.withSiblings, true)
+  assert.deepEqual(hydrated.paths, ['src/alpha.js', 'src/beta.js', 'src/presence.ts'])
+  assert.equal(await pathExists(path.join(state.workspace, 'src/alpha.js')), true)
+  assert.equal(await pathExists(path.join(state.workspace, 'src/beta.js')), true)
+  assert.equal(await pathExists(path.join(state.workspace, 'src/presence.ts')), true)
+  assert.equal(await pathExists(path.join(state.workspace, 'README.md')), false)
+  assert.equal(await pathExists(path.join(state.workspace, 'docs/guide.md')), false)
+
+  await runCli('sync-once', stateArgs(state))
+  const cloud = await readJson(state.cloud)
+  assert.ok(cloud.files['README.md'])
+  assert.ok(cloud.files['docs/guide.md'])
+  assert.ok(cloud.files['src/alpha.js'])
+  assert.ok(cloud.files['src/beta.js'])
+})
+
+test('reopening a clean workspace skips already hydrated clean files without refetching them', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('workspace', ['attach', ...stateArgs(state)])
+
+  const firstOpen = parseLastJsonObject((await runCli('workspace', [
+    'open',
+    ...stateArgs(state),
+    '--open-max-files',
+    '1',
+  ])).stdout)
+  assert.equal(firstOpen.hydratedPathCount, 1)
+  const firstEvents = await readNdjson(state.events)
+  assert.equal(firstEvents.filter((entry) => entry.event === 'file.hydrated').length, 1)
+
+  const secondOpen = parseLastJsonObject((await runCli('workspace', [
+    'open',
+    ...stateArgs(state),
+    '--open-max-files',
+    '1',
+  ])).stdout)
+  assert.equal(secondOpen.state, 'partial')
+  assert.equal(secondOpen.hydratedPathCount, 0)
+  assert.deepEqual(secondOpen.skippedPaths, [{ path: 'README.md', reason: 'already_hydrated_clean' }])
+  const secondEvents = await readNdjson(state.events)
+  assert.equal(secondEvents.filter((entry) => entry.event === 'file.hydrated').length, 1)
+})
+
+test('pinned paths are included in the next workspace open plan', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await addCloudFiles(state, {
+    'docs/guide.md': '# Pinned guide\n',
+  })
+  await runCli('workspace', ['attach', ...stateArgs(state)])
+  await runCli('workspace', ['pin', ...stateArgs(state), '--path', 'docs/guide.md'])
+
+  const opened = parseLastJsonObject((await runCli('workspace', [
+    'open',
+    ...stateArgs(state),
+    '--open-max-files',
+    '6',
+  ])).stdout)
+  assert.ok(opened.plannedPaths.includes('docs/guide.md'))
+  assert.ok(opened.hydratedPaths.includes('docs/guide.md'))
+  assert.equal(await fs.readFile(path.join(state.workspace, 'docs/guide.md'), 'utf8'), '# Pinned guide\n')
+})
+
+test('workspace open leaves encrypted secret-zone paths cloud-only when the decryption key is missing', async () => {
+  const state = await makeState()
+  const blobRoot = path.join(state.root, 'blob-store')
+  const key = Buffer.alloc(32, 23).toString('base64')
+  const keyedArgs = [
+    ...stateArgs(state),
+    '--blob-provider',
+    'filesystem',
+    '--blob-root',
+    blobRoot,
+    '--client-encryption-key',
+    `base64:${key}`,
+  ]
+  const noKeyArgs = [
+    ...stateArgs(state),
+    '--blob-provider',
+    'filesystem',
+    '--blob-root',
+    blobRoot,
+  ]
+
+  await runCli('init', [...keyedArgs, '--force'])
+  await runCli('hydrate', keyedArgs)
+  const secretPath = path.join(state.workspace, '.private/env/repo-root/.env.local')
+  await fs.mkdir(path.dirname(secretPath), { recursive: true })
+  await fs.writeFile(secretPath, 'SECRET=open-missing-key\n', 'utf8')
+  await runCli('sync-once', keyedArgs)
+  await runCli('workspace', ['dehydrate', ...keyedArgs, '--force'])
+  await runCli('workspace', ['pin', ...noKeyArgs, '--path', '.private/env/repo-root/.env.local'])
+
+  const opened = parseLastJsonObject((await runCli('workspace', [
+    'open',
+    ...noKeyArgs,
+    '--open-max-files',
+    '8',
+  ])).stdout)
+  assert.equal(opened.state, 'partial')
+  assert.ok(opened.plannedPaths.includes('.private/env/repo-root/.env.local'))
+  assert.deepEqual(
+    opened.blockedPaths.filter((entry) => entry.path === '.private/env/repo-root/.env.local'),
+    [{ path: '.private/env/repo-root/.env.local', reason: 'client_encryption_key_missing' }],
+  )
+  assert.equal(await pathExists(secretPath), false)
+
+  const status = JSON.parse((await runCli('status', noKeyArgs)).stdout)
+  assert.equal(status.workspace.files['.private/env/repo-root/.env.local'].state, 'blocked')
+  assert.equal(status.workspace.openHydration.blockedPaths[0].reason, 'client_encryption_key_missing')
+})
+
+test('collaborator workspace open never exposes hidden .private path names', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await addCloudFiles(state, {
+    '.private/owner-plan.md': 'owner-only\n',
+    'src/shared.js': 'export const shared = true\n',
+  })
+  await setChangeSetVisibility(state, 'team-visible')
+  const cloud = await readJson(state.cloud)
+  cloud.collaborators = [{ id: 'user_collab', role: 'member' }]
+  await writeJson(state.cloud, cloud)
+
+  const collaboratorArgs = [
+    ...stateArgs(state),
+    '--requester-id',
+    'user_collab',
+    '--session-id',
+    'session_collab',
+  ]
+  await runCli('workspace', ['attach', ...collaboratorArgs])
+  const opened = parseLastJsonObject((await runCli('workspace', [
+    'open',
+    ...collaboratorArgs,
+    '--open-max-files',
+    '10',
+  ])).stdout)
+  const serialized = JSON.stringify(opened)
+  assert.equal(serialized.includes('.private'), false)
+  assert.equal(opened.requester.role, 'member')
+  assert.equal(opened.hiddenScopeCounts.private, 2)
+  assert.ok(opened.plannedPaths.includes('README.md'))
+  assert.ok(opened.plannedPaths.includes('src/shared.js'))
+
+  const status = JSON.parse((await runCli('status', collaboratorArgs)).stdout)
+  assert.equal(JSON.stringify(status.workspace.openHydration).includes('.private'), false)
+  assert.equal(status.hiddenScopeCounts.private, 2)
 })
 
 test('workspace attach refuses non-empty unmanaged folders', async () => {

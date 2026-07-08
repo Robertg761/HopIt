@@ -48,6 +48,7 @@ export function parseOptions(args) {
     'production-safe',
     'execute',
     'recursive',
+    'with-siblings',
     'skip-cloud-registration',
   ])
 

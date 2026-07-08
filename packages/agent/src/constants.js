@@ -58,6 +58,11 @@ export const objectBlobProvider = {
 }
 
 export const defaultFileStorageBudgetBytes = 1_000_000_000
+export const defaultOpenHydrationMaxFiles = 64
+export const defaultOpenHydrationMaxBytes = 1_048_576
+export const defaultOpenHydrationSmallFileBytes = 64_000
+export const defaultSiblingHydrationMaxFiles = 8
+export const defaultSiblingHydrationMaxBytes = 128_000
 export const r2FreeStorageTierBytes = 10_000_000_000
 export const r2DefaultFreeOnlyBudgetBytes = 8_000_000_000
 export const serviceReadyTimeoutMs = 60_000
