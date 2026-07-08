@@ -3,7 +3,7 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { serviceReadyTimeoutMs, serviceStatusFetchTimeoutMs } from './constants.js'
 import { agentSessionTokenFromOptions, readJson, sendJson, writeJson } from './io.js'
-import { assertWorkspacePathSafe, remotePullEnabled } from './paths.js'
+import { assertWorkspacePathSafe, remotePullEnabled, remotePushEnabled } from './paths.js'
 import { readAgentCloudEndpoint, readAgentEventsEndpoint, readAgentJournalEndpoint, readAgentStatusEndpoint } from './status-endpoints.js'
 import { watchWorkspace } from './watch.js'
 import { spawn } from 'node:child_process'
@@ -204,7 +204,7 @@ export async function waitForServiceReady(options, waitOptions) {
       lastStatus.running &&
       lastStatus.agent?.ok === true &&
       lastStatus.agent?.readiness === 'ready' &&
-      lastStatus.agent?.watch?.state === 'watching' &&
+      serviceWatchReady(lastStatus.agent?.watch?.state) &&
       agentWatchStartedAfter(lastStatus.agent, waitOptions.startedAt)
     ) {
       return lastStatus
@@ -224,6 +224,10 @@ export async function waitForServiceReady(options, waitOptions) {
       waitOptions.logPath
     }. Last status: ${JSON.stringify(lastStatus)}`,
   )
+}
+
+export function serviceWatchReady(state) {
+  return state === 'watching' || state === 'polling-degraded'
 }
 
 export async function stopService(options, stopOptions = {}) {
@@ -395,6 +399,12 @@ export function runtimeArgsFromOptions(options) {
   }
   if (remotePullEnabled(options)) {
     args.push('--remote-pull')
+  }
+  if (remotePushEnabled(options)) {
+    args.push('--remote-push')
+  }
+  if (options['remote-push-url']) {
+    args.push('--remote-push-url', options['remote-push-url'])
   }
   if (options['remote-pull-cooldown-ms']) {
     args.push('--remote-pull-cooldown-ms', options['remote-pull-cooldown-ms'])

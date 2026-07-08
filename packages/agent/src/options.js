@@ -38,6 +38,7 @@ export function parseOptions(args) {
     'allow-local-cloud',
     'include-private',
     'remote-pull',
+    'remote-push',
     'auto-refresh',
     'json',
     'start-service',
@@ -85,6 +86,12 @@ export function applyRuntimeDefaults(options, provided) {
   }
   if (!provided.has('remote-pull') && isTruthyEnv(process.env.HOPIT_REMOTE_PULL)) {
     options['remote-pull'] = true
+  }
+  if (!provided.has('remote-push') && isTruthyEnv(process.env.HOPIT_REMOTE_PUSH)) {
+    options['remote-push'] = true
+  }
+  if (!provided.has('remote-push-url') && process.env.HOPIT_REMOTE_PUSH_URL) {
+    options['remote-push-url'] = process.env.HOPIT_REMOTE_PUSH_URL
   }
   if (!provided.has('auto-refresh') && isTruthyEnv(process.env.HOPIT_AUTO_REFRESH)) {
     options['auto-refresh'] = true
@@ -157,4 +164,3 @@ export function defaultAgentStateRoot() {
 export function defaultWorkspaceRoot() {
   return path.join(os.homedir(), 'HopIt Workspaces')
 }
-

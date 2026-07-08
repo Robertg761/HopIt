@@ -2019,7 +2019,7 @@ test('service start exposes status and service stop cleans up the pid file', asy
   assert.equal(startRecord.service.ok, true)
   assert.equal(startRecord.service.running, true)
   assert.equal(startRecord.service.agent.readiness, 'ready')
-  assert.equal(startRecord.service.agent.watch.state, 'watching')
+  assert.match(startRecord.service.agent.watch.state, /^(watching|polling-degraded)$/)
 
   t.after(async () => {
     try {
@@ -2035,7 +2035,7 @@ test('service start exposes status and service stop cleans up the pid file', asy
   assert.equal(running.pid, startRecord.pid)
   assert.equal(running.ok, true)
   assert.equal(running.agent.readiness, 'ready')
-  assert.equal(running.agent.watch.state, 'watching')
+  assert.match(running.agent.watch.state, /^(watching|polling-degraded)$/)
   assert.equal(running.agent.cloud.service, 'fixture-json-cloud-graph')
 
   const stopped = await runCli('service', ['stop', ...serviceArgs])

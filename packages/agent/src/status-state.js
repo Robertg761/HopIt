@@ -5,7 +5,7 @@ import { ConflictError, entryEncoding, entryKind, workspaceMode } from './consta
 import { privacyZoneForPath } from '@hopit/core/crypto'
 import { findLastEvent, findLastEventOf, readNdjson } from './io.js'
 import { cloudEntryEquals, countCloudScopes, countEntryScopes, normalizeCloudFileEntry, toCloudPath } from './journal.js'
-import { remotePullEnabled, remoteRefreshIntervalMs } from './paths.js'
+import { remotePullEnabled, remotePushEnabled, remotePushUrl, remoteRefreshIntervalMs } from './paths.js'
 import { isTimestampAtOrAfter } from './service.js'
 import { findIndexedCodebase, localCacheSnapshotForCloud, readWorkspaceIndex, workspaceIndexSummary } from './workspace-index.js'
 import { buildRemoteCursor, buildWorkspaceHydration, contentManifestSummary, readSingleWorkspaceEntry, workspaceFilePath, workspaceLocalChanges } from './workspace-manifest.js'
@@ -58,6 +58,32 @@ export async function readAgentState(options) {
     lastRemotePullSkipped,
     lastRemotePullFailed,
     latestRemotePullEvent,
+  })
+  const lastRemotePushStarted = findLastEvent(eventEntries, 'remote-push.started')
+  const lastRemotePushConnected = findLastEvent(eventEntries, 'remote-push.connected')
+  const lastRemotePushDisconnected = findLastEvent(eventEntries, 'remote-push.disconnected')
+  const lastRemotePushFallbackPolling = findLastEvent(eventEntries, 'remote-push.fallback_polling')
+  const lastRemotePushApplied = findLastEvent(eventEntries, 'remote-push.applied')
+  const lastRemotePushSkipped = findLastEvent(eventEntries, 'remote-push.skipped')
+  const lastRemotePushFailed = findLastEvent(eventEntries, 'remote-push.failed')
+  const latestRemotePushEvent = findLastEventOf(eventEntries, [
+    'remote-push.started',
+    'remote-push.connected',
+    'remote-push.disconnected',
+    'remote-push.fallback_polling',
+    'remote-push.applied',
+    'remote-push.skipped',
+    'remote-push.failed',
+  ])
+  const remotePushHealth = buildRemotePushHealth(options, {
+    lastRemotePushStarted,
+    lastRemotePushConnected,
+    lastRemotePushDisconnected,
+    lastRemotePushFallbackPolling,
+    lastRemotePushApplied,
+    lastRemotePushSkipped,
+    lastRemotePushFailed,
+    latestRemotePushEvent,
   })
   const latestRefreshEvent = findLastEventOf(eventEntries, [
     'refresh.started',
@@ -202,6 +228,14 @@ export async function readAgentState(options) {
     lastRemotePullSkipped,
     lastRemotePullFailed,
     latestRemotePullEvent,
+    lastRemotePushStarted,
+    lastRemotePushConnected,
+    lastRemotePushDisconnected,
+    lastRemotePushFallbackPolling,
+    lastRemotePushApplied,
+    lastRemotePushSkipped,
+    lastRemotePushFailed,
+    latestRemotePushEvent,
     lastReviewOpened: findLastEvent(eventEntries, 'change_set.review_opened'),
     lastChangeSetMerged: findLastEvent(eventEntries, 'change_set.merged'),
     lastConflictDetected: findLastEvent(eventEntries, 'change_set.conflict_detected'),
@@ -238,7 +272,8 @@ export async function readAgentState(options) {
         failedJournalEntries.length === 0 &&
         syncHealth.state !== 'failed' &&
         refreshHealth.state !== 'blocked' &&
-        !watchHealth.state.endsWith('degraded') &&
+        watchHealth.state !== 'unavailable-degraded' &&
+        watchHealth.state !== 'degraded' &&
         watchHealth.state !== 'blocked',
       generatedAt: new Date().toISOString(),
       readiness: initialized ? 'ready' : attached ? 'attached' : 'not_initialized',
@@ -309,6 +344,7 @@ export async function readAgentState(options) {
         lastUpdate: lastRemoteUpdate,
       },
       remotePull: remotePullHealth,
+      remotePush: remotePushHealth,
       watch: watchHealth,
       events: {
         path: eventsSummary.path,
@@ -331,6 +367,14 @@ export async function readAgentState(options) {
         lastRemotePullSkipped,
         lastRemotePullFailed,
         latestRemotePullEvent,
+        lastRemotePushStarted,
+        lastRemotePushConnected,
+        lastRemotePushDisconnected,
+        lastRemotePushFallbackPolling,
+        lastRemotePushApplied,
+        lastRemotePushSkipped,
+        lastRemotePushFailed,
+        latestRemotePushEvent,
         lastReviewOpened: eventsSummary.lastReviewOpened,
         lastChangeSetMerged: eventsSummary.lastChangeSetMerged,
         lastConflictDetected: eventsSummary.lastConflictDetected,
@@ -724,6 +768,53 @@ export function buildRemotePullHealth(options, remotePullEvents) {
     lastSkipped: lastRemotePullSkipped,
     lastFailed: lastRemotePullFailed,
     latestEvent: latestRemotePullEvent,
+    lastError: latestProblemIsCurrent ? (latestProblem.detail?.reason ?? null) : null,
+  }
+}
+
+export function buildRemotePushHealth(options, remotePushEvents) {
+  const enabled = remotePushEnabled(options)
+  const latestRemotePushEvent = remotePushEvents.latestRemotePushEvent ?? null
+  const latestProblem = latestEvent([
+    remotePushEvents.lastRemotePushSkipped,
+    remotePushEvents.lastRemotePushFailed,
+    remotePushEvents.lastRemotePushDisconnected,
+  ])
+  const latestProblemIsCurrent = latestProblem && latestProblem === latestRemotePushEvent
+  let state = enabled ? 'push-disconnected' : 'disabled'
+
+  if (enabled && latestRemotePushEvent?.event === 'remote-push.connected') {
+    state = 'push-connected'
+  } else if (enabled && latestRemotePushEvent?.event === 'remote-push.disconnected') {
+    state = 'push-disconnected'
+  } else if (enabled && latestRemotePushEvent?.event === 'remote-push.fallback_polling') {
+    state = 'push-fallback-polling'
+  } else if (enabled && latestRemotePushEvent?.event === 'remote-push.skipped') {
+    state = 'push-skipped'
+  } else if (enabled && latestRemotePushEvent?.event === 'remote-push.applied') {
+    state = 'push-applied'
+  } else if (enabled && latestRemotePushEvent?.event === 'remote-push.failed') {
+    state = 'push-disconnected'
+  }
+
+  return {
+    enabled,
+    state,
+    hubUrl: enabled ? remotePushUrl(options) : null,
+    safeRefreshOnly: enabled,
+    lastStarted: remotePushEvents.lastRemotePushStarted ?? null,
+    lastConnected: remotePushEvents.lastRemotePushConnected ?? null,
+    lastDisconnected: remotePushEvents.lastRemotePushDisconnected ?? null,
+    lastFallbackPolling: remotePushEvents.lastRemotePushFallbackPolling ?? null,
+    lastApplied: remotePushEvents.lastRemotePushApplied ?? null,
+    lastSkipped: remotePushEvents.lastRemotePushSkipped ?? null,
+    lastFailed: remotePushEvents.lastRemotePushFailed ?? null,
+    latestEvent: latestRemotePushEvent,
+    lastEventId: latestRemotePushEvent?.detail?.eventId ?? null,
+    lastPushedRevision: latestRemotePushEvent?.detail?.pushedRevision ??
+      latestRemotePushEvent?.detail?.lastPushedRevision ??
+      null,
+    lastAppliedRevision: remotePushEvents.lastRemotePushApplied?.detail?.toRevision ?? null,
     lastError: latestProblemIsCurrent ? (latestProblem.detail?.reason ?? null) : null,
   }
 }

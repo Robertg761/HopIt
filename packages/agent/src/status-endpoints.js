@@ -5,7 +5,7 @@ import { workspaceMode } from './constants.js'
 import { findLastEvent, findLastEventOf, readNdjson } from './io.js'
 import { countCloudScopes, countEntryScopes } from './journal.js'
 import { cloudLocationFromOptions } from './paths.js'
-import { buildRefreshHealth, buildRemotePullHealth, buildSyncHealth, buildWatchHealth, classifyJournalEntries, workspaceRootFromOptions } from './status-state.js'
+import { buildRefreshHealth, buildRemotePullHealth, buildRemotePushHealth, buildSyncHealth, buildWatchHealth, classifyJournalEntries, workspaceRootFromOptions } from './status-state.js'
 import { findIndexedCodebase, localCacheSnapshotForCloud, readWorkspaceIndex, workspaceIndexSummary } from './workspace-index.js'
 import { buildRemoteCursor, buildWorkspaceHydration, contentManifestSummary } from './workspace-manifest.js'
 import { existsSync, watch } from 'node:fs'
@@ -28,7 +28,9 @@ export async function readAgentStatusEndpoint(options) {
     path: path.resolve(options.journal),
     exists: existsSync(options.journal),
   }
-  const indexedCodebase = findIndexedCodebase(workspaceIndex, options['codebase-id'], options.workspace)
+  const indexedCodebase =
+    findIndexedCodebase(workspaceIndex, options['codebase-id'], options.workspace) ??
+    findIndexedCodebaseByWorkspace(workspaceIndex, options.workspace)
   const cloudSummary = fastCloudSummaryFromIndex(options, cloudService, indexedCodebase)
   const workspaceExists = existsSync(options.workspace)
   const hydration = buildWorkspaceHydration({
@@ -47,6 +49,7 @@ export async function readAgentStatusEndpoint(options) {
     eventsSummary,
     hydration,
   })
+  const remotePushHealth = buildRemotePushHealth(options, eventsSummary)
   const initialized = cloudSummary.exists && (hydration.state === 'materialized' || hydration.state === 'partial')
   const attached = cloudSummary.exists && hydration.state === 'metadata-only'
   const readiness = initialized || watchHealth.state === 'watching' ? 'ready' : attached ? 'attached' : 'not_initialized'
@@ -58,7 +61,8 @@ export async function readAgentStatusEndpoint(options) {
       journalSummary.failedCount === 0 &&
       syncHealth.state !== 'failed' &&
       refreshHealth.state !== 'blocked' &&
-      !watchHealth.state.endsWith('degraded') &&
+      watchHealth.state !== 'unavailable-degraded' &&
+      watchHealth.state !== 'degraded' &&
       watchHealth.state !== 'blocked',
     generatedAt: new Date().toISOString(),
     readiness,
@@ -134,6 +138,7 @@ export async function readAgentStatusEndpoint(options) {
       lastUpdate: eventsSummary.lastRemoteUpdate,
     },
     remotePull: remotePullHealth,
+    remotePush: remotePushHealth,
     watch: watchHealth,
     events: eventsSummary,
   }
@@ -261,6 +266,22 @@ export function summarizeAgentEvents(eventEntries) {
     'remote-pull.skipped',
     'remote-pull.failed',
   ])
+  const lastRemotePushStarted = findLastEvent(eventEntries, 'remote-push.started')
+  const lastRemotePushConnected = findLastEvent(eventEntries, 'remote-push.connected')
+  const lastRemotePushDisconnected = findLastEvent(eventEntries, 'remote-push.disconnected')
+  const lastRemotePushFallbackPolling = findLastEvent(eventEntries, 'remote-push.fallback_polling')
+  const lastRemotePushApplied = findLastEvent(eventEntries, 'remote-push.applied')
+  const lastRemotePushSkipped = findLastEvent(eventEntries, 'remote-push.skipped')
+  const lastRemotePushFailed = findLastEvent(eventEntries, 'remote-push.failed')
+  const latestRemotePushEvent = findLastEventOf(eventEntries, [
+    'remote-push.started',
+    'remote-push.connected',
+    'remote-push.disconnected',
+    'remote-push.fallback_polling',
+    'remote-push.applied',
+    'remote-push.skipped',
+    'remote-push.failed',
+  ])
   const latestRefreshEvent = findLastEventOf(eventEntries, [
     'refresh.started',
     'refresh.blocked',
@@ -297,6 +318,14 @@ export function summarizeAgentEvents(eventEntries) {
     lastRemotePullSkipped,
     lastRemotePullFailed,
     latestRemotePullEvent,
+    lastRemotePushStarted,
+    lastRemotePushConnected,
+    lastRemotePushDisconnected,
+    lastRemotePushFallbackPolling,
+    lastRemotePushApplied,
+    lastRemotePushSkipped,
+    lastRemotePushFailed,
+    latestRemotePushEvent,
     lastReviewOpened: findLastEvent(eventEntries, 'change_set.review_opened'),
     lastChangeSetMerged: findLastEvent(eventEntries, 'change_set.merged'),
     lastConflictDetected: findLastEvent(eventEntries, 'change_set.conflict_detected'),
@@ -391,3 +420,12 @@ export function fastCloudSummaryFromIndex(options, cloudService, indexedCodebase
   }
 }
 
+export function findIndexedCodebaseByWorkspace(index, workspacePath) {
+  if (!index || !workspacePath) return null
+  const resolvedWorkspace = path.resolve(workspacePath)
+  return (
+    (index.codebases ?? []).find((codebase) =>
+      path.resolve(codebase.workspace?.path ?? '') === resolvedWorkspace,
+    ) ?? null
+  )
+}

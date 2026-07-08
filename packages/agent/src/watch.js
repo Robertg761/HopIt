@@ -7,6 +7,7 @@ import { initCloud } from './commands/import.js'
 import { recoverJournal, refreshWorkspace, syncOnce } from './commands/sync.js'
 import { workspaceMode } from './constants.js'
 import { emit, findLastEventOf, readNdjson } from './io.js'
+import { createRemotePushClient } from './remote-push.js'
 import { toCloudPath } from './journal.js'
 import { assertWorkspacePathSafe, remotePullEnabled, remoteRefreshIntervalMs } from './paths.js'
 import { normalizeWatchFilename, readJournalSafety, visibleRevisionFromEvent } from './status-state.js'
@@ -39,6 +40,7 @@ export async function watchWorkspace(options) {
   let watcher
   let poller = null
   let remotePuller = null
+  let remotePusher = null
   const scheduleSync = createWatchSyncScheduler(options, {
     afterDrain: async (detail) => {
       await remotePuller?.schedule('local-change', detail)
@@ -87,6 +89,11 @@ export async function watchWorkspace(options) {
   remotePuller = await createRemoteRefreshScheduler(options, {
     localSyncIdle: () => scheduleSync.isIdle?.() ?? true,
   })
+  remotePusher = await createRemotePushClient(options, {
+    localSyncIdle: () => scheduleSync.isIdle?.() ?? true,
+    remoteRefreshDecision,
+    refreshWorkspace,
+  })
 
   console.log(`HopIt agent watching ${options.workspace}`)
   console.log('Press Ctrl+C to stop.')
@@ -100,6 +107,7 @@ export async function watchWorkspace(options) {
       }
       poller?.close()
       remotePuller?.close()
+      remotePusher?.close()
     },
   }
 }
@@ -591,4 +599,3 @@ export async function remoteRefreshDecision(options, context) {
     toRevision: cloudHead.revision,
   }
 }
-

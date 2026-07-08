@@ -305,7 +305,7 @@ Still open:
 | Vercel/D1 production baseline | Active dogfood | Vercel hosts the protected dashboard and Clerk sign-in routing is live. The D1 database/env/seeding sequence is complete, `hopit-d1-api` proxies D1 for Vercel, hosted D1 reads can skip schema re-checks with `HOPIT_D1_ASSUME_SCHEMA=1`, hosted status reads are cached/coalesced and the hosted client polls less often to protect the free D1 budget, `hopit.dev` live API smoke checks pass, and the packaged LaunchAgent reports D1 cloud status. Automatic remote-pull is now activity-gated with a five-minute cooldown when enabled. |
 | D1 cloud graph | In progress | D1 now has schema, HTTP API backend, agent service integration, hosted status/codebase/file/account/action-job/member/invite/work-item/key-grant routes, automatic verified-owner bootstrap for `local-owner` migrations, account-visible codebase heads with actor access summaries, scoped-token configured-codebase fallback, actions-runner support, scoped D1 proxy session auth, scoped agent sessions, device key/user keyring/wrapped key metadata, project-board operations and UI, durable issue/discussion comments, historical export migration script, and D1 graph/collaboration/session/key round-trip tests. History reconstruction, retention policy, richer release assets, and full product write-path coverage remain to port or complete. |
 | Historical hosted graph export | Done | The retired export backup is retained under `/Users/robert/HopIt-Backups/convex/` as a migration/recovery source; the backend implementation was removed by WS1. |
-| Object blob storage | Mostly done | The agent has an S3-compatible blob provider boundary, Cloudflare R2 env contract, Backblaze B2-compatible migration path, filesystem-backed tests, metadata-only D1 commits, hash-verified hydrate/refresh/export, client-encrypted secret-object metadata, and dry-run-by-default storage GC. The live `hopit-blobs` R2 bucket exists, scoped local R2 credentials are configured for that bucket only, and read/write/hydrate/delete smoke coverage exists. Personal use keeps R2 free-only with an 8 GB cap, public access disabled, and a 1-day auto-delete lifecycle rule. Production retention policy and storage tier decisions remain. |
+| Object blob storage | Mostly done | The agent has an S3-compatible blob provider boundary, Cloudflare R2 env contract, Backblaze B2-compatible migration path, filesystem-backed tests, metadata-only D1 commits, hash-verified hydrate/refresh/export, client-encrypted secret-object metadata, and dry-run-by-default storage GC. The live `hopit-blobs` R2 bucket exists, scoped local R2 credentials are configured for that bucket only, and read/write/hydrate/delete smoke coverage exists. Personal use keeps R2 free-only with an 8 GB cap and public access disabled; the 1-day auto-delete lifecycle rule was removed on 2026-07-08 so stored blobs persist durably (verified: no object-backed rows existed while the rule was active). Production retention policy and storage tier decisions remain. |
 | `.private/` model | Done for spike | `.private/` files are synced/versioned and classified as owner-private; they are not ignored or skipped. Routed `.private/env/` secrets remain local-only by default, and sync only when object storage plus the legacy local key or `hop keys` user-vault bridge are configured so raw secret bytes never go to D1/R2. |
 | Privacy/encryption key model | In progress | The end-to-end plan is documented; agent crypto/envelope helpers now cover file envelopes, X25519 device wraps, user-vault unwrap, and encrypted recovery export; `hop keys` can create/status/export local keyrings; file entries carry derived privacy-zone metadata; D1 has key-management tables and first device/keyring/wrapped-key APIs; the dashboard can show redacted trusted-device and wrapped-key grant status; plaintext secret-zone files are rejected. Repo/private/secret zone keys, full private-repo file encryption, invite-time grants, independent secret grants, dashboard approval/recovery, revocation/rekey, and private path metadata remain. |
 | Safety journal | Done for spike | Pending, acknowledged, and failed entries are derived from journal/events and exposed through status. |
@@ -313,7 +313,7 @@ Still open:
 | Fixture cloud graph service boundary | Done | Commands now use a fixture-backed service boundary instead of direct command-level cloud JSON access. |
 | Main/change-set/owner/session/visibility contract | Done for fixture | The fixture graph and status surface include these identities and visibility fields. |
 | Same-owner two-session continuity | Done for spike | Device/session B can refresh acknowledged shared and `.private/` changes from device/session A. |
-| Automatic remote-update delivery | In progress | Remote-update events, explicit safe refresh, per-workspace materialization cursors, opt-in activity-gated `--remote-pull` with a five-minute default cooldown, graph-head cursor checks that avoid unchanged full graph reads, and one-shot `hop remote-pull` checks for clean materialized workspaces exist. Production-grade push/subscription delivery, default policy, and broader verification remain. |
+| Automatic remote-update delivery | In progress | Remote-update events, explicit safe refresh, per-workspace materialization cursors, opt-in activity-gated `--remote-pull` with a five-minute default cooldown, graph-head cursor checks that avoid unchanged full graph reads, one-shot `hop remote-pull`, and WS7a Stage 1 agent-side `--remote-push` NDJSON hint delivery with fixture hub coverage exist. Cloudflare Durable Object hub wiring, D1-route notifications, default policy, and broader production verification remain. |
 | Collaborator visibility simulation | Done for fixture | Tests prove private change sets hide non-owner content, team/review-visible change sets expose non-private paths, and `.private/` remains owner-only. |
 | Remote-update events | Done for spike | Refresh emits first-class `remote-update` events and status exposes the latest update. |
 | Review and merge | Done for fixture | Fixture commands open the selected active change set for review, merge it into Main, emit review/merge events, and expose review/merge state through status. |
@@ -945,6 +945,9 @@ Current foundation:
 - The current worktree includes opt-in activity-gated `--remote-pull` support for `watch` and `service start`, plus `hop remote-pull` for a deterministic one-shot safe refresh attempt.
 - Remote-pull checks the codebase-level graph head before full graph refresh, so unchanged activity-triggered checks do not repeatedly read all file metadata from the graph backend.
 - The production-profile same-Mac dogfood test uses two isolated state/workspace roots against one fixture graph and covers metadata-only dehydrate, single-file hydrate, refresh fallback, one-shot remote-pull apply, unchanged cursor skip before dirty scanning, and dirty-state blocking after a remote move without requiring loopback service access.
+- WS7a Stage 1 adds opt-in `--remote-push` / `HOPIT_REMOTE_PUSH=1` agent transport against a compact NDJSON hint stream. The client connects with codebase/state/device cursor context, treats envelopes as hints, calls the same safe remote-refresh decision path as `remote-pull`, reconnects with exponential backoff, and runs a fallback head check after reconnect.
+- Status now exposes `remotePush` state and events for `push-connected`, `push-disconnected`, `push-fallback-polling`, `push-skipped`, and `push-applied`, including last event id, pushed revision, applied revision, and current skip/failure reason.
+- Fixture tests cover clean apply, pending-journal skip, manifest-drift skip, duplicate idempotence, out-of-order convergence, reconnect fallback catch-up, metadata-only no-body hydration, and same-owner/collaborator `.private/` visibility.
 
 ### 0.9. Installer, Daemon, And Production Hygiene
 
@@ -1109,7 +1112,7 @@ Definition of done:
 
 ### July 2026 WS7 Remediation Gate
 
-Status: `Design complete; adversarial tests added`
+Status: `Design complete; adversarial tests added; WS7a Stage 1 implemented`
 
 Definition of done:
 
@@ -1124,6 +1127,7 @@ Current foundation:
 - [WS7b Demand Hydration Design](ws7b-demand-hydration-design.md) chooses open-time and intent-driven hydration for v1, rejects source-code placeholder files for the managed-folder adapter, and defers true read-triggered hydration to native filesystem-provider research.
 - [WS7c Object-Backed Diff And History Reconstruction Design](ws7c-object-backed-diff-history-design.md) defines per-file object-backed version rows, retention-aware storage GC, lazy blob fetches for compare views, and fixture demo acceptance criteria.
 - `packages/agent/test/agent-cli.test.js` now covers same-file two-device conflict preservation, crash-left pending journal recovery, skewed mtime/clock behavior, watch-mode sync racing refresh, and object-storage budget exhaustion.
+- WS7a Stage 1 implements the agent-side push client plus local fake push hub tests only. Stage 2 remains the Cloudflare Durable Object hub and D1-route notify integration.
 
 Proof command:
 
@@ -1131,7 +1135,30 @@ Proof command:
 node --test --test-name-pattern "adversarial|crash-left|skewed|racing refresh|storage budget failure" packages/agent/test/agent-cli.test.js
 ```
 
-WS7a, WS7b, and WS7c implementation remains intentionally gated on owner approval of the design docs.
+WS7b and WS7c implementation remains intentionally gated on owner approval of the design docs. WS7a Stage 2 remains pending after the agent-side fixture-first slice.
+
+### 2026-07-08 WS7a Stage 1 — Agent Push Delivery
+
+Implemented:
+
+- Added an opt-in agent-side push client behind `--remote-push` / `HOPIT_REMOTE_PUSH=1` and `--remote-push-url` / `HOPIT_REMOTE_PUSH_URL`.
+- The Stage 1 transport consumes compact `codebase.remote_update` NDJSON envelopes with codebase id, selected state id, revision, event id, changed paths, and scope counts only. Envelopes are treated as hints and never carry file bytes.
+- Push delivery reuses the existing `remoteRefreshDecision` safety path before calling `refreshWorkspace`, so pending journals, failed recovery state, metadata-only or partial hydration, and unjournaled manifest drift still block materialization.
+- The client records `remote-push.started`, `connected`, `disconnected`, `fallback_polling`, `skipped`, `applied`, and `failed` events. Status exposes these as `remotePush` with last event id, last pushed revision, last applied revision, and last skip/failure reason.
+- Reconnect uses exponential backoff and runs one fallback head-cursor refresh decision after reconnect to catch missed events.
+- Added a loopback-only stdlib fake push hub in `packages/agent/test/remote-push.test.js`.
+
+Proof commands:
+
+```bash
+node --test packages/agent/test/remote-push.test.js
+```
+
+Deferred to Stage 2:
+
+- Cloudflare Durable Object/WebSocket hub.
+- D1 mutation route notification after commit.
+- Production push rollout/default policy beyond the opt-in agent flag.
 
 ## Known Gaps
 
@@ -1151,7 +1178,7 @@ WS7a, WS7b, and WS7c implementation remains intentionally gated on owner approva
 - Requester-aware dashboard filtering exists, but the auth-backed collaborator permission model is not enforced across every user-facing write yet.
 - A first read-only code-review browser slice exists, now with routeable codebase review/compare/history pages, durable review-linked follow-up issues/comments, D1-backed snapshot-anchored inline review threads, and durable review decisions. A true tree/diff API and object-backed history reconstruction are still pending.
 - Issue, discussion, release, durable comments, release-asset attachment, project-board UI, routeable work-item detail pages, and first codebase notification feed exist for the first slice; richer linked-object cards and complete permission coverage are still pending.
-- No production-grade push/subscription remote-update delivery yet; explicit refresh, per-workspace cursor state, and opt-in activity-gated remote-pull are personal-dogfood proof rather than the final v1 delivery model.
+- No production-grade Cloudflare push/subscription remote-update delivery yet; explicit refresh, per-workspace cursor state, opt-in activity-gated remote-pull, and WS7a Stage 1 local fake-hub push are proof layers rather than the final v1 delivery model.
 - Service mode syncs local edits and serves status. Local two-service simulation proves device A edits sync through the watcher, while device B pulls them through explicit safe refresh before switching devices.
 - No conflict resolution UI yet; fixture conflict detection/status exists.
 - `hop import-git` now provides a production-safe literal Git checkout conversion path for snapshot-style repo migration, including `.git/` as owner-private metadata and encrypted routed secrets. Full Git history import, ancestry preservation, and remote publish are still pending.

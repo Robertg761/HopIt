@@ -23,6 +23,14 @@ export function remotePullEnabled(options) {
   return Boolean(options['remote-pull'] || options['auto-refresh'])
 }
 
+export function remotePushEnabled(options) {
+  return Boolean(options['remote-push'])
+}
+
+export function remotePushUrl(options) {
+  return options['remote-push-url'] ?? null
+}
+
 export function remoteRefreshIntervalMs(options) {
   const usesCooldownOption = options['remote-pull-cooldown-ms'] !== undefined
   const rawValue = usesCooldownOption ? options['remote-pull-cooldown-ms'] : (options['remote-refresh-interval-ms'] ?? '300000')
@@ -63,4 +71,3 @@ export async function assertWorkspacePathSafe(options, context = {}) {
     }
   }
 }
-

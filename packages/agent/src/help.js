@@ -80,6 +80,8 @@ Options:
   --host <host>        Status server host, defaults to 127.0.0.1
   --port <port>        Status server port, defaults to 4785
   --remote-pull        Opt into activity-gated safe cloud refresh in watch/service mode
+  --remote-push        Opt into push-delivered safe cloud refresh hints in watch/service mode
+  --remote-push-url <url> Push hub NDJSON stream URL, or HOPIT_REMOTE_PUSH_URL
   --remote-pull-cooldown-ms <ms> Minimum delay between activity-triggered remote pulls, default 300000
   --remote-refresh-interval-ms <ms> Legacy alias for --remote-pull-cooldown-ms
   --start-service      install: start the production service after preparing paths
