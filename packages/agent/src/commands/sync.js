@@ -2,7 +2,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { canRequesterSeePath, createCloudGraphService, filterVisibleGraphForRequester, removeEmptyAncestorDirectories, summarizeGraphContract, summarizeRequester, visibilityContextForGraph, visibilityRequestFromOptions } from '../cloud/d1-graph-service.js'
-import { ConflictError, entryKind, workspaceMode } from '../constants.js'
+import { bulkJournalCommitChunkSize, bulkJournalCommitThreshold, ConflictError, entryKind, workspaceMode } from '../constants.js'
 import { privacyZoneForPath } from '@hopit/core/crypto'
 import { appendNdjson, emit, findLastEventOf, readNdjson } from '../io.js'
 import { actorIdFromOptions, bufferFromCloudFileEntry, cloudEntryEquals, countCloudScopes, countEntryScopes, countPathScopes, ensureActiveChangeSet, journalContextForCloud, normalizeCloudFileEntry, recordChangeSetConflict } from '../journal.js'
@@ -248,13 +248,15 @@ export async function performSyncOnce(options, contextDetail = {}) {
   )
   const writeEvents = []
   const now = new Date().toISOString()
+  const plannedEntries = []
+  const planningCloud = structuredClone(cloud)
 
   for (const [relativePath, rawEntry] of Object.entries(diskEntries)) {
     if (!canRequesterSeePath(visibilityContext, relativePath)) continue
 
     const entryPayload = normalizeCloudFileEntry(relativePath, rawEntry)
-    const current = cloud.files[relativePath]
-      ? normalizeCloudFileEntry(relativePath, cloud.files[relativePath])
+    const current = planningCloud.files[relativePath]
+      ? normalizeCloudFileEntry(relativePath, planningCloud.files[relativePath])
       : null
     const scope = scopeForPath(relativePath)
     cloudPaths.delete(relativePath)
@@ -275,19 +277,11 @@ export async function performSyncOnce(options, contextDetail = {}) {
       baseRevision: current?.revision ?? null,
       createdAt: now,
       status: 'pending',
-      ...journalContextForCloud(cloud),
+      ...journalContextForCloud(planningCloud),
     }
 
-    await appendNdjson(options.journal, entry)
-    await emit(options, 'write.journaled', entry)
-
-    const acknowledgement = await cloudService.commitJournalEntry(cloud, entry, {
-      entry: entryPayload,
-      now,
-    })
-    await emit(options, 'cloud.acknowledged', acknowledgement)
-
-    writeEvents.push(entry)
+    plannedEntries.push({ entry, payload: entryPayload })
+    cloudService.applyJournalEntry(planningCloud, entry, { entry: entryPayload, now })
   }
 
   for (const relativePath of cloudPaths) {
@@ -298,23 +292,27 @@ export async function performSyncOnce(options, contextDetail = {}) {
       id: randomUUID(),
       type: 'delete',
       path: relativePath,
-      kind: cloud.files[relativePath]?.kind ?? entryKind.file,
+      kind: planningCloud.files[relativePath]?.kind ?? entryKind.file,
       scope,
       privacyZone: privacyZoneForPath(relativePath),
-      baseRevision: cloud.files[relativePath]?.revision ?? null,
+      baseRevision: planningCloud.files[relativePath]?.revision ?? null,
       createdAt: now,
       status: 'pending',
-      ...journalContextForCloud(cloud),
+      ...journalContextForCloud(planningCloud),
     }
 
-    await appendNdjson(options.journal, entry)
-    await emit(options, 'write.journaled', entry)
-
-    const acknowledgement = await cloudService.commitJournalEntry(cloud, entry, { now })
-    await emit(options, 'cloud.acknowledged', acknowledgement)
-
-    writeEvents.push(entry)
+    plannedEntries.push({ entry, payload: null })
+    cloudService.applyJournalEntry(planningCloud, entry, { now })
   }
+
+  writeEvents.push(...await commitPlannedJournalEntries({
+    options,
+    cloudService,
+    cloud,
+    plannedEntries,
+    now,
+    summaryEvent: 'sync.bulk_commit',
+  }))
 
   if (!cloudService.usesAtomicFileMutations) {
     await cloudService.writeGraph(cloud)
@@ -355,6 +353,79 @@ export async function recoverJournal(options) {
     acknowledged: 0,
     failed: 0,
     skipped: journalEntries.length - candidates.length,
+  }
+
+  if (candidates.length > bulkJournalCommitThreshold && typeof cloudService.commitJournalEntries === 'function') {
+    for (let offset = 0; offset < candidates.length; offset += bulkJournalCommitChunkSize) {
+      const chunkEntries = candidates.slice(offset, offset + bulkJournalCommitChunkSize)
+      const plannedEntries = []
+      for (const entry of chunkEntries) {
+        result.attempted += 1
+        try {
+          const recovery = await prepareRecovery(cloud, entry, options.workspace)
+          plannedEntries.push({
+            entry,
+            payload: recovery.entry,
+            recoveryReason: recovery.reason,
+          })
+        } catch (error) {
+          result.failed += 1
+          await emit(options, 'journal.recovery_failed', {
+            id: entry.id,
+            type: entry.type,
+            path: entry.path,
+            scope: entry.scope ?? scopeForPath(entry.path ?? ''),
+            reason: error.message,
+          })
+        }
+      }
+
+      const committed = await commitPlannedJournalEntries({
+        options,
+        cloudService,
+        cloud,
+        plannedEntries,
+        now: new Date().toISOString(),
+        summaryEvent: 'sync.bulk_commit',
+        journalAlreadyWritten: true,
+        acknowledgementDetail: (plan) => ({
+          recovered: true,
+          recoveryReason: plan.recoveryReason,
+        }),
+      })
+      result.acknowledged += committed.length
+      recoveredPaths.push(...committed.map((entry) => entry.path).filter(Boolean))
+    }
+
+    await emit(options, 'journal.recovery_complete', {
+      ...result,
+      revision: cloud.revision,
+      service: cloudService.type,
+      contract: summarizeGraphContract(cloud),
+      scopeCounts: countCloudScopes(cloud),
+    })
+
+    if (result.acknowledged > 0 && result.failed === 0) {
+      const workspaceIndex = await readWorkspaceIndex(options)
+      const indexedCodebase = findIndexedCodebase(
+        workspaceIndex,
+        cloud.codebase?.id ?? options['codebase-id'],
+        options.workspace,
+      )
+      const diskEntries = await readWorkspaceFiles(options.workspace, options)
+      const hydrationState = workspaceIndexHydrationStateForSync(indexedCodebase)
+      const visibleCloud = filterVisibleGraphForRequester(cloud, visibilityRequestFromOptions(options))
+      await upsertWorkspaceIndexFromCloud(options, visibleCloud, {
+        reason: 'recover',
+        lastEvent: 'journal.recovery_complete',
+        hydrationState,
+        hydratedPaths: hydratedPathsAfterSync(indexedCodebase, Object.keys(diskEntries), Object.keys(visibleCloud.files ?? {})),
+        materialization: hydrationState === 'materialized' ? 'managed-folder' : 'partial-managed-folder',
+        syncedPaths: recoveredPaths,
+      })
+    }
+
+    return result
   }
 
   for (const entry of candidates) {
@@ -423,6 +494,86 @@ export async function recoverJournal(options) {
   }
 
   return result
+}
+
+async function commitPlannedJournalEntries({
+  options,
+  cloudService,
+  cloud,
+  plannedEntries,
+  now = new Date().toISOString(),
+  summaryEvent = 'sync.bulk_commit',
+  acknowledgementDetail = null,
+  journalAlreadyWritten = false,
+}) {
+  if (plannedEntries.length === 0) return []
+
+  const useBulk =
+    plannedEntries.length > bulkJournalCommitThreshold &&
+    typeof cloudService.commitJournalEntries === 'function'
+
+  if (!useBulk) {
+    const committed = []
+    for (const plan of plannedEntries) {
+      if (!journalAlreadyWritten) {
+        await appendNdjson(options.journal, plan.entry)
+        await emit(options, 'write.journaled', plan.entry)
+      }
+      const acknowledgement = await cloudService.commitJournalEntry(cloud, plan.entry, {
+        entry: plan.payload,
+        now,
+      })
+      await emit(options, 'cloud.acknowledged', {
+        ...acknowledgement,
+        ...(typeof acknowledgementDetail === 'function' ? acknowledgementDetail(plan) : acknowledgementDetail),
+      })
+      committed.push(plan.entry)
+    }
+    return committed
+  }
+
+  for (const plan of plannedEntries) {
+    if (!journalAlreadyWritten) {
+      await appendNdjson(options.journal, plan.entry)
+      await emit(options, 'write.journaled', plan.entry)
+    }
+  }
+
+  const payloads = new Map()
+  for (const plan of plannedEntries) {
+    if (plan.payload) payloads.set(plan.entry.id, plan.payload)
+  }
+
+  const committed = []
+  await cloudService.commitJournalEntries(cloud, plannedEntries.map((plan) => plan.entry), {
+    entryPayloads: payloads,
+    now,
+    chunkSize: bulkJournalCommitChunkSize,
+    onChunkCommitted: async (chunk) => {
+      const scopeCounts = countEntryScopes(chunk.entries)
+      await emit(options, summaryEvent, {
+        storageMode: chunk.storageMode,
+        chunkIndex: chunk.chunkIndex,
+        chunkOffset: chunk.chunkOffset,
+        count: chunk.count,
+        fromRevision: chunk.fromRevision,
+        toRevision: chunk.toRevision,
+        paths: chunk.entries.map((entry) => entry.path).filter(Boolean),
+        scopeCounts,
+      })
+      for (const acknowledgement of chunk.acknowledgements) {
+        const matchingPlan = plannedEntries.find((plan) => plan.entry.id === acknowledgement.id)
+        await emit(options, 'cloud.acknowledged', {
+          ...acknowledgement,
+          ...(typeof acknowledgementDetail === 'function'
+            ? acknowledgementDetail(matchingPlan ?? { entry: acknowledgement })
+            : acknowledgementDetail),
+        })
+      }
+      committed.push(...chunk.entries)
+    },
+  })
+  return committed
 }
 
 export async function openChangeSetReview(options) {
@@ -514,4 +665,3 @@ export async function mergeChangeSet(options) {
     mergeState: cloud.selectedState.mergeState,
   })
 }
-

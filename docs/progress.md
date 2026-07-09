@@ -1,6 +1,6 @@
 # HopIt Progress Tracker
 
-Last updated: 2026-07-08
+Last updated: 2026-07-09
 
 This tracker is the working view of what is done, what is in progress, what is next, and what is still deliberately out of scope. The roadmap source remains [MVP Plan](mvp-plan.md), and the agent contract source remains [Local Agent Architecture](agent-architecture.md). This file turns those plans into a practical implementation ledger.
 
@@ -144,6 +144,44 @@ Result:
 - Delete commits remove the file row, advance the head, and write a tombstone `file_versions` row.
 - Remote-head races throw `ConflictError` with `selected_state_revision_mismatch` detail and leave file/version rows unchanged.
 - Scoped session commits through the Worker are accepted and emit one compact push envelope.
+
+## 2026-07-09 Bulk Chunked Journal Commits
+
+Large first-run imports and mirror backlogs now drain the local safety journal through guarded D1 chunks instead of one HTTP request per file. The per-file path remains unchanged for small edits.
+
+Implemented:
+
+- Added `commitJournalEntries` to the D1 backend. Each chunk sends one `queryBatch` request with one optimistic codebase head update, one guarded file mutation per entry, and one guarded `file_versions` insert per changed file.
+- Chose a chunk size of `40`: this keeps a full write chunk to `81` statements while each statement stays under D1's 100-bound-variable limit; a 4,000-file import drops from about 4,000 commit requests to about 100 chunk requests.
+- Added the agent threshold constant `20`, so normal small edits keep `storageMode: "d1-file-mutation"` and large drains switch to `storageMode: "d1-bulk-mutation"`.
+- Planned sync entries against a shadow graph before committing so bulk journal entries keep sequential selected-state/base revision context without advancing the real cloud state until the guarded chunk succeeds.
+- Preserved per-entry `cloud.acknowledged` events and added `sync.bulk_commit` chunk summaries with counts, revisions, paths, scopes, and storage mode.
+- Added fixture JSON bulk commits with one JSON write per chunk and matching version rows.
+- Kept object-backed entry preparation before an entry's metadata is included in a chunk.
+- Verified the Worker push path emits one remote-update envelope per chunk request, not one per file.
+- Verified a raced second chunk throws `ConflictError`, acknowledges only earlier chunks, and writes no file/version rows for the failed chunk.
+
+Proof commands:
+
+```bash
+node --test packages/agent/test/d1-backend.test.js
+node --test cloudflare/d1/api-worker.test.js
+npm run agent:test
+npm run lint
+npm run typecheck
+npm run typecheck:agent
+node packages/agent/src/cli.js help
+```
+
+Current result:
+
+- `node --test packages/agent/test/d1-backend.test.js`: passes with 14 tests, 14 passing, and 0 failures.
+- `node --test cloudflare/d1/api-worker.test.js`: passes with 10 tests, 10 passing, and 0 failures.
+- `npm run agent:test`: passes with 122 tests, 122 passing, and 0 failures.
+- `npm run lint`: passes.
+- `npm run typecheck`: passes.
+- `npm run typecheck:agent`: passes.
+- `node packages/agent/src/cli.js help`: prints the command help successfully.
 
 ## 2026-07-08 WS7c Object-Backed Diff History Log
 

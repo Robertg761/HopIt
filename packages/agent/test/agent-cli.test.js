@@ -633,6 +633,41 @@ test('CLI classifies .private files as owner-private while snapshotting and sync
   )
 })
 
+test('sync bulk-commits large fixture backlogs with per-entry acknowledgements', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+
+  const bulkDir = path.join(state.workspace, 'bulk')
+  await fs.mkdir(bulkDir, { recursive: true })
+  for (let index = 0; index < 45; index += 1) {
+    await fs.writeFile(
+      path.join(bulkDir, `file-${String(index).padStart(3, '0')}.txt`),
+      `fixture bulk ${index}\n`,
+      'utf8',
+    )
+  }
+
+  const sync = await runCli('sync-once', stateArgs(state))
+  assert.match(sync.stdout, /sync\.bulk_commit/)
+  assert.match(sync.stdout, /sync\.complete/)
+
+  const events = await readNdjson(state.events)
+  const bulkEvents = events.filter((event) => event.event === 'sync.bulk_commit')
+  const acknowledgements = events.filter((event) => event.event === 'cloud.acknowledged')
+  assert.equal(bulkEvents.length, 2)
+  assert.deepEqual(bulkEvents.map((event) => event.detail.count), [40, 5])
+  assert.equal(acknowledgements.length, 45)
+  assert.equal(
+    acknowledgements.every((event) => event.detail.storageMode === 'fixture-json-bulk-mutation'),
+    true,
+  )
+
+  const cloud = await readJson(state.cloud)
+  assert.equal(Object.keys(cloud.files).filter((filePath) => filePath.startsWith('bulk/')).length, 45)
+  assert.equal(cloud.fileVersions.filter((row) => row.path.startsWith('bulk/')).length, 45)
+})
+
 test('owner sync still journals and applies owner-private deletes', async () => {
   const state = await makeState()
   await runCli('init', [...stateArgs(state), '--force'])

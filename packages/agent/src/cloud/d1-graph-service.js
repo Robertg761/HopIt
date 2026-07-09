@@ -30,7 +30,7 @@ export class FixtureJsonCloudGraphService {
     this.path = options.cloud
     this.type = cloudServiceType
     this.location = path.resolve(options.cloud)
-    this.usesAtomicFileMutations = false
+    this.usesAtomicFileMutations = true
     this.blobStore = createObjectBlobStore(options)
   }
 
@@ -126,6 +126,77 @@ export class FixtureJsonCloudGraphService {
     return acknowledgement
   }
 
+  async commitJournalEntries(cloud, entries, options = {}) {
+    const pendingEntries = Array.isArray(entries) ? entries : []
+    if (pendingEntries.length === 0) return []
+
+    const chunkSize = normalizeChunkSize(options.chunkSize)
+    const acknowledgements = []
+    for (let offset = 0; offset < pendingEntries.length; offset += chunkSize) {
+      const chunkEntries = pendingEntries.slice(offset, offset + chunkSize)
+      const beforeGraph = (await this.exists()) ? await this.readGraph() : null
+      const previousVersions = Array.isArray(beforeGraph?.fileVersions) ? beforeGraph.fileVersions : []
+      const workingCloud = structuredClone(cloud)
+      const now = options.now ?? new Date().toISOString()
+      const chunkAcknowledgements = []
+      const versionRows = []
+
+      for (const entry of chunkEntries) {
+        const suppliedPayload = entryPayloadFor(options, entry)
+        const payload = suppliedPayload
+          ? await prepareEntryForBlobStorage(this.blobStore, cloud.codebase?.id ?? 'hopit', entry.path, suppliedPayload)
+          : null
+        const previousFile = cloneCloudFileEntry(workingCloud?.files?.[entry.path] ?? null)
+        const acknowledgement = this.applyJournalEntry(workingCloud, entry, {
+          ...options,
+          entry: payload ?? suppliedPayload ?? options.entry,
+          now,
+        })
+        const normalizedEntryGraph = normalizeValidatedCloudGraph(workingCloud)
+        const actor = journalActor(entry, normalizedEntryGraph)
+        const versionRow = buildFileVersionRowForEntry({
+          beforeGraph,
+          afterGraph: normalizedEntryGraph,
+          entry,
+          beforeFile: previousFile,
+          afterFile: normalizedEntryGraph.files?.[entry.path] ?? null,
+          createdAt: now,
+          actor,
+        })
+        if (versionRow) versionRows.push(versionRow)
+        chunkAcknowledgements.push(acknowledgement)
+      }
+
+      const normalized = normalizeValidatedCloudGraph(workingCloud)
+      const nextVersionId = previousVersions.reduce((max, row) => Math.max(max, Number(row.versionId ?? 0)), 0) + 1
+      normalized.fileVersions = [
+        ...previousVersions,
+        ...versionRows.map((row, index) => ({ versionId: nextVersionId + index, ...row })),
+      ]
+      await writeJson(this.path, normalized)
+      replaceGraphContents(cloud, normalized)
+
+      const chunk = {
+        acknowledgements: chunkAcknowledgements.map((acknowledgement) => ({
+          ...acknowledgement,
+          storageMode: 'fixture-json-bulk-mutation',
+        })),
+        entries: chunkEntries,
+        chunkIndex: Math.floor(offset / chunkSize),
+        chunkOffset: offset,
+        fromRevision: beforeGraph?.revision ?? 0,
+        toRevision: normalized.revision,
+        count: chunkEntries.length,
+        storageMode: 'fixture-json-bulk-mutation',
+      }
+      acknowledgements.push(...chunk.acknowledgements)
+      if (typeof options.onChunkCommitted === 'function') {
+        await options.onChunkCommitted(chunk)
+      }
+    }
+    return acknowledgements
+  }
+
   async readBlob(file, context = {}) {
     if (!this.blobStore) throw new Error('Object-backed file requires HOPIT_BLOB_PROVIDER.')
     return await this.blobStore.getBlob(file, context)
@@ -167,7 +238,7 @@ export class D1CloudGraphService extends CloudflareD1HopBackend {
     this.codebaseId = options['codebase-id'] || process.env.HOPIT_CODEBASE_ID || this.codebaseId || null
     this.type = d1CloudServiceType
     this.location = this.codebaseId ? `d1:${this.codebaseId}` : `d1:${this.config.databaseId ?? 'unconfigured'}`
-    this.usesAtomicFileMutations = false
+    this.usesAtomicFileMutations = true
     this.blobStore = createObjectBlobStore(options)
   }
 
@@ -233,6 +304,24 @@ export class D1CloudGraphService extends CloudflareD1HopBackend {
     return await super.commitJournalEntry(cloud, entry, {
       ...options,
       entry: payload ?? options.entry,
+      ConflictError,
+    })
+  }
+
+  async commitJournalEntries(cloud, entries, options = {}) {
+    const pendingEntries = Array.isArray(entries) ? entries : []
+    const entryPayloads = new Map()
+    for (const entry of pendingEntries) {
+      const suppliedPayload = entryPayloadFor(options, entry)
+      if (!suppliedPayload) continue
+      entryPayloads.set(
+        entry.id,
+        await prepareEntryForBlobStorage(this.blobStore, cloud.codebase?.id ?? this.codebaseId ?? 'hopit', entry.path, suppliedPayload),
+      )
+    }
+    return await super.commitJournalEntries(cloud, pendingEntries, {
+      ...options,
+      entryPayloads,
       ConflictError,
     })
   }
@@ -392,6 +481,29 @@ function journalActor(entry, cloud) {
 
 function cloneCloudFileEntry(file) {
   return file ? structuredClone(file) : null
+}
+
+function entryPayloadFor(options, entry) {
+  const payloads = options.entryPayloads
+  if (!payloads) return null
+  if (payloads instanceof Map) {
+    return payloads.get(entry.id) ?? payloads.get(entry.path) ?? null
+  }
+  if (typeof payloads === 'object') {
+    return payloads[entry.id] ?? payloads[entry.path] ?? null
+  }
+  return null
+}
+
+function normalizeChunkSize(value) {
+  const normalized = Number(value)
+  if (!Number.isInteger(normalized) || normalized <= 0) return 40
+  return Math.min(normalized, 40)
+}
+
+function replaceGraphContents(target, source) {
+  for (const key of Object.keys(target)) delete target[key]
+  Object.assign(target, structuredClone(source))
 }
 
 export function normalizeCloudGraph(cloud) {

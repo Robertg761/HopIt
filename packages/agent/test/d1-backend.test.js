@@ -48,6 +48,10 @@ test('agent can initialize, hydrate, sync, and report status through D1', async 
   assert.equal(status.cloud.path, 'd1:hopit-core')
   assert.equal(status.cloud.fileCount, 4)
   assert.equal(status.cloud.revision, 2)
+
+  const events = await readNdjson(state.events)
+  const acknowledgement = events.find((event) => event.event === 'cloud.acknowledged')
+  assert.equal(acknowledgement.detail.storageMode, 'd1-file-mutation')
 })
 
 test('workspace discover lists account-visible D1 codebases with local readiness', async (t) => {
@@ -859,7 +863,7 @@ test('D1 backend records file versions and compares retained revisions', async (
   assert.equal(missingCompare.summary.missingBlob, 1)
 })
 
-async function startD1ApiServer(t, { statements = null, statementRecords = null, pushNamespace = null } = {}) {
+async function startD1ApiServer(t, { statements = null, statementRecords = null, requestBatches = null, pushNamespace = null } = {}) {
   const db = new DatabaseSync(':memory:')
   const env = {
     HOPIT_D1_DB: d1Binding(db, statements, statementRecords),
@@ -870,6 +874,10 @@ async function startD1ApiServer(t, { statements = null, statementRecords = null,
   const server = createServer(async (request, response) => {
     try {
       const body = request.method === 'GET' || request.method === 'HEAD' ? undefined : await readRequestBody(request)
+      if (requestBatches && body) {
+        const parsed = JSON.parse(body)
+        requestBatches.push(Array.isArray(parsed) ? parsed : [parsed])
+      }
       const workerRequest = new Request(`http://127.0.0.1${request.url ?? '/query'}`, {
         method: request.method,
         headers: request.headers,
@@ -963,6 +971,19 @@ function readRequestBody(request) {
     request.on('end', () => resolve(body))
     request.on('error', reject)
   })
+}
+
+async function readNdjson(filePath) {
+  try {
+    const content = await fs.readFile(filePath, 'utf8')
+    return content
+      .split('\n')
+      .filter(Boolean)
+      .map((line) => JSON.parse(line))
+  } catch (error) {
+    if (error?.code === 'ENOENT') return []
+    throw error
+  }
 }
 
 async function makeState() {
@@ -1082,6 +1103,139 @@ test('D1 journal commit uses bounded per-file statements on wide graphs', async 
   const versions = await backend.listFileVersions()
   assert.equal(versions.filter((row) => row.graphRevision === 2).length, 1)
   assert.equal(versions.find((row) => row.graphRevision === 2).path, 'src/file-060.js')
+})
+
+test('D1 bulk journal commit chunks wide imports into bounded requests', async (t) => {
+  const statementRecords = []
+  const requestBatches = []
+  const pushNamespace = createRecordingPushNamespace()
+  const server = await startD1ApiServer(t, { statementRecords, requestBatches, pushNamespace })
+  const now = '2026-07-08T00:00:00.000Z'
+  const backend = new D1CloudGraphService({
+    'codebase-id': 'journal-bulk-core',
+    'd1-api-base-url': server.baseUrl,
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_test',
+    'd1-api-token': 'token_test',
+  })
+  await backend.initialize(makeD1Graph({ codebaseId: 'journal-bulk-core', files: {}, now }))
+  const cloud = await backend.readGraph()
+  const entries = []
+  const entryPayloads = new Map()
+  for (let index = 0; index < 300; index += 1) {
+    const filePath = `src/imported-${String(index).padStart(3, '0')}.js`
+    const entry = {
+      id: `bulk-entry-${index}`,
+      type: 'create',
+      path: filePath,
+      kind: 'file',
+      baseRevision: null,
+      createdAt: now,
+      status: 'pending',
+    }
+    entries.push(entry)
+    entryPayloads.set(entry.id, {
+      kind: 'file',
+      content: `export const imported${index} = ${index}\n`,
+      encoding: 'utf8',
+    })
+  }
+
+  statementRecords.length = 0
+  requestBatches.length = 0
+  pushNamespace.notifications.length = 0
+  const chunks = []
+  const acknowledgements = await backend.commitJournalEntries(cloud, entries, {
+    entryPayloads,
+    now: '2026-07-08T00:05:00.000Z',
+    chunkSize: 40,
+    onChunkCommitted: (chunk) => {
+      chunks.push(chunk)
+    },
+  })
+
+  assert.equal(acknowledgements.length, 300)
+  assert.equal(acknowledgements.every((entry) => entry.storageMode === 'd1-bulk-mutation'), true)
+  assert.equal(chunks.length, 8)
+  assert.equal(requestBatches.length, 8)
+  assert.deepEqual(requestBatches.map((batch) => batch.length), [81, 81, 81, 81, 81, 81, 81, 41])
+  assert.equal(Math.max(...statementRecords.map((record) => record.params.length)), 29)
+  assert.equal(statementRecords.every((record) => record.params.length <= 100), true)
+  assert.equal(pushNamespace.notifications.length, 8)
+
+  const written = await backend.readGraph()
+  assert.equal(written.revision, 301)
+  assert.equal(Object.keys(written.files).length, 300)
+  assert.equal(written.files['src/imported-299.js'].content, 'export const imported299 = 299\n')
+  const versions = await backend.listFileVersions()
+  assert.equal(versions.length, 300)
+  assert.equal(versions.filter((row) => row.operation === 'add').length, 300)
+  assert.equal(versions.at(-1).path, 'src/imported-299.js')
+})
+
+test('D1 bulk journal commit stops on a raced chunk without partial rows', async (t) => {
+  const statementRecords = []
+  const server = await startD1ApiServer(t, { statementRecords })
+  const now = '2026-07-08T00:00:00.000Z'
+  const backend = new D1CloudGraphService({
+    'codebase-id': 'journal-bulk-race-core',
+    'd1-api-base-url': server.baseUrl,
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_test',
+    'd1-api-token': 'token_test',
+  })
+  await backend.initialize(makeD1Graph({ codebaseId: 'journal-bulk-race-core', files: {}, now }))
+  const cloud = await backend.readGraph()
+  const entries = []
+  const entryPayloads = new Map()
+  for (let index = 0; index < 100; index += 1) {
+    const filePath = `src/raced-${String(index).padStart(3, '0')}.js`
+    const entry = {
+      id: `bulk-race-entry-${index}`,
+      type: 'create',
+      path: filePath,
+      kind: 'file',
+      baseRevision: null,
+      createdAt: now,
+      status: 'pending',
+    }
+    entries.push(entry)
+    entryPayloads.set(entry.id, {
+      kind: 'file',
+      content: `export const raced${index} = ${index}\n`,
+      encoding: 'utf8',
+    })
+  }
+
+  const acknowledged = []
+  await assert.rejects(
+    () => backend.commitJournalEntries(cloud, entries, {
+      entryPayloads,
+      now: '2026-07-08T00:06:00.000Z',
+      chunkSize: 40,
+      onChunkCommitted: (chunk) => {
+        acknowledged.push(...chunk.acknowledgements)
+        if (chunk.chunkIndex === 0) {
+          server.db.prepare(`update codebases set revision = ? where codebase_id = ?`).run(999, 'journal-bulk-race-core')
+        }
+      },
+    }),
+    (error) => {
+      assert.equal(error.name, 'ConflictError')
+      assert.equal(error.detail.reason, 'selected_state_revision_mismatch')
+      assert.equal(error.detail.id, 'bulk-race-entry-40')
+      return true
+    },
+  )
+
+  assert.equal(acknowledged.length, 40)
+  assert.equal(acknowledged.every((entry) => entry.storageMode === 'd1-bulk-mutation'), true)
+  const rows = server.db.prepare(`select path from files where codebase_id = ? order by path asc`).all('journal-bulk-race-core')
+  assert.equal(rows.length, 40)
+  assert.equal(rows.some((row) => row.path === 'src/raced-040.js'), false)
+  const versionRows = await backend.listFileVersions()
+  assert.equal(versionRows.length, 40)
+  assert.equal(versionRows.some((row) => row.path === 'src/raced-040.js'), false)
 })
 
 test('D1 journal delete removes the file row and writes a tombstone version', async (t) => {

@@ -12,6 +12,7 @@ import { summarizeAccessContext, normalizeEmail, normalizeCodebaseName, normaliz
 // Cloudflare D1 rejects statements with more than 100 bound variables
 // (SQLITE_MAX_VARIABLE_NUMBER=100), unlike stock SQLite's 999.
 const maxNotInBoundPaths = 90
+const defaultJournalCommitChunkSize = 40
 
 export function attachGraphMethods(Backend) {
   defineBackendMethods(Backend, {
@@ -321,6 +322,28 @@ export function attachGraphMethods(Backend) {
       ...acknowledgement,
       storageMode: 'd1-file-mutation',
     }
+  },
+
+  async commitJournalEntries(cloud, entries, options = {}) {
+    await this.ensureSchema()
+    const pendingEntries = Array.isArray(entries) ? entries : []
+    if (pendingEntries.length === 0) return []
+
+    const chunkSize = journalCommitChunkSize(options.chunkSize)
+    const acknowledgements = []
+    for (let offset = 0; offset < pendingEntries.length; offset += chunkSize) {
+      const chunkEntries = pendingEntries.slice(offset, offset + chunkSize)
+      const chunk = await commitJournalEntryChunk(this, cloud, chunkEntries, {
+        ...options,
+        chunkIndex: Math.floor(offset / chunkSize),
+        chunkOffset: offset,
+      })
+      acknowledgements.push(...chunk.acknowledgements)
+      if (typeof options.onChunkCommitted === 'function') {
+        await options.onChunkCommitted(chunk)
+      }
+    }
+    return acknowledgements
   },
 
   async appendEvent({ codebaseId = this.codebaseId, event, detail, at = new Date().toISOString(), source = 'local-agent' }) {
@@ -795,6 +818,135 @@ function upsertFileStatement(codebaseId, filePath, file, graphRevision, now = ne
       updated_at = excluded.updated_at`,
     guardedParams(params, guard),
   ]
+}
+
+async function commitJournalEntryChunk(backend, cloud, entries, options = {}) {
+  const previousRevision = integerOrNull(cloud?.revision) ?? 0
+  const workingCloud = structuredClone(cloud)
+  const now = options.now ?? new Date().toISOString()
+  const acknowledgements = []
+  const fileStatements = []
+  const versionStatements = []
+
+  for (const entry of entries) {
+    const previousFile = cloneFileEntry(workingCloud?.files?.[entry.path] ?? null)
+    const payload = entryPayloadFor(options, entry)
+    const acknowledgement = backend.applyJournalEntry(workingCloud, entry, {
+      ...options,
+      entry: payload ?? options.entry,
+      now,
+    })
+    const normalizedEntryGraph = normalizeGraph(workingCloud)
+    const codebaseId = normalizedEntryGraph.codebase.id
+    const actor = journalActor(entry, normalizedEntryGraph)
+    const afterFile = cloneFileEntry(normalizedEntryGraph.files?.[entry.path] ?? null)
+    const versionRow = buildFileVersionRowForEntry({
+      afterGraph: normalizedEntryGraph,
+      entry,
+      beforeFile: previousFile,
+      afterFile,
+      createdAt: now,
+      actor,
+    })
+
+    fileStatements.push(entry.type === 'delete'
+      ? { entry, statement: guardedDeleteFileStatement }
+      : { entry, file: afterFile, graphRevision: integerOrNull(afterFile?.revision) ?? integerOrNull(normalizedEntryGraph.revision) ?? previousRevision })
+    if (versionRow) versionStatements.push(versionRow)
+    acknowledgements.push(acknowledgement)
+  }
+
+  const normalized = normalizeGraph(workingCloud)
+  const codebaseId = normalized.codebase.id
+  const nextRevision = integerOrNull(normalized.revision) ?? previousRevision
+  const files = Object.entries(normalized.files ?? {})
+  const fileCount = files.length
+  const privateFileCount = files.filter(([filePath]) => scopeForPath(filePath) === 'owner-private').length
+  backend.codebaseId = codebaseId
+  backend.location = `d1:${backend.config.databaseId}:${codebaseId}`
+
+  const guard = { codebaseId, revision: nextRevision, updatedAt: now }
+  const headStatement = [
+    `update codebases set
+      revision = ?,
+      selected_state_json = ?,
+      main_json = ?,
+      file_count = ?,
+      private_file_count = ?,
+      updated_at = ?
+    where codebase_id = ? and revision = ?`,
+    [
+      nextRevision,
+      stringifyJson(normalized.selectedState),
+      stringifyJson(normalized.main),
+      fileCount,
+      privateFileCount,
+      now,
+      codebaseId,
+      previousRevision,
+    ],
+  ]
+
+  const statements = [headStatement]
+  for (const item of fileStatements) {
+    statements.push(item.entry.type === 'delete'
+      ? guardedDeleteFileStatement(codebaseId, item.entry.path, guard)
+      : upsertFileStatement(codebaseId, item.entry.path, item.file, item.graphRevision, now, guard))
+  }
+  for (const row of versionStatements) {
+    statements.push(insertFileVersionStatement(row, guard))
+  }
+
+  const results = await backend.queryBatch(statements.map(([sql, params]) => ({ sql, params })))
+  const changedRows = changedRowCount(results[0])
+  if (changedRows === 0) {
+    throw createSelectedStateRevisionConflict(options.ConflictError, {
+      entry: entries[0],
+      cloud: normalized,
+      expectedRevision: previousRevision,
+    })
+  }
+  if (!Number.isInteger(changedRows)) {
+    throw new Error('D1 guarded journal commit did not report changed rows.')
+  }
+
+  replaceGraphContents(cloud, normalized)
+  return {
+    acknowledgements: acknowledgements.map((acknowledgement) => ({
+      ...acknowledgement,
+      storageMode: 'd1-bulk-mutation',
+    })),
+    entries,
+    chunkIndex: options.chunkIndex ?? 0,
+    chunkOffset: options.chunkOffset ?? 0,
+    fromRevision: previousRevision,
+    toRevision: nextRevision,
+    count: entries.length,
+    storageMode: 'd1-bulk-mutation',
+  }
+}
+
+function journalCommitChunkSize(value) {
+  const normalized = Number(value)
+  if (!Number.isInteger(normalized) || normalized <= 0) return defaultJournalCommitChunkSize
+  return Math.min(normalized, defaultJournalCommitChunkSize)
+}
+
+function entryPayloadFor(options, entry) {
+  const payloads = options.entryPayloads
+  if (!payloads) return null
+  if (payloads instanceof Map) {
+    return payloads.get(entry.id) ?? payloads.get(entry.path) ?? null
+  }
+  if (typeof payloads === 'object') {
+    return payloads[entry.id] ?? payloads[entry.path] ?? null
+  }
+  return null
+}
+
+function replaceGraphContents(target, source) {
+  for (const key of Object.keys(target)) delete target[key]
+  Object.assign(target, structuredClone(source))
 }
 
 function guardedDeleteFileStatement(codebaseId, filePath, guard) {
