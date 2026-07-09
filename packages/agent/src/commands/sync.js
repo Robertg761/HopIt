@@ -168,10 +168,19 @@ export async function materializeCloudEntry(root, relativePath, file, cloudServi
   }
 
   await replacePathIfWrongType(absolutePath, 'file')
-  await fs.writeFile(absolutePath, await bufferFromCloudFileEntry(entry, cloudService, {
+  const body = await bufferFromCloudFileEntry(entry, cloudService, {
     ...context,
     relativePath,
-  }))
+  })
+  try {
+    await fs.writeFile(absolutePath, body)
+  } catch (error) {
+    // Read-only targets (git stores object files as mode 444) are replaced,
+    // not edited in place — the same way git itself rewrites them.
+    if (error?.code !== 'EACCES' && error?.code !== 'EPERM') throw error
+    await fs.rm(absolutePath, { force: true })
+    await fs.writeFile(absolutePath, body)
+  }
 }
 
 export async function replacePathIfWrongType(absolutePath, expectedType) {

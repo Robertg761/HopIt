@@ -3903,3 +3903,23 @@ test('object storage budget failure leaves local edit pending and absent from a 
   const cloud = await readJson(deviceA.cloud)
   assert.equal(cloud.files['oversized.txt'], undefined)
 })
+
+test('hydrate replaces read-only local files instead of failing with EACCES', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+
+  const readmePath = path.join(state.workspace, 'README.md')
+  await fs.chmod(readmePath, 0o444)
+
+  const updatedContent = '# hopit-core\n\nUpdated over a read-only local copy.\n'
+  const cloud = await readJson(state.cloud)
+  cloud.files['README.md'].content = updatedContent
+  cloud.files['README.md'].hash = hashContent(updatedContent)
+  cloud.files['README.md'].size = Buffer.byteLength(updatedContent)
+  cloud.files['README.md'].revision += 1
+  await writeJson(state.cloud, cloud)
+
+  await runCli('hydrate', stateArgs(state))
+  assert.equal(await fs.readFile(readmePath, 'utf8'), updatedContent)
+})
