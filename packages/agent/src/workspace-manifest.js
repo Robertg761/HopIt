@@ -431,11 +431,30 @@ export async function sortedDirEntries(dir) {
   return entries.sort((a, b) => a.name.localeCompare(b.name))
 }
 
+// Generated/dependency directories the sync scan never uploads. Unlike
+// shouldSkipImportPath this deliberately keeps `.git/` — Git internals are
+// part of the owner-private mirror contract; node_modules and build output
+// are reproducible junk that would flood the cloud graph (a 2026-07-08 scan
+// journaled 26k node_modules files before this guard existed).
+const generatedWorkspaceDirectories = new Set([
+  '.next',
+  '.turbo',
+  '.vercel',
+  'node_modules',
+  'dist',
+  'build',
+  'out',
+  'coverage',
+  'artifacts',
+  'DerivedData',
+])
+
 export function shouldSkipWorkspacePath(relativePath, entry, options = {}) {
   const parts = relativePath.split('/')
   const basename = parts.at(-1) ?? relativePath
   if (parts.includes('.hopit')) return true
   if (basename === '.DS_Store') return true
+  if (parts.some((part) => generatedWorkspaceDirectories.has(part))) return true
   if (isLocalOnlySecretPath(relativePath) && !shouldSyncLocalOnlySecretPath(relativePath, options)) return true
   return false
 }

@@ -3958,3 +3958,21 @@ test('hydrate replaces read-only local files instead of failing with EACCES', as
   await runCli('hydrate', stateArgs(state))
   assert.equal(await fs.readFile(readmePath, 'utf8'), updatedContent)
 })
+
+test('sync scan skips generated dependency directories like node_modules', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+
+  await fs.mkdir(path.join(state.workspace, 'node_modules/some-dep'), { recursive: true })
+  await fs.writeFile(path.join(state.workspace, 'node_modules/some-dep/index.js'), 'module.exports = 1\n', 'utf8')
+  await fs.mkdir(path.join(state.workspace, 'dist'), { recursive: true })
+  await fs.writeFile(path.join(state.workspace, 'dist/bundle.js'), 'bundled\n', 'utf8')
+  await runCli('sync-once', stateArgs(state))
+
+  const cloud = await readJson(state.cloud)
+  assert.equal(Object.keys(cloud.files).some((p) => p.startsWith('node_modules/') || p.startsWith('dist/')), false)
+  const status = JSON.parse((await runCli('status', stateArgs(state))).stdout)
+  assert.equal(status.journal.pendingCount, 0)
+  assert.equal(status.workspace.localChanges.state, 'clean')
+})
