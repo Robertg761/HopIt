@@ -3,7 +3,7 @@ import { privacyZoneForPath, privacyZoneIdForPath, scopeForPath } from '@hopit/c
 import { defineBackendMethods } from './method-support.js'
 import { d1CloudServiceType, d1AuthorizationToken, schemaCacheKey, usesCloudflareD1Api, usesScopedD1SessionAuth } from './config.js'
 import { d1SchemaStatements } from './schema.js'
-import { attachTextDiff, buildFileVersionRows, compareVersionRows, createCompareBlobReader, retainedBlobKeysForVersions } from './history.js'
+import { attachTextDiff, buildFileVersionRowForEntry, buildFileVersionRows, compareVersionRows, createCompareBlobReader, retainedBlobKeysForVersions } from './history.js'
 import { summarizeAccessContext, normalizeEmail, normalizeCodebaseName, normalizeNewCodebaseId, backendErrorMessage, normalizeFutureTimestamp, normalizePositiveInteger, nullablePositiveInteger, nullableNonNegativeInteger, actorAuditId, requireTextValue, uniqueStrings, parseStringArray, normalizeRole, graphMemberCount, countPathScopes, assertSafeGraphPath, hashText, byteLength, parseJson, stringifyJson, stringOrNull, integerOrNull, integerValue, boundedLimit, requireAuthenticatedActor, requireVerifiedEmailActor, requireOwnerClaimActor, isBootstrapOwnerMember, claimedOwnerValue, graphFromRows, codebaseRowToRecord, codebaseRecordFromGraph, fileRowToEntry, normalizeGraph, normalizeFileEntry, normalizeVisibilityContract, normalizeOptionalVisibility, normalizeVisibilityValue, summarizeCodebaseHead, summarizeCodebaseRemoteUpdate, buildStatus, buildSyncHealth, buildRefreshHealth, mapD1AgentEvent, latestEventOf, applyJournalEntryToCloud, slugifyCodebaseId, hasCapability, visibilityContextForGraph, filterVisibleGraphForRequester, filterVisibleGraphForAccess, canRequesterSeePath, canRead, canWrite, permissionsForRole, accessContextForCodebaseHead, memberSelectSql, mapD1Member, mapD1Invitation, invitationRole, invitationStatusOrNull, isInvitationExpired, invitationStatusForRead, hashInvitationToken, createAgentSessionId, createAgentSessionToken, hashAgentSessionToken, normalizeAgentSessionId, assertReusableAgentSession, normalizeAgentSessionCapabilities, agentSessionStatusOrNull, agentSessionHasCapability, codebaseCapabilityForAgentCapability, agentCapabilityForCodebaseCapability, isExpiredTimestamp, summarizeAgentSession, normalizeKeyEntityId, assertDevicePublicKeyDescriptor, looksLikePem, assertSameDevicePublicKeys, assertSameCodebaseKeyring, wrappedKeyType, wrappedKeyRecipientType, capabilityForWrappedKey, isPrivateZoneId, assertWrappedKeyEnvelope, assertSameWrappedKey, effectiveWrappedKeyStatus, canActorReadWrappedKey, createWrappedKeyId, summarizeDeviceKey, summarizeUserKeyring, summarizeCodebaseKeyring, summarizeWrappedKey, deviceKeyStatusOrNull, keyRotationState, mapD1Issue, mapD1IssueComment, mapD1Discussion, mapD1DiscussionComment, mapD1Release, mapD1ReleaseAsset, mapD1ReviewThread, mapD1ReviewThreadComment, mapD1ReviewDecision, mapD1Notification, mapD1Project, mapD1ProjectItem, issuePriorityOrNull, issueStatus, discussionCategory, discussionStatus, releaseStatus, releaseAssetKind, reviewDecision, notificationKind, reviewDecisionTitle, reviewDecisionBody, reviewHref, workItemHref, projectStatus, normalizeProjectColumns, normalizeProjectColumnId, normalizeProjectPosition, projectItemType, normalizeReleaseTarget, collaborationScope, actionCommandForKind, summarizeActionJob, actionSummary, capOutput } from './helpers/index.js'
 
 /** @typedef {import('@hopit/core').CloudGraph} CloudGraph */
@@ -153,43 +153,7 @@ export function attachGraphMethods(Backend) {
   },
 
   async insertFileVersion(row) {
-    await this.query(
-      `insert into file_versions (
-        codebase_id, selected_state_type, selected_state_id, main_state_id,
-        graph_revision, path, operation, kind, old_revision, new_revision,
-        old_file_json, new_file_json, scope, privacy_zone, zone_id,
-        content_storage, blob_provider, blob_key, blob_hash, encoding,
-        target, size, actor_user_id, session_id, device_name, created_at
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [
-        row.codebaseId,
-        row.selectedStateType,
-        row.selectedStateId,
-        row.mainStateId,
-        row.graphRevision,
-        row.path,
-        row.operation,
-        row.kind,
-        row.oldRevision,
-        row.newRevision,
-        row.oldFile ? stringifyJson(row.oldFile) : null,
-        row.newFile ? stringifyJson(row.newFile) : null,
-        row.scope,
-        row.privacyZone,
-        row.zoneId,
-        row.contentStorage,
-        row.blobProvider,
-        row.blobKey,
-        row.blobHash,
-        row.encoding,
-        row.target,
-        row.size,
-        row.actorUserId,
-        row.sessionId,
-        row.deviceName,
-        row.createdAt,
-      ],
-    )
+    await this.query(...insertFileVersionStatement(row))
   },
 
   async listFileVersions(codebaseId = this.codebaseId) {
@@ -288,17 +252,74 @@ export function attachGraphMethods(Backend) {
   },
 
   async commitJournalEntry(cloud, entry, options = {}) {
+    await this.ensureSchema()
+    const previousRevision = integerOrNull(cloud?.revision) ?? 0
+    const previousFile = cloneFileEntry(cloud?.files?.[entry.path] ?? null)
     const acknowledgement = this.applyJournalEntry(cloud, entry, options)
-    await this.writeGraph(cloud, {
-      actor: {
-        actorUserId: entry.actorUserId ?? entry.ownerId ?? entry.userId ?? entry.requesterId ?? null,
-        sessionId: entry.sessionId ?? cloud.session?.id ?? null,
-        deviceName: entry.deviceName ?? cloud.session?.deviceName ?? null,
-      },
+    const normalized = normalizeGraph(cloud)
+    const codebaseId = normalized.codebase.id
+    const now = options.now ?? new Date().toISOString()
+    const nextRevision = integerOrNull(normalized.revision) ?? previousRevision
+    const files = Object.entries(normalized.files ?? {})
+    const fileCount = files.length
+    const privateFileCount = files.filter(([filePath]) => scopeForPath(filePath) === 'owner-private').length
+    this.codebaseId = codebaseId
+    this.location = `d1:${this.config.databaseId}:${codebaseId}`
+
+    const guard = { codebaseId, revision: nextRevision, updatedAt: now }
+    const headStatement = [
+      `update codebases set
+        revision = ?,
+        selected_state_json = ?,
+        main_json = ?,
+        file_count = ?,
+        private_file_count = ?,
+        updated_at = ?
+      where codebase_id = ? and revision = ?`,
+      [
+        nextRevision,
+        stringifyJson(normalized.selectedState),
+        stringifyJson(normalized.main),
+        fileCount,
+        privateFileCount,
+        now,
+        codebaseId,
+        previousRevision,
+      ],
+    ]
+
+    const actor = journalActor(entry, normalized)
+    const versionRow = buildFileVersionRowForEntry({
+      afterGraph: normalized,
+      entry,
+      beforeFile: previousFile,
+      afterFile: normalized.files?.[entry.path] ?? null,
+      createdAt: now,
+      actor,
     })
+    const statements = [
+      headStatement,
+      entry.type === 'delete'
+        ? guardedDeleteFileStatement(codebaseId, entry.path, guard)
+        : upsertFileStatement(codebaseId, entry.path, normalized.files[entry.path], nextRevision, now, guard),
+    ]
+    if (versionRow) statements.push(insertFileVersionStatement(versionRow, guard))
+    const results = await this.queryBatch(statements.map(([sql, params]) => ({ sql, params })))
+    const changedRows = changedRowCount(results[0])
+    if (changedRows === 0) {
+      throw createSelectedStateRevisionConflict(options.ConflictError, {
+        entry,
+        cloud: normalized,
+        expectedRevision: previousRevision,
+      })
+    }
+    if (!Number.isInteger(changedRows)) {
+      throw new Error('D1 guarded journal commit did not report changed rows.')
+    }
+
     return {
       ...acknowledgement,
-      storageMode: 'd1-graph-save',
+      storageMode: 'd1-file-mutation',
     }
   },
 
@@ -718,57 +739,177 @@ export function attachGraphMethods(Backend) {
   },
 
   async upsertFile(codebaseId, filePath, file, graphRevision, now = new Date().toISOString()) {
-    const normalized = normalizeFileEntry(filePath, file, graphRevision, now)
-    await this.query(
-      `insert into files (
-        codebase_id, path, kind, content, encoding, target, blob_hash, blob_provider,
-        blob_key, blob_size, client_encryption_json, encryption_json, privacy_zone,
-        zone_id, content_storage, hash, size, scope, revision, updated_at
-      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      on conflict(codebase_id, path) do update set
-        kind = excluded.kind,
-        content = excluded.content,
-        encoding = excluded.encoding,
-        target = excluded.target,
-        blob_hash = excluded.blob_hash,
-        blob_provider = excluded.blob_provider,
-        blob_key = excluded.blob_key,
-        blob_size = excluded.blob_size,
-        client_encryption_json = excluded.client_encryption_json,
-        encryption_json = excluded.encryption_json,
-        privacy_zone = excluded.privacy_zone,
-        zone_id = excluded.zone_id,
-        content_storage = excluded.content_storage,
-        hash = excluded.hash,
-        size = excluded.size,
-        scope = excluded.scope,
-        revision = excluded.revision,
-        updated_at = excluded.updated_at`,
-      [
-        codebaseId,
-        filePath,
-        normalized.kind,
-        normalized.content,
-        normalized.encoding,
-        normalized.target ?? null,
-        normalized.blobHash ?? normalized.hash ?? null,
-        normalized.blobProvider ?? null,
-        normalized.blobKey ?? null,
-        normalized.blobSize ?? null,
-        normalized.clientEncryption ? stringifyJson(normalized.clientEncryption) : null,
-        normalized.encryption ? stringifyJson(normalized.encryption) : null,
-        normalized.privacyZone ?? privacyZoneForPath(filePath),
-        normalized.zoneId ?? privacyZoneIdForPath(codebaseId, filePath),
-        normalized.contentStorage ?? 'inline',
-        normalized.hash ?? null,
-        normalized.size ?? byteLength(normalized.content ?? ''),
-        normalized.scope ?? scopeForPath(filePath),
-        normalized.revision ?? graphRevision,
-        normalized.updatedAt ?? now,
-      ],
-    )
+    await this.query(...upsertFileStatement(codebaseId, filePath, file, graphRevision, now))
   },
   })
+}
+
+function upsertFileStatement(codebaseId, filePath, file, graphRevision, now = new Date().toISOString(), guard = null) {
+  const normalized = normalizeFileEntry(filePath, file, graphRevision, now)
+  const params = [
+    codebaseId,
+    filePath,
+    normalized.kind,
+    normalized.content,
+    normalized.encoding,
+    normalized.target ?? null,
+    normalized.blobHash ?? normalized.hash ?? null,
+    normalized.blobProvider ?? null,
+    normalized.blobKey ?? null,
+    normalized.blobSize ?? null,
+    normalized.clientEncryption ? stringifyJson(normalized.clientEncryption) : null,
+    normalized.encryption ? stringifyJson(normalized.encryption) : null,
+    normalized.privacyZone ?? privacyZoneForPath(filePath),
+    normalized.zoneId ?? privacyZoneIdForPath(codebaseId, filePath),
+    normalized.contentStorage ?? 'inline',
+    normalized.hash ?? null,
+    normalized.size ?? byteLength(normalized.content ?? ''),
+    normalized.scope ?? scopeForPath(filePath),
+    normalized.revision ?? graphRevision,
+    normalized.updatedAt ?? now,
+  ]
+  return [
+    `insert into files (
+      codebase_id, path, kind, content, encoding, target, blob_hash, blob_provider,
+      blob_key, blob_size, client_encryption_json, encryption_json, privacy_zone,
+      zone_id, content_storage, hash, size, scope, revision, updated_at
+    ) ${guardedValuesSql(params.length, guard)}
+    on conflict(codebase_id, path) do update set
+      kind = excluded.kind,
+      content = excluded.content,
+      encoding = excluded.encoding,
+      target = excluded.target,
+      blob_hash = excluded.blob_hash,
+      blob_provider = excluded.blob_provider,
+      blob_key = excluded.blob_key,
+      blob_size = excluded.blob_size,
+      client_encryption_json = excluded.client_encryption_json,
+      encryption_json = excluded.encryption_json,
+      privacy_zone = excluded.privacy_zone,
+      zone_id = excluded.zone_id,
+      content_storage = excluded.content_storage,
+      hash = excluded.hash,
+      size = excluded.size,
+      scope = excluded.scope,
+      revision = excluded.revision,
+      updated_at = excluded.updated_at`,
+    guardedParams(params, guard),
+  ]
+}
+
+function guardedDeleteFileStatement(codebaseId, filePath, guard) {
+  return [
+    `delete from files
+      where codebase_id = ? and path = ?
+        and exists (
+          select 1 from codebases
+          where codebase_id = ? and revision = ? and updated_at = ?
+        )`,
+    [codebaseId, filePath, guard.codebaseId, guard.revision, guard.updatedAt],
+  ]
+}
+
+function insertFileVersionStatement(row, guard = null) {
+  const params = [
+    row.codebaseId,
+    row.selectedStateType,
+    row.selectedStateId,
+    row.mainStateId,
+    row.graphRevision,
+    row.path,
+    row.operation,
+    row.kind,
+    row.oldRevision,
+    row.newRevision,
+    row.oldFile ? stringifyJson(row.oldFile) : null,
+    row.newFile ? stringifyJson(row.newFile) : null,
+    row.scope,
+    row.privacyZone,
+    row.zoneId,
+    row.contentStorage,
+    row.blobProvider,
+    row.blobKey,
+    row.blobHash,
+    row.encoding,
+    row.target,
+    row.size,
+    row.actorUserId,
+    row.sessionId,
+    row.deviceName,
+    row.createdAt,
+  ]
+  return [
+    `insert into file_versions (
+      codebase_id, selected_state_type, selected_state_id, main_state_id,
+      graph_revision, path, operation, kind, old_revision, new_revision,
+      old_file_json, new_file_json, scope, privacy_zone, zone_id,
+      content_storage, blob_provider, blob_key, blob_hash, encoding,
+      target, size, actor_user_id, session_id, device_name, created_at
+    ) ${guardedValuesSql(params.length, guard)}`,
+    guardedParams(params, guard),
+  ]
+}
+
+function guardedValuesSql(valueCount, guard) {
+  const placeholders = Array.from({ length: valueCount }, () => '?').join(', ')
+  if (!guard) return `values (${placeholders})`
+  return `select ${placeholders}
+    where exists (
+      select 1 from codebases
+      where codebase_id = ? and revision = ? and updated_at = ?
+    )`
+}
+
+function guardedParams(params, guard) {
+  return guard ? [...params, guard.codebaseId, guard.revision, guard.updatedAt] : params
+}
+
+function changedRowCount(result) {
+  const meta = result?.meta ?? {}
+  for (const key of ['changes', 'changedRows', 'rowsAffected', 'rowsWritten', 'rows_written']) {
+    const value = meta[key]
+    if (Number.isInteger(value)) return value
+  }
+  return null
+}
+
+function createSelectedStateRevisionConflict(ConflictErrorClass, { entry, cloud, expectedRevision }) {
+  const actualRevision = cloud?.selectedState?.revision ?? cloud?.revision ?? null
+  const Conflict = typeof ConflictErrorClass === 'function' ? ConflictErrorClass : D1ConflictError
+  return new Conflict(
+    `selected_state_revision_mismatch: expected ${expectedRevision}, got ${actualRevision}`,
+    {
+      reason: 'selected_state_revision_mismatch',
+      id: entry.id,
+      type: entry.type,
+      path: entry.path,
+      scope: entry.scope ?? scopeForPath(entry.path ?? ''),
+      expectedRevision,
+      actualRevision,
+      selectedStateId: cloud?.selectedState?.id ?? null,
+      selectedStateRevision: actualRevision,
+    },
+  )
+}
+
+function journalActor(entry, cloud) {
+  return {
+    actorUserId: entry.actorUserId ?? entry.ownerId ?? entry.userId ?? entry.requesterId ?? null,
+    sessionId: entry.sessionId ?? cloud.session?.id ?? null,
+    deviceName: entry.deviceName ?? cloud.session?.deviceName ?? null,
+  }
+}
+
+function cloneFileEntry(file) {
+  return file ? structuredClone(file) : null
+}
+
+class D1ConflictError extends Error {
+  constructor(message, detail) {
+    super(message)
+    this.name = 'ConflictError'
+    this.detail = detail
+  }
 }
 
 function mapD1FileVersion(row) {

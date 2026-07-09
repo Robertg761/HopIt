@@ -424,13 +424,21 @@ export function latestEventOf(events) {
 }
 
 export function applyJournalEntryToCloud(cloud, entry, options = {}) {
-  const nextRevision = (cloud.revision ?? 0) + 1
+  if (!cloud.files || typeof cloud.files !== 'object') cloud.files = {}
+  if (!Number.isInteger(cloud.revision)) cloud.revision = 0
+  if (cloud.selectedState && !Number.isInteger(cloud.selectedState.revision)) {
+    cloud.selectedState.revision = cloud.revision
+  }
+  assertEntrySelectedStateRevision(cloud, entry)
+  assertEntryBaseRevision(cloud, entry)
+
+  const nextRevision = cloud.revision + 1
   cloud.revision = nextRevision
   cloud.main = cloud.main ?? {}
   cloud.main.revision = nextRevision
   cloud.selectedState = cloud.selectedState ?? {}
   cloud.selectedState.revision = nextRevision
-  const now = new Date().toISOString()
+  const now = options.now ?? new Date().toISOString()
 
   if (entry.type === 'delete') {
     delete cloud.files[entry.path]
@@ -449,5 +457,58 @@ export function applyJournalEntryToCloud(cloud, entry, options = {}) {
     revision: nextRevision,
     path: entry.path,
     type: entry.type,
+  }
+}
+
+function assertEntrySelectedStateRevision(cloud, entry) {
+  if (!Object.hasOwn(entry, 'targetStateRevision') || entry.targetStateRevision === undefined) return
+
+  const actualRevision = cloud.selectedState?.revision ?? null
+  if (entry.targetStateRevision === actualRevision) return
+
+  throw new BackendConflictError(
+    `selected_state_revision_mismatch: expected ${entry.targetStateRevision}, got ${actualRevision}`,
+    {
+      reason: 'selected_state_revision_mismatch',
+      id: entry.id,
+      type: entry.type,
+      path: entry.path,
+      scope: entry.scope ?? scopeForPath(entry.path ?? ''),
+      expectedRevision: entry.targetStateRevision,
+      actualRevision,
+      selectedStateId: cloud.selectedState?.id ?? null,
+      selectedStateRevision: actualRevision,
+    },
+  )
+}
+
+function assertEntryBaseRevision(cloud, entry) {
+  if (!Object.hasOwn(entry, 'baseRevision') || entry.baseRevision === undefined) return
+
+  const current = cloud.files?.[entry.path]
+  const actualRevision = current?.revision ?? null
+  if (entry.baseRevision === actualRevision) return
+
+  throw new BackendConflictError(
+    `base_revision_mismatch: expected ${entry.baseRevision}, got ${actualRevision}`,
+    {
+      reason: 'base_revision_mismatch',
+      id: entry.id,
+      type: entry.type,
+      path: entry.path,
+      scope: entry.scope ?? scopeForPath(entry.path ?? ''),
+      expectedRevision: entry.baseRevision,
+      actualRevision,
+      selectedStateId: cloud.selectedState?.id ?? null,
+      selectedStateRevision: cloud.selectedState?.revision ?? null,
+    },
+  )
+}
+
+class BackendConflictError extends Error {
+  constructor(message, detail) {
+    super(message)
+    this.name = 'ConflictError'
+    this.detail = detail
   }
 }

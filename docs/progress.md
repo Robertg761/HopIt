@@ -90,8 +90,9 @@ Current verified result:
 
 - `node --test packages/agent/test/agent-cli.test.js`: passes with 88 tests, 88 passing, and 0 failures.
 - `node --test packages/agent/test/crypto.test.js`: passes with 8 tests, 8 passing, and 0 failures.
-- `node --test packages/agent/test/d1-backend.test.js`: passes with 7 tests, 7 passing, and 0 failures.
-- `npm run agent:test`: passes with 113 tests, 113 passing, and 0 failures.
+- `node --test cloudflare/d1/api-worker.test.js`: passes with 10 tests, 10 passing, and 0 failures.
+- `node --test packages/agent/test/d1-backend.test.js`: passes with 12 tests, 12 passing, and 0 failures.
+- `npm run agent:test`: passes with 119 tests, 119 passing, and 0 failures.
 - `npm run lint`: passes.
 - `npm run typecheck`: passes.
 - `npm run typecheck:agent`: passes the WS4 checkJs allowlist.
@@ -107,6 +108,42 @@ Current verified result:
 - `curl -I https://hopit.dev/`: returns `HTTP/2 307` to `/sign-in` for signed-out users, confirming Clerk protects the dashboard.
 - Production Clerk sign-in and D1 owner claim were smoke-tested on `https://hopit.dev`; Basic Auth fallback is no longer needed for the owner handoff.
 - Google Auth Platform Audience for project `hopit-auth-prod-rg`: shows `1 user (1 test, 0 other) / 100 user cap` and the test-user row `robertgordon761@gmail.com`.
+
+## 2026-07-08 Per-file D1 Journal Commits
+
+This incident fix replaces the D1 agent journal hot path that previously called full `writeGraph` for every acknowledged entry. A single-file commit now persists a bounded guarded batch: optimistic codebase head update, one file row mutation, and one file-version row when the entry changes file state.
+
+Implemented:
+
+- Added D1 client batch support while preserving existing single-statement `query` callers.
+- Added a single-entry file-version row builder so journal commits do not diff the whole graph.
+- Reworked D1 `commitJournalEntry` to call `applyJournalEntry` first, then persist only the changed path with an optimistic `codebases.revision` guard.
+- Guarded file/version statements on the freshly updated codebase revision and timestamp so remote-head races do not partially apply file rows.
+- Changed D1 acknowledgements to `storageMode: "d1-file-mutation"`.
+- Reworked the agent D1 service to upload only the entry's object blob before metadata commit; fixture JSON commits now append exactly the single entry version row instead of invoking whole-graph history rediff.
+- Covered scoped `hst_` session commits and Worker push notification for the new batched statements.
+
+Proof commands:
+
+```bash
+node --test packages/agent/test/d1-backend.test.js
+node --test cloudflare/d1/api-worker.test.js
+npm run agent:test
+npm run lint
+npm run typecheck
+npm run typecheck:agent
+node packages/agent/src/cli.js help
+```
+
+Result:
+
+- `node --test packages/agent/test/d1-backend.test.js`: passes with 12 tests, 12 passing, and 0 failures.
+- `node --test cloudflare/d1/api-worker.test.js`: passes with 10 tests, 10 passing, and 0 failures.
+- `npm run agent:test`: passes with 119 tests, 119 passing, and 0 failures.
+- A journal write against a 120-file D1 graph records 3 statements for the commit batch and rewrites only the target file row.
+- Delete commits remove the file row, advance the head, and write a tombstone `file_versions` row.
+- Remote-head races throw `ConflictError` with `selected_state_revision_mismatch` detail and leave file/version rows unchanged.
+- Scoped session commits through the Worker are accepted and emit one compact push envelope.
 
 ## 2026-07-08 WS7c Object-Backed Diff History Log
 
@@ -914,7 +951,7 @@ Definition of done:
 
 - Store file metadata separately from content.
 - Store file content by hash/blob id instead of inline-only file rows.
-- Replace whole-graph save semantics with file-level mutations.
+- Replace whole-graph save semantics with file-level mutations for D1 agent journal commits.
 - Require base revision or known cloud revision for each write.
 - Return explicit conflict state on stale revisions.
 - Keep snapshot reconstruction possible for Main, active change sets, review, merge, export, and publish.
@@ -924,7 +961,7 @@ Current foundation:
 - D1 stores graph metadata, file rows, object-blob references, hashes, sizes, revisions, and agent events for the new free-first path.
 - Production agent sync should upload file bytes to S3-compatible object storage before committing metadata with revision guards.
 - The local fixture validates graph shape and detects stale selected-state/file/Main revisions.
-- Bootstrap/import can still replace the graph as an admin operation; per-file version history reconstruction and retention-aware object GC now exist for the agent/D1 path, while production retention policy and non-agent product write paths remain.
+- Bootstrap/import can still replace the graph as an admin operation; per-file D1 journal commits, per-file version history reconstruction, and retention-aware object GC now exist for the agent/D1 path, while production retention policy and non-agent product write paths remain.
 
 ### 0.6. Privacy, Encryption, And Key Grants
 
@@ -1278,7 +1315,7 @@ Deferred:
   recovery remain.
 - D1-backed graph storage and auth-backed user APIs exist for the first collaboration slice, but not every product command has moved to user-scoped auth yet.
 - D1 separates file metadata from file bytes for agent sync, records per-file version rows, exposes object-backed revision compare, and has dry-run-by-default retention-aware object GC. Production retention policy and full product write-path coverage are not complete yet.
-- Per-file revision-guarded mutation exists for the agent path, but the full product write surface has not moved to the same model yet.
+- Per-file revision-guarded mutation now covers D1 agent journal commits, but the full non-agent product write surface has not moved to the same model yet.
 - Graph contract validators exist for the agent/D1 graph path, but product-level validation is not yet comprehensive across every future object type.
 - Requester-aware dashboard filtering exists, but the auth-backed collaborator permission model is not enforced across every user-facing write yet.
 - A first read-only code-review browser slice exists, now with routeable codebase review/compare/history pages, durable review-linked follow-up issues/comments, D1-backed snapshot-anchored inline review threads, durable review decisions, and object-backed revision compare support. Web UI wiring for the compare API and richer tree/diff interactions are still pending.

@@ -235,6 +235,60 @@ test('successful graph mutation emits a compact push envelope after commit', asy
   assert.equal(Object.hasOwn(envelope, 'bytes'), false)
 })
 
+test('scoped session accepts guarded per-file commit statements and emits one push envelope', async () => {
+  const namespace = createMockPushNamespace()
+  const db = createMockDb({
+    session: {
+      session_id: 'session-1',
+      user_id: 'user-1',
+      codebase_id: 'codebase-1',
+      status: 'active',
+      expires_at: null,
+      capabilities_json: JSON.stringify(['read', 'write']),
+    },
+    codebase: {
+      codebase_id: 'codebase-1',
+      revision: 2,
+      selected_state_json: JSON.stringify({ id: 'cs_1' }),
+    },
+    files: [{ path: 'README.md', scope: 'shared', revision: 2 }],
+  })
+
+  const response = await worker.fetch(new Request('https://worker.example/query', {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer hst_session_token',
+      'content-type': 'application/json',
+      'x-hopit-codebase-id': 'codebase-1',
+      'cf-connecting-ip': '203.0.113.18',
+    },
+    body: JSON.stringify([
+      {
+        sql: 'update codebases set revision = ?, selected_state_json = ?, main_json = ?, file_count = ?, private_file_count = ?, updated_at = ? where codebase_id = ? and revision = ?',
+        params: [2, '{"id":"cs_1"}', '{"id":"main","revision":2}', 1, 0, '2026-07-08T00:00:00.000Z', 'codebase-1', 1],
+      },
+      {
+        sql: 'insert into files (codebase_id, path, kind, content, encoding, target, blob_hash, blob_provider, blob_key, blob_size, client_encryption_json, encryption_json, privacy_zone, zone_id, content_storage, hash, size, scope, revision, updated_at) select ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? where exists (select 1 from codebases where codebase_id = ? and revision = ? and updated_at = ?) on conflict(codebase_id, path) do update set content = excluded.content',
+        params: ['codebase-1', 'README.md', 'file', 'changed', 'utf8', null, null, null, null, null, null, null, 'repo-content', 'codebase-1:repo-content', 'inline', 'hash', 7, 'shared', 2, '2026-07-08T00:00:00.000Z', 'codebase-1', 2, '2026-07-08T00:00:00.000Z'],
+      },
+      {
+        sql: 'insert into file_versions (codebase_id, selected_state_type, selected_state_id, main_state_id, graph_revision, path, operation, kind, old_revision, new_revision, old_file_json, new_file_json, scope, privacy_zone, zone_id, content_storage, blob_provider, blob_key, blob_hash, encoding, target, size, actor_user_id, session_id, device_name, created_at) select ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ? where exists (select 1 from codebases where codebase_id = ? and revision = ? and updated_at = ?)',
+        params: ['codebase-1', 'active-change-set', 'cs_1', 'main', 2, 'README.md', 'modify', 'file', 1, 2, '{}', '{}', 'shared', 'repo-content', 'codebase-1:repo-content', 'inline', null, null, null, 'utf8', null, 7, 'user-1', 'session-1', 'test', '2026-07-08T00:00:00.000Z', 'codebase-1', 2, '2026-07-08T00:00:00.000Z'],
+      },
+    ]),
+  }), {
+    HOPIT_D1_DB: db,
+    HOPIT_PUSH_HUB: namespace,
+  })
+
+  assert.equal(response.status, 200)
+  assert.equal(db.sessionLookups, 1)
+  assert.equal(db.executedStatements.length, 3)
+  assert.equal(namespace.notifications.length, 1)
+  assert.equal(namespace.notifications[0].codebaseId, 'codebase-1')
+  assert.deepEqual(namespace.notifications[0].changedPaths, ['README.md'])
+})
+
 test('push notify failure is logged without failing the committed mutation', async () => {
   const namespace = createMockPushNamespace({ notifyStatus: 503 })
   const db = createMockDb({

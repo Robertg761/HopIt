@@ -2,14 +2,14 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createObjectBlobStore, prepareEntryForBlobStorage, prepareGraphForBlobStorage } from '../blob-stores/index.js'
-import { cloudServiceType, contentStorageMode, entryEncoding, entryKind, fileScope } from '../constants.js'
+import { ConflictError, cloudServiceType, contentStorageMode, entryEncoding, entryKind, fileScope } from '../constants.js'
 import { privacyZoneForPath, validateClientEncryptionMetadata } from '@hopit/core/crypto'
 import { readJson, shouldUseD1Backend, writeJson } from '../io.js'
 import { countPathScopes, normalizeCloudFileEntry, normalizeCloudScopes } from '../journal.js'
 import { applyJournalEntryToCloud } from '../status-state.js'
 import { assertSafeCloudPath } from '../workspace-manifest.js'
 import { CloudflareD1HopBackend, d1CloudServiceType, d1ConfigFromOptions } from '@hopit/backend-d1'
-import { attachTextDiff, buildFileVersionRows, compareVersionRows, createCompareBlobReader, retainedBlobKeysForVersions } from '@hopit/backend-d1'
+import { attachTextDiff, buildFileVersionRowForEntry, buildFileVersionRows, compareVersionRows, createCompareBlobReader, retainedBlobKeysForVersions } from '@hopit/backend-d1'
 import { scopeForPath } from '@hopit/core/privacy-zone'
 import { existsSync } from 'node:fs'
 
@@ -97,6 +97,9 @@ export class FixtureJsonCloudGraphService {
   }
 
   async commitJournalEntry(cloud, entry, options = {}) {
+    const beforeGraph = (await this.exists()) ? await this.readGraph() : null
+    const previousVersions = Array.isArray(beforeGraph?.fileVersions) ? beforeGraph.fileVersions : []
+    const previousFile = cloneCloudFileEntry(cloud?.files?.[entry.path] ?? null)
     const payload = options.entry
       ? await prepareEntryForBlobStorage(this.blobStore, cloud.codebase?.id ?? 'hopit', entry.path, options.entry)
       : null
@@ -104,14 +107,22 @@ export class FixtureJsonCloudGraphService {
       ...options,
       entry: payload ?? options.entry,
     })
-    await this.writeGraph(cloud, {
-      now: options.now,
-      actor: {
-        actorUserId: entry.actorUserId ?? entry.ownerId ?? entry.userId ?? entry.requesterId ?? null,
-        sessionId: entry.sessionId ?? cloud.session?.id ?? null,
-        deviceName: entry.deviceName ?? cloud.session?.deviceName ?? null,
-      },
+    const normalized = normalizeValidatedCloudGraph(cloud)
+    const actor = journalActor(entry, normalized)
+    const versionRow = buildFileVersionRowForEntry({
+      beforeGraph,
+      afterGraph: normalized,
+      entry,
+      beforeFile: previousFile,
+      afterFile: normalized.files?.[entry.path] ?? null,
+      createdAt: options.now ?? new Date().toISOString(),
+      actor,
     })
+    const nextVersionId = previousVersions.reduce((max, row) => Math.max(max, Number(row.versionId ?? 0)), 0) + 1
+    normalized.fileVersions = versionRow
+      ? [...previousVersions, { versionId: nextVersionId, ...versionRow }]
+      : previousVersions
+    await writeJson(this.path, normalized)
     return acknowledgement
   }
 
@@ -219,22 +230,11 @@ export class D1CloudGraphService extends CloudflareD1HopBackend {
     const payload = options.entry
       ? await prepareEntryForBlobStorage(this.blobStore, cloud.codebase?.id ?? this.codebaseId ?? 'hopit', entry.path, options.entry)
       : null
-    const acknowledgement = this.applyJournalEntry(cloud, entry, {
+    return await super.commitJournalEntry(cloud, entry, {
       ...options,
       entry: payload ?? options.entry,
+      ConflictError,
     })
-    await this.writeGraph(cloud, {
-      now: options.now,
-      actor: {
-        actorUserId: entry.actorUserId ?? entry.ownerId ?? entry.userId ?? entry.requesterId ?? null,
-        sessionId: entry.sessionId ?? cloud.session?.id ?? null,
-        deviceName: entry.deviceName ?? cloud.session?.deviceName ?? null,
-      },
-    })
-    return {
-      ...acknowledgement,
-      storageMode: 'd1-graph-save',
-    }
   }
 
   async readBlob(file, context = {}) {
@@ -380,6 +380,18 @@ export function normalizeCloudGraphHead(head) {
       : null,
     updatedAt: textOrNull(head.updatedAt),
   }
+}
+
+function journalActor(entry, cloud) {
+  return {
+    actorUserId: entry.actorUserId ?? entry.ownerId ?? entry.userId ?? entry.requesterId ?? null,
+    sessionId: entry.sessionId ?? cloud.session?.id ?? null,
+    deviceName: entry.deviceName ?? cloud.session?.deviceName ?? null,
+  }
+}
+
+function cloneCloudFileEntry(file) {
+  return file ? structuredClone(file) : null
 }
 
 export function normalizeCloudGraph(cloud) {

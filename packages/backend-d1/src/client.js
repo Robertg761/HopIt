@@ -11,7 +11,21 @@ import { summarizeAccessContext, normalizeEmail, backendErrorMessage, normalizeF
 export function attachClientMethods(Backend) {
   defineBackendMethods(Backend, {
   async query(sql, params = []) {
+    const [result] = await this.queryBatch([{ sql, params }])
+    return Array.isArray(result?.results) ? result.results : []
+  },
+
+  async queryWithMeta(sql, params = []) {
+    const [result] = await this.queryBatch([{ sql, params }])
+    return result ?? { results: [], meta: {} }
+  },
+
+  async queryBatch(statements = []) {
     this.assertConfigured()
+    const normalizedStatements = statements.map((statement) => ({
+      sql: statement.sql,
+      params: Array.isArray(statement.params) ? statement.params : [],
+    }))
     const authToken = d1AuthorizationToken(this.config)
     const response = await fetch(this.queryUrl(), {
       method: 'POST',
@@ -20,19 +34,25 @@ export function attachClientMethods(Backend) {
         'Content-Type': 'application/json',
         'X-HopIt-Codebase-Id': this.codebaseId ?? this.config.codebaseId ?? '',
       },
-      body: JSON.stringify({ sql, params }),
+      body: JSON.stringify(normalizedStatements.length === 1 ? normalizedStatements[0] : normalizedStatements),
     })
     const body = await response.json().catch(() => null)
     if (!response.ok || body?.success === false) {
       const reason = body?.errors?.map((error) => error.message).join('; ') || response.statusText
       throw new Error(`D1 query failed: ${reason}`)
     }
-    const result = Array.isArray(body?.result) ? body.result[0] : body?.result
-    if (result?.success === false) {
-      const reason = result?.error ?? result?.meta?.error ?? 'statement failed'
+    const results = Array.isArray(body?.result) ? body.result : [body?.result]
+    for (const result of results) {
+      if (result?.success === false) {
+        const reason = result?.error ?? result?.meta?.error ?? 'statement failed'
+        throw new Error(`D1 statement failed: ${reason}`)
+      }
+    }
+    if (results.length === 0) {
+      const reason = body?.error ?? body?.meta?.error ?? 'statement failed'
       throw new Error(`D1 statement failed: ${reason}`)
     }
-    return Array.isArray(result?.results) ? result.results : []
+    return results
   },
 
   async first(sql, params = []) {

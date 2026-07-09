@@ -9,45 +9,70 @@ export function buildFileVersionRows({ beforeGraph = null, afterGraph, createdAt
   const rows = []
 
   for (const filePath of paths) {
-    const oldFile = beforeFiles[filePath] ?? null
-    const newFile = afterFiles[filePath] ?? null
-    if (oldFile && newFile && fileVersionEquivalent(oldFile, newFile)) continue
-    if (!oldFile && !newFile) continue
-
-    const revision = integerOrNull(newFile?.revision) ?? integerOrNull(afterGraph?.revision) ?? integerOrNull(oldFile?.revision) ?? 0
-    const newDescriptor = newFile ? versionFileDescriptor(codebaseId, filePath, newFile) : null
-    const oldDescriptor = oldFile ? versionFileDescriptor(codebaseId, filePath, oldFile) : null
-    rows.push({
-      codebaseId,
-      selectedStateType: afterGraph?.selectedState?.type ?? null,
-      selectedStateId: afterGraph?.selectedState?.id ?? null,
-      mainStateId: afterGraph?.main?.id ?? null,
-      graphRevision: revision,
+    const row = buildFileVersionRowForEntry({
+      beforeGraph,
+      afterGraph,
       path: filePath,
-      operation: oldFile ? (newFile ? 'modify' : 'delete') : 'add',
-      kind: newFile?.kind ?? oldFile?.kind ?? 'file',
-      oldRevision: integerOrNull(oldFile?.revision),
-      newRevision: integerOrNull(newFile?.revision),
-      oldFile: oldDescriptor,
-      newFile: newDescriptor,
-      scope: newDescriptor?.scope ?? oldDescriptor?.scope ?? scopeForPath(filePath),
-      privacyZone: newDescriptor?.privacyZone ?? oldDescriptor?.privacyZone ?? privacyZoneForPath(filePath),
-      zoneId: newDescriptor?.zoneId ?? oldDescriptor?.zoneId ?? privacyZoneIdForPath(codebaseId, filePath),
-      contentStorage: newDescriptor?.contentStorage ?? oldDescriptor?.contentStorage ?? 'inline',
-      blobProvider: newDescriptor?.blobProvider ?? oldDescriptor?.blobProvider ?? null,
-      blobKey: newDescriptor?.blobKey ?? oldDescriptor?.blobKey ?? null,
-      blobHash: newDescriptor?.blobHash ?? oldDescriptor?.blobHash ?? null,
-      encoding: newDescriptor?.encoding ?? oldDescriptor?.encoding ?? 'utf8',
-      target: newDescriptor?.target ?? oldDescriptor?.target ?? null,
-      size: newDescriptor?.size ?? oldDescriptor?.size ?? null,
-      actorUserId: actor.actorUserId ?? actor.userId ?? actor.requesterId ?? null,
-      sessionId: actor.sessionId ?? afterGraph?.session?.id ?? null,
-      deviceName: actor.deviceName ?? afterGraph?.session?.deviceName ?? null,
+      beforeFile: beforeFiles[filePath] ?? null,
+      afterFile: afterFiles[filePath] ?? null,
       createdAt,
+      actor,
     })
+    if (row) rows.push(row)
   }
 
   return rows
+}
+
+export function buildFileVersionRowForEntry({
+  beforeGraph = null,
+  afterGraph,
+  entry = null,
+  path = entry?.path,
+  beforeFile = null,
+  afterFile = null,
+  createdAt = new Date().toISOString(),
+  actor = {},
+}) {
+  const filePath = path
+  if (typeof filePath !== 'string' || filePath.length === 0) return null
+  const oldFile = beforeFile ?? null
+  const newFile = afterFile ?? null
+  if (oldFile && newFile && fileVersionEquivalent(oldFile, newFile)) return null
+  if (!oldFile && !newFile) return null
+
+  const codebaseId = afterGraph?.codebase?.id ?? beforeGraph?.codebase?.id ?? 'hopit'
+  const revision = integerOrNull(newFile?.revision) ?? integerOrNull(afterGraph?.revision) ?? integerOrNull(oldFile?.revision) ?? 0
+  const newDescriptor = newFile ? versionFileDescriptor(codebaseId, filePath, newFile) : null
+  const oldDescriptor = oldFile ? versionFileDescriptor(codebaseId, filePath, oldFile) : null
+  return {
+    codebaseId,
+    selectedStateType: afterGraph?.selectedState?.type ?? null,
+    selectedStateId: afterGraph?.selectedState?.id ?? null,
+    mainStateId: afterGraph?.main?.id ?? null,
+    graphRevision: revision,
+    path: filePath,
+    operation: oldFile ? (newFile ? 'modify' : 'delete') : 'add',
+    kind: newFile?.kind ?? oldFile?.kind ?? entry?.kind ?? 'file',
+    oldRevision: integerOrNull(oldFile?.revision),
+    newRevision: integerOrNull(newFile?.revision),
+    oldFile: oldDescriptor,
+    newFile: newDescriptor,
+    scope: newDescriptor?.scope ?? oldDescriptor?.scope ?? scopeForPath(filePath),
+    privacyZone: newDescriptor?.privacyZone ?? oldDescriptor?.privacyZone ?? privacyZoneForPath(filePath),
+    zoneId: newDescriptor?.zoneId ?? oldDescriptor?.zoneId ?? privacyZoneIdForPath(codebaseId, filePath),
+    contentStorage: newDescriptor?.contentStorage ?? oldDescriptor?.contentStorage ?? 'inline',
+    blobProvider: newDescriptor?.blobProvider ?? oldDescriptor?.blobProvider ?? null,
+    blobKey: newDescriptor?.blobKey ?? oldDescriptor?.blobKey ?? null,
+    blobHash: newDescriptor?.blobHash ?? oldDescriptor?.blobHash ?? null,
+    encoding: newDescriptor?.encoding ?? oldDescriptor?.encoding ?? 'utf8',
+    target: newDescriptor?.target ?? oldDescriptor?.target ?? null,
+    size: newDescriptor?.size ?? oldDescriptor?.size ?? null,
+    actorUserId: actor.actorUserId ?? actor.userId ?? actor.requesterId ?? null,
+    sessionId: actor.sessionId ?? afterGraph?.session?.id ?? null,
+    deviceName: actor.deviceName ?? afterGraph?.session?.deviceName ?? null,
+    createdAt,
+  }
 }
 
 export function versionFileDescriptor(codebaseId, filePath, file) {

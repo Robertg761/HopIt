@@ -9,6 +9,7 @@ export function createD1Backend(options?: D1Options, env?: D1Environment): Cloud
 
 export const d1SchemaStatements: string[]
 export function attachTextDiff(result: unknown, filePath: string, readFileBody: (...args: unknown[]) => Promise<unknown>): Promise<unknown>
+export function buildFileVersionRowForEntry(input: Record<string, unknown>): unknown
 export function buildFileVersionRows(input: Record<string, unknown>): unknown[]
 export function compareVersionRows(versions: unknown[], leftRevision: number, rightRevision: number, options?: Record<string, unknown>): unknown
 export function createCompareBlobReader(options?: Record<string, unknown>): unknown

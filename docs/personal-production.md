@@ -2,7 +2,7 @@
 
 This runbook is the first real-use path for one-person HopIt dogfooding. It keeps the local JSON graph as a development fallback, and now treats Cloudflare D1 as the canonical cloud graph target. The retired hosted graph export remains available for migration/recovery history only. Vercel hosts the protected dashboard. Hosted workspace commands are disabled; collaboration/member/work-item/session/key APIs now route through the D1 backend selector. Basic Auth is not part of normal production access and should stay unset unless deliberately re-enabled for emergency recovery.
 
-Last updated: 2026-07-03
+Last updated: 2026-07-08
 
 ## Current Deployment
 
@@ -164,7 +164,7 @@ npm run d1:migrate:convex-export -- \
 
 The production import on 2026-06-30 wrote `58` files and the latest `500` events from `11,638` exported events into D1. Use `--dry-run` for future rehearsals. Use `--all-events` only if the daily D1 write budget can absorb the full event history.
 
-The D1 path currently covers agent graph reads/writes, graph-head status polling, hosted dashboard status, codebase list/create/update/delete, text file read/edit, account sync, automatic verified-owner bootstrap for migrated `local-owner` codebases, hosted action jobs, member/invite routes, issue/discussion/release/project/comment collaboration tables, project-board UI operations, scoped D1 proxy session auth, scoped device sessions, trusted-device/key metadata, redacted key-grant status, per-file version rows, and object-backed revision compare. Production retention policy, web compare UI wiring, full private-repo key-grant approval/rotation flows, richer release assets, and complete product write-path coverage still need work.
+The D1 path currently covers agent graph reads/writes, graph-head status polling, hosted dashboard status, codebase list/create/update/delete, text file read/edit, account sync, automatic verified-owner bootstrap for migrated `local-owner` codebases, hosted action jobs, member/invite routes, issue/discussion/release/project/comment collaboration tables, project-board UI operations, scoped D1 proxy session auth, scoped device sessions, trusted-device/key metadata, redacted key-grant status, per-file version rows, per-file D1 agent journal commits, and object-backed revision compare. Mirror-backlog syncs are now viable on the agent path because journal commits no longer save the whole graph per entry; bootstrap/import/admin full-graph saves remain available for their narrow use cases. Production retention policy, web compare UI wiring, full private-repo key-grant approval/rotation flows, richer release assets, and complete product write-path coverage still need work.
 
 ### D1 Proxy Token Rotation
 
@@ -673,7 +673,7 @@ If you are using the manual pid-file debug service instead of LaunchAgent, use
 
 - Hosted workspace commands are intentionally disabled; local workspace commands run through the local agent. Hosted collaboration/member/work-item APIs exist behind Clerk product auth.
 - Basic Auth is now emergency-only code and should stay disabled in production. The repo has Clerk-backed product auth code, production Google OAuth, durable users, memberships, invitations, D1 owner claim, and first server-side permission checks.
-- D1 separates graph/file metadata from file bytes and supports object-backed blobs through the agent sync path with per-file revision-guarded mutations, per-file version rows, object-backed compare, and retention-aware dry-run-by-default object GC. Production retention policy and full product write-path coverage are still incomplete.
+- D1 separates graph/file metadata from file bytes and supports object-backed blobs through the agent sync path with per-file revision-guarded journal commits, per-file version rows, object-backed compare, and retention-aware dry-run-by-default object GC. The previous whole-graph-save cost warning is resolved for agent sync and mirror backlogs; production retention policy and full non-agent product write-path coverage are still incomplete.
 - The full privacy/key-grant model is documented in [HopIt Privacy And
   Encryption Plan](privacy-encryption-plan.md). The first device keyring,
   encrypted recovery export, trusted-device public-key registration, and

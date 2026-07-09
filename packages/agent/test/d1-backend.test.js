@@ -11,6 +11,7 @@ import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import d1ApiWorker from '../../../cloudflare/d1/api-worker.js'
 import { createD1Backend, d1SchemaStatements } from '@hopit/backend-d1'
+import { D1CloudGraphService } from '../src/cloud/d1-graph-service.js'
 
 const execFileAsync = promisify(execFile)
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -858,13 +859,14 @@ test('D1 backend records file versions and compares retained revisions', async (
   assert.equal(missingCompare.summary.missingBlob, 1)
 })
 
-async function startD1ApiServer(t, { statements = null } = {}) {
+async function startD1ApiServer(t, { statements = null, statementRecords = null, pushNamespace = null } = {}) {
   const db = new DatabaseSync(':memory:')
   const env = {
-    HOPIT_D1_DB: d1Binding(db, statements),
+    HOPIT_D1_DB: d1Binding(db, statements, statementRecords),
     HOPIT_D1_PROXY_TOKEN: 'token_test',
     HOPIT_D1_PROXY_LOG_REQUESTS: '0',
   }
+  if (pushNamespace) env.HOPIT_PUSH_HUB = pushNamespace
   const server = createServer(async (request, response) => {
     try {
       const body = request.method === 'GET' || request.method === 'HEAD' ? undefined : await readRequestBody(request)
@@ -898,21 +900,24 @@ async function startD1ApiServer(t, { statements = null } = {}) {
   return { baseUrl: `http://127.0.0.1:${port}`, db }
 }
 
-function d1Binding(db, statements = null) {
+function d1Binding(db, statements = null, statementRecords = null) {
   return {
     prepare(sql) {
       statements?.push(sql)
       const statement = db.prepare(sql)
       return {
         bind(...params) {
+          statementRecords?.push({ sql, params })
           return {
             all() {
-              const rows = sql.trim().toLowerCase().startsWith('select')
-                ? statement.all(...params)
-                : (statement.run(...params), [])
+              const isSelect = sql.trim().toLowerCase().startsWith('select')
+              const result = isSelect ? null : statement.run(...params)
+              const rows = isSelect ? statement.all(...params) : []
               return {
                 results: rows,
-                meta: {},
+                meta: {
+                  changes: result?.changes ?? 0,
+                },
               }
             },
           }
@@ -920,6 +925,32 @@ function d1Binding(db, statements = null) {
       }
     },
   }
+}
+
+function createRecordingPushNamespace() {
+  const namespace = {
+    idNames: [],
+    fetches: [],
+    notifications: [],
+    idFromName(name) {
+      namespace.idNames.push(name)
+      return `id:${name}`
+    },
+    get(id) {
+      return {
+        async fetch(request, init) {
+          const normalizedRequest = request instanceof Request ? request : new Request(request, init)
+          namespace.fetches.push({ id, request: normalizedRequest })
+          if (normalizedRequest.method === 'POST') {
+            namespace.notifications.push(await normalizedRequest.json())
+            return new Response(JSON.stringify({ success: true }), { status: 200 })
+          }
+          return new Response('upgrade-ok')
+        },
+      }
+    },
+  }
+  return namespace
 }
 
 function readRequestBody(request) {
@@ -958,12 +989,259 @@ function stateArgs(state) {
   ]
 }
 
+function makeD1Graph({ codebaseId = 'd1-core', revision = 1, files = {}, now = '2026-07-08T00:00:00.000Z' } = {}) {
+  return {
+    schemaVersion: 2,
+    codebase: { id: codebaseId, name: codebaseId, ownerId: 'user_owner' },
+    main: { id: 'main', revision, updatedAt: now, mergedChangeSetId: null },
+    selectedState: {
+      type: 'active-change-set',
+      id: `cs_${codebaseId.replace(/[^a-z0-9]+/gi, '_')}`,
+      ownerId: 'user_owner',
+      baseMainId: 'main',
+      baseRevision: revision,
+      revision,
+      visibility: 'private',
+      effectiveVisibility: 'private',
+      reviewState: 'not-open',
+      mergeState: 'unmerged',
+      conflictState: 'none',
+      conflict: null,
+      review: null,
+      merge: null,
+    },
+    owner: { id: 'user_owner', name: 'Owner' },
+    collaborators: [],
+    session: { id: `session_${codebaseId.replace(/[^a-z0-9]+/gi, '_')}`, deviceName: 'test' },
+    visibility: {
+      productDefault: 'private',
+      globalUserDefault: null,
+      codebaseOverride: null,
+      changeSetOverride: null,
+      effective: 'private',
+    },
+    revision,
+    files,
+  }
+}
+
 async function runCli(command, args = []) {
   return await execFileAsync(process.execPath, [cliPath, command, ...args], {
     cwd: repoRoot,
     maxBuffer: 10 * 1024 * 1024,
   })
 }
+
+test('D1 journal commit uses bounded per-file statements on wide graphs', async (t) => {
+  const statementRecords = []
+  const server = await startD1ApiServer(t, { statementRecords })
+  const now = '2026-07-08T00:00:00.000Z'
+  const files = {}
+  for (let index = 0; index < 120; index += 1) {
+    files[`src/file-${String(index).padStart(3, '0')}.js`] = {
+      kind: 'file',
+      content: `export const value${index} = ${index}\n`,
+      encoding: 'utf8',
+      revision: 1,
+      updatedAt: now,
+    }
+  }
+  const backend = new D1CloudGraphService({
+    'codebase-id': 'journal-wide-core',
+    'd1-api-base-url': server.baseUrl,
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_test',
+    'd1-api-token': 'token_test',
+  })
+  await backend.initialize(makeD1Graph({ codebaseId: 'journal-wide-core', files, now }))
+  const cloud = await backend.readGraph()
+
+  statementRecords.length = 0
+  const acknowledgement = await backend.commitJournalEntry(cloud, {
+    id: 'entry-wide-1',
+    type: 'write',
+    path: 'src/file-060.js',
+    baseRevision: 1,
+    targetStateRevision: 1,
+  }, {
+    content: 'export const value60 = 6000\n',
+    now: '2026-07-08T00:01:00.000Z',
+  })
+
+  assert.equal(acknowledgement.storageMode, 'd1-file-mutation')
+  assert.ok(statementRecords.length < 10, `expected bounded journal statements, saw ${statementRecords.length}`)
+  assert.equal(statementRecords.filter((record) => /^\s*insert\s+into\s+files\b/i.test(record.sql)).length, 1)
+  assert.equal(statementRecords.some((record) => /path\s+not\s+in/i.test(record.sql)), false)
+  assert.equal(statementRecords.some((record) => /delete\s+from\s+files\s+where\s+codebase_id\s+=\s+\?\s+and\s+path\s+not\s+in/i.test(record.sql)), false)
+
+  const written = await backend.readGraph()
+  assert.equal(written.revision, 2)
+  assert.equal(Object.keys(written.files).length, 120)
+  assert.equal(written.files['src/file-060.js'].content, 'export const value60 = 6000\n')
+  assert.equal(written.files['src/file-061.js'].content, 'export const value61 = 61\n')
+  const versions = await backend.listFileVersions()
+  assert.equal(versions.filter((row) => row.graphRevision === 2).length, 1)
+  assert.equal(versions.find((row) => row.graphRevision === 2).path, 'src/file-060.js')
+})
+
+test('D1 journal delete removes the file row and writes a tombstone version', async (t) => {
+  const server = await startD1ApiServer(t)
+  const now = '2026-07-08T00:00:00.000Z'
+  const backend = new D1CloudGraphService({
+    'codebase-id': 'journal-delete-core',
+    'd1-api-base-url': server.baseUrl,
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_test',
+    'd1-api-token': 'token_test',
+  })
+  await backend.initialize(makeD1Graph({
+    codebaseId: 'journal-delete-core',
+    now,
+    files: {
+      'README.md': {
+        kind: 'file',
+        content: '# Delete me\n',
+        encoding: 'utf8',
+        revision: 1,
+        updatedAt: now,
+      },
+    },
+  }))
+  const cloud = await backend.readGraph()
+
+  const acknowledgement = await backend.commitJournalEntry(cloud, {
+    id: 'entry-delete-1',
+    type: 'delete',
+    path: 'README.md',
+    baseRevision: 1,
+    targetStateRevision: 1,
+  }, { now: '2026-07-08T00:02:00.000Z' })
+
+  assert.equal(acknowledgement.storageMode, 'd1-file-mutation')
+  const written = await backend.readGraph()
+  assert.equal(written.revision, 2)
+  assert.equal(written.files['README.md'], undefined)
+  const versions = await backend.listFileVersions()
+  const tombstone = versions.find((row) => row.path === 'README.md' && row.graphRevision === 2)
+  assert.equal(tombstone.operation, 'delete')
+  assert.equal(tombstone.oldRevision, 1)
+  assert.equal(tombstone.newRevision, null)
+  assert.equal(tombstone.oldFile.content, '# Delete me\n')
+  assert.equal(tombstone.newFile, null)
+})
+
+test('D1 journal commit detects a remote head race without partial file writes', async (t) => {
+  const statementRecords = []
+  const server = await startD1ApiServer(t, { statementRecords })
+  const now = '2026-07-08T00:00:00.000Z'
+  const backend = new D1CloudGraphService({
+    'codebase-id': 'journal-race-core',
+    'd1-api-base-url': server.baseUrl,
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_test',
+    'd1-api-token': 'token_test',
+  })
+  await backend.initialize(makeD1Graph({
+    codebaseId: 'journal-race-core',
+    now,
+    files: {
+      'README.md': {
+        kind: 'file',
+        content: 'original\n',
+        encoding: 'utf8',
+        revision: 1,
+        updatedAt: now,
+      },
+    },
+  }))
+  const cloud = await backend.readGraph()
+  server.db.prepare(`update codebases set revision = ? where codebase_id = ?`).run(99, 'journal-race-core')
+
+  statementRecords.length = 0
+  await assert.rejects(
+    () => backend.commitJournalEntry(cloud, {
+      id: 'entry-race-1',
+      type: 'write',
+      path: 'README.md',
+      baseRevision: 1,
+      targetStateRevision: 1,
+    }, {
+      content: 'should not persist\n',
+      now: '2026-07-08T00:03:00.000Z',
+    }),
+    (error) => {
+      assert.equal(error.name, 'ConflictError')
+      assert.equal(error.detail.reason, 'selected_state_revision_mismatch')
+      return true
+    },
+  )
+
+  assert.ok(statementRecords.length < 10, `expected bounded failed journal statements, saw ${statementRecords.length}`)
+  const written = await backend.readGraph()
+  assert.equal(written.files['README.md'].content, 'original\n')
+  assert.equal(written.files['README.md'].revision, 1)
+  const versions = await backend.listFileVersions()
+  assert.equal(versions.some((row) => row.graphRevision === 2), false)
+})
+
+test('scoped D1 session can commit a per-file journal entry and emits one push envelope', async (t) => {
+  const pushNamespace = createRecordingPushNamespace()
+  const server = await startD1ApiServer(t, { pushNamespace })
+  const now = '2026-07-08T00:00:00.000Z'
+  const admin = new D1CloudGraphService({
+    'codebase-id': 'journal-scoped-core',
+    'd1-api-base-url': server.baseUrl,
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_test',
+    'd1-api-token': 'token_test',
+  })
+  await admin.initialize(makeD1Graph({
+    codebaseId: 'journal-scoped-core',
+    now,
+    files: {
+      'README.md': {
+        kind: 'file',
+        content: 'scoped original\n',
+        encoding: 'utf8',
+        revision: 1,
+        updatedAt: now,
+      },
+    },
+  }))
+  const registered = await admin.registerAgentSession({
+    codebaseId: 'journal-scoped-core',
+    sessionId: 'session_journal_scoped',
+    deviceName: 'Scoped Commit Device',
+    capabilities: ['read', 'write'],
+  })
+  const scoped = new D1CloudGraphService({
+    'codebase-id': 'journal-scoped-core',
+    'd1-api-base-url': server.baseUrl,
+    'session-token': registered.sessionToken,
+  })
+  const cloud = await scoped.readGraph()
+  pushNamespace.notifications.length = 0
+
+  const acknowledgement = await scoped.commitJournalEntry(cloud, {
+    id: 'entry-scoped-1',
+    type: 'write',
+    path: 'README.md',
+    baseRevision: 1,
+    targetStateRevision: 1,
+    sessionId: 'session_journal_scoped',
+  }, {
+    content: 'scoped changed\n',
+    now: '2026-07-08T00:04:00.000Z',
+  })
+
+  assert.equal(acknowledgement.storageMode, 'd1-file-mutation')
+  const written = await admin.readGraph()
+  assert.equal(written.files['README.md'].content, 'scoped changed\n')
+  assert.equal(pushNamespace.notifications.length, 1)
+  assert.equal(pushNamespace.notifications[0].codebaseId, 'journal-scoped-core')
+  assert.equal(pushNamespace.notifications[0].revision, 2)
+  assert.deepEqual(pushNamespace.notifications[0].changedPaths, ['README.md'])
+})
 
 test('writeGraph stays under the D1 bound-variable limit for graphs over 90 files', async (t) => {
   const statements = []

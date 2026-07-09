@@ -13,6 +13,7 @@ export { d1CloudServiceType, d1ConfigFromOptions, isD1Configured } from './confi
 export { d1SchemaStatements } from './schema.js'
 export {
   attachTextDiff,
+  buildFileVersionRowForEntry,
   buildFileVersionRows,
   compareVersionRows,
   createCompareBlobReader,
