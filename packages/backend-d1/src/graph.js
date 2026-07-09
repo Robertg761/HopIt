@@ -9,6 +9,10 @@ import { summarizeAccessContext, normalizeEmail, normalizeCodebaseName, normaliz
 /** @typedef {import('@hopit/core').CloudGraph} CloudGraph */
 /** @typedef {import('@hopit/core').AgentSession} AgentSession */
 
+// Cloudflare D1 rejects statements with more than 100 bound variables
+// (SQLITE_MAX_VARIABLE_NUMBER=100), unlike stock SQLite's 999.
+const maxNotInBoundPaths = 90
+
 export function attachGraphMethods(Backend) {
   defineBackendMethods(Backend, {
   async exists(codebaseId = this.codebaseId) {
@@ -118,12 +122,14 @@ export function attachGraphMethods(Backend) {
 
     if (seenPaths.length === 0) {
       await this.query(`delete from files where codebase_id = ?`, [codebaseId])
-    } else if (seenPaths.length <= 900) {
+    } else if (seenPaths.length <= maxNotInBoundPaths) {
       await this.query(
         `delete from files where codebase_id = ? and path not in (${seenPaths.map(() => '?').join(', ')})`,
         [codebaseId, ...seenPaths],
       )
     } else {
+      // Chunking a NOT IN list would delete paths carried by the other chunks,
+      // so larger graphs diff against the existing rows and delete only stale paths.
       const existingRows = await this.query(`select path from files where codebase_id = ?`, [codebaseId])
       const incoming = new Set(seenPaths)
       for (const row of existingRows) {

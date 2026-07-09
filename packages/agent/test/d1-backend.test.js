@@ -964,3 +964,78 @@ async function runCli(command, args = []) {
     maxBuffer: 10 * 1024 * 1024,
   })
 }
+
+test('writeGraph stays under the D1 bound-variable limit for graphs over 90 files', async (t) => {
+  const statements = []
+  const server = await startD1ApiServer(t, { statements })
+  const backend = createD1Backend({
+    'codebase-id': 'wide-core',
+    'd1-api-base-url': server.baseUrl,
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_test',
+    'd1-api-token': 'token_test',
+  })
+  const now = '2026-07-08T00:00:00.000Z'
+  const files = {}
+  for (let index = 0; index < 120; index += 1) {
+    files[`src/file-${String(index).padStart(3, '0')}.js`] = {
+      kind: 'file',
+      content: `export const value${index} = ${index}\n`,
+      encoding: 'utf8',
+      revision: 1,
+      updatedAt: now,
+    }
+  }
+  const graph = {
+    schemaVersion: 2,
+    codebase: { id: 'wide-core', name: 'Wide Core', ownerId: 'user_owner' },
+    main: { id: 'main', revision: 1, updatedAt: now, mergedChangeSetId: null },
+    selectedState: {
+      type: 'active-change-set',
+      id: 'cs_wide_core',
+      ownerId: 'user_owner',
+      baseMainId: 'main',
+      baseRevision: 1,
+      revision: 1,
+      visibility: 'private',
+      effectiveVisibility: 'private',
+      reviewState: 'not-open',
+      mergeState: 'unmerged',
+      conflictState: 'none',
+      conflict: null,
+      review: null,
+      merge: null,
+    },
+    owner: { id: 'user_owner', name: 'Owner' },
+    collaborators: [],
+    session: { id: 'session_wide', deviceName: 'test' },
+    visibility: {
+      productDefault: 'private',
+      globalUserDefault: null,
+      codebaseOverride: null,
+      changeSetOverride: null,
+      effective: 'private',
+    },
+    revision: 1,
+    files,
+  }
+
+  await backend.initialize(graph)
+
+  const removedPath = 'src/file-000.js'
+  const nextFiles = { ...files }
+  delete nextFiles[removedPath]
+  statements.length = 0
+  await backend.writeGraph({ ...graph, revision: 2, files: nextFiles })
+
+  const maxPlaceholders = Math.max(...statements.map((sql) => (sql.match(/\?/g) ?? []).length))
+  assert.ok(
+    maxPlaceholders <= 100,
+    `expected every statement to stay within D1's 100 bound-variable limit, saw ${maxPlaceholders}`,
+  )
+
+  const written = await backend.readGraph('wide-core')
+  assert.equal(Object.keys(written.files).length, 119)
+  assert.equal(written.files[removedPath], undefined)
+  assert.equal(written.files['src/file-001.js'].content, 'export const value1 = 1\n')
+})
