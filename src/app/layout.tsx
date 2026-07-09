@@ -1,22 +1,9 @@
 import type { Metadata } from "next";
-import { Inter, JetBrains_Mono } from "next/font/google";
 import "@/styles/globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { ThemeProvider } from "@/components/providers/theme-provider";
 import { ClerkAuthProvider } from "@/components/providers/clerk-auth-provider";
 import { shouldEnableClerkUi } from "@/lib/auth-config";
-
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-inter",
-  display: "swap",
-});
-
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ["latin"],
-  variable: "--font-jbmono",
-  display: "swap",
-});
 
 export const metadata: Metadata = {
   title: "HopIt — Your code, on every device",
@@ -43,12 +30,12 @@ export default function RootLayout({
   const clerkEnabled = shouldEnableClerkUi();
 
   return (
-    <html lang="en" suppressHydrationWarning className={`${inter.variable} ${jetbrainsMono.variable}`}>
+    <html lang="en" suppressHydrationWarning data-scroll-behavior="smooth">
       <body>
         <ClerkAuthProvider enabled={clerkEnabled}>
           <ThemeProvider
             attribute="class"
-            defaultTheme="dark"
+            defaultTheme="light"
             enableSystem={false}
             disableTransitionOnChange
             storageKey="hopit-theme"

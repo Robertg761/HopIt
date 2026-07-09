@@ -166,7 +166,7 @@ export function CommandPalette({
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
-        className="relative z-10 w-full max-w-lg overflow-hidden rounded-xl border border-border bg-popover shadow-2xl animate-in fade-in zoom-in-95 duration-150"
+        className="relative z-10 w-full max-w-xl overflow-hidden rounded-[1.5rem] border border-border bg-popover shadow-[0_32px_100px_rgba(10,19,15,0.3)] animate-in fade-in zoom-in-95 duration-150"
       >
         <div className="flex items-center gap-2.5 border-b border-border px-4">
           <Search className="size-4 shrink-0 text-muted-foreground" />
@@ -176,7 +176,7 @@ export function CommandPalette({
             onChange={(event) => setQuery(event.target.value)}
             onKeyDown={onKeyDown}
             placeholder="Search pages and actions…"
-            className="h-12 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
+          className="h-14 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
             role="combobox"
             aria-expanded="true"
             aria-controls="command-palette-list"
@@ -206,13 +206,13 @@ export function CommandPalette({
                       select(entry)
                     }}
                     className={cn(
-                      'flex cursor-pointer items-center gap-2.5 rounded-lg px-2.5 py-2 text-sm',
-                      index === activeIndex ? 'bg-muted text-foreground' : 'text-muted-foreground',
+                      'flex cursor-pointer items-center gap-3 rounded-xl px-3 py-2.5 text-sm',
+                      index === activeIndex ? 'bg-foreground text-background' : 'text-muted-foreground',
                     )}
                   >
                     <entry.icon className="size-4 shrink-0" />
-                    <span className="font-medium text-foreground">{entry.label}</span>
-                    <span className="truncate text-xs text-muted-foreground">{entry.description}</span>
+                    <span className={cn('font-bold', index === activeIndex ? 'text-background' : 'text-foreground')}>{entry.label}</span>
+                    <span className={cn('truncate text-xs', index === activeIndex ? 'text-background/65' : 'text-muted-foreground')}>{entry.description}</span>
                   </li>
                 </React.Fragment>
               )

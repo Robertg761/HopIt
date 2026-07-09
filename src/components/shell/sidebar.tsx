@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils'
 import { HopItLogo } from '@/components/brand/logo'
 import { activeNavId, navGroups } from '@/components/shell/nav'
 import { useWorkspace } from '@/components/workspace/workspace-provider'
+import { ArrowUpRight } from 'lucide-react'
 import { StatusDot, type StatusDotTone } from '@/components/ui/status-dot'
 
 const stateTone: Record<string, StatusDotTone> = {
@@ -24,22 +25,33 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex h-14 items-center px-4">
+      <div className="flex h-[4.5rem] items-center border-b border-white/10 px-5">
         <Link
           href="/"
           onClick={onNavigate}
-          className="rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+          className="rounded-xl text-[var(--sidebar-foreground)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--signal)]/60"
         >
-          <HopItLogo />
+          <HopItLogo size={31} />
         </Link>
+        <span className="ml-auto font-mono text-[0.58rem] font-semibold uppercase tracking-[0.2em] text-[var(--sidebar-muted)]">
+          Relay 01
+        </span>
       </div>
 
-      <nav className="flex-1 space-y-5 overflow-y-auto px-2.5 py-2 scroll-thin">
-        {navGroups.map((group) => (
+      <div className="px-5 pb-4 pt-5">
+        <p className="font-display text-[1.65rem] leading-[1.02] tracking-[-0.03em] text-white">
+          Code that keeps<br />up with you.
+        </p>
+      </div>
+
+      <nav className="scroll-thin flex-1 space-y-5 overflow-y-auto px-3 pb-5">
+        {navGroups.map((group, groupIndex) => (
           <div key={group.id}>
             {group.label ? (
-              <p className="mb-1 px-2 text-[0.6875rem] font-medium uppercase tracking-wider text-muted-foreground/70">
-                {group.label}
+              <p className="mb-1.5 flex items-center gap-2 px-2.5 font-mono text-[0.6rem] font-semibold uppercase tracking-[0.18em] text-[var(--sidebar-muted)]">
+                <span>{String(groupIndex + 1).padStart(2, '0')}</span>
+                <span className="h-px flex-1 bg-white/10" />
+                <span>{group.label}</span>
               </p>
             ) : null}
             <ul className="space-y-0.5">
@@ -52,14 +64,15 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
                       onClick={onNavigate}
                       aria-current={isActive ? 'page' : undefined}
                       className={cn(
-                        'flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-sm outline-none transition-colors focus-visible:ring-2 focus-visible:ring-ring/40',
+                        'group flex items-center gap-3 rounded-xl px-3 py-2.5 text-[0.82rem] font-semibold outline-none transition-all focus-visible:ring-2 focus-visible:ring-[var(--signal)]/60',
                         isActive
-                          ? 'bg-muted font-medium text-foreground'
-                          : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
+                          ? 'bg-[var(--signal)] text-[#17352e] shadow-[0_8px_28px_rgba(201,244,92,0.13)]'
+                          : 'text-[var(--sidebar-muted)] hover:bg-white/[0.07] hover:text-white',
                       )}
                     >
-                      <item.icon className={cn('size-4 shrink-0', isActive && 'text-hop')} />
-                      {item.label}
+                      <item.icon className="size-[1.05rem] shrink-0" strokeWidth={1.8} />
+                      <span className="flex-1">{item.label}</span>
+                      {isActive ? <ArrowUpRight className="size-3.5" /> : null}
                     </Link>
                   </li>
                 )
@@ -69,12 +82,18 @@ export function Sidebar({ onNavigate }: { onNavigate?: () => void }) {
         ))}
       </nav>
 
-      <div className="border-t border-border px-4 py-3">
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+      <div className="border-t border-white/10 p-3">
+        <div className="rounded-2xl bg-black/15 p-3.5">
+          <div className="mb-2 flex items-center gap-2 font-mono text-[0.58rem] font-semibold uppercase tracking-[0.15em] text-[var(--sidebar-muted)]">
+            Agent signal
+            <span className="relay-dash h-px flex-1 text-white/20" />
+          </div>
+          <div className="flex items-center gap-2 text-xs font-semibold text-white">
           <StatusDot tone={stateTone[status.state] ?? 'neutral'} pulse={status.state === 'online'} />
           <span className="truncate" title={status.healthLabel}>
             {status.healthLabel || 'Agent status unknown'}
-          </span>
+            </span>
+          </div>
         </div>
       </div>
     </div>

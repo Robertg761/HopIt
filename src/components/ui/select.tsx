@@ -10,7 +10,7 @@ function Select({ className, children, ...props }: React.ComponentProps<"select"
       <select
         data-slot="select"
         className={cn(
-          "h-8 w-full appearance-none rounded-lg border border-input bg-transparent pl-2.5 pr-8 text-sm text-foreground transition-colors",
+          "h-10 w-full appearance-none rounded-xl border border-input bg-card/50 pl-3 pr-9 text-sm text-foreground transition-colors",
           "focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/25 outline-none",
           "disabled:pointer-events-none disabled:opacity-50",
           "[&>option]:bg-popover [&>option]:text-popover-foreground"

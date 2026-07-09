@@ -1,68 +1,56 @@
 'use client'
 
 import Link from 'next/link'
+import { ArrowRight, Boxes } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { CodebaseSummary } from '@/components/workspace/workspace-provider'
 import { formatCount } from '@/lib/client/format'
 
-/** Up to four codebases with hydration and drift info, linking to /codebases. */
-export function CodebasesPreviewCard({
-  codebases,
-  loading,
-}: {
-  codebases: CodebaseSummary[]
-  loading: boolean
-}) {
+export function CodebasesPreviewCard({ codebases, loading }: { codebases: CodebaseSummary[]; loading: boolean }) {
   const preview = codebases.slice(0, 4)
 
   return (
-    <Card>
-      <CardHeader className="flex-row items-center justify-between">
-        <CardTitle>Codebases</CardTitle>
-        <Link
-          href="/codebases"
-          className="rounded text-xs font-medium text-iris outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/40"
-        >
-          View all
-        </Link>
+    <Card className="overflow-hidden bg-[var(--signal)] text-[#17352e]">
+      <CardHeader className="flex-row items-start justify-between pb-5">
+        <div>
+          <p className="mono-label mb-2 text-[#17352e]/60">Account / {formatCount(codebases.length)} total</p>
+          <CardTitle className="font-display text-2xl font-normal tracking-[-0.03em] text-[#17352e]">Codebases in orbit</CardTitle>
+        </div>
+        <span className="grid size-10 place-items-center rounded-full bg-[#17352e] text-[var(--signal)]">
+          <Boxes className="size-4" />
+        </span>
       </CardHeader>
-      <CardContent className="pt-3">
+      <CardContent className="pt-1">
         {loading ? (
-          <div className="space-y-2">
-            <Skeleton className="h-9" />
-            <Skeleton className="h-9" />
-            <Skeleton className="h-9" />
-          </div>
+          <div className="space-y-2"><Skeleton className="h-12" /><Skeleton className="h-12" /></div>
         ) : preview.length === 0 ? (
-          <p className="text-xs text-muted-foreground">No codebases in this account yet.</p>
+          <p className="py-5 text-sm text-[#17352e]/70">No codebases in this account yet.</p>
         ) : (
-          <ul className="space-y-1">
-            {preview.map((codebase) => (
+          <ul className="divide-y divide-[#17352e]/15 border-y border-[#17352e]/15">
+            {preview.map((codebase, index) => (
               <li key={codebase.id}>
-                <Link
-                  href="/codebases"
-                  className="flex items-center gap-3 rounded-lg px-2 py-2 outline-none hover:bg-muted/50 focus-visible:ring-2 focus-visible:ring-ring/40"
-                >
-                  <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                    {codebase.name}
-                  </span>
-                  <Badge tone={codebase.attached ? 'hop' : 'neutral'}>
-                    {codebase.hydrationState}
-                  </Badge>
-                  {codebase.behindByRevisions > 0 ? (
-                    <Badge tone="amber">behind {formatCount(codebase.behindByRevisions)}</Badge>
-                  ) : null}
-                  <span className="shrink-0 text-xs text-muted-foreground">
-                    {formatCount(codebase.fileCount)} files
-                  </span>
+                <Link href="/codebases" className="group grid grid-cols-[1.5rem_1fr_auto] items-center gap-2 py-3 outline-none">
+                  <span className="font-mono text-[0.58rem] text-[#17352e]/50">{String(index + 1).padStart(2, '0')}</span>
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold">{codebase.name}</p>
+                    <p className="mt-0.5 text-[0.65rem] text-[#17352e]/65">{formatCount(codebase.fileCount)} files · {codebase.hydrationState}</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Badge className="border-[#17352e]/20 bg-transparent text-[#17352e]" tone="outline">{codebase.attached ? 'Attached' : 'Cloud'}</Badge>
+                    <ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
+                  </div>
                 </Link>
               </li>
             ))}
           </ul>
         )}
+        <Button asChild variant="ghost" className="mt-4 px-0 text-[#17352e] hover:bg-transparent">
+          <Link href="/codebases">Manage all codebases <ArrowRight /></Link>
+        </Button>
       </CardContent>
     </Card>
   )

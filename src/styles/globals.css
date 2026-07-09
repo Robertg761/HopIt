@@ -1,11 +1,13 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
+/* HopIt workspace relay visual system. */
+
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
-  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono: var(--font-jbmono), ui-monospace, SFMono-Regular, "SF Mono", Consolas, monospace;
+  --font-sans: var(--font-body);
+  --font-mono: var(--font-code);
 
   --color-background: var(--background);
   --color-foreground: var(--foreground);
@@ -27,7 +29,6 @@
   --color-input: var(--input);
   --color-ring: var(--ring);
 
-  /* Brand + semantic accents */
   --color-hop: var(--hop);
   --color-hop-foreground: var(--hop-foreground);
   --color-hop-soft: var(--hop-soft);
@@ -55,187 +56,248 @@
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
 
-  --radius-sm: calc(var(--radius) - 4px);
-  --radius-md: calc(var(--radius) - 2px);
+  --radius-sm: calc(var(--radius) - 6px);
+  --radius-md: calc(var(--radius) - 3px);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 4px);
+  --radius-xl: calc(var(--radius) + 6px);
 }
 
 :root {
-  --radius: 0.625rem;
+  --font-body: "Avenir Next", Avenir, "Helvetica Neue", sans-serif;
+  --font-display: "Iowan Old Style", "Baskerville", "Times New Roman", serif;
+  --font-code: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
+  --radius: 0.875rem;
 
-  --background: #f7f7f8;
-  --foreground: #16181d;
-  --card: #ffffff;
-  --card-foreground: #16181d;
-  --popover: #ffffff;
-  --popover-foreground: #16181d;
+  --background: #f3f0e6;
+  --foreground: #14231f;
+  --card: #fbfaf4;
+  --card-foreground: #14231f;
+  --popover: #fffef9;
+  --popover-foreground: #14231f;
 
-  --primary: #0b8265;
-  --primary-foreground: #ffffff;
-  --secondary: #eeeff1;
-  --secondary-foreground: #16181d;
-  --muted: #f0f1f3;
-  --muted-foreground: #697180;
-  --accent: #f0f1f3;
-  --accent-foreground: #16181d;
-  --destructive: #d6453a;
-  --destructive-foreground: #ffffff;
-  --border: #e3e5e8;
-  --input: #d6d9de;
-  --ring: #0b8265;
+  --primary: #173f35;
+  --primary-foreground: #f8ffd5;
+  --secondary: #e7e2d4;
+  --secondary-foreground: #22342e;
+  --muted: #eae6da;
+  --muted-foreground: #68736d;
+  --accent: #c9f45c;
+  --accent-foreground: #173125;
+  --destructive: #d84a32;
+  --destructive-foreground: #fff8f0;
+  --border: #d3cebf;
+  --input: #bfb9a8;
+  --ring: #4c72f0;
 
-  --hop: #0b8265;
-  --hop-foreground: #ffffff;
-  --hop-soft: #ddf3eb;
-  --hop-soft-foreground: #085c48;
-  --iris: #5458c6;
+  --hop: #8abf2f;
+  --hop-foreground: #14231f;
+  --hop-soft: #e6f5b8;
+  --hop-soft-foreground: #35540b;
+  --iris: #4c72f0;
   --iris-foreground: #ffffff;
-  --iris-soft: #e7e8fa;
-  --iris-soft-foreground: #3d40a0;
-  --amber: #b96e11;
-  --amber-foreground: #ffffff;
-  --amber-soft: #fcefd8;
-  --amber-soft-foreground: #8a5209;
-  --danger-soft: #fbe5e3;
-  --danger-soft-foreground: #a93228;
-  --info: #256fa1;
-  --info-foreground: #ffffff;
-  --info-soft: #e1eff8;
-  --info-soft-foreground: #1d5880;
+  --iris-soft: #e1e8ff;
+  --iris-soft-foreground: #2447bd;
+  --amber: #d47d27;
+  --amber-foreground: #fff9f1;
+  --amber-soft: #f8e4c7;
+  --amber-soft-foreground: #7b4311;
+  --danger-soft: #f8d9d2;
+  --danger-soft-foreground: #962e1d;
+  --info: #087f8c;
+  --info-foreground: #f1ffff;
+  --info-soft: #d5eff0;
+  --info-soft-foreground: #075e67;
 
-  --hop-logo-start: #0b8265;
-  --hop-logo-end: #5458c6;
+  --sidebar: #17352e;
+  --sidebar-foreground: #f4f1e7;
+  --sidebar-muted: #9baea6;
+  --signal: #c9f45c;
+  --signal-orange: #f16c43;
+  --paper-grid: rgba(29, 55, 47, 0.055);
 
-  --chart-1: #0b8265;
-  --chart-2: #5458c6;
-  --chart-3: #b96e11;
-  --chart-4: #256fa1;
-  --chart-5: #697180;
+  --chart-1: #8abf2f;
+  --chart-2: #4c72f0;
+  --chart-3: #f16c43;
+  --chart-4: #087f8c;
+  --chart-5: #7c7568;
 }
 
 .dark {
-  --background: #0b0c0f;
-  --foreground: #e7e9ee;
-  --card: #101216;
-  --card-foreground: #e7e9ee;
-  --popover: #14161b;
-  --popover-foreground: #e7e9ee;
+  --background: #111915;
+  --foreground: #f0eee4;
+  --card: #18231e;
+  --card-foreground: #f0eee4;
+  --popover: #1d2923;
+  --popover-foreground: #f0eee4;
 
-  --primary: #3ecf9c;
-  --primary-foreground: #062a1e;
-  --secondary: #1b1e25;
-  --secondary-foreground: #e7e9ee;
-  --muted: #191c22;
-  --muted-foreground: #939bab;
-  --accent: #1a1d24;
-  --accent-foreground: #e7e9ee;
-  --destructive: #e5695f;
-  --destructive-foreground: #2a0c09;
-  --border: #21242c;
-  --input: #2a2e38;
-  --ring: #3ecf9c;
+  --primary: #c9f45c;
+  --primary-foreground: #173125;
+  --secondary: #27332d;
+  --secondary-foreground: #f0eee4;
+  --muted: #233029;
+  --muted-foreground: #9caaa3;
+  --accent: #c9f45c;
+  --accent-foreground: #173125;
+  --destructive: #f4765c;
+  --destructive-foreground: #2c0f08;
+  --border: #324139;
+  --input: #48584f;
+  --ring: #829cff;
 
-  --hop: #3ecf9c;
-  --hop-foreground: #062a1e;
-  --hop-soft: #0e2a20;
-  --hop-soft-foreground: #6fe3b6;
-  --iris: #8d91f2;
-  --iris-foreground: #14163b;
-  --iris-soft: #1e2040;
-  --iris-soft-foreground: #abaff7;
-  --amber: #e3a63c;
-  --amber-foreground: #2b1d05;
-  --amber-soft: #2e2410;
-  --amber-soft-foreground: #ebbe6b;
-  --danger-soft: #331512;
-  --danger-soft-foreground: #f09189;
-  --info: #5fa8d8;
-  --info-foreground: #0a1e2b;
-  --info-soft: #12222e;
-  --info-soft-foreground: #8cc3e6;
+  --hop: #c9f45c;
+  --hop-foreground: #173125;
+  --hop-soft: #30451e;
+  --hop-soft-foreground: #dffb9b;
+  --iris: #829cff;
+  --iris-foreground: #101735;
+  --iris-soft: #27335d;
+  --iris-soft-foreground: #b9c7ff;
+  --amber: #f0a355;
+  --amber-foreground: #291805;
+  --amber-soft: #432d17;
+  --amber-soft-foreground: #ffd39f;
+  --danger-soft: #442019;
+  --danger-soft-foreground: #ffb3a2;
+  --info: #56c2ce;
+  --info-foreground: #06272b;
+  --info-soft: #17383b;
+  --info-soft-foreground: #98e8ee;
 
-  --hop-logo-start: #3ecf9c;
-  --hop-logo-end: #8d91f2;
-
-  --chart-1: #3ecf9c;
-  --chart-2: #8d91f2;
-  --chart-3: #e3a63c;
-  --chart-4: #5fa8d8;
-  --chart-5: #939bab;
+  --sidebar: #0b110e;
+  --sidebar-foreground: #f0eee4;
+  --sidebar-muted: #8b9b93;
+  --signal: #c9f45c;
+  --signal-orange: #ff805b;
+  --paper-grid: rgba(230, 238, 232, 0.035);
 }
 
 @layer base {
   * {
     @apply border-border outline-ring/50;
   }
+
   html {
     scroll-behavior: smooth;
   }
+
   html,
   body {
     max-width: 100%;
     overflow-x: hidden;
   }
+
   body {
     @apply bg-background text-foreground font-sans text-sm antialiased;
-    font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+    min-height: 100dvh;
+    font-feature-settings: "ss01", "ss02", "cv02", "cv11";
+    background-image:
+      linear-gradient(var(--paper-grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--paper-grid) 1px, transparent 1px);
+    background-size: 32px 32px;
   }
+
+  button,
+  a,
+  input,
+  textarea,
+  select {
+    -webkit-tap-highlight-color: transparent;
+  }
+
   ::selection {
-    background: color-mix(in oklch, var(--hop) 28%, transparent);
+    color: #14231f;
+    background: var(--signal);
   }
 }
 
 @layer utilities {
-  /* Small uppercase mono captions for IDs, revisions, section eyebrows */
+  .font-display {
+    font-family: var(--font-display);
+  }
+
   .mono-label {
-    font-family: var(--font-mono);
-    font-size: 0.6875rem;
-    letter-spacing: 0.08em;
+    font-family: var(--font-code);
+    font-size: 0.65rem;
+    font-weight: 650;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
   }
 
-  .scroll-thin::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
+  .text-balance {
+    text-wrap: balance;
   }
+
+  .scroll-thin::-webkit-scrollbar {
+    width: 7px;
+    height: 7px;
+  }
+
   .scroll-thin::-webkit-scrollbar-track {
     background: transparent;
   }
+
   .scroll-thin::-webkit-scrollbar-thumb {
-    background: color-mix(in oklch, var(--muted-foreground) 25%, transparent);
+    background: color-mix(in oklch, var(--muted-foreground) 32%, transparent);
+    border: 2px solid transparent;
     border-radius: 999px;
-  }
-  .scroll-thin::-webkit-scrollbar-thumb:hover {
-    background: color-mix(in oklch, var(--muted-foreground) 45%, transparent);
+    background-clip: padding-box;
   }
 
-  /* Pulsing halo for the live agent status dot */
   .status-pulse::after {
     content: "";
     position: absolute;
-    inset: 0;
+    inset: -1px;
     border-radius: inherit;
-    box-shadow: 0 0 0 0 color-mix(in oklch, var(--hop) 55%, transparent);
-    animation: hopit-pulse 2.4s ease-out infinite;
-  }
-  @keyframes hopit-pulse {
-    0% {
-      box-shadow: 0 0 0 0 color-mix(in oklch, var(--hop) 45%, transparent);
-    }
-    70% {
-      box-shadow: 0 0 0 5px transparent;
-    }
-    100% {
-      box-shadow: 0 0 0 0 transparent;
-    }
+    animation: relay-pulse 2.2s ease-out infinite;
   }
 
-  .text-hop-gradient {
-    background-image: linear-gradient(120deg, var(--hop-logo-start), var(--hop-logo-end));
-    -webkit-background-clip: text;
-    background-clip: text;
-    -webkit-text-fill-color: transparent;
-    color: transparent;
+  @keyframes relay-pulse {
+    0% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--hop) 70%, transparent); }
+    75%, 100% { box-shadow: 0 0 0 7px transparent; }
+  }
+
+  .page-enter {
+    animation: page-rise 480ms cubic-bezier(.2,.75,.2,1) both;
+  }
+
+  @keyframes page-rise {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .relay-dash {
+    background-image: linear-gradient(90deg, currentColor 50%, transparent 0);
+    background-size: 10px 1px;
+    background-repeat: repeat-x;
+  }
+
+  .signal-sheen {
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+  }
+
+  .signal-sheen::after {
+    content: "";
+    position: absolute;
+    z-index: -1;
+    width: 16rem;
+    height: 16rem;
+    right: -8rem;
+    bottom: -10rem;
+    border-radius: 999px;
+    background: color-mix(in oklch, var(--signal) 32%, transparent);
+    filter: blur(1px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 }

@@ -23,9 +23,9 @@ export function CodebaseSwitcher() {
 
   if (codebases.length === 0) {
     return (
-      <span className="inline-flex h-8 max-w-48 items-center gap-1.5 truncate rounded-lg px-2 text-sm text-muted-foreground">
-        <Boxes className="size-4 shrink-0" />
-        <span className="truncate">{currentLabel}</span>
+      <span className="inline-flex h-9 max-w-52 items-center gap-2 truncate rounded-full border border-border bg-card/70 px-3 text-sm text-muted-foreground">
+        <Boxes className="size-4 shrink-0 text-hop" />
+        <span className="truncate font-semibold">{currentLabel}</span>
       </span>
     )
   }
@@ -33,8 +33,11 @@ export function CodebaseSwitcher() {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" className="max-w-52 gap-1.5 px-2 font-medium">
-          <Boxes className="size-4 shrink-0 text-muted-foreground" />
+        <Button variant="ghost" className="h-10 max-w-60 gap-2 rounded-full border border-transparent px-2.5 font-semibold hover:border-border hover:bg-card/70">
+          <span className="grid size-7 shrink-0 place-items-center rounded-full bg-hop-soft text-hop-soft-foreground">
+            <Boxes className="size-3.5" />
+          </span>
+          <span className="hidden text-[0.62rem] font-bold uppercase tracking-[0.12em] text-muted-foreground md:inline">Codebase</span>
           <span className="truncate">{currentLabel}</span>
           <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
         </Button>

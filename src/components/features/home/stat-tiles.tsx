@@ -1,9 +1,9 @@
 'use client'
 
 import * as React from 'react'
+import { ArrowDownLeft, ArrowUpRight, Files, GitPullRequest } from 'lucide-react'
 
 import { Badge, type BadgeTone } from '@/components/ui/badge'
-import { Card } from '@/components/ui/card'
 import type { AgentStatusSnapshot } from '@/lib/client/agent-status'
 import { formatCount } from '@/lib/client/format'
 
@@ -11,62 +11,65 @@ function reviewTone(reviewState: string): BadgeTone {
   return reviewState === 'open' ? 'iris' : 'outline'
 }
 
-function mergeTone(mergeState: string): BadgeTone {
-  if (mergeState === 'merged') return 'hop'
-  if (mergeState.includes('conflict')) return 'danger'
-  return 'outline'
-}
-
-/** Grid of four workspace stat tiles: files, pending writes, behind remote, review. */
 export function StatTiles({ status }: { status: AgentStatusSnapshot }) {
   const behind = status.remoteBehindByRevisions
 
   return (
-    <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-      <StatTile label="Files">
-        <span className="text-xl font-semibold tracking-tight">
-          {formatCount(status.fileCount)}
-        </span>
-        {status.hiddenFileCount > 0 ? (
-          <span className="text-xs text-muted-foreground">
-            +{formatCount(status.hiddenFileCount)} private
-          </span>
-        ) : null}
+    <section aria-label="Workspace at a glance" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <StatTile index="01" label="Files in view" icon={Files} accent="lime">
+        <strong>{formatCount(status.fileCount)}</strong>
+        <span>{status.hiddenFileCount > 0 ? `+${formatCount(status.hiddenFileCount)} private` : 'Ready everywhere'}</span>
       </StatTile>
-
-      <StatTile label="Pending writes">
-        <span className="text-xl font-semibold tracking-tight">
-          {formatCount(status.pendingWrites)}
-        </span>
-        {status.failedWrites > 0 ? (
-          <Badge tone="danger">{formatCount(status.failedWrites)} failed</Badge>
-        ) : null}
+      <StatTile index="02" label="Writes in flight" icon={ArrowUpRight} accent="orange">
+        <strong>{formatCount(status.pendingWrites)}</strong>
+        <span>{status.failedWrites > 0 ? `${formatCount(status.failedWrites)} need attention` : 'Journal is clear'}</span>
       </StatTile>
-
-      <StatTile label="Behind remote">
-        <span className="text-xl font-semibold tracking-tight">
-          {behind === null ? '—' : formatCount(behind)}
-        </span>
-        {behind !== null && behind > 0 ? (
-          <span className="text-xs text-muted-foreground">
-            revision{behind === 1 ? '' : 's'}
-          </span>
-        ) : null}
+      <StatTile index="03" label="Remote distance" icon={ArrowDownLeft} accent="blue">
+        <strong>{behind === null ? '—' : formatCount(behind)}</strong>
+        <span>{behind && behind > 0 ? `${behind === 1 ? 'revision' : 'revisions'} behind` : 'Right on pace'}</span>
       </StatTile>
-
-      <StatTile label="Review">
-        <Badge tone={reviewTone(status.reviewState)}>{status.reviewState}</Badge>
-        <Badge tone={mergeTone(status.mergeState)}>{status.mergeState}</Badge>
+      <StatTile index="04" label="Review gate" icon={GitPullRequest} accent="ink">
+        <div className="flex flex-wrap gap-1.5 pt-2">
+          <Badge tone={reviewTone(status.reviewState)}>{status.reviewState}</Badge>
+          <Badge tone={status.mergeState === 'merged' ? 'hop' : 'outline'}>{status.mergeState}</Badge>
+        </div>
+        <span>{status.conflictState === 'none' ? 'No conflicts' : status.conflictState}</span>
       </StatTile>
-    </div>
+    </section>
   )
 }
 
-function StatTile({ label, children }: { label: string; children: React.ReactNode }) {
+function StatTile({
+  index,
+  label,
+  icon: Icon,
+  accent,
+  children,
+}: {
+  index: string
+  label: string
+  icon: typeof Files
+  accent: 'lime' | 'orange' | 'blue' | 'ink'
+  children: React.ReactNode
+}) {
+  const accentClass = {
+    lime: 'bg-[var(--signal)] text-[#17352e]',
+    orange: 'bg-[var(--signal-orange)] text-white',
+    blue: 'bg-iris text-white',
+    ink: 'bg-foreground text-background',
+  }[accent]
+
   return (
-    <Card className="p-5">
-      <p className="text-xs text-muted-foreground">{label}</p>
-      <div className="mt-2 flex min-h-7 flex-wrap items-baseline gap-2">{children}</div>
-    </Card>
+    <article className="relative min-h-32 overflow-hidden rounded-[1.25rem] border border-border bg-card/90 p-4 sm:p-5">
+      <div className="flex items-center justify-between">
+        <span className="mono-label text-muted-foreground">{index} / {label}</span>
+        <span className={`grid size-7 place-items-center rounded-full ${accentClass}`}>
+          <Icon className="size-3.5" />
+        </span>
+      </div>
+      <div className="mt-4 flex flex-col gap-1 [&_strong]:font-display [&_strong]:text-[2.35rem] [&_strong]:font-normal [&_strong]:leading-none [&_strong]:tracking-[-0.04em] [&>span]:text-[0.68rem] [&>span]:text-muted-foreground">
+        {children}
+      </div>
+    </article>
   )
 }

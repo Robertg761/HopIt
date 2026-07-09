@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { Menu, Search } from 'lucide-react'
+import { Menu, Search, Sparkles } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Kbd } from '@/components/ui/kbd'
@@ -17,7 +17,7 @@ export function Topbar({
   onOpenNav: () => void
 }) {
   return (
-    <header className="sticky top-0 z-30 flex h-14 items-center gap-2 border-b border-border bg-background/90 px-4 backdrop-blur">
+    <header className="sticky top-0 z-30 flex h-[4.5rem] items-center gap-3 border-b border-border/80 bg-background/85 px-4 backdrop-blur-xl sm:px-6 lg:px-8">
       <Button
         variant="ghost"
         size="icon"
@@ -35,10 +35,10 @@ export function Topbar({
       <button
         type="button"
         onClick={onOpenPalette}
-        className="hidden h-8 w-64 items-center gap-2 rounded-lg border border-border px-2.5 text-sm text-muted-foreground/80 transition-colors hover:border-input hover:text-muted-foreground sm:flex outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
+        className="hidden h-9 w-72 items-center gap-2 rounded-full border border-border bg-card/70 px-3 text-sm text-muted-foreground transition-all hover:border-foreground/25 hover:bg-card sm:flex outline-none focus-visible:ring-2 focus-visible:ring-ring/40"
       >
-        <Search className="size-3.5" />
-        <span className="flex-1 text-left text-xs">Search or run a command…</span>
+        <Sparkles className="size-3.5 text-[var(--signal-orange)]" />
+        <span className="flex-1 text-left text-xs">Jump anywhere or run a command</span>
         <Kbd>⌘K</Kbd>
       </button>
       <Button
