@@ -17,6 +17,34 @@ The implementation plan lives in [docs/privacy-encryption-plan.md](docs/privacy-
 
 The current setup source of truth is [docs/personal-production.md](docs/personal-production.md). That runbook records the active Vercel, D1, historical Convex export, Cloudflare R2, LaunchAgent, local env, workspace, backup, and export locations without exposing secret values.
 
+## Install
+
+Install the HopIt command-line agent on macOS or Linux with one line:
+
+```sh
+curl -fsSL https://hopit.dev/install | sh
+```
+
+This downloads the prebuilt bundle for your platform from the public release
+channel, verifies its checksum, installs it under `~/.hopit`, and links the
+`hop` launcher into `~/.local/bin`. The bundle ships its own Node runtime, so
+Node and npm are not required on the target machine.
+
+Supported targets: `darwin-arm64`, `darwin-x64`, `linux-arm64`, `linux-x64`.
+Windows is not supported yet. If `~/.local/bin` is not already on your `PATH`,
+the installer prints the `export` line to add.
+
+First run:
+
+```sh
+hop setup
+```
+
+`hop setup` is the interactive first-run onboarding step: it chooses the HopIt
+Workspace Root, seeds local agent state, optionally writes a pre-filled
+production env file, and optionally installs the start-on-login service. The
+bundle is not signed or notarized yet.
+
 ## Initial Scope
 
 - Cloud-backed codebase dashboard with live workspace and sync state.

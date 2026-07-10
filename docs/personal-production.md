@@ -495,6 +495,40 @@ recover, review, merge, and Workspace Root attach actions on the installed-agent
 D1 config and Workspace Root even if `.env.local` still contains older rollback
 values.
 
+### Releases
+
+The public one-liner installer (`curl -fsSL https://hopit.dev/install | sh`,
+served from `public/install.sh`) pulls prebuilt bundles from a public R2 release
+channel. Publishing is a single command:
+
+```bash
+npm run release:hop            # build + upload all four targets
+npm run release:hop -- --dry-run   # print the wrangler upload plan, no writes
+npm run release:hop -- --target darwin-arm64   # limit to specific targets
+```
+
+`scripts/release-hop.mjs` cross-builds every target via `scripts/package-hop.mjs`
+(`darwin-arm64`, `darwin-x64`, `linux-arm64`, `linux-x64`), computes a version
+string `<package.json version>+<short git sha>`, and uploads through
+`npx wrangler r2 object put ... --remote`. It aborts on the first failed upload
+so there are no silent partial releases.
+
+- Bucket: `hopit-releases` (public, wrangler-authed on the release machine).
+- Public base URL: `https://pub-3d89002dcb6c4d71b6d1188f39cc7731.r2.dev`.
+- Layout:
+  - `latest/hop-<target>.tar.gz` and `latest/hop-<target>.tar.gz.sha256` — the
+    moving install channel the installer reads (short cache).
+  - `latest/manifest.json` — `{ version, gitSha, builtAt, targets: { "<target>":
+    { key, sha256, verified } } }`.
+  - `releases/<version>/...` — the same set under an immutable per-version prefix
+    for history/rollback (long cache).
+
+Each `.tar.gz.sha256` sidecar is written in `<hex>  <name>.tar.gz` format, so the
+installer verifies it with `shasum -a 256 -c` / `sha256sum -c`. Cross-target
+bundles are verified structurally at build time (launcher + runtime present, and
+the bundled `hop.mjs` parses); only the host target is executed during packaging,
+and each target records a `verified` flag in the manifest.
+
 ## Local Agent Service
 
 Import one real project into D1 and hydrate a production-profile managed workspace:

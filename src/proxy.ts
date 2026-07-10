@@ -13,6 +13,10 @@ import { hasValidBasicAuthFallbackCredentials } from '@/lib/basic-auth-fallback'
 const AUTH_HEADER = 'WWW-Authenticate'
 const REALM = 'Basic realm="HopIt"'
 const isPublicRoute = createRouteMatcher(['/sign-in(.*)', '/sign-up(.*)'])
+// The one-liner installer (`curl -fsSL https://hopit.dev/install | sh`) must
+// return the raw script to unauthenticated clients in every auth mode, so it is
+// always public. `/install` is rewritten to the static `/install.sh` file.
+const isInstallRoute = createRouteMatcher(['/install', '/install.sh'])
 
 const clerkProxy = clerkMiddleware(async (auth, request) => {
   await auth.protect({ unauthenticatedUrl: new URL(signInPath, request.url).toString() })
@@ -20,6 +24,8 @@ const clerkProxy = clerkMiddleware(async (auth, request) => {
 })
 
 export function proxy(request: NextRequest, event: NextFetchEvent) {
+  if (isInstallRoute(request)) return NextResponse.next()
+
   if (shouldUseClerkAuth()) {
     if (!isClerkServerConfigured()) return authProviderMissing()
     if (isPublicRoute(request)) return NextResponse.next()

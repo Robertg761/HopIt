@@ -6,103 +6,192 @@ import fs from 'node:fs/promises'
 import { constants, createWriteStream } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { build } from 'esbuild'
 
 const __filename = fileURLToPath(import.meta.url)
 const repoRoot = path.resolve(path.dirname(__filename), '..')
 const nodeVersion = process.env.HOP_PACKAGE_NODE_VERSION ?? process.version
-const target = targetFromProcess()
-const packageName = `hop-${target.nodePlatform}-${target.nodeArch}`
 const artifactsRoot = path.join(repoRoot, 'artifacts')
 const cacheRoot = path.join(artifactsRoot, 'cache')
-const releaseRoot = path.join(artifactsRoot, packageName)
-const runtimeRoot = path.join(releaseRoot, 'runtime')
-const appRoot = path.join(releaseRoot, 'app')
-const fixtureRoot = path.join(appRoot, 'fixtures')
-const binRoot = path.join(releaseRoot, 'bin')
-const examplesRoot = path.join(releaseRoot, 'examples')
-const supportRoot = path.join(releaseRoot, 'support')
-const archivePath = path.join(artifactsRoot, `${packageName}.tar.gz`)
-const bundledCliPath = path.join(appRoot, 'hop.mjs')
-const runtimeNodePath = path.join(runtimeRoot, target.exeName)
 
-await fs.rm(releaseRoot, { recursive: true, force: true })
-await fs.mkdir(cacheRoot, { recursive: true })
-await fs.mkdir(runtimeRoot, { recursive: true })
-await fs.mkdir(fixtureRoot, { recursive: true })
-await fs.mkdir(binRoot, { recursive: true })
-await fs.mkdir(examplesRoot, { recursive: true })
-await fs.mkdir(supportRoot, { recursive: true })
+// platform-arch -> node platform/arch (identical strings for the supported set,
+// but kept explicit so the mapping is a single source of truth).
+const TARGET_TABLE = {
+  'darwin-arm64': { nodePlatform: 'darwin', nodeArch: 'arm64' },
+  'darwin-x64': { nodePlatform: 'darwin', nodeArch: 'x64' },
+  'linux-arm64': { nodePlatform: 'linux', nodeArch: 'arm64' },
+  'linux-x64': { nodePlatform: 'linux', nodeArch: 'x64' },
+}
 
-const officialNodePath = await ensureOfficialNodeRuntime()
-await copyExecutable(officialNodePath, runtimeNodePath)
+export const VALID_TARGET_KEYS = Object.keys(TARGET_TABLE)
 
-await build({
-  entryPoints: [path.join(repoRoot, 'packages/agent/src/cli.js')],
-  outfile: bundledCliPath,
-  bundle: true,
-  format: 'esm',
-  platform: 'node',
-  target: ['node20'],
-  legalComments: 'none',
-})
-await fs.chmod(bundledCliPath, 0o755)
+export function hostTargetKey(platform = process.platform, arch = process.arch) {
+  const key = `${platform}-${arch}`
+  return Object.prototype.hasOwnProperty.call(TARGET_TABLE, key) ? key : null
+}
 
-await fs.copyFile(
-  path.join(repoRoot, 'packages/agent/fixtures/demo-cloud.json'),
-  path.join(fixtureRoot, 'demo-cloud.json'),
-)
-await writeLauncher()
-await writeSupportFiles()
-await writeReadme()
-await writeManifest()
-await verifyRelease()
-await createArchive()
-
-console.log(JSON.stringify({
-  ok: true,
-  packageName,
-  releaseRoot,
-  archivePath,
-  nodeVersion,
-  target,
-}, null, 2))
-
-function targetFromProcess() {
-  const platformMap = {
-    darwin: 'darwin',
-    linux: 'linux',
-  }
-  const archMap = {
-    arm64: 'arm64',
-    x64: 'x64',
-  }
-
-  if (process.platform === 'win32') {
+function makeTarget(key) {
+  const base = TARGET_TABLE[key]
+  if (!base) {
     throw new Error(
-      'Windows packaging is not supported yet. Official Node Windows runtimes ship as .zip archives, while this packager currently handles macOS/Linux .tar.gz runtimes.',
+      `Unsupported packaging target: ${key}. Valid targets: ${VALID_TARGET_KEYS.join(', ')}, all.`,
     )
   }
-
-  const nodePlatform = platformMap[process.platform]
-  const nodeArch = archMap[process.arch]
-
-  if (!nodePlatform || !nodeArch) {
-    throw new Error(`Unsupported packaging target: ${process.platform}-${process.arch}`)
-  }
-
   return {
-    platform: process.platform,
-    arch: process.arch,
-    nodePlatform,
-    nodeArch,
+    key,
+    platform: base.nodePlatform,
+    arch: base.nodeArch,
+    nodePlatform: base.nodePlatform,
+    nodeArch: base.nodeArch,
     exeName: 'node',
     launcherName: 'hop',
   }
 }
 
-async function ensureOfficialNodeRuntime() {
+/**
+ * Resolve the requested packaging targets from CLI args and/or env.
+ * Precedence: explicit --target / HOP_PACKAGE_TARGET tokens (comma-separated,
+ * repeatable) win; "all" expands to every valid target; empty falls back to the
+ * host target. Invalid target keys throw. Returns a deduped array of target
+ * descriptors preserving first-seen order.
+ */
+export function parseTargets({ argv = [], env = {}, host = hostTargetKey() } = {}) {
+  const raw = []
+  for (let i = 0; i < argv.length; i += 1) {
+    const arg = argv[i]
+    if (arg === '--target' || arg === '-t') {
+      raw.push(argv[i + 1])
+      i += 1
+    } else if (typeof arg === 'string' && arg.startsWith('--target=')) {
+      raw.push(arg.slice('--target='.length))
+    }
+  }
+  if (env.HOP_PACKAGE_TARGET) raw.push(env.HOP_PACKAGE_TARGET)
+
+  const tokens = raw
+    .filter((value) => typeof value === 'string' && value.length > 0)
+    .flatMap((value) => value.split(','))
+    .map((value) => value.trim())
+    .filter(Boolean)
+
+  let keys
+  if (tokens.length === 0) {
+    if (!host) {
+      throw new Error(
+        `No --target/HOP_PACKAGE_TARGET provided and host ${process.platform}-${process.arch} is not a supported packaging target. Valid targets: ${VALID_TARGET_KEYS.join(', ')}, all.`,
+      )
+    }
+    keys = [host]
+  } else if (tokens.includes('all')) {
+    keys = [...VALID_TARGET_KEYS]
+  } else {
+    keys = tokens
+  }
+
+  const seen = new Set()
+  const targets = []
+  for (const key of keys) {
+    if (seen.has(key)) continue
+    seen.add(key)
+    targets.push(makeTarget(key))
+  }
+  return targets
+}
+
+function targetContext(target) {
+  const packageName = `hop-${target.nodePlatform}-${target.nodeArch}`
+  const releaseRoot = path.join(artifactsRoot, packageName)
+  const appRoot = path.join(releaseRoot, 'app')
+  return {
+    target,
+    packageName,
+    releaseRoot,
+    runtimeRoot: path.join(releaseRoot, 'runtime'),
+    appRoot,
+    fixtureRoot: path.join(appRoot, 'fixtures'),
+    binRoot: path.join(releaseRoot, 'bin'),
+    examplesRoot: path.join(releaseRoot, 'examples'),
+    supportRoot: path.join(releaseRoot, 'support'),
+    archivePath: path.join(artifactsRoot, `${packageName}.tar.gz`),
+    checksumPath: path.join(artifactsRoot, `${packageName}.tar.gz.sha256`),
+    bundledCliPath: path.join(appRoot, 'hop.mjs'),
+    runtimeNodePath: path.join(releaseRoot, 'runtime', target.exeName),
+  }
+}
+
+/**
+ * Build one packaged target end to end and return a summary record. This is the
+ * single-target worker that both the CLI and the release script drive.
+ */
+export async function buildTarget(target) {
+  const ctx = targetContext(target)
+
+  await fs.rm(ctx.releaseRoot, { recursive: true, force: true })
+  await fs.mkdir(cacheRoot, { recursive: true })
+  await fs.mkdir(ctx.runtimeRoot, { recursive: true })
+  await fs.mkdir(ctx.fixtureRoot, { recursive: true })
+  await fs.mkdir(ctx.binRoot, { recursive: true })
+  await fs.mkdir(ctx.examplesRoot, { recursive: true })
+  await fs.mkdir(ctx.supportRoot, { recursive: true })
+
+  const officialNodePath = await ensureOfficialNodeRuntime(target)
+  await copyExecutable(officialNodePath, ctx.runtimeNodePath)
+
+  await build({
+    entryPoints: [path.join(repoRoot, 'packages/agent/src/cli.js')],
+    outfile: ctx.bundledCliPath,
+    bundle: true,
+    format: 'esm',
+    platform: 'node',
+    target: ['node20'],
+    legalComments: 'none',
+  })
+  await fs.chmod(ctx.bundledCliPath, 0o755)
+
+  await fs.copyFile(
+    path.join(repoRoot, 'packages/agent/fixtures/demo-cloud.json'),
+    path.join(ctx.fixtureRoot, 'demo-cloud.json'),
+  )
+  await writeLauncher(ctx)
+  await writeSupportFiles(ctx)
+  await writeReadme(ctx)
+  await writeManifest(ctx)
+  const verified = await verifyRelease(ctx)
+  await createArchive(ctx)
+  const sha256 = await sha256File(ctx.archivePath)
+  await fs.writeFile(ctx.checksumPath, `${sha256}  ${ctx.packageName}.tar.gz\n`, 'utf8')
+
+  return {
+    target: target.key,
+    packageName: ctx.packageName,
+    releaseRoot: ctx.releaseRoot,
+    archivePath: ctx.archivePath,
+    checksumPath: ctx.checksumPath,
+    sha256,
+    verified,
+    nodeVersion,
+  }
+}
+
+/**
+ * Build every requested target in sequence within a single invocation.
+ */
+export async function packageTargets(targets) {
+  const results = []
+  for (const target of targets) {
+    results.push(await buildTarget(target))
+  }
+  return results
+}
+
+async function main() {
+  const targets = parseTargets({ argv: process.argv.slice(2), env: process.env })
+  const results = await packageTargets(targets)
+  console.log(JSON.stringify({ ok: true, targets: results }, null, 2))
+}
+
+async function ensureOfficialNodeRuntime(target) {
   const nodeDirName = `node-${nodeVersion}-${target.nodePlatform}-${target.nodeArch}`
   const extractedRoot = path.join(cacheRoot, nodeDirName)
   const extractedNodePath = path.join(extractedRoot, 'bin', target.exeName)
@@ -162,9 +251,9 @@ async function copyExecutable(source, destination) {
   await fs.chmod(destination, 0o755)
 }
 
-async function writeLauncher() {
+async function writeLauncher(ctx) {
   await fs.writeFile(
-    path.join(binRoot, target.launcherName),
+    path.join(ctx.binRoot, ctx.target.launcherName),
     `#!/bin/sh
 set -eu
 SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
@@ -172,12 +261,12 @@ exec "$SELF_DIR/../runtime/node" "$SELF_DIR/../app/hop.mjs" "$@"
 `,
     'utf8',
   )
-  await fs.chmod(path.join(binRoot, target.launcherName), 0o755)
+  await fs.chmod(path.join(ctx.binRoot, ctx.target.launcherName), 0o755)
 }
 
-async function writeReadme() {
+async function writeReadme(ctx) {
   await fs.writeFile(
-    path.join(releaseRoot, 'README.txt'),
+    path.join(ctx.releaseRoot, 'README.txt'),
     `HopIt standalone command
 
 Install:
@@ -218,11 +307,11 @@ you create the local env file. It is not signed or notarized yet.
   )
 }
 
-async function writeSupportFiles() {
-  const envDefaults = packageEnvDefaults()
+async function writeSupportFiles(ctx) {
+  const envDefaults = packageEnvDefaults(ctx.target)
 
   await fs.writeFile(
-    path.join(examplesRoot, 'production.env.example'),
+    path.join(ctx.examplesRoot, 'production.env.example'),
     `HOPIT_CODEBASE_ID=hopit
 HOPIT_CLOUD_BACKEND=d1
 HOPIT_D1_ACCOUNT_ID=replace-with-cloudflare-account-id
@@ -281,6 +370,7 @@ HOPIT_CLIENT_ENCRYPTION_SCOPE=secrets
   )
 
   await writeExecutableSupportFile(
+    ctx,
     'install-macos-launch-agent.sh',
     `#!/bin/sh
 set -eu
@@ -368,6 +458,7 @@ echo "Logs: $LOG_DIR/agent.out.log and $LOG_DIR/agent.err.log"
   )
 
   await writeExecutableSupportFile(
+    ctx,
     'uninstall-macos-launch-agent.sh',
     `#!/bin/sh
 set -eu
@@ -385,6 +476,7 @@ echo "Removed HopIt launch agent: $PLIST"
   )
 
   await writeExecutableSupportFile(
+    ctx,
     'install-systemd-user-service.sh',
     `#!/bin/sh
 set -eu
@@ -449,6 +541,7 @@ echo "Status: systemctl --user status hopit-agent.service"
   )
 
   await writeExecutableSupportFile(
+    ctx,
     'uninstall-systemd-user-service.sh',
     `#!/bin/sh
 set -eu
@@ -464,7 +557,7 @@ echo "Removed HopIt systemd user service: $SERVICE_FILE"
   )
 }
 
-function packageEnvDefaults() {
+function packageEnvDefaults(target) {
   if (target.platform === 'linux') {
     const stateRoot = '${XDG_STATE_HOME:-$HOME/.local/state}/hopit/agent'
     return {
@@ -481,22 +574,22 @@ function packageEnvDefaults() {
   }
 }
 
-async function writeExecutableSupportFile(name, content) {
-  const filePath = path.join(supportRoot, name)
+async function writeExecutableSupportFile(ctx, name, content) {
+  const filePath = path.join(ctx.supportRoot, name)
   await fs.writeFile(filePath, content, 'utf8')
   await fs.chmod(filePath, 0o755)
 }
 
-async function writeManifest() {
+async function writeManifest(ctx) {
   const manifest = {
     name: 'hop',
     version: readPackageJson().version,
     nodeVersion,
-    target,
+    target: ctx.target,
     createdAt: new Date().toISOString(),
     files: {
-      launcher: `bin/${target.launcherName}`,
-      runtime: `runtime/${target.exeName}`,
+      launcher: `bin/${ctx.target.launcherName}`,
+      runtime: `runtime/${ctx.target.exeName}`,
       app: 'app/hop.mjs',
       fixture: 'app/fixtures/demo-cloud.json',
       productionEnvExample: 'examples/production.env.example',
@@ -506,12 +599,12 @@ async function writeManifest() {
       systemdUserServiceUninstaller: 'support/uninstall-systemd-user-service.sh',
     },
     checksums: {
-      app: await sha256File(bundledCliPath),
-      runtime: await sha256File(runtimeNodePath),
+      app: await sha256File(ctx.bundledCliPath),
+      runtime: await sha256File(ctx.runtimeNodePath),
     },
   }
 
-  await fs.writeFile(path.join(releaseRoot, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
+  await fs.writeFile(path.join(ctx.releaseRoot, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
 }
 
 function readPackageJson() {
@@ -521,8 +614,24 @@ function readPackageJson() {
   }).stdout)
 }
 
-async function verifyRelease() {
-  const launcherPath = path.join(binRoot, target.launcherName)
+/**
+ * Verify a built release. For a target matching the host platform+arch this runs
+ * the packaged launcher (`hop help` + a status smoke run). For cross targets the
+ * launcher cannot execute here, so verify structurally: launcher present and
+ * executable, runtime node binary present, and the bundled hop.mjs parses under
+ * the host Node (`node --check`, valid because it is plain JS). Returns whether
+ * verification succeeded (throws on failure).
+ */
+async function verifyRelease(ctx) {
+  const isHostTarget = ctx.target.platform === process.platform && ctx.target.arch === process.arch
+  if (isHostTarget) {
+    return verifyHostRelease(ctx)
+  }
+  return verifyCrossRelease(ctx)
+}
+
+async function verifyHostRelease(ctx) {
+  const launcherPath = path.join(ctx.binRoot, ctx.target.launcherName)
   const helpResult = spawnSync(launcherPath, ['help'], {
     cwd: repoRoot,
     encoding: 'utf8',
@@ -560,17 +669,41 @@ async function verifyRelease() {
   ) {
     throw new Error(`Packaged hop status verification failed: ${statusResult.stderr || statusResult.stdout}`)
   }
+
+  return true
 }
 
-async function createArchive() {
-  await fs.rm(archivePath, { force: true })
-  const result = spawnSync('tar', ['-czf', archivePath, '-C', artifactsRoot, packageName], {
+async function verifyCrossRelease(ctx) {
+  const launcherPath = path.join(ctx.binRoot, ctx.target.launcherName)
+  if (!(await isExecutable(launcherPath))) {
+    throw new Error(`Cross-target verify failed: launcher missing or not executable at ${launcherPath}`)
+  }
+  if (!(await isExecutable(ctx.runtimeNodePath))) {
+    throw new Error(`Cross-target verify failed: runtime node missing or not executable at ${ctx.runtimeNodePath}`)
+  }
+  const stat = await fs.stat(ctx.bundledCliPath)
+  if (!stat.isFile() || stat.size === 0) {
+    throw new Error(`Cross-target verify failed: bundled app missing at ${ctx.bundledCliPath}`)
+  }
+  const checkResult = spawnSync(process.execPath, ['--check', ctx.bundledCliPath], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  })
+  if (checkResult.status !== 0) {
+    throw new Error(`Cross-target verify failed: bundled app did not parse: ${checkResult.stderr || checkResult.stdout}`)
+  }
+  return true
+}
+
+async function createArchive(ctx) {
+  await fs.rm(ctx.archivePath, { force: true })
+  const result = spawnSync('tar', ['-czf', ctx.archivePath, '-C', artifactsRoot, ctx.packageName], {
     cwd: repoRoot,
     encoding: 'utf8',
   })
 
   if (result.status !== 0) {
-    throw new Error(`Failed to create ${archivePath}: ${result.stderr || result.stdout}`)
+    throw new Error(`Failed to create ${ctx.archivePath}: ${result.stderr || result.stdout}`)
   }
 }
 
@@ -587,4 +720,9 @@ async function isExecutable(filePath) {
   } catch {
     return false
   }
+}
+
+const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href
+if (isDirectRun) {
+  await main()
 }
