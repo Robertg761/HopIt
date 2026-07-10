@@ -4,7 +4,7 @@ export function printHelp() {
   console.log(`hop - HopIt local workspace agent
 
 Commands:
-  setup       Interactive first-run onboarding: choose the workspace root and bootstrap local agent config
+  setup       Guided first run: open a folder picker and choose where HopIt keeps projects
   init        Seed a local cloud file graph
   import      Import a real local folder into the HopIt graph and hydrate it
   import-git  Production-safe literal Git checkout conversion into HopIt
@@ -97,7 +97,7 @@ Options:
   --write-env          install: write hopit.env.example under the agent state root
   --launch-agent       install: write a macOS LaunchAgent for start-on-login
   --yes                setup: accept all defaults with no prompts (non-interactive)
-  --advanced           setup: also prompt for the agent state root
+  --advanced           setup: also prompt for agent state, codebase, env, and login-service options
   --env-path <path>    setup: production env file path, default ~/.config/hopit/production.env (--env-file is reserved by Node)
   --no-write-env       setup: do not write the production env file
   --force-env          setup: overwrite an existing production env file

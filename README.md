@@ -40,10 +40,13 @@ First run:
 hop setup
 ```
 
-`hop setup` is the interactive first-run onboarding step: it chooses the HopIt
-Workspace Root, seeds local agent state, optionally writes a pre-filled
-production env file, and optionally installs the start-on-login service. The
-bundle is not signed or notarized yet.
+`hop setup` asks permission to open the system folder picker, then lets the user
+choose the directory where HopIt will keep projects. Existing directories are
+allowed; before accepting a non-empty directory, HopIt warns that its contents
+will be uploaded to HopIt Cloud and removed from the device after the upload is
+safely acknowledged. The remaining local configuration uses safe defaults;
+`hop setup --advanced` exposes the lower-level prompts. The bundle is not signed
+or notarized yet.
 
 ## Initial Scope
 

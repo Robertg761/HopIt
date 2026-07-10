@@ -83,6 +83,112 @@ async function assertRootSafe(rootPath, options) {
   })
 }
 
+async function directoryHasContents(directory) {
+  try {
+    return (await fs.readdir(directory)).length > 0
+  } catch (error) {
+    if (error && typeof error === 'object' && error.code === 'ENOENT') return false
+    throw error
+  }
+}
+
+function appleScriptString(value) {
+  return String(value).replaceAll('\\', '\\\\').replaceAll('"', '\\"')
+}
+
+async function openDirectoryPicker(defaultPath) {
+  // Test and headless environments can supply the picker result without opening UI.
+  if (process.env.HOPIT_SETUP_PICKER_PATH) {
+    return path.resolve(expandHome(process.env.HOPIT_SETUP_PICKER_PATH))
+  }
+
+  const pickerDefaultPath = existsSync(defaultPath) ? defaultPath : path.dirname(defaultPath)
+
+  if (process.platform === 'darwin') {
+    const prompt = appleScriptString('Choose where HopIt should keep your projects')
+    const defaultLocation = appleScriptString(pickerDefaultPath)
+    const script = [
+      `set chosenFolder to choose folder with prompt "${prompt}" default location POSIX file "${defaultLocation}"`,
+      'POSIX path of chosenFolder',
+    ].join('\n')
+    const { stdout } = await execFileAsync('osascript', ['-e', script])
+    return path.resolve(stdout.trim())
+  }
+
+  if (process.platform === 'win32') {
+    const script = [
+      'Add-Type -AssemblyName System.Windows.Forms',
+      '$picker = New-Object System.Windows.Forms.FolderBrowserDialog',
+      "$picker.Description = 'Choose where HopIt should keep your projects'",
+      `$picker.SelectedPath = '${String(pickerDefaultPath).replaceAll("'", "''")}'`,
+      'if ($picker.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { $picker.SelectedPath } else { exit 1 }',
+    ].join('; ')
+    const { stdout } = await execFileAsync('powershell.exe', ['-NoProfile', '-Command', script])
+    return path.resolve(stdout.trim())
+  }
+
+  const { stdout } = await execFileAsync('zenity', [
+    '--file-selection',
+    '--directory',
+    '--title=Choose where HopIt should keep your projects',
+    `--filename=${path.resolve(pickerDefaultPath)}${path.sep}`,
+  ])
+  return path.resolve(stdout.trim())
+}
+
+async function confirmExistingDirectory(reader, directory) {
+  if (!(await directoryHasContents(directory))) return true
+
+  writeLine()
+  writeLine(`The selected folder is not empty: ${directory}`)
+  writeLine('Everything already inside it will be uploaded to HopIt Cloud and removed')
+  writeLine('from this device after the upload is safely acknowledged.')
+  return promptYesNo(reader, 'Use this folder anyway?', false)
+}
+
+async function chooseWorkspaceRoot(reader, workspaceRootDefault, options) {
+  const openPicker = await promptYesNo(
+    reader,
+    'Allow HopIt to open your file explorer so you can choose your projects folder?',
+    true,
+  )
+
+  if (!openPicker) {
+    const answer = await promptValue(
+      reader,
+      'Enter the folder where HopIt should keep your projects',
+      workspaceRootDefault,
+    )
+    const candidate = path.resolve(expandHome(answer))
+    await assertRootSafe(candidate, options)
+    if (!(await confirmExistingDirectory(reader, candidate))) {
+      throw new Error('Setup cancelled. No folder was changed.')
+    }
+    return candidate
+  }
+
+  for (;;) {
+    let candidate
+    try {
+      writeLine('Opening your file explorer…')
+      candidate = await openDirectoryPicker(workspaceRootDefault)
+    } catch {
+      writeLine('No folder was selected. You can enter its path instead.')
+      const answer = await promptValue(reader, 'Projects folder', workspaceRootDefault)
+      candidate = path.resolve(expandHome(answer))
+    }
+
+    try {
+      await assertRootSafe(candidate, options)
+    } catch (error) {
+      writeLine(`  ${error instanceof Error ? error.message : String(error)}`)
+      continue
+    }
+    if (await confirmExistingDirectory(reader, candidate)) return candidate
+    writeLine('Choose a different folder.')
+  }
+}
+
 export async function runSetup(options) {
   const provided = options._provided ?? new Set()
   const useYes = Boolean(options.yes)
@@ -101,7 +207,8 @@ export async function runSetup(options) {
 
   try {
     if (interactive) {
-      writeLine('HopIt setup — configure where HopIt keeps and watches your codebases.')
+      writeLine('HopIt setup')
+      writeLine('Choose one folder for all of your HopIt projects.')
       writeLine()
     }
 
@@ -113,22 +220,11 @@ export async function runSetup(options) {
     if (provided.has('workspace-root')) {
       workspaceRoot = path.resolve(expandHome(options['workspace-root']))
       await assertRootSafe(workspaceRoot, options)
-    } else if (interactive) {
-      for (;;) {
-        const answer = await promptValue(
-          reader,
-          'Where should HopIt keep and watch your codebases?',
-          workspaceRootDefault,
-        )
-        const candidate = path.resolve(expandHome(answer))
-        try {
-          await assertRootSafe(candidate, options)
-          workspaceRoot = candidate
-          break
-        } catch (error) {
-          writeLine(`  ${error instanceof Error ? error.message : String(error)}`)
-        }
+      if (interactive && !(await confirmExistingDirectory(reader, workspaceRoot))) {
+        throw new Error('Setup cancelled. No folder was changed.')
       }
+    } else if (interactive) {
+      workspaceRoot = await chooseWorkspaceRoot(reader, workspaceRootDefault, options)
     } else {
       workspaceRoot = workspaceRootDefault
       await assertRootSafe(workspaceRoot, options)
@@ -152,7 +248,7 @@ export async function runSetup(options) {
     let codebaseId
     if (provided.has('codebase-id')) {
       codebaseId = options['codebase-id']
-    } else if (interactive) {
+    } else if (interactive && options.advanced) {
       codebaseId = await promptValue(reader, 'Codebase id', codebaseIdDefault)
     } else {
       codebaseId = codebaseIdDefault
@@ -170,18 +266,18 @@ export async function runSetup(options) {
     let writeEnv
     if (provided.has('write-env')) {
       writeEnv = Boolean(options['write-env'])
-    } else if (interactive) {
+    } else if (interactive && options.advanced) {
       writeEnv = await promptYesNo(reader, `Write the production env template to ${envFilePath}?`, true)
     } else {
       writeEnv = true
     }
 
-    // 6. Launch agent (macOS only)
+    // 5. Launch agent (macOS only)
     const isDarwin = process.platform === 'darwin'
     let launchAgentRequested
     if (provided.has('launch-agent')) {
       launchAgentRequested = Boolean(options['launch-agent']) && isDarwin
-    } else if (interactive && isDarwin) {
+    } else if (interactive && options.advanced && isDarwin) {
       launchAgentRequested = await promptYesNo(
         reader,
         'Install and load a macOS start-on-login agent?',
@@ -203,7 +299,7 @@ export async function runSetup(options) {
 
     await assertWorkspacePathSafe(installOptions)
 
-    // 5. Create directories + seed workspace index (idempotent)
+    // 6. Create directories + seed workspace index (idempotent)
     const created = await ensureAgentDirectories({ stateRoot, workspaceRoot, workspace })
     const index = await ensureWorkspaceIndexEntry(installOptions, { codebaseId, workspaceRoot })
     const workspaceIndex = path.resolve(workspaceIndexPath(installOptions))

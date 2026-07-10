@@ -3999,10 +3999,11 @@ function setupArgs(state, extra = []) {
   ]
 }
 
-function runSetupInteractive(args, input) {
+function runSetupInteractive(args, input, env = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, 'setup', ...args], {
       cwd: repoRoot,
+      env: { ...process.env, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
     })
     let stdout = ''
@@ -4099,9 +4100,9 @@ test('setup without --yes fails fast when stdin is not a TTY', async () => {
   assert.match(failure.stderr, /--yes/)
 })
 
-test('setup interactive prompts resolve workspace root and codebase id from stdin', async () => {
+test('setup interactive opens a directory picker and uses safe defaults', async () => {
   const state = await makeSetupState()
-  const answers = `${state.workspaceRoot}\ninteractive-demo\n\n`
+  const answers = 'y\n'
 
   const run = await runSetupInteractive(
     [
@@ -4110,9 +4111,12 @@ test('setup interactive prompts resolve workspace root and codebase id from stdi
       state.stateRoot,
       '--env-path',
       state.envFile,
+      '--codebase-id',
+      'interactive-demo',
       '--no-launch-agent',
     ],
     answers,
+    { HOPIT_SETUP_PICKER_PATH: state.workspaceRoot },
   )
 
   assert.equal(run.code, 0)
@@ -4122,10 +4126,39 @@ test('setup interactive prompts resolve workspace root and codebase id from stdi
   assert.equal(result.workspaceRoot, path.resolve(state.workspaceRoot))
   assert.equal(result.envFile.status, 'written')
   assert.equal(result.launchAgent.installed, false)
+  assert.match(run.stderr, /open your file explorer/i)
+  assert.match(run.stderr, /Opening your file explorer/)
 
   assert.equal(await pathExists(path.join(state.workspaceRoot, 'interactive-demo')), true)
   const index = await readJson(path.join(state.stateRoot, 'workspaces.json'))
   assert.equal(index.codebases[0].id, 'interactive-demo')
+})
+
+test('setup warns before accepting an existing non-empty projects folder', async () => {
+  const state = await makeSetupState()
+  await fs.mkdir(state.workspaceRoot, { recursive: true })
+  await fs.writeFile(path.join(state.workspaceRoot, 'existing-project.txt'), 'keep me\n', 'utf8')
+
+  const run = await runSetupInteractive(
+    [
+      '--interactive',
+      '--state-root',
+      state.stateRoot,
+      '--env-path',
+      state.envFile,
+      '--codebase-id',
+      'existing-demo',
+      '--no-launch-agent',
+    ],
+    'y\ny\n',
+    { HOPIT_SETUP_PICKER_PATH: state.workspaceRoot },
+  )
+
+  assert.equal(run.code, 0)
+  assert.match(run.stderr, /not empty/)
+  assert.match(run.stderr, /uploaded to HopIt Cloud/)
+  assert.match(run.stderr, /removed[\s\S]*from this device/)
+  assert.equal(await fs.readFile(path.join(state.workspaceRoot, 'existing-project.txt'), 'utf8'), 'keep me\n')
 })
 
 test('setup refuses an unsafe workspace root', async () => {

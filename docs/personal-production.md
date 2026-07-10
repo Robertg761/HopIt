@@ -450,13 +450,17 @@ The packaged artifact contains:
 
 ### First-run setup
 
-`hop setup` is the interactive front door for a new device. It asks where HopIt
-should keep and watch your codebases (the HopIt Workspace Root), then seeds the
-agent state directories, workspace folder, and workspace index, and offers to
-write a pre-filled `~/.config/hopit/production.env` (workspace root, workspace
-index, agent state root, codebase id, and `HOPIT_PROFILE=production` are filled
-in; credential keys are left as placeholders to edit). On macOS it can also
-install and load the start-on-login LaunchAgent.
+`hop setup` is the interactive front door for a new device. It asks permission
+to open the system folder picker, then lets the user choose where HopIt should
+keep projects (the HopIt Workspace Root). Existing directories are allowed; a
+non-empty choice requires confirmation after a warning that its contents will
+be uploaded to HopIt Cloud and removed from the device after safe cloud
+acknowledgement. Setup then seeds the agent state directories, workspace folder,
+workspace index, and a pre-filled `~/.config/hopit/production.env` using safe
+defaults (workspace root, workspace index, agent state root, codebase id, and
+`HOPIT_PROFILE=production` are filled in; credential keys remain placeholders).
+Use `hop setup --advanced` to expose the agent-state, codebase, env-file, and
+macOS start-on-login prompts.
 
 ```bash
 /tmp/hop-darwin-arm64/bin/hop setup
