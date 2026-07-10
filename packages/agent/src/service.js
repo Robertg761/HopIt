@@ -139,6 +139,13 @@ export async function startService(options) {
   const childEnv = {
     ...process.env,
   }
+  if (options['cloud-backend']) childEnv.HOPIT_CLOUD_BACKEND = options['cloud-backend']
+  if (options['d1-api-base-url']) childEnv.HOPIT_D1_API_BASE_URL = options['d1-api-base-url']
+  if (options['codebase-id']) childEnv.HOPIT_CODEBASE_ID = options['codebase-id']
+  if (options['workspace-root']) childEnv.HOPIT_WORKSPACE_ROOT = options['workspace-root']
+  if (options['workspace-index']) childEnv.HOPIT_WORKSPACE_INDEX = options['workspace-index']
+  if (options['state-root']) childEnv.HOPIT_AGENT_STATE_ROOT = options['state-root']
+  if (options['device-keys']) childEnv.HOPIT_DEVICE_KEYS_PATH = options['device-keys']
   const sessionToken = agentSessionTokenFromOptions(options)
   if (sessionToken) childEnv.HOPIT_AGENT_SESSION_TOKEN = sessionToken
   if (options['session-id']) childEnv.HOPIT_SESSION_ID = options['session-id']
@@ -171,7 +178,9 @@ export async function startService(options) {
       pidPath,
       startedAt: record.startedAt,
     })
-    console.log(JSON.stringify({ ok: true, ...record, pidPath, service: status }, null, 2))
+    const result = { ok: true, ...record, pidPath, service: status }
+    if (!options.quiet) console.log(JSON.stringify(result, null, 2))
+    return result
   } catch (error) {
     if (typeof child.pid === 'number' && isProcessRunning(child.pid)) {
       process.kill(child.pid, 'SIGTERM')

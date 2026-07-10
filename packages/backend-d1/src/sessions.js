@@ -119,6 +119,11 @@ export function attachSessionMethods(Backend) {
   },
 
   async resolveAgentSessionRegistrationUser(codebaseId, options = {}) {
+    const actorId = stringOrNull(options.actor?.userId)
+    if (actorId) {
+      await this.requireGraphCapability(codebaseId, options.actor, 'read')
+      return actorId
+    }
     const sessionToken = stringOrNull(options.sessionToken) ?? this.config.agentSessionToken
     if (sessionToken) {
       const access = await this.requireD1AgentAccess(codebaseId, { sessionToken }, 'admin', { touch: true })

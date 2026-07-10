@@ -733,7 +733,7 @@ export async function attachWorkspace(options) {
   )
 
   if (existing && existing.hydration?.state !== 'metadata-only' && !options.force) {
-    console.log(JSON.stringify({
+    const result = {
       ok: true,
       action: 'attach',
       alreadyAttached: true,
@@ -747,8 +747,9 @@ export async function attachWorkspace(options) {
       },
       index: workspaceIndexSummary(attachOptions, index),
       note: 'Existing attached workspace was left unchanged. Use hydrate-file, hydrate, or refresh for materialization changes.',
-    }, null, 2))
-    return
+    }
+    if (!options.quiet) console.log(JSON.stringify(result, null, 2))
+    return result
   }
 
   await assertAttachWorkspaceSafe(attachOptions, cloud, index)
@@ -789,7 +790,7 @@ export async function attachWorkspace(options) {
     attachOptions.workspace,
   )
 
-  console.log(JSON.stringify({
+  const result = {
     ok: true,
     action: 'attach',
     alreadyAttached: Boolean(existing),
@@ -802,5 +803,7 @@ export async function attachWorkspace(options) {
       materialization: 'metadata-only',
     },
     index: workspaceIndexSummary(attachOptions, attachedIndex),
-  }, null, 2))
+  }
+  if (!options.quiet) console.log(JSON.stringify(result, null, 2))
+  return result
 }

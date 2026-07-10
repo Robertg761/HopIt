@@ -14,12 +14,16 @@ The selected cloud state remains the source of truth for the managed folder. In 
 
 The solid v1 target is a HopIt Workspace Root, such as `~/HopIt Workspaces`, where cloud codebases appear as HopIt-managed project folders. This package currently proves selected managed folders, a durable workspace-root index, D1 account-visible codebase discovery with local readiness when credentials allow it, scoped-token configured-codebase fallback, automatic verified-owner bootstrap for migrated `local-owner` codebases, metadata-only attach, hydration/cursor status, metadata-only/dehydrate, per-path local cache state, single-file and recursive-prefix hydrate primitives, pin/unpin controls, clean cached-body pruning that does not become a cloud delete, safe full hydrate through refresh, an explicit metadata-first lazy-materialization policy, S3-compatible object-blob storage for file bodies, activity-gated safe remote-pull plus one-shot remote-pull checks, Cloudflare D1 graph storage, and scoped D1 agent-session tokens. It does not yet provide editor/tool demand hydration, complete D1 device-session auth hardening, or production-grade push/subscription remote-update delivery.
 
-For first-run configuration, `hop setup` asks permission to open the system
-folder picker and uses the selected directory as the Workspace Root. A
-non-empty directory is allowed only after the user confirms the warning that
-its contents will be uploaded to HopIt Cloud and removed locally after safe
-acknowledgement. Configuration details stay on safe defaults unless setup is
-run with `--advanced` or explicit flags.
+For first-run configuration, `hop setup` presents a four-step terminal wizard,
+asks permission to open the system folder picker, uses the selected directory
+as the Workspace Root, and creates the local device-encryption keyring
+automatically. A non-empty directory is allowed only after the user confirms
+the warning that its contents will be uploaded to HopIt Cloud and removed
+locally after safe acknowledgement. The default flow prints a concise readiness
+summary. Browser approval creates a scoped session token, encrypts it to the
+device's public key, attaches the selected codebase, and starts background sync.
+Configuration details stay on safe defaults unless setup is run with
+`--advanced`, `--json`, `--yes`, `--no-connect`, or explicit flags.
 
 HopIt does not use ignore files as product sharing controls. Files under `.private/` are still snapshotted, synced, and versioned, but owner-visible only. Files outside `.private/` are governed by the active change set's effective visibility and the codebase's permissions.
 

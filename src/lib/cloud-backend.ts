@@ -249,6 +249,30 @@ export async function upsertCloudUser(input: CloudActor & {
   throw new Error('No HopIt cloud backend is configured for account sync.')
 }
 
+export async function createCloudDeviceAuthorization(input: Record<string, unknown>) {
+  if (configuredCloudBackend() === 'd1') return d1Backend().createDeviceAuthorization(input)
+  throw new Error('No HopIt cloud backend is configured for device authorization.')
+}
+
+export async function pollCloudDeviceAuthorization(deviceCode: string) {
+  if (configuredCloudBackend() === 'd1') return d1Backend().pollDeviceAuthorization(deviceCode)
+  throw new Error('No HopIt cloud backend is configured for device authorization.')
+}
+
+export async function readCloudDeviceAuthorization(userCode: string) {
+  if (configuredCloudBackend() === 'd1') return d1Backend().readDeviceAuthorizationForApproval(userCode)
+  throw new Error('No HopIt cloud backend is configured for device authorization.')
+}
+
+export async function approveCloudDeviceAuthorization(input: {
+  userCode: string
+  codebaseId: string
+  actor: CloudActor
+}) {
+  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).approveDeviceAuthorization(input)
+  throw new Error('No HopIt cloud backend is configured for device authorization.')
+}
+
 function d1Backend(options: Record<string, unknown> = {}): any {
   return createD1Backend(options)
 }

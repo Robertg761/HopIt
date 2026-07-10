@@ -6,9 +6,18 @@ import readline from 'node:readline'
 import { execFile } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { promisify } from 'node:util'
+import { publicDeviceKeyDescriptor, unwrapSymmetricKeyFromDevice } from '@hopit/core/crypto'
 import { assertWorkspacePathSafe, isTruthyEnv } from '../paths.js'
 import { defaultAgentStateRoot, defaultWorkspaceRoot } from '../options.js'
 import { workspaceIndexPath, workspaceIndexSummary } from '../workspace-index.js'
+import {
+  initializeLocalDeviceKeyring,
+  localDeviceKeyringPath,
+  registerLocalDeviceKeyringWithCloud,
+  writeLocalDeviceKeyring,
+} from './keys.js'
+import { attachWorkspace } from './hydrate.js'
+import { serviceStatus, startService } from '../service.js'
 import {
   ensureAgentDirectories,
   ensureWorkspaceIndexEntry,
@@ -17,6 +26,45 @@ import {
 } from './install.js'
 
 const execFileAsync = promisify(execFile)
+const defaultDeviceAuthorizationBaseUrl = 'https://hopit.dev'
+
+const color = {
+  reset: '\u001b[0m',
+  bold: '\u001b[1m',
+  dim: '\u001b[2m',
+  teal: '\u001b[38;5;44m',
+  green: '\u001b[38;5;42m',
+  amber: '\u001b[38;5;214m',
+}
+
+function supportsColor() {
+  return Boolean(process.stderr.isTTY && !process.env.NO_COLOR && process.env.TERM !== 'dumb')
+}
+
+function paint(value, ...codes) {
+  if (!supportsColor()) return String(value)
+  return `${codes.join('')}${value}${color.reset}`
+}
+
+function bold(value) {
+  return paint(value, color.bold)
+}
+
+function muted(value) {
+  return paint(value, color.dim)
+}
+
+function accent(value) {
+  return paint(value, color.teal)
+}
+
+function success(value) {
+  return paint(value, color.green)
+}
+
+function caution(value) {
+  return paint(value, color.amber)
+}
 
 function expandHome(value) {
   if (!value || typeof value !== 'string') return value
@@ -29,6 +77,29 @@ function expandHome(value) {
 
 function writeLine(message = '') {
   process.stderr.write(`${message}\n`)
+}
+
+function renderWelcome() {
+  writeLine()
+  writeLine(`  ${accent('◆')} ${bold('HOPIT')}`)
+  writeLine(`    ${muted('Your projects, ready wherever you are.')}`)
+  writeLine()
+  writeLine(`    ${muted('Let’s prepare this device. It takes about a minute.')}`)
+  writeLine()
+}
+
+function renderStep(current, total, title, detail) {
+  writeLine(`  ${accent(`${current}/${total}`)}  ${bold(title)}`)
+  if (detail) writeLine(`       ${muted(detail)}`)
+  writeLine()
+}
+
+function renderProgress(label, value) {
+  writeLine(`  ${success('✓')}  ${label}${value ? `  ${muted(value)}` : ''}`)
+}
+
+function renderPending(label, value) {
+  writeLine(`  ${caution('○')}  ${label}${value ? `  ${muted(value)}` : ''}`)
 }
 
 // A small event-driven line reader. node:readline/promises `question()` does not
@@ -83,11 +154,18 @@ async function assertRootSafe(rootPath, options) {
   })
 }
 
-async function directoryHasContents(directory) {
+async function directoryInventory(directory) {
   try {
-    return (await fs.readdir(directory)).length > 0
+    const entries = await fs.readdir(directory, { withFileTypes: true })
+    return {
+      total: entries.length,
+      directories: entries.filter((entry) => entry.isDirectory()).length,
+      files: entries.filter((entry) => !entry.isDirectory()).length,
+    }
   } catch (error) {
-    if (error && typeof error === 'object' && error.code === 'ENOENT') return false
+    if (error && typeof error === 'object' && error.code === 'ENOENT') {
+      return { total: 0, directories: 0, files: 0 }
+    }
     throw error
   }
 }
@@ -137,26 +215,32 @@ async function openDirectoryPicker(defaultPath) {
 }
 
 async function confirmExistingDirectory(reader, directory) {
-  if (!(await directoryHasContents(directory))) return true
+  const inventory = await directoryInventory(directory)
+  if (inventory.total === 0) return true
 
   writeLine()
-  writeLine(`The selected folder is not empty: ${directory}`)
-  writeLine('Everything already inside it will be uploaded to HopIt Cloud and removed')
-  writeLine('from this device after the upload is safely acknowledged.')
-  return promptYesNo(reader, 'Use this folder anyway?', false)
+  writeLine(`  ${caution('╭─ Existing contents found')}`)
+  writeLine(`  ${caution('│')}  ${inventory.total} item${inventory.total === 1 ? '' : 's'} in ${directory}`)
+  writeLine(`  ${caution('│')}  ${inventory.directories} folder${inventory.directories === 1 ? '' : 's'}, ${inventory.files} file${inventory.files === 1 ? '' : 's'}`)
+  writeLine(`  ${caution('│')}`)
+  writeLine(`  ${caution('│')}  Everything already here will be uploaded to HopIt Cloud.`)
+  writeLine(`  ${caution('│')}  Local copies are removed only after the cloud safely acknowledges them.`)
+  writeLine(`  ${caution('╰─')}`)
+  writeLine()
+  return promptYesNo(reader, '  Continue with this folder?', false)
 }
 
 async function chooseWorkspaceRoot(reader, workspaceRootDefault, options) {
   const openPicker = await promptYesNo(
     reader,
-    'Allow HopIt to open your file explorer so you can choose your projects folder?',
+    '  Open your file explorer to choose a projects folder?',
     true,
   )
 
   if (!openPicker) {
     const answer = await promptValue(
       reader,
-      'Enter the folder where HopIt should keep your projects',
+      '  Projects folder',
       workspaceRootDefault,
     )
     const candidate = path.resolve(expandHome(answer))
@@ -170,11 +254,11 @@ async function chooseWorkspaceRoot(reader, workspaceRootDefault, options) {
   for (;;) {
     let candidate
     try {
-      writeLine('Opening your file explorer…')
+      writeLine(`  ${muted('Opening your file explorer…')}`)
       candidate = await openDirectoryPicker(workspaceRootDefault)
     } catch {
-      writeLine('No folder was selected. You can enter its path instead.')
-      const answer = await promptValue(reader, 'Projects folder', workspaceRootDefault)
+      writeLine(`  ${caution('No folder was selected.')} Enter its path instead.`)
+      const answer = await promptValue(reader, '  Projects folder', workspaceRootDefault)
       candidate = path.resolve(expandHome(answer))
     }
 
@@ -185,7 +269,230 @@ async function chooseWorkspaceRoot(reader, workspaceRootDefault, options) {
       continue
     }
     if (await confirmExistingDirectory(reader, candidate)) return candidate
-    writeLine('Choose a different folder.')
+    writeLine(`  ${muted('Choose a different folder.')}`)
+  }
+}
+
+function renderCompletion({ workspaceRoot, keyringPath, envFilePath, cloudConnectionReady }) {
+  writeLine()
+  renderStep(4, 4, 'YOU’RE READY', 'HopIt is connected and your workspace is ready on this device.')
+  renderProgress('Projects folder', workspaceRoot)
+  renderProgress('Device encryption', keyringPath)
+  if (cloudConnectionReady) {
+    renderProgress('HopIt Cloud', 'connected')
+  } else {
+    renderPending('HopIt Cloud', 'not connected')
+  }
+  writeLine()
+  if (cloudConnectionReady) {
+    writeLine(`  ${accent('Done')}  You can close this terminal and open your project.`)
+  } else {
+    writeLine(`  ${accent('Next')}  Run ${bold('hop setup')} when you’re ready to connect HopIt Cloud.`)
+    writeLine(`        ${muted(`Configuration: ${envFilePath}`)}`)
+  }
+  writeLine(`        ${muted('Run hop setup --advanced for operator settings.')}`)
+  writeLine()
+}
+
+export async function authorizeDeviceWithBrowser({ keyring, authBaseUrl, openBrowser = true }) {
+  const baseUrl = String(authBaseUrl ?? defaultDeviceAuthorizationBaseUrl).replace(/\/+$/, '')
+  const createResponse = await fetch(`${baseUrl}/api/device-authorizations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ deviceKey: publicDeviceKeyDescriptor(keyring) }),
+  })
+  const created = await readJsonResponse(createResponse, 'Could not start device authorization.')
+  const verificationUrl = requireResponseText(created.verificationUriComplete, 'verificationUriComplete')
+  const deviceCode = requireResponseText(created.deviceCode, 'deviceCode')
+  const expiresAt = requireResponseText(created.expiresAt, 'expiresAt')
+  const intervalMs = Math.max(1_000, Number(created.intervalSeconds ?? 2) * 1_000)
+
+  writeLine(`  ${accent('Open')}  ${verificationUrl}`)
+  writeLine(`  ${muted(`Confirmation code: ${created.userCode}`)}`)
+  if (openBrowser && !isTruthyEnv(process.env.HOPIT_SETUP_SKIP_BROWSER)) {
+    await openUrl(verificationUrl).catch(() => {
+      writeLine(`  ${caution('Browser did not open automatically.')} Use the link above.`)
+    })
+  }
+  writeLine(`  ${muted('Waiting for approval in your browser…')}`)
+
+  while (Date.now() < Date.parse(expiresAt)) {
+    await delay(intervalMs)
+    const pollResponse = await fetch(
+      `${baseUrl}/api/device-authorizations?device_code=${encodeURIComponent(deviceCode)}`,
+      { headers: { Accept: 'application/json' } },
+    )
+    const polled = await readJsonResponse(pollResponse, 'Could not check device authorization.')
+    if (polled.status === 'pending') continue
+    if (polled.status !== 'approved') {
+      throw new Error(`Device authorization is ${polled.status ?? 'unavailable'}. Run hop setup again.`)
+    }
+    const tokenContext = requireResponseText(polled.tokenContext, 'tokenContext')
+    const wrappedSessionToken = recordValue(polled.wrappedSessionToken)
+    if (!wrappedSessionToken) throw new Error('Device authorization response did not include an encrypted session token.')
+    const sessionToken = unwrapSymmetricKeyFromDevice({
+      wrappedKey: wrappedSessionToken,
+      recipientPrivateKeyPem: keyring.encryption.privateKeyPem,
+      context: tokenContext,
+    }).toString('utf8')
+    if (!sessionToken.startsWith('hst_')) throw new Error('Device authorization returned an invalid session token.')
+    return {
+      codebaseId: requireResponseText(polled.codebaseId, 'codebaseId'),
+      sessionId: requireResponseText(polled.sessionId, 'sessionId'),
+      sessionToken,
+      apiBaseUrl: requireResponseText(polled.apiBaseUrl, 'apiBaseUrl').replace(/\/+$/, ''),
+      authorizationId: requireResponseText(polled.authorizationId, 'authorizationId'),
+    }
+  }
+  throw new Error('Device authorization expired. Run hop setup again.')
+}
+
+async function openUrl(url) {
+  if (process.platform === 'darwin') return execFileAsync('open', [url])
+  if (process.platform === 'win32') return execFileAsync('cmd.exe', ['/d', '/s', '/c', 'start', '', url])
+  return execFileAsync('xdg-open', [url])
+}
+
+async function readJsonResponse(response, fallbackMessage) {
+  const body = await response.json().catch(() => null)
+  if (!response.ok || body?.ok !== true) {
+    throw new Error(body?.error?.message ?? fallbackMessage)
+  }
+  return body
+}
+
+function requireResponseText(value, label) {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`Device authorization response is missing ${label}.`)
+  }
+  return value.trim()
+}
+
+function recordValue(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : null
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function productionSetupOptions(options, provided, {
+  stateRoot,
+  workspaceRoot,
+  codebaseId,
+  envFilePath,
+  universalDeviceKey = false,
+}) {
+  const workspace = path.join(workspaceRoot, codebaseId)
+  return {
+    ...options,
+    profile: 'production',
+    'cloud-backend': 'd1',
+    'state-root': stateRoot,
+    'workspace-root': workspaceRoot,
+    'workspace-index': provided.has('workspace-index')
+      ? options['workspace-index']
+      : path.join(stateRoot, 'workspaces.json'),
+    'codebase-id': codebaseId,
+    'device-keys': provided.has('device-keys')
+      ? options['device-keys']
+      : options['device-keys'] ?? process.env.HOPIT_DEVICE_KEYS_PATH ?? path.join(
+        stateRoot,
+        'keys',
+        universalDeviceKey ? 'device.json' : `${codebaseId}.device.json`,
+      ),
+    'env-path': envFilePath,
+    cloud: provided.has('cloud') ? options.cloud : path.join(stateRoot, 'cloud', `${codebaseId}.json`),
+    workspace,
+    journal: provided.has('journal') ? options.journal : path.join(stateRoot, 'journal', `${codebaseId}.ndjson`),
+    events: provided.has('events') ? options.events : path.join(stateRoot, 'events', `${codebaseId}.ndjson`),
+    pid: provided.has('pid') ? options.pid : path.join(stateRoot, 'run', `${codebaseId}.pid`),
+  }
+}
+
+async function writeConnectedEnvFile(envFilePath, installOptions, connection) {
+  let content = existsSync(envFilePath)
+    ? await fs.readFile(envFilePath, 'utf8')
+    : productionEnvTemplate(installOptions)
+  const values = {
+    HOPIT_PROFILE: 'production',
+    HOPIT_CLOUD_BACKEND: 'd1',
+    HOPIT_CODEBASE_ID: connection.codebaseId,
+    HOPIT_D1_API_TOKEN: '',
+    HOPIT_D1_API_BASE_URL: connection.apiBaseUrl,
+    HOPIT_AGENT_STATE_ROOT: path.resolve(installOptions['state-root']),
+    HOPIT_WORKSPACE_ROOT: path.resolve(installOptions['workspace-root']),
+    HOPIT_WORKSPACE_INDEX: path.resolve(installOptions['workspace-index']),
+    HOPIT_SESSION_ID: connection.sessionId,
+    HOPIT_DEVICE_NAME: installOptions['device-name'] ?? os.hostname() ?? 'local-device',
+    HOPIT_AGENT_SESSION_TOKEN: connection.sessionToken,
+    HOPIT_DEVICE_KEYS_PATH: path.resolve(installOptions['device-keys']),
+    HOPIT_REMOTE_PULL: '1',
+  }
+  for (const [key, value] of Object.entries(values)) {
+    const line = `${key}=${formatEnvValue(value)}`
+    const pattern = new RegExp(`^${key}=.*$`, 'm')
+    content = pattern.test(content) ? content.replace(pattern, line) : `${content.trimEnd()}\n${line}\n`
+  }
+  await fs.mkdir(path.dirname(envFilePath), { recursive: true, mode: 0o700 })
+  await fs.writeFile(envFilePath, content.endsWith('\n') ? content : `${content}\n`, { encoding: 'utf8', mode: 0o600 })
+  if (process.platform !== 'win32') await fs.chmod(envFilePath, 0o600)
+}
+
+function formatEnvValue(value) {
+  const text = String(value ?? '')
+  return /\s|["'#$`\\]/.test(text) ? JSON.stringify(text) : text
+}
+
+async function migrateLegacyDeviceKeyring(installOptions, stateRoot, codebaseId) {
+  const destination = path.resolve(installOptions['device-keys'])
+  if (existsSync(destination)) return false
+  const legacyPath = path.join(stateRoot, 'keys', `${codebaseId}.device.json`)
+  if (!existsSync(legacyPath) || path.resolve(legacyPath) === destination) return false
+  await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 })
+  await fs.copyFile(legacyPath, destination)
+  if (process.platform !== 'win32') await fs.chmod(destination, 0o600)
+  return true
+}
+
+async function loadLaunchAgentAndWait(installOptions, launchAgent) {
+  const domain = `gui/${process.getuid?.() ?? ''}`
+  await execFileAsync('launchctl', ['bootout', domain, launchAgent.label]).catch(() => {})
+  try {
+    await execFileAsync('launchctl', ['bootstrap', domain, launchAgent.plistPath])
+  } catch (error) {
+    return {
+      ...launchAgent,
+      installed: true,
+      loaded: false,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    const status = await serviceStatus(installOptions)
+    if (status.running && status.ok) {
+      return { ...launchAgent, installed: true, loaded: true }
+    }
+    await delay(100)
+  }
+  return { ...launchAgent, installed: true, loaded: true, ready: false }
+}
+
+function connectedKeyringDocument(keyring, connection) {
+  return {
+    ...keyring,
+    codebaseId: connection.codebaseId,
+    updatedAt: new Date().toISOString(),
+    device: {
+      ...(keyring.device ?? {}),
+      deviceId: keyring.device?.deviceId ?? keyring.deviceId,
+      deviceName: keyring.device?.deviceName ?? keyring.deviceName,
+      sessionId: connection.sessionId,
+    },
+    credentials: {
+      ...(keyring.credentials ?? {}),
+      agentSessionToken: connection.sessionToken,
+    },
   }
 }
 
@@ -196,20 +503,25 @@ export async function runSetup(options) {
     Boolean(options.interactive) || isTruthyEnv(process.env.HOPIT_SETUP_ASSUME_TTY)
   const ttyInteractive = Boolean(process.stdin.isTTY && process.stderr.isTTY)
   const interactive = !useYes && (forceInteractive || ttyInteractive)
+  const connectRequested = provided.has('connect')
+    ? Boolean(options.connect)
+    : interactive && !options.advanced
 
   if (!useYes && !interactive) {
     throw new Error(
       'hop setup needs an interactive terminal. Re-run with --yes to accept defaults, or pass explicit flags (for example --workspace-root, --codebase-id, --env-path, --no-launch-agent).',
     )
   }
+  if (connectRequested && provided.has('write-env') && !options['write-env']) {
+    throw new Error('Connected setup needs its secure environment file. Remove --no-write-env or use --no-connect.')
+  }
 
   const reader = interactive ? createLineReader() : null
 
   try {
     if (interactive) {
-      writeLine('HopIt setup')
-      writeLine('Choose one folder for all of your HopIt projects.')
-      writeLine()
+      renderWelcome()
+      renderStep(1, 4, 'CHOOSE YOUR PROJECTS FOLDER', 'HopIt keeps every managed project together in one place.')
     }
 
     // 1. Workspace root
@@ -272,41 +584,103 @@ export async function runSetup(options) {
       writeEnv = true
     }
 
-    // 5. Launch agent (macOS only)
+    // 5. Start-on-login agent (macOS only)
     const isDarwin = process.platform === 'darwin'
     let launchAgentRequested
     if (provided.has('launch-agent')) {
       launchAgentRequested = Boolean(options['launch-agent']) && isDarwin
-    } else if (interactive && options.advanced && isDarwin) {
+    } else if (connectRequested && interactive && options.advanced && isDarwin) {
       launchAgentRequested = await promptYesNo(
         reader,
         'Install and load a macOS start-on-login agent?',
-        false,
+        true,
       )
     } else {
-      launchAgentRequested = false
+      launchAgentRequested = connectRequested && isDarwin
     }
 
-    const workspace = path.join(workspaceRoot, codebaseId)
-    const installOptions = {
-      ...options,
-      'workspace-root': workspaceRoot,
-      'state-root': stateRoot,
-      'codebase-id': codebaseId,
-      workspace,
-      profile: 'production',
+    let installOptions = productionSetupOptions(options, provided, {
+      stateRoot,
+      workspaceRoot,
+      codebaseId,
+      envFilePath,
+      universalDeviceKey: connectRequested,
+    })
+    await assertWorkspacePathSafe(installOptions)
+
+    // 6. Prepare local encryption before anything leaves the device.
+    if (interactive) {
+      writeLine()
+      renderStep(2, 4, 'PREPARE THIS DEVICE', 'Securing a device-only encryption key before connecting.')
+    }
+    await fs.mkdir(stateRoot, { recursive: true, mode: 0o700 })
+    await fs.mkdir(workspaceRoot, { recursive: true })
+    if (connectRequested) {
+      await migrateLegacyDeviceKeyring(installOptions, stateRoot, codebaseId)
+    }
+    let keyring = await initializeLocalDeviceKeyring(installOptions)
+    const keyringPath = path.resolve(localDeviceKeyringPath(installOptions))
+    if (interactive) {
+      renderProgress('Workspace prepared', workspaceRoot)
+      renderProgress('Device encryption ready', keyring.created ? 'new key secured' : 'existing key kept')
+    }
+
+    // 7. Authorize this device in the browser and let the user choose a codebase.
+    let connection = null
+    if (interactive) {
+      writeLine()
+      renderStep(
+        3,
+        4,
+        'CONNECT HOPIT CLOUD',
+        connectRequested
+          ? 'Approve this device in your browser. Your private key never leaves this device.'
+          : 'Skipped for this local-only setup.',
+      )
+    }
+    if (connectRequested) {
+      connection = await authorizeDeviceWithBrowser({
+        keyring: keyring.keyring,
+        authBaseUrl:
+          options['auth-base-url'] ?? process.env.HOPIT_AUTH_BASE_URL ?? defaultDeviceAuthorizationBaseUrl,
+      })
+      codebaseId = connection.codebaseId
+      installOptions = {
+        ...productionSetupOptions(options, provided, {
+          stateRoot,
+          workspaceRoot,
+          codebaseId,
+          envFilePath,
+          universalDeviceKey: true,
+        }),
+        'd1-api-base-url': connection.apiBaseUrl,
+        'session-id': connection.sessionId,
+        'session-token': connection.sessionToken,
+        'remote-pull': true,
+      }
+      keyring = {
+        ...keyring,
+        keyring: connectedKeyringDocument(keyring.keyring, connection),
+      }
+      await writeLocalDeviceKeyring(installOptions, keyring.keyring)
+      if (interactive) renderProgress('Account approved', codebaseId)
+    } else if (interactive) {
+      renderPending('HopIt Cloud', 'not connected')
     }
 
     await assertWorkspacePathSafe(installOptions)
-
-    // 6. Create directories + seed workspace index (idempotent)
+    const workspace = path.resolve(installOptions.workspace)
     const created = await ensureAgentDirectories({ stateRoot, workspaceRoot, workspace })
-    const index = await ensureWorkspaceIndexEntry(installOptions, { codebaseId, workspaceRoot })
+    let index = await ensureWorkspaceIndexEntry(installOptions, { codebaseId, workspaceRoot })
     const workspaceIndex = path.resolve(workspaceIndexPath(installOptions))
 
     // Env file
     let envStatus
-    if (!writeEnv) {
+    if (connection) {
+      const envAlreadyExisted = existsSync(envFilePath)
+      await writeConnectedEnvFile(envFilePath, installOptions, connection)
+      envStatus = envAlreadyExisted ? 'updated' : 'written'
+    } else if (!writeEnv) {
       envStatus = 'skipped'
     } else if (existsSync(envFilePath) && !envForceOverwrite) {
       envStatus = 'kept'
@@ -316,64 +690,100 @@ export async function runSetup(options) {
       envStatus = 'written'
     }
 
-    // Launch agent
-    let launchAgent = { installed: false }
-    if (launchAgentRequested) {
-      const written = await writeLaunchAgent(installOptions)
-      let loaded = false
+    // Register encryption metadata, attach the selected cloud codebase, and start.
+    let cloudRegistration = null
+    let attachment = null
+    let service = null
+    if (connection) {
       try {
-        await execFileAsync('launchctl', [
-          'bootstrap',
-          `gui/${process.getuid?.() ?? ''}`,
-          written.plistPath,
-        ])
-        loaded = true
-      } catch {
-        loaded = false
+        cloudRegistration = await registerLocalDeviceKeyringWithCloud(installOptions, keyring.keyring)
+        if (cloudRegistration?.registered) {
+          keyring.keyring = {
+            ...keyring.keyring,
+            updatedAt: new Date().toISOString(),
+            cloud: {
+              ...(keyring.keyring.cloud ?? {}),
+              registeredAt: cloudRegistration.registeredAt,
+              deviceKey: cloudRegistration.deviceKey,
+              userKeyring: cloudRegistration.userKeyring,
+              userVaultWrap: cloudRegistration.userVaultWrap,
+            },
+          }
+          await writeLocalDeviceKeyring(installOptions, keyring.keyring)
+        }
+      } catch (error) {
+        cloudRegistration = {
+          registered: false,
+          reason: 'existing_encryption_key_requires_recovery',
+          message: error instanceof Error ? error.message : String(error),
+        }
       }
-      launchAgent = { installed: true, loaded, ...written }
+      attachment = await attachWorkspace({ ...installOptions, quiet: true })
+      index = await ensureWorkspaceIndexEntry(installOptions, { codebaseId, workspaceRoot })
     }
 
-    const nextSteps = [
-      envStatus === 'written'
-        ? `Fill in credential values (D1/R2/session token) in ${envFilePath}`
-        : `Confirm credential values (D1/R2/session token) in ${envFilePath}`,
-      'Initialize the local device keyring: hop keys init-device',
-      'Register this device/session: hop session register',
-      `Attach the codebase workspace: hop workspace attach --codebase-id ${codebaseId}`,
-      'Start the local agent service: hop service start',
+    let launchAgent = { installed: false }
+    if (connection && launchAgentRequested) {
+      const written = await writeLaunchAgent(installOptions)
+      launchAgent = await loadLaunchAgentAndWait(installOptions, written)
+    }
+    if (connection) {
+      const existingService = await serviceStatus(installOptions)
+      service = existingService.running && existingService.ok
+        ? { started: false, alreadyRunning: true, status: existingService }
+        : { started: true, result: await startService({ ...installOptions, quiet: true }) }
+      if (interactive) {
+        renderProgress('Workspace attached', workspace)
+        renderProgress('Background sync running', launchAgent.installed ? 'starts at login' : 'started')
+      }
+    }
+
+    const nextSteps = connection ? [] : [
+      `Connect this device: hop setup --connect --workspace-root ${JSON.stringify(workspaceRoot)}`,
     ]
     if (launchAgent.installed && !launchAgent.loaded && launchAgent.loadCommand) {
       nextSteps.push(`Load the start-on-login agent: ${launchAgent.loadCommand}`)
     }
 
-    if (interactive) {
-      writeLine()
-      writeLine('Setup complete. Next steps:')
-      for (const step of nextSteps) writeLine(`  - ${step}`)
-      writeLine()
+    const cloudConnectionReady = Boolean(connection)
+    const result = {
+      ok: true,
+      action: 'setup',
+      codebaseId,
+      workspaceRoot,
+      agentStateRoot: stateRoot,
+      workspace,
+      workspaceIndex,
+      workspaceIndexSummary: workspaceIndexSummary(installOptions, index),
+      envFile: { path: envFilePath, status: envStatus },
+      deviceSecurity: {
+        path: keyringPath,
+        status: keyring.created ? 'created' : 'kept',
+      },
+      launchAgent,
+      connection: connection ? {
+        status: 'connected',
+        authorizationId: connection.authorizationId,
+        sessionId: connection.sessionId,
+      } : { status: 'not-connected' },
+      cloudRegistration,
+      attachment,
+      service,
+      created,
+      nextSteps,
     }
 
-    console.log(
-      JSON.stringify(
-        {
-          ok: true,
-          action: 'setup',
-          codebaseId,
-          workspaceRoot,
-          agentStateRoot: stateRoot,
-          workspace,
-          workspaceIndex,
-          workspaceIndexSummary: workspaceIndexSummary(installOptions, index),
-          envFile: { path: envFilePath, status: envStatus },
-          launchAgent,
-          created,
-          nextSteps,
-        },
-        null,
-        2,
-      ),
-    )
+    if (interactive) {
+      renderCompletion({
+        workspaceRoot,
+        keyringPath,
+        envFilePath,
+        cloudConnectionReady,
+      })
+    }
+    if (!interactive || options.json) {
+      console.log(JSON.stringify(result, null, 2))
+    }
   } finally {
     reader?.close()
   }

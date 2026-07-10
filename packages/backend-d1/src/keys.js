@@ -372,6 +372,16 @@ export function attachKeyMethods(Backend) {
   },
 
   async resolveKeyActor(codebaseId, options = {}, capability = 'read') {
+    const actorId = stringOrNull(options.actor?.userId)
+    if (actorId) {
+      const { access } = await this.requireGraphCapability(codebaseId, options.actor, capability)
+      return {
+        kind: 'browser',
+        userId: actorId,
+        deviceId: stringOrNull(options.actor?.deviceId),
+        access,
+      }
+    }
     const sessionToken = stringOrNull(options.sessionToken) ?? this.config.agentSessionToken
     if (sessionToken) {
       const access = await this.requireD1AgentAccess(

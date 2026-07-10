@@ -139,7 +139,8 @@ export async function writeLaunchAgent(options) {
   const launchAgentsRoot = path.join(os.homedir(), 'Library', 'LaunchAgents')
   const plistPath = path.join(launchAgentsRoot, `${label}.plist`)
   const hopBin = options['hop-bin'] ?? process.argv[1] ?? __filename
-  const programArguments = [
+  const envFilePath = options['env-path']
+  const serviceArguments = [
     process.execPath,
     hopBin,
     'service',
@@ -150,13 +151,20 @@ export async function writeLaunchAgent(options) {
     codebaseId,
   ]
   if (remotePullEnabled(options)) {
-    programArguments.push('--remote-pull')
+    serviceArguments.push('--remote-pull')
   }
   if (options['remote-pull-cooldown-ms']) {
-    programArguments.push('--remote-pull-cooldown-ms', options['remote-pull-cooldown-ms'])
+    serviceArguments.push('--remote-pull-cooldown-ms', options['remote-pull-cooldown-ms'])
   } else if (options['remote-refresh-interval-ms']) {
-    programArguments.push('--remote-refresh-interval-ms', options['remote-refresh-interval-ms'])
+    serviceArguments.push('--remote-refresh-interval-ms', options['remote-refresh-interval-ms'])
   }
+  const programArguments = [
+    '/bin/sh',
+    '-lc',
+    envFilePath
+      ? `set -a; . ${shellQuote(path.resolve(envFilePath))}; set +a; exec ${serviceArguments.map(shellQuote).join(' ')}`
+      : `exec ${serviceArguments.map(shellQuote).join(' ')}`,
+  ]
 
   const plist = `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -189,6 +197,10 @@ ${programArguments.map((argument) => `    <string>${escapePlist(argument)}</stri
   }
 }
 
+export function shellQuote(value) {
+  return `'${String(value).replaceAll("'", `'"'"'`)}'`
+}
+
 export function escapePlist(value) {
   return String(value)
     .replaceAll('&', '&amp;')
@@ -197,4 +209,3 @@ export function escapePlist(value) {
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&apos;')
 }
-

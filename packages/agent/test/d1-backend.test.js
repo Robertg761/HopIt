@@ -11,6 +11,11 @@ import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import d1ApiWorker from '../../../cloudflare/d1/api-worker.js'
 import { createD1Backend, d1SchemaStatements } from '@hopit/backend-d1'
+import {
+  createDeviceKeyMaterial,
+  publicDeviceKeyDescriptor,
+  unwrapSymmetricKeyFromDevice,
+} from '@hopit/core/crypto'
 import { D1CloudGraphService } from '../src/cloud/d1-graph-service.js'
 
 const execFileAsync = promisify(execFile)
@@ -698,6 +703,64 @@ test('D1 assume-schema mode skips schema setup queries', async (t) => {
 
   assert.equal(dashboard.cloud.exists, true)
   assert.equal(statements.some((sql) => /^\s*create\s+/i.test(sql)), false)
+})
+
+test('D1 device authorization exchanges a one-time code for a device-encrypted scoped session', async (t) => {
+  const server = await startD1ApiServer(t)
+  const backend = createD1Backend({
+    'codebase-id': 'device-auth-core',
+    'd1-api-base-url': server.baseUrl,
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_test',
+    'd1-api-token': 'token_test',
+  })
+  await backend.initialize(makeD1Graph({ codebaseId: 'device-auth-core' }))
+  const device = createDeviceKeyMaterial({
+    deviceId: 'dev_device_auth_test',
+    deviceName: 'Authorization Test Device',
+    platform: 'test-platform',
+  })
+
+  const created = await backend.createDeviceAuthorization({
+    deviceKey: publicDeviceKeyDescriptor(device),
+    requestFingerprint: 'fingerprint_test',
+  })
+  assert.match(created.deviceCode, /^hdc_/)
+  assert.match(created.userCode, /^[A-Z2-9]{4}-[A-Z2-9]{4}$/)
+  assert.equal((await backend.pollDeviceAuthorization(created.deviceCode)).status, 'pending')
+  const approvalView = await backend.readDeviceAuthorizationForApproval(created.userCode.toLowerCase())
+  assert.equal(approvalView.device.id, device.deviceId)
+  assert.equal(Object.hasOwn(approvalView.device, 'encryptionPublicKey'), false)
+
+  const approved = await backend.approveDeviceAuthorization({
+    userCode: created.userCode,
+    codebaseId: 'device-auth-core',
+    actor: { userId: 'user_owner' },
+  })
+  assert.equal(approved.status, 'approved')
+  const polled = await backend.pollDeviceAuthorization(created.deviceCode)
+  assert.equal(polled.status, 'approved')
+  assert.equal(polled.codebaseId, 'device-auth-core')
+  const token = unwrapSymmetricKeyFromDevice({
+    wrappedKey: polled.wrappedSessionToken,
+    recipientPrivateKeyPem: device.encryption.privateKeyPem,
+    context: polled.tokenContext,
+  }).toString('utf8')
+  assert.match(token, /^hst_/)
+
+  const scoped = createD1Backend({
+    'codebase-id': 'device-auth-core',
+    'd1-api-base-url': server.baseUrl,
+    'session-token': token,
+  })
+  assert.equal((await scoped.readGraph()).codebase.id, 'device-auth-core')
+  const stored = server.db.prepare(
+    'select device_code_hash, wrapped_session_token_json from device_authorizations where authorization_id = ?',
+  ).get(created.authorizationId)
+  assert.notEqual(stored.device_code_hash, created.deviceCode)
+  assert.equal(stored.device_code_hash.includes(created.deviceCode), false)
+  assert.equal(stored.wrapped_session_token_json.includes(token), false)
+  assert.equal((await backend.pollDeviceAuthorization('hdc_' + 'x'.repeat(43))).status, 'not_found')
 })
 
 test('D1 backend records file versions and compares retained revisions', async (t) => {

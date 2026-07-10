@@ -54,6 +54,7 @@ export function parseOptions(args) {
     'interactive',
     'advanced',
     'force-env',
+    'connect',
   ])
 
   for (let i = 0; i < args.length; i += 1) {

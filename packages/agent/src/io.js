@@ -66,7 +66,7 @@ export async function emit(options, event, detail) {
   }
   await appendNdjson(options.events, payload)
   await appendRemoteEvent(options, payload)
-  console.log(`${event} ${JSON.stringify(detail)}`)
+  if (!options.quiet) console.log(`${event} ${JSON.stringify(detail)}`)
 }
 
 export async function appendRemoteEvent(options, payload) {

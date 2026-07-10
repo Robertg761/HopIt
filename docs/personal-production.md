@@ -450,30 +450,32 @@ The packaged artifact contains:
 
 ### First-run setup
 
-`hop setup` is the interactive front door for a new device. It asks permission
-to open the system folder picker, then lets the user choose where HopIt should
-keep projects (the HopIt Workspace Root). Existing directories are allowed; a
-non-empty choice requires confirmation after a warning that its contents will
-be uploaded to HopIt Cloud and removed from the device after safe cloud
-acknowledgement. Setup then seeds the agent state directories, workspace folder,
-workspace index, and a pre-filled `~/.config/hopit/production.env` using safe
-defaults (workspace root, workspace index, agent state root, codebase id, and
-`HOPIT_PROFILE=production` are filled in; credential keys remain placeholders).
-Use `hop setup --advanced` to expose the agent-state, codebase, env-file, and
-macOS start-on-login prompts.
+`hop setup` is the interactive front door for a new device. Its default terminal
+wizard has four visible stages: choose a projects folder through the system
+picker, prepare the local device-encryption keyring, approve the device and
+select a cloud codebase in the signed-in browser, then review a human-readable
+readiness summary. Existing directories are allowed; a non-empty
+choice requires confirmation after a warning that its contents will be uploaded
+to HopIt Cloud and local copies removed only after safe acknowledgement. Setup
+creates a scoped session whose token is encrypted to the local device public
+key, writes the connected `~/.config/hopit/production.env`, attaches the chosen
+cloud codebase, and starts the service plus macOS start-on-login agent. Interactive
+setup does not dump JSON by default; use `--json` to include it, `--advanced`
+for agent-state/codebase/env/login-agent prompts, `--no-connect` for local-only
+setup, or `--yes` and explicit flags for automation.
 
 ```bash
 /tmp/hop-darwin-arm64/bin/hop setup
 ```
 
-Run it non-interactively in scripts or CI with `--yes` (accept all defaults) or
+Run it non-interactively in scripts or CI with `--yes` (accept local defaults) or
 explicit flags: `--workspace-root`, `--state-root`, `--codebase-id`,
 `--env-path`, `--write-env`/`--no-write-env`, `--force-env`, `--advanced`, and
-`--launch-agent`/`--no-launch-agent`. It never overwrites an existing env file
-unless `--force-env` is passed, and it does not require cloud credentials or
-network access. After setup, fill the credential values in the env file, then
-run `hop keys init-device`, `hop session register`, `hop workspace attach`, and
-`hop service start`.
+`--launch-agent`/`--no-launch-agent`. Add `--connect` to a scripted invocation
+when browser approval is intended; otherwise `--yes` remains offline and does
+not require cloud credentials or network access. Connected setup securely merges
+the managed connection values into an existing env file instead of replacing
+unrelated entries.
 
 Create the local env file before installing a login service (or let `hop setup`
 write it for you):

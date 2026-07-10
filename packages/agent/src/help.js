@@ -4,7 +4,7 @@ export function printHelp() {
   console.log(`hop - HopIt local workspace agent
 
 Commands:
-  setup       Guided first run: open a folder picker and choose where HopIt keeps projects
+  setup       Guided first run: choose a projects folder and prepare this device
   init        Seed a local cloud file graph
   import      Import a real local folder into the HopIt graph and hydrate it
   import-git  Production-safe literal Git checkout conversion into HopIt
@@ -101,10 +101,11 @@ Options:
   --env-path <path>    setup: production env file path, default ~/.config/hopit/production.env (--env-file is reserved by Node)
   --no-write-env       setup: do not write the production env file
   --force-env          setup: overwrite an existing production env file
+  --no-connect         setup: prepare local files without opening browser account authorization
   --no-launch-agent    setup: skip the macOS start-on-login agent prompt/step
   --interactive        setup: force interactive prompts even when stdin is not a TTY (testing/advanced; env HOPIT_SETUP_ASSUME_TTY=1)
   --skip-service-control mirror: do not stop or restart the macOS LaunchAgent
-  --json              Accepted for scripting; commands already emit JSON where applicable
+  --json              setup: include the machine-readable result after the interactive flow
   --message <text>    Git commit message for export/publish
   --include-private   Include .private files in export only; publish always omits them
   --allow-unsafe-workspace Override workspace path safety checks

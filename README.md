@@ -40,13 +40,18 @@ First run:
 hop setup
 ```
 
-`hop setup` asks permission to open the system folder picker, then lets the user
-choose the directory where HopIt will keep projects. Existing directories are
-allowed; before accepting a non-empty directory, HopIt warns that its contents
-will be uploaded to HopIt Cloud and removed from the device after the upload is
-safely acknowledged. The remaining local configuration uses safe defaults;
-`hop setup --advanced` exposes the lower-level prompts. The bundle is not signed
-or notarized yet.
+`hop setup` opens a focused four-step terminal wizard: choose the projects
+folder through the system picker, review the existing-content safety boundary,
+prepare device encryption, and approve the device in a signed-in browser. Existing directories
+are allowed; before accepting a non-empty directory, HopIt warns that its
+contents will be uploaded to HopIt Cloud and that local copies are removed only
+after safe cloud acknowledgement. The browser approval creates a scoped session,
+returns it encrypted for that device, attaches the selected cloud codebase, and
+starts background sync automatically. The normal flow ends with a human-readable
+readiness summary rather than JSON. Use `hop setup --advanced` for lower-level
+prompts, `hop setup --json` for machine-readable output, `hop setup --yes` for
+unattended local setup, or `hop setup --no-connect` to skip cloud authorization.
+The bundle is not signed or notarized yet.
 
 ## Initial Scope
 

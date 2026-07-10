@@ -9,6 +9,8 @@ import path from 'node:path'
 import { test } from 'node:test'
 import { promisify } from 'node:util'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+import { createDeviceKeyMaterial, wrapSymmetricKeyForDevice } from '@hopit/core/crypto'
+import { authorizeDeviceWithBrowser } from '../src/commands/setup.js'
 
 const execFileAsync = promisify(execFile)
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -4038,11 +4040,14 @@ test('setup --yes bootstraps state, workspace, index, and a pre-filled env file'
   assert.equal(result.workspace, path.join(path.resolve(state.workspaceRoot), 'setup-demo'))
   assert.equal(result.envFile.status, 'written')
   assert.equal(result.envFile.path, path.resolve(state.envFile))
+  assert.equal(result.deviceSecurity.status, 'created')
+  assert.equal(result.deviceSecurity.path, path.join(state.stateRoot, 'keys', 'setup-demo.device.json'))
   assert.equal(result.launchAgent.installed, false)
   assert.ok(Array.isArray(result.nextSteps) && result.nextSteps.length > 0)
 
   assert.equal(await pathExists(path.join(state.stateRoot, 'run')), true)
   assert.equal(await pathExists(path.join(state.stateRoot, 'backups')), true)
+  assert.equal(await pathExists(path.join(state.stateRoot, 'keys', 'setup-demo.device.json')), true)
   assert.equal(await pathExists(path.join(state.workspaceRoot, 'setup-demo')), true)
 
   const index = await readJson(path.join(state.stateRoot, 'workspaces.json'))
@@ -4113,6 +4118,7 @@ test('setup interactive opens a directory picker and uses safe defaults', async 
       state.envFile,
       '--codebase-id',
       'interactive-demo',
+      '--no-connect',
       '--no-launch-agent',
     ],
     answers,
@@ -4120,16 +4126,21 @@ test('setup interactive opens a directory picker and uses safe defaults', async 
   )
 
   assert.equal(run.code, 0)
-  const result = parseLastJsonObject(run.stdout)
-  assert.equal(result.action, 'setup')
-  assert.equal(result.codebaseId, 'interactive-demo')
-  assert.equal(result.workspaceRoot, path.resolve(state.workspaceRoot))
-  assert.equal(result.envFile.status, 'written')
-  assert.equal(result.launchAgent.installed, false)
+  assert.equal(run.stdout, '')
+  assert.match(run.stderr, /◆ HOPIT/)
+  assert.match(run.stderr, /1\/4  CHOOSE YOUR PROJECTS FOLDER/)
+  assert.match(run.stderr, /2\/4  PREPARE THIS DEVICE/)
+  assert.match(run.stderr, /3\/4  CONNECT HOPIT CLOUD/)
+  assert.match(run.stderr, /4\/4  YOU.RE READY/)
   assert.match(run.stderr, /open your file explorer/i)
   assert.match(run.stderr, /Opening your file explorer/)
+  assert.match(run.stderr, /Device encryption ready/)
+  assert.match(run.stderr, /HopIt Cloud.*not connected/)
+  assert.doesNotMatch(run.stderr, /Setup complete\. Next steps/)
 
   assert.equal(await pathExists(path.join(state.workspaceRoot, 'interactive-demo')), true)
+  assert.equal(await pathExists(path.join(state.stateRoot, 'keys', 'interactive-demo.device.json')), true)
+  assert.equal(await pathExists(state.envFile), true)
   const index = await readJson(path.join(state.stateRoot, 'workspaces.json'))
   assert.equal(index.codebases[0].id, 'interactive-demo')
 })
@@ -4148,6 +4159,7 @@ test('setup warns before accepting an existing non-empty projects folder', async
       state.envFile,
       '--codebase-id',
       'existing-demo',
+      '--no-connect',
       '--no-launch-agent',
     ],
     'y\ny\n',
@@ -4155,9 +4167,10 @@ test('setup warns before accepting an existing non-empty projects folder', async
   )
 
   assert.equal(run.code, 0)
-  assert.match(run.stderr, /not empty/)
+  assert.match(run.stderr, /Existing contents found/)
   assert.match(run.stderr, /uploaded to HopIt Cloud/)
-  assert.match(run.stderr, /removed[\s\S]*from this device/)
+  assert.match(run.stderr, /Local copies are removed only after/)
+  assert.equal(run.stdout, '')
   assert.equal(await fs.readFile(path.join(state.workspaceRoot, 'existing-project.txt'), 'utf8'), 'keep me\n')
 })
 
@@ -4169,4 +4182,65 @@ test('setup refuses an unsafe workspace root', async () => {
   )
   assert.equal(failure.code, 1)
   assert.match(failure.stderr, /unsafe workspace path/)
+})
+
+test('setup browser authorization polls and decrypts a device-bound session token', async (t) => {
+  const keyring = createDeviceKeyMaterial({
+    deviceId: 'dev_setup_authorization_test',
+    deviceName: 'Setup Authorization Test',
+    platform: 'test-platform',
+  })
+  const authorizationId = 'dau_setup_authorization_test'
+  const deviceCode = `hdc_${'a'.repeat(43)}`
+  const sessionToken = `hst_${'b'.repeat(43)}`
+  const tokenContext = `device-authorization:${authorizationId}:session-token`
+  let polls = 0
+  const server = createHttpServer(async (request, response) => {
+    response.setHeader('Content-Type', 'application/json')
+    if (request.method === 'POST') {
+      let body = ''
+      for await (const chunk of request) body += chunk
+      const parsed = JSON.parse(body)
+      const wrappedSessionToken = wrapSymmetricKeyForDevice({
+        key: Buffer.from(sessionToken, 'utf8'),
+        recipientPublicKeyPem: parsed.deviceKey.encryptionPublicKey,
+        context: tokenContext,
+      })
+      server.wrappedSessionToken = wrappedSessionToken
+      response.end(JSON.stringify({
+        ok: true,
+        authorizationId,
+        deviceCode,
+        userCode: 'ABCD-2345',
+        verificationUriComplete: `http://127.0.0.1:${server.address().port}/device?code=ABCD-2345`,
+        expiresAt: new Date(Date.now() + 10_000).toISOString(),
+        intervalSeconds: 0,
+      }))
+      return
+    }
+    polls += 1
+    response.end(JSON.stringify(polls === 1 ? { ok: true, status: 'pending' } : {
+      ok: true,
+      status: 'approved',
+      authorizationId,
+      codebaseId: 'setup-auth-core',
+      sessionId: 'session_setup_auth',
+      apiBaseUrl: 'https://agent-api.example.test',
+      tokenContext,
+      wrappedSessionToken: server.wrappedSessionToken,
+    }))
+  })
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
+  t.after(() => server.close())
+
+  const connection = await authorizeDeviceWithBrowser({
+    keyring,
+    authBaseUrl: `http://127.0.0.1:${server.address().port}`,
+    openBrowser: false,
+  })
+  assert.equal(connection.codebaseId, 'setup-auth-core')
+  assert.equal(connection.sessionId, 'session_setup_auth')
+  assert.equal(connection.sessionToken, sessionToken)
+  assert.equal(connection.apiBaseUrl, 'https://agent-api.example.test')
+  assert.equal(polls, 2)
 })

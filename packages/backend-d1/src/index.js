@@ -3,6 +3,7 @@ import { attachAccessMethods } from './access.js'
 import { attachActionMethods } from './actions.js'
 import { attachClientMethods } from './client.js'
 import { attachCollaborationMethods } from './collaboration.js'
+import { attachDeviceAuthorizationMethods } from './device-authorizations.js'
 import { attachGraphMethods } from './graph.js'
 import { attachKeyMethods } from './keys.js'
 import { attachMemberMethods } from './members.js'
@@ -42,4 +43,5 @@ attachMemberMethods(CloudflareD1HopBackend)
 attachCollaborationMethods(CloudflareD1HopBackend)
 attachSessionMethods(CloudflareD1HopBackend)
 attachKeyMethods(CloudflareD1HopBackend)
+attachDeviceAuthorizationMethods(CloudflareD1HopBackend)
 attachClientMethods(CloudflareD1HopBackend)

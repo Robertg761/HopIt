@@ -17,6 +17,9 @@ const isPublicRoute = createRouteMatcher(['/sign-in(.*)', '/sign-up(.*)'])
 // return the raw script to unauthenticated clients in every auth mode, so it is
 // always public. `/install` is rewritten to the static `/install.sh` file.
 const isInstallRoute = createRouteMatcher(['/install', '/install.sh'])
+// Device-code creation and polling are intentionally public. Approval lives on
+// a separate Clerk-protected route and requires the signed-in user.
+const isPublicDeviceAuthorizationRoute = createRouteMatcher(['/api/device-authorizations'])
 
 const clerkProxy = clerkMiddleware(async (auth, request) => {
   await auth.protect({ unauthenticatedUrl: new URL(signInPath, request.url).toString() })
@@ -24,7 +27,7 @@ const clerkProxy = clerkMiddleware(async (auth, request) => {
 })
 
 export function proxy(request: NextRequest, event: NextFetchEvent) {
-  if (isInstallRoute(request)) return NextResponse.next()
+  if (isInstallRoute(request) || isPublicDeviceAuthorizationRoute(request)) return NextResponse.next()
 
   if (shouldUseClerkAuth()) {
     if (!isClerkServerConfigured()) return authProviderMissing()
