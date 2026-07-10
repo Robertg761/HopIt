@@ -336,15 +336,31 @@ export async function authorizeDeviceWithBrowser({ keyring, authBaseUrl, openBro
       context: tokenContext,
     }).toString('utf8')
     if (!sessionToken.startsWith('hst_')) throw new Error('Device authorization returned an invalid session token.')
+    const apiBaseUrl = requireResponseText(polled.apiBaseUrl, 'apiBaseUrl').replace(/\/+$/, '')
     return {
       codebaseId: requireResponseText(polled.codebaseId, 'codebaseId'),
+      requesterId: requireResponseText(polled.requesterId, 'requesterId'),
       sessionId: requireResponseText(polled.sessionId, 'sessionId'),
       sessionToken,
-      apiBaseUrl: requireResponseText(polled.apiBaseUrl, 'apiBaseUrl').replace(/\/+$/, ''),
+      apiBaseUrl,
+      remotePushUrl: deriveRemotePushUrl(apiBaseUrl),
       authorizationId: requireResponseText(polled.authorizationId, 'authorizationId'),
     }
   }
   throw new Error('Device authorization expired. Run hop setup again.')
+}
+
+export function deriveRemotePushUrl(apiBaseUrl) {
+  const url = new URL(requireResponseText(apiBaseUrl, 'apiBaseUrl'))
+  if (url.protocol !== 'https:') {
+    throw new Error('Device authorization API URL must use HTTPS before remote push can be enabled.')
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error('Device authorization API URL must not contain credentials, query parameters, or a fragment.')
+  }
+  url.protocol = 'wss:'
+  url.pathname = `${url.pathname.replace(/\/+$/, '')}/events`
+  return url.toString()
 }
 
 async function openUrl(url) {
@@ -410,7 +426,7 @@ function productionSetupOptions(options, provided, {
   }
 }
 
-async function writeConnectedEnvFile(envFilePath, installOptions, connection) {
+export async function writeConnectedEnvFile(envFilePath, installOptions, connection) {
   let content = existsSync(envFilePath)
     ? await fs.readFile(envFilePath, 'utf8')
     : productionEnvTemplate(installOptions)
@@ -423,11 +439,14 @@ async function writeConnectedEnvFile(envFilePath, installOptions, connection) {
     HOPIT_AGENT_STATE_ROOT: path.resolve(installOptions['state-root']),
     HOPIT_WORKSPACE_ROOT: path.resolve(installOptions['workspace-root']),
     HOPIT_WORKSPACE_INDEX: path.resolve(installOptions['workspace-index']),
+    HOPIT_REQUESTER_ID: connection.requesterId,
     HOPIT_SESSION_ID: connection.sessionId,
     HOPIT_DEVICE_NAME: installOptions['device-name'] ?? os.hostname() ?? 'local-device',
     HOPIT_AGENT_SESSION_TOKEN: connection.sessionToken,
     HOPIT_DEVICE_KEYS_PATH: path.resolve(installOptions['device-keys']),
     HOPIT_REMOTE_PULL: '1',
+    HOPIT_REMOTE_PUSH: '1',
+    HOPIT_REMOTE_PUSH_URL: connection.remotePushUrl,
   }
   for (const [key, value] of Object.entries(values)) {
     const line = `${key}=${formatEnvValue(value)}`
@@ -654,9 +673,12 @@ export async function runSetup(options) {
           universalDeviceKey: true,
         }),
         'd1-api-base-url': connection.apiBaseUrl,
+        'requester-id': connection.requesterId,
         'session-id': connection.sessionId,
         'session-token': connection.sessionToken,
         'remote-pull': true,
+        'remote-push': true,
+        'remote-push-url': connection.remotePushUrl,
       }
       keyring = {
         ...keyring,
@@ -764,7 +786,9 @@ export async function runSetup(options) {
       connection: connection ? {
         status: 'connected',
         authorizationId: connection.authorizationId,
+        requesterId: connection.requesterId,
         sessionId: connection.sessionId,
+        remotePushUrl: connection.remotePushUrl,
       } : { status: 'not-connected' },
       cloudRegistration,
       attachment,

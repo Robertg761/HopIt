@@ -212,6 +212,7 @@ export function attachDeviceAuthorizationMethods(Backend) {
         authorizationId: row.authorization_id,
         status: 'approved',
         codebaseId: row.codebase_id,
+        requesterId: row.user_id,
         sessionId: row.session_id,
         wrappedSessionToken: parseJson(row.wrapped_session_token_json, null),
         tokenContext: deviceAuthorizationTokenContext(row.authorization_id),
@@ -294,6 +295,7 @@ function summarizeForApproval(row) {
       platform: row.platform,
     },
     codebaseId: row.codebase_id ?? null,
+    requesterId: row.user_id ?? null,
     expiresAt: row.expires_at,
     approvedAt: row.approved_at ?? null,
   }

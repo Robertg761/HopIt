@@ -33,6 +33,26 @@ export function offlineAgentStatus(reason = 'Start the local HopIt agent status 
     remotePullEnabled: false,
     remotePullMode: 'Disabled',
     remotePullCadence: 'No remote pull',
+    remotePush: {
+      enabled: false,
+      state: 'disabled',
+      connectionState: 'disabled',
+      fallbackState: 'disabled',
+      safeRefreshOnly: false,
+      hubUrl: null,
+      reconciliationCadence: 'No safety check',
+      lastConnected: 'Unavailable',
+      lastDisconnected: 'Unavailable',
+      lastFallbackCheck: 'Unavailable',
+      lastApplied: 'Unavailable',
+      lastSkipped: 'Unavailable',
+      lastFailed: 'Unavailable',
+      lastEventId: null,
+      lastPushedRevision: null,
+      lastAppliedRevision: null,
+      lastSkippedReason: null,
+      lastError: null,
+    },
     workspaceHydrationState: 'Unavailable',
     workspaceMaterializedRevision: null,
     workspaceIndexPath: null,
@@ -55,4 +75,3 @@ export function offlineAgentStatus(reason = 'Start the local HopIt agent status 
     unavailableReason: reason,
   }
 }
-

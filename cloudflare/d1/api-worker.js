@@ -1,4 +1,5 @@
 import { CodebasePushHub, normalizeRemoteUpdateEnvelope } from './push-hub.js'
+import { assertScopedSessionStatementAllowed } from './scoped-sql.js'
 
 function json(payload, status = 200) {
   return new Response(JSON.stringify(payload), {
@@ -27,13 +28,18 @@ const failedAuthBuckets = new Map()
 const failedAuthWindowMs = 5 * 60 * 1000
 const failedAuthLimit = 20
 
-async function executeStatement(db, statement) {
+function prepareStatement(db, statement) {
   if (!statement || typeof statement.sql !== 'string' || statement.sql.trim() === '') {
     throw new Error('Expected a non-empty SQL statement.')
   }
   const params = Array.isArray(statement.params) ? statement.params : []
-  const startedAt = Date.now()
-  const executed = await db.prepare(statement.sql).bind(...params).all()
+  return db.prepare(statement.sql).bind(...params)
+}
+
+function statementResult(executed, startedAt) {
+  if (executed?.success === false) {
+    throw new Error(executed.error ?? executed.meta?.error ?? 'D1 statement failed.')
+  }
   return {
     results: executed.results ?? [],
     success: true,
@@ -42,6 +48,24 @@ async function executeStatement(db, statement) {
       duration: executed.meta?.duration ?? Math.max(0, Date.now() - startedAt),
     },
   }
+}
+
+async function executeStatements(db, statements) {
+  const startedAt = Date.now()
+  const prepared = statements.map((statement) => prepareStatement(db, statement))
+  if (statements.length > 1 && typeof db.batch === 'function') {
+    const executed = await db.batch(prepared)
+    if (!Array.isArray(executed) || executed.length !== statements.length) {
+      throw new Error('D1 batch returned an unexpected result count.')
+    }
+    return executed.map((result) => statementResult(result, startedAt))
+  }
+
+  const results = []
+  for (const statement of prepared) {
+    results.push(statementResult(await statement.all(), startedAt))
+  }
+  return results
 }
 
 async function authorizeRequest(request, env, statements, options = {}) {
@@ -62,11 +86,157 @@ async function authorizeRequest(request, env, statements, options = {}) {
     throw new Error('Agent session is not scoped to the requested codebase.')
   }
 
-  for (const statement of statements) {
-    assertScopedSessionStatementAllowed(session, statement)
-  }
+  const statementPolicies = statements.map((statement) => assertScopedSessionStatementAllowed(session, statement))
+  assertScopedMutationBatch(statementPolicies)
+  const needsFileAccess = statementPolicies.some((policy) => policy.resultVisibility || policy.fileMutation || policy.journalHead)
+  const fileAccess = needsFileAccess
+    ? await readScopedFileAccess(env.HOPIT_D1_DB, session)
+    : null
+  assertScopedMutationAccess(statementPolicies, fileAccess)
 
-  return { kind: 'session', session }
+  return { kind: 'session', session, statementPolicies, fileAccess }
+}
+
+async function readScopedFileAccess(db, session) {
+  const result = await db.prepare(
+    `select c.owner_id, c.selected_state_json, c.visibility_json,
+      m.role as member_role, m.status as member_status
+    from codebases c
+    left join codebase_members m on m.codebase_id = c.codebase_id and m.user_id = ?
+    where c.codebase_id = ?
+    limit 1`,
+  ).bind(session.user_id, session.codebase_id).all()
+  const row = result.results?.[0]
+  if (!row) return null
+  const selectedState = parseJson(row.selected_state_json, {})
+  const visibility = parseJson(row.visibility_json, {})
+  return {
+    codebaseId: session.codebase_id,
+    isOwner: Boolean(session.user_id && session.user_id === row.owner_id),
+    isActiveMember: row.member_status === 'active' && ['owner', 'maintainer', 'member', 'viewer'].includes(row.member_role),
+    selectedStateType: selectedState?.type ?? null,
+    selectedStateId: selectedState?.id ?? null,
+    selectedStateMergeState: selectedState?.mergeState ?? null,
+    effectiveVisibility: selectedState?.effectiveVisibility ?? visibility?.effective ?? 'private',
+  }
+}
+
+function assertScopedMutationBatch(policies) {
+  const journalHeads = policies.filter((policy) => policy.journalHead)
+  const guardedMutations = policies.filter((policy) => policy.fileMutation?.knownGuarded)
+  if (journalHeads.length === 0 && guardedMutations.length === 0) return
+  if (journalHeads.length !== 1) {
+    throw new Error('Scoped journal mutations require exactly one guarded codebase head update.')
+  }
+  const fileMutations = guardedMutations.filter((policy) => policy.fileMutation.table === 'files')
+  if (fileMutations.length === 0) {
+    throw new Error('Scoped journal mutations require at least one guarded file operation.')
+  }
+  if (policies.some((policy) => policy.fileMutation && !policy.fileMutation.knownGuarded)) {
+    throw new Error('Scoped journal batches cannot mix guarded and generic file operations.')
+  }
+  const filePaths = new Set(fileMutations.map((policy) => policy.fileMutation.path))
+  for (const policy of guardedMutations) {
+    const mutation = policy.fileMutation
+    if (!mutation.path) throw new Error('Scoped journal mutations require a bound file path.')
+    if (mutation.table === 'file_versions' && !filePaths.has(mutation.path)) {
+      throw new Error('Scoped journal history must match a guarded file operation in the same batch.')
+    }
+  }
+}
+
+function assertScopedMutationAccess(policies, access) {
+  const mutations = policies.filter((policy) => policy.fileMutation || policy.journalHead)
+  if (mutations.length === 0) return
+  if (!access) throw new Error('Scoped file mutation access could not be verified.')
+  if (policies.some((policy) => policy.journalHead)) {
+    if (access.selectedStateType !== 'active-change-set' || !access.selectedStateId) {
+      throw new Error('Scoped journal mutations require a selected active change set.')
+    }
+    if (access.selectedStateMergeState !== 'unmerged') {
+      throw new Error('Scoped journal mutations require an unmerged change set.')
+    }
+  }
+  if (access.isOwner) return
+  if (!access.isActiveMember) {
+    throw new Error('Scoped file mutations require an active codebase membership.')
+  }
+  if (access.selectedStateType !== 'active-change-set'
+    || (access.effectiveVisibility !== 'team-visible' && access.effectiveVisibility !== 'review-visible')) {
+    throw new Error('Scoped collaborators cannot mutate a private active change set.')
+  }
+  for (const policy of policies) {
+    const mutation = policy.fileMutation
+    if (!mutation) continue
+    if (!mutation.knownGuarded) {
+      throw new Error('Scoped collaborators can only use guarded journal file operations.')
+    }
+    if (!mutation.path || ownerPrivatePath(mutation.path)) {
+      throw new Error('Scoped collaborators cannot mutate owner-private paths.')
+    }
+  }
+}
+
+async function enforceScopedResultVisibility(db, results, authorization) {
+  if (authorization.kind !== 'session') return results
+  const policies = authorization.statementPolicies ?? []
+  const access = authorization.fileAccess
+  const filtered = []
+  for (let index = 0; index < results.length; index += 1) {
+    const result = results[index]
+    const policy = policies[index]
+    if (!policy?.resultVisibility) {
+      filtered.push(result)
+      continue
+    }
+    if (policy.resultVisibility === 'file' || policy.resultVisibility === 'file-version') {
+      filtered.push({
+        ...result,
+        results: (result.results ?? []).filter((row) => scopedFileRowVisible(access, row)),
+      })
+      continue
+    }
+    if (policy.resultVisibility === 'file-blob') {
+      const blobVisible = await scopedBlobVisible(db, access, policy.blobHash)
+      filtered.push({ ...result, results: blobVisible ? (result.results ?? []) : [] })
+      continue
+    }
+    filtered.push({ ...result, results: [] })
+  }
+  return filtered
+}
+
+function scopedFileRowVisible(access, row) {
+  if (!access) return false
+  if (access.isOwner) return true
+  if (!access.isActiveMember) return false
+  if (access.selectedStateType !== 'main'
+    && access.effectiveVisibility !== 'team-visible'
+    && access.effectiveVisibility !== 'review-visible') return false
+  return !ownerPrivatePath(row?.path) && row?.scope !== 'owner-private'
+}
+
+async function scopedBlobVisible(db, access, blobHash) {
+  if (!access || !blobHash) return false
+  if (access.isOwner) return true
+  if (!access.isActiveMember) return false
+  if (access.selectedStateType !== 'main'
+    && access.effectiveVisibility !== 'team-visible'
+    && access.effectiveVisibility !== 'review-visible') return false
+  const result = await db.prepare(
+    `select path, scope from files
+    where codebase_id = ? and (blob_hash = ? or hash = ?)
+    limit 20`,
+  ).bind(access.codebaseId, blobHash, blobHash).all()
+  return (result.results ?? []).some((row) => scopedFileRowVisible(access, row))
+}
+
+function ownerPrivatePath(value) {
+  const normalized = String(value ?? '').replace(/\\/g, '/').replace(/^\.\//, '')
+  return normalized === '.private'
+    || normalized.startsWith('.private/')
+    || normalized === '.git'
+    || normalized.startsWith('.git/')
 }
 
 function bearerTokenFromRequest(request) {
@@ -111,48 +281,6 @@ async function hashAgentSessionToken(token) {
   return `sha256:${Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, '0')).join('')}`
 }
 
-function assertScopedSessionStatementAllowed(session, statement) {
-  const sql = statement?.sql
-  if (typeof sql !== 'string') throw new Error('Expected a SQL statement.')
-  const normalized = sql.trim().replace(/\s+/g, ' ').toLowerCase()
-  if (!/^(select|insert|update|delete)\b/.test(normalized)) {
-    throw new Error('Scoped agent sessions cannot run schema or administrative SQL.')
-  }
-
-  const requiredCapability = requiredCapabilityForStatement(normalized)
-  if (!agentSessionHasCapability(session, requiredCapability)) {
-    throw new Error(`Agent session does not have ${requiredCapability} capability.`)
-  }
-
-  if (!statementIsScopedToCodebase(normalized, statement.params, session.codebase_id)) {
-    throw new Error('Scoped agent session SQL must be constrained to its codebase.')
-  }
-}
-
-function requiredCapabilityForStatement(normalizedSql) {
-  if (/^select\b/.test(normalizedSql)) return 'read'
-  if (touchesAdminTable(normalizedSql)) return 'admin'
-  return 'write'
-}
-
-function touchesAdminTable(normalizedSql) {
-  return /\b(codebase_members|codebase_invitations|agent_sessions|device_keys|user_keyrings|codebase_keyrings|wrapped_keys|key_audit_events|users)\b/.test(normalizedSql)
-}
-
-function statementIsScopedToCodebase(normalizedSql, params, codebaseId) {
-  if (!codebaseId) return false
-  if (!touchesCodebaseScopedTable(normalizedSql)) return false
-  return Array.isArray(params) && params.includes(codebaseId)
-}
-
-function touchesCodebaseScopedTable(normalizedSql) {
-  return /\b(codebases|files|file_versions|file_blobs|agent_events|action_jobs|collaboration_counters|issues|issue_comments|projects|project_items|discussions|discussion_comments|releases|release_assets|review_threads|review_thread_comments|review_decisions|notifications|codebase_members|codebase_invitations|agent_sessions|codebase_keyrings|wrapped_keys|key_audit_events)\b/.test(normalizedSql)
-}
-
-function agentSessionHasCapability(session, capability) {
-  const capabilities = parseJson(session.capabilities_json, [])
-  return Array.isArray(capabilities) && (capabilities.includes('admin') || capabilities.includes(capability))
-}
 
 function parseJson(value, fallback) {
   try {
@@ -318,10 +446,8 @@ const worker = {
     }
 
     try {
-      const result = []
-      for (const statement of statements) {
-        result.push(await executeStatement(env.HOPIT_D1_DB, statement))
-      }
+      const executed = await executeStatements(env.HOPIT_D1_DB, statements)
+      const result = await enforceScopedResultVisibility(env.HOPIT_D1_DB, executed, authorization)
       await notifyPushHubAfterMutation({ request, env, statements, authorization })
       const response = json({
         success: true,

@@ -116,13 +116,106 @@ describe('mapAgentStatusResponse', () => {
     expect(status.requester.permissions).toContain('manage_members')
     expect(status.workspaceMaterializedRevision).toBe(11)
     expect(status.remoteBehindByRevisions).toBe(1)
-    expect(status.remotePullCadence).toBe('5 min cooldown')
+    expect(status.remotePullCadence).toBe('5 min safety check')
     expect(status.events[0]).toMatchObject({
       id: 'event-1',
       label: 'agent.sync.started',
       detail: 'Triggered by manual',
       tone: 'syncing',
     })
+  })
+
+  it('normalizes push connection, fallback, skipped, error, and applied revision state', () => {
+    const status = mapAgentStatusResponse({
+      capabilities: {
+        backend: 'local-agent',
+        commands: true,
+      },
+      status: {
+        ok: true,
+        generatedAt: '2026-07-03T12:00:00.000Z',
+        codebaseName: 'HopIt Push',
+        conflict: {
+          state: 'none',
+        },
+        remotePush: {
+          enabled: true,
+          state: 'push-skipped',
+          connectionState: 'connected',
+          fallbackState: 'available',
+          safeRefreshOnly: true,
+          hubUrl: 'https://push.example.test/events',
+          reconciliationIntervalMs: 300000,
+          lastConnected: {
+            at: '2026-07-03T11:59:55.000Z',
+          },
+          lastFallbackPolling: {
+            at: '2026-07-03T11:58:00.000Z',
+          },
+          lastApplied: {
+            at: '2026-07-03T11:57:00.000Z',
+            detail: {
+              toRevision: 41,
+            },
+          },
+          lastSkipped: {
+            at: '2026-07-03T11:59:58.000Z',
+            detail: {
+              reason: 'workspace_has_unjournaled_changes',
+            },
+          },
+          lastFailed: {
+            at: '2026-07-03T11:56:00.000Z',
+          },
+          lastEventId: 'push-event-42',
+          lastPushedRevision: 42,
+          lastAppliedRevision: 41,
+          lastSkippedReason: 'workspace_has_unjournaled_changes',
+          lastError: 'workspace_has_unjournaled_changes',
+        },
+      },
+    })
+
+    expect(status.remotePush).toEqual({
+      enabled: true,
+      state: 'push-skipped',
+      connectionState: 'connected',
+      fallbackState: 'available',
+      safeRefreshOnly: true,
+      hubUrl: 'https://push.example.test/events',
+      reconciliationCadence: '5 min safety check',
+      lastConnected: '5 sec ago',
+      lastDisconnected: 'Unavailable',
+      lastFallbackCheck: '2 min ago',
+      lastApplied: '3 min ago',
+      lastSkipped: 'now',
+      lastFailed: '4 min ago',
+      lastEventId: 'push-event-42',
+      lastPushedRevision: 42,
+      lastAppliedRevision: 41,
+      lastSkippedReason: 'workspace_has_unjournaled_changes',
+      lastError: 'workspace_has_unjournaled_changes',
+    })
+  })
+
+  it('treats detected conflicts as blocked instead of reporting the agent online', () => {
+    const status = mapAgentStatusResponse({
+      capabilities: {
+        backend: 'local-agent',
+        commands: true,
+      },
+      status: {
+        ok: true,
+        codebaseName: 'HopIt Conflict',
+        conflict: {
+          state: 'detected',
+        },
+      },
+    })
+
+    expect(status.state).toBe('blocked')
+    expect(status.cacheState).toBe('blocked')
+    expect(status.healthLabel).toBe('Needs attention')
   })
 
   it('normalizes a hosted D1 status payload with graph data', () => {

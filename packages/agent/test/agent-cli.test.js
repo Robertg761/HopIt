@@ -69,6 +69,7 @@ async function makeProductionTwoDeviceState() {
       workspace: path.join(workspaceRoot, codebaseId),
       journal: path.join(stateRoot, 'journal', `${codebaseId}.ndjson`),
       events: path.join(stateRoot, 'events', `${codebaseId}.ndjson`),
+      requesterId: 'user_demo_owner',
       sessionId,
       deviceName,
     }
@@ -181,6 +182,8 @@ function productionProfileArgs(device, extraArgs = []) {
     '--cloud',
     device.cloud,
     '--allow-local-cloud',
+    '--requester-id',
+    device.requesterId,
     '--session-id',
     device.sessionId,
     '--device-name',
@@ -4273,6 +4276,7 @@ test('setup browser authorization polls and decrypts a device-bound session toke
       status: 'approved',
       authorizationId,
       codebaseId: 'setup-auth-core',
+      requesterId: 'user_setup_collaborator',
       sessionId: 'session_setup_auth',
       apiBaseUrl: 'https://agent-api.example.test',
       tokenContext,
@@ -4288,8 +4292,10 @@ test('setup browser authorization polls and decrypts a device-bound session toke
     openBrowser: false,
   })
   assert.equal(connection.codebaseId, 'setup-auth-core')
+  assert.equal(connection.requesterId, 'user_setup_collaborator')
   assert.equal(connection.sessionId, 'session_setup_auth')
   assert.equal(connection.sessionToken, sessionToken)
   assert.equal(connection.apiBaseUrl, 'https://agent-api.example.test')
+  assert.equal(connection.remotePushUrl, 'wss://agent-api.example.test/events')
   assert.equal(polls, 2)
 })

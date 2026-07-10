@@ -8,6 +8,7 @@ import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
+import { useWorkspace } from '@/components/workspace/workspace-provider'
 import { useToast } from '@/hooks/use-toast'
 import { saveCodebaseFile } from './files-api'
 
@@ -23,6 +24,7 @@ export function NewFileDialog({
   onCreated: (path: string) => void
 }) {
   const { toast } = useToast()
+  const { status } = useWorkspace()
   const [path, setPath] = React.useState('')
   const [content, setContent] = React.useState('')
   const [busy, setBusy] = React.useState(false)
@@ -37,9 +39,10 @@ export function NewFileDialog({
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
     const trimmed = path.trim().replace(/^\/+/, '')
-    if (!trimmed || !codebaseId || busy) return
+    const selectedStateId = status.activeChangeSetId === 'None' ? null : status.activeChangeSetId
+    if (!trimmed || !codebaseId || !selectedStateId || busy) return
     setBusy(true)
-    const result = await saveCodebaseFile({ codebaseId, path: trimmed, content })
+    const result = await saveCodebaseFile({ codebaseId, path: trimmed, content, selectedStateId })
     setBusy(false)
     if (result.ok) {
       toast({ title: 'File created', description: trimmed })
@@ -84,7 +87,10 @@ export function NewFileDialog({
           <Button type="button" variant="ghost" onClick={() => onOpenChange(false)} disabled={busy}>
             Cancel
           </Button>
-          <Button type="submit" disabled={busy || !path.trim() || !codebaseId}>
+          <Button
+            type="submit"
+            disabled={busy || !path.trim() || !codebaseId || status.activeChangeSetId === 'None'}
+          >
             {busy ? <Spinner className="size-3.5 text-primary-foreground" /> : null}
             {busy ? 'Creating…' : 'Create file'}
           </Button>

@@ -14,6 +14,13 @@ import { summarizeAccessContext, normalizeEmail, normalizeCodebaseName, normaliz
 const maxNotInBoundPaths = 90
 const defaultJournalCommitChunkSize = 40
 
+function allocateCodebaseId(name) {
+  // Codebase ids are global D1 tenant keys. Keep the human-readable name while
+  // adding a full UUID so two accounts can safely choose the same common name.
+  const slug = slugifyCodebaseId(name).slice(0, 44)
+  return normalizeNewCodebaseId(`${slug}-${randomUUID()}`)
+}
+
 export function attachGraphMethods(Backend) {
   defineBackendMethods(Backend, {
   async exists(codebaseId = this.codebaseId) {
@@ -249,15 +256,36 @@ export function attachGraphMethods(Backend) {
   },
 
   applyJournalEntry(cloud, entry, options = {}) {
-    return applyJournalEntryToCloud(cloud, entry, options)
+    assertWritableSelectedState(cloud, entry)
+    const main = cloud.main ? structuredClone(cloud.main) : null
+    const acknowledgement = applyJournalEntryToCloud(cloud, entry, options)
+
+    // Journaled writes belong to the selected active change set. Main is an
+    // accepted snapshot and must only move through the explicit merge flow.
+    if (main) cloud.main = main
+
+    return {
+      id: entry.id,
+      ...acknowledgement,
+      selectedStateType: cloud.selectedState?.type ?? null,
+      selectedStateId: cloud.selectedState?.id ?? null,
+      selectedStateRevision: cloud.selectedState?.revision ?? null,
+    }
   },
 
   async commitJournalEntry(cloud, entry, options = {}) {
     await this.ensureSchema()
     const previousRevision = integerOrNull(cloud?.revision) ?? 0
+    const previousSelectedState = structuredClone(cloud?.selectedState ?? {})
+    const previousMain = structuredClone(cloud?.main ?? {})
     const previousFile = cloneFileEntry(cloud?.files?.[entry.path] ?? null)
-    const acknowledgement = this.applyJournalEntry(cloud, entry, options)
-    const normalized = normalizeGraph(cloud)
+    // A failed compare-and-swap must not leak its speculative mutation back to
+    // recovery code. Recovery records conflicts on the caller's graph and may
+    // persist that graph, so only publish the working copy after D1 confirms
+    // the guarded batch committed.
+    const workingCloud = structuredClone(cloud)
+    const acknowledgement = this.applyJournalEntry(workingCloud, entry, options)
+    const normalized = normalizeGraph(workingCloud)
     const codebaseId = normalized.codebase.id
     const now = options.now ?? new Date().toISOString()
     const nextRevision = integerOrNull(normalized.revision) ?? previousRevision
@@ -267,7 +295,7 @@ export function attachGraphMethods(Backend) {
     this.codebaseId = codebaseId
     this.location = `d1:${this.config.databaseId}:${codebaseId}`
 
-    const guard = { codebaseId, revision: nextRevision, updatedAt: now }
+    const guard = { codebaseId, revision: nextRevision, updatedAt: mutationGuardTimestamp(now) }
     const headStatement = [
       `update codebases set
         revision = ?,
@@ -276,16 +304,19 @@ export function attachGraphMethods(Backend) {
         file_count = ?,
         private_file_count = ?,
         updated_at = ?
-      where codebase_id = ? and revision = ?`,
+      where codebase_id = ? and revision = ?
+        and selected_state_json = ? and main_json = ?`,
       [
         nextRevision,
         stringifyJson(normalized.selectedState),
         stringifyJson(normalized.main),
         fileCount,
         privateFileCount,
-        now,
+        guard.updatedAt,
         codebaseId,
         previousRevision,
+        stringifyJson(previousSelectedState),
+        stringifyJson(previousMain),
       ],
     ]
 
@@ -305,18 +336,35 @@ export function attachGraphMethods(Backend) {
         : upsertFileStatement(codebaseId, entry.path, normalized.files[entry.path], nextRevision, now, guard),
     ]
     if (versionRow) statements.push(insertFileVersionStatement(versionRow, guard))
+    if (options.event) {
+      statements.push(guardedAgentEventStatement({
+        codebaseId,
+        event: options.event.event,
+        detail: {
+          ...(options.event.detail ?? {}),
+          revision: acknowledgement.revision,
+          selectedStateId: acknowledgement.selectedStateId,
+          selectedStateRevision: acknowledgement.selectedStateRevision,
+        },
+        at: options.event.at ?? now,
+        source: options.event.source ?? 'local-agent',
+      }, guard))
+    }
     const results = await this.queryBatch(statements.map(([sql, params]) => ({ sql, params })))
     const changedRows = changedRowCount(results[0])
     if (changedRows === 0) {
+      const currentHead = await this.readGraphHead(codebaseId).catch(() => null)
       throw createSelectedStateRevisionConflict(options.ConflictError, {
         entry,
-        cloud: normalized,
+        cloud: currentHead ?? cloud,
         expectedRevision: previousRevision,
       })
     }
     if (!Number.isInteger(changedRows)) {
       throw new Error('D1 guarded journal commit did not report changed rows.')
     }
+
+    replaceGraphContents(cloud, normalized)
 
     return {
       ...acknowledgement,
@@ -557,7 +605,9 @@ export function attachGraphMethods(Backend) {
     await this.ensureSchema()
     const now = new Date().toISOString()
     const normalizedName = normalizeCodebaseName(name)
-    const id = normalizeNewCodebaseId(codebaseId ?? slugifyCodebaseId(normalizedName))
+    const id = codebaseId === undefined || codebaseId === null
+      ? allocateCodebaseId(normalizedName)
+      : normalizeNewCodebaseId(codebaseId)
     if (await this.readOptionalGraph(id)) throw new Error(`Codebase ${id} already exists.`)
     const ownerId = stringOrNull(actor.userId) ?? 'local-owner'
     const ownerEmail = stringOrNull(actor.primaryEmail)
@@ -717,48 +767,121 @@ export function attachGraphMethods(Backend) {
       size: file.size ?? byteLength(file.content ?? ''),
       scope: file.scope ?? scopeForPath(path),
       updatedAt: file.updatedAt ?? null,
+      selectedStateId: graph.selectedState?.id ?? null,
+      selectedStateRevision: graph.selectedState?.revision ?? null,
     }
   },
 
-  async mutateTextFile({ codebaseId, path, content, baseRevision, actor = {} }) {
+  async mutateTextFile({ codebaseId, path, content, baseRevision, selectedStateId, actor = {} }) {
     assertSafeGraphPath(path)
-    const graph = await this.readGraph(codebaseId)
-    const access = await this.readAccessContext(graph, actor)
-    if (!canWrite(access)) throw new Error(`User cannot edit ${codebaseId}.`)
-    if (!canRequesterSeePath(access, path)) throw new Error(`File ${path} is not visible.`)
-    const existing = graph.files[path] ?? null
-    const actualRevision = existing?.revision ?? null
-    if (baseRevision !== undefined && baseRevision !== actualRevision) {
-      throw new Error(`base_revision_mismatch: expected ${baseRevision}, got ${actualRevision}`)
+    let expectedFileRevision = baseRevision
+
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const graph = await this.readGraph(codebaseId)
+      const access = await this.readAccessContext(graph, actor)
+      if (!canWrite(access)) throw new Error(`User cannot edit ${codebaseId}.`)
+      if (!canRequesterSeePath(access, path)) throw new Error(`File ${path} is not visible.`)
+      assertWritableSelectedState(graph)
+      if (selectedStateId !== undefined && selectedStateId !== graph.selectedState.id) {
+        throw new D1FileMutationError(
+          'selected_state_id_mismatch',
+          `selected_state_id_mismatch: expected ${selectedStateId}, got ${graph.selectedState.id}`,
+          {
+            expectedId: selectedStateId,
+            actualId: graph.selectedState.id,
+            selectedStateRevision: graph.selectedState.revision ?? null,
+          },
+        )
+      }
+
+      const existing = graph.files[path] ?? null
+      const actualRevision = existing?.revision ?? null
+      if (expectedFileRevision === undefined) expectedFileRevision = actualRevision
+      if (expectedFileRevision !== actualRevision) {
+        throw new D1FileMutationError(
+          'base_revision_mismatch',
+          `base_revision_mismatch: expected ${expectedFileRevision}, got ${actualRevision}`,
+          {
+            path,
+            expectedRevision: expectedFileRevision,
+            actualRevision,
+            selectedStateId: graph.selectedState?.id ?? null,
+            selectedStateRevision: graph.selectedState?.revision ?? null,
+          },
+        )
+      }
+      if (existing?.contentStorage === 'object-blob') {
+        throw new D1FileMutationError(
+          'object_blob_upload_required',
+          `object_blob_upload_required: Browser editing cannot replace object-backed file ${path} until the server can upload its new blob first. Edit it through the HopIt agent instead.`,
+          {
+            path,
+            contentStorage: existing.contentStorage,
+            blobProvider: existing.blobProvider ?? null,
+            blobKey: existing.blobKey ?? null,
+          },
+        )
+      }
+
+      const now = new Date().toISOString()
+      const hash = hashText(content)
+      const entry = {
+        id: randomUUID(),
+        type: existing ? 'write' : 'create',
+        path,
+        kind: 'file',
+        scope: scopeForPath(path),
+        privacyZone: privacyZoneForPath(path),
+        hash,
+        bytes: byteLength(content),
+        encoding: 'utf8',
+        baseRevision: expectedFileRevision,
+        targetStateType: graph.selectedState.type,
+        targetStateId: selectedStateId ?? graph.selectedState.id,
+        targetStateRevision: graph.selectedState.revision,
+        actorUserId: actor.userId ?? null,
+        sessionId: actor.sessionId ?? null,
+        createdAt: now,
+        status: 'pending',
+      }
+
+      try {
+        const acknowledgement = await this.commitJournalEntry(graph, entry, {
+          entry: {
+            kind: 'file',
+            content,
+            encoding: 'utf8',
+            contentStorage: 'inline',
+            hash,
+            size: byteLength(content),
+          },
+          now,
+          event: {
+            event: 'file.mutated',
+            detail: {
+              path,
+              updatedBy: actor.userId ?? null,
+            },
+            at: now,
+            source: 'browser',
+          },
+        })
+        return {
+          ok: true,
+          codebaseId,
+          path,
+          revision: acknowledgement.revision,
+          selectedStateId: acknowledgement.selectedStateId,
+          selectedStateRevision: acknowledgement.selectedStateRevision,
+          file: graph.files[path],
+        }
+      } catch (error) {
+        if (attempt < 2 && isSelectedStateHeadConflict(error)) continue
+        throw error
+      }
     }
-    const now = new Date().toISOString()
-    graph.revision += 1
-    graph.main.revision = graph.revision
-    graph.files[path] = normalizeFileEntry(path, {
-      kind: 'file',
-      content,
-      encoding: 'utf8',
-      contentStorage: 'inline',
-      hash: hashText(content),
-      size: byteLength(content),
-      revision: graph.revision,
-      updatedAt: now,
-    }, graph.revision, now)
-    await this.writeGraph(graph, { actor })
-    await this.appendEvent({
-      codebaseId,
-      event: 'file.mutated',
-      detail: { path, revision: graph.revision, updatedBy: actor.userId ?? null },
-      at: now,
-      source: 'browser',
-    })
-    return {
-      ok: true,
-      codebaseId,
-      path,
-      revision: graph.revision,
-      file: graph.files[path],
-    }
+
+    throw new Error(`Could not edit ${path} because the selected change set kept moving.`)
   },
 
   async upsertFile(codebaseId, filePath, file, graphRevision, now = new Date().toISOString()) {
@@ -822,6 +945,8 @@ function upsertFileStatement(codebaseId, filePath, file, graphRevision, now = ne
 
 async function commitJournalEntryChunk(backend, cloud, entries, options = {}) {
   const previousRevision = integerOrNull(cloud?.revision) ?? 0
+  const previousSelectedState = structuredClone(cloud?.selectedState ?? {})
+  const previousMain = structuredClone(cloud?.main ?? {})
   const workingCloud = structuredClone(cloud)
   const now = options.now ?? new Date().toISOString()
   const acknowledgements = []
@@ -865,7 +990,7 @@ async function commitJournalEntryChunk(backend, cloud, entries, options = {}) {
   backend.codebaseId = codebaseId
   backend.location = `d1:${backend.config.databaseId}:${codebaseId}`
 
-  const guard = { codebaseId, revision: nextRevision, updatedAt: now }
+  const guard = { codebaseId, revision: nextRevision, updatedAt: mutationGuardTimestamp(now) }
   const headStatement = [
     `update codebases set
       revision = ?,
@@ -874,16 +999,19 @@ async function commitJournalEntryChunk(backend, cloud, entries, options = {}) {
       file_count = ?,
       private_file_count = ?,
       updated_at = ?
-    where codebase_id = ? and revision = ?`,
+    where codebase_id = ? and revision = ?
+      and selected_state_json = ? and main_json = ?`,
     [
       nextRevision,
       stringifyJson(normalized.selectedState),
       stringifyJson(normalized.main),
       fileCount,
       privateFileCount,
-      now,
+      guard.updatedAt,
       codebaseId,
       previousRevision,
+      stringifyJson(previousSelectedState),
+      stringifyJson(previousMain),
     ],
   ]
 
@@ -1002,6 +1130,21 @@ function insertFileVersionStatement(row, guard = null) {
   ]
 }
 
+function guardedAgentEventStatement(event, guard) {
+  const params = [
+    event.codebaseId,
+    event.event,
+    stringifyJson(event.detail ?? {}),
+    event.at,
+    event.source,
+  ]
+  return [
+    `insert into agent_events (codebase_id, event, detail_json, at, source)
+      ${guardedValuesSql(params.length, guard)}`,
+    guardedParams(params, guard),
+  ]
+}
+
 function guardedValuesSql(valueCount, guard) {
   const placeholders = Array.from({ length: valueCount }, () => '?').join(', ')
   if (!guard) return `values (${placeholders})`
@@ -1054,6 +1197,78 @@ function journalActor(entry, cloud) {
 
 function cloneFileEntry(file) {
   return file ? structuredClone(file) : null
+}
+
+function assertWritableSelectedState(cloud, entry = {}) {
+  const selectedState = cloud?.selectedState
+  if (selectedState?.type !== 'active-change-set' || !selectedState.id) {
+    throw new D1FileMutationError(
+      'selected_state_not_writable',
+      'selected_state_not_writable: File mutations require a selected active change set.',
+      {
+        selectedStateType: selectedState?.type ?? null,
+        selectedStateId: selectedState?.id ?? null,
+      },
+    )
+  }
+  if (selectedState.mergeState === 'merged') {
+    throw new D1FileMutationError(
+      'selected_state_already_merged',
+      `selected_state_already_merged: Change set ${selectedState.id} is already merged and cannot accept file mutations.`,
+      {
+        selectedStateType: selectedState.type,
+        selectedStateId: selectedState.id,
+        selectedStateRevision: selectedState.revision ?? null,
+      },
+    )
+  }
+  if (entry.targetStateType !== undefined && entry.targetStateType !== selectedState.type) {
+    throw new D1FileMutationError(
+      'selected_state_type_mismatch',
+      `selected_state_type_mismatch: expected ${entry.targetStateType}, got ${selectedState.type}`,
+      {
+        expectedType: entry.targetStateType,
+        actualType: selectedState.type,
+        selectedStateId: selectedState.id,
+        selectedStateRevision: selectedState.revision ?? null,
+      },
+    )
+  }
+  if (entry.targetStateId !== undefined && entry.targetStateId !== selectedState.id) {
+    throw new D1FileMutationError(
+      'selected_state_id_mismatch',
+      `selected_state_id_mismatch: expected ${entry.targetStateId}, got ${selectedState.id}`,
+      {
+        expectedId: entry.targetStateId,
+        actualId: selectedState.id,
+        selectedStateRevision: selectedState.revision ?? null,
+      },
+    )
+  }
+}
+
+function isSelectedStateHeadConflict(error) {
+  return error?.detail?.reason === 'selected_state_revision_mismatch' ||
+    /^selected_state_revision_mismatch:/.test(error instanceof Error ? error.message : '')
+}
+
+function mutationGuardTimestamp(now) {
+  const match = /^(.+?)(?:\.(\d+))?Z$/.exec(String(now ?? ''))
+  const base = match?.[1] ?? new Date(now).toISOString().replace(/\.\d{3}Z$/, '')
+  const milliseconds = (match?.[2] ?? '000').padEnd(3, '0').slice(0, 3)
+  const entropy = (BigInt(`0x${randomBytes(8).toString('hex')}`) % 1_000_000_000_000n)
+    .toString()
+    .padStart(12, '0')
+  return `${base}.${milliseconds}${entropy}Z`
+}
+
+class D1FileMutationError extends Error {
+  constructor(code, message, detail = {}) {
+    super(message)
+    this.name = 'FileMutationError'
+    this.code = code
+    this.detail = { reason: code, ...detail }
+  }
 }
 
 class D1ConflictError extends Error {

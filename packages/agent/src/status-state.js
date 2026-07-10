@@ -90,6 +90,9 @@ export async function readAgentState(options) {
     lastRemotePushSkipped,
     lastRemotePushFailed,
     latestRemotePushEvent,
+    lastRemotePullApplied,
+    lastRemotePullSkipped,
+    lastRemotePullFailed,
   })
   const latestRefreshEvent = findLastEventOf(eventEntries, [
     'refresh.started',
@@ -749,7 +752,9 @@ export function buildWatchHealth(watchEvents) {
 }
 
 export function buildRemotePullHealth(options, remotePullEvents) {
-  const enabled = remotePullEnabled(options)
+  const activityTriggersEnabled = remotePullEnabled(options)
+  const pushReconciliationEnabled = remotePushEnabled(options)
+  const enabled = activityTriggersEnabled || pushReconciliationEnabled
   const currentWatchStartedAt = remotePullEvents.lastWatchStarted?.at ?? null
   const lastRemotePullStarted = eventAtOrAfter(remotePullEvents.lastRemotePullStarted, currentWatchStartedAt)
   const lastRemotePullApplied = eventAtOrAfter(remotePullEvents.lastRemotePullApplied, currentWatchStartedAt)
@@ -773,6 +778,9 @@ export function buildRemotePullHealth(options, remotePullEvents) {
     enabled,
     state,
     intervalMs: enabled ? remoteRefreshIntervalMs(options) : null,
+    reconciliationIntervalMs: enabled ? remoteRefreshIntervalMs(options) : null,
+    activityTriggersEnabled,
+    pushReconciliationEnabled,
     safeRefreshOnly: enabled,
     lastStarted: lastRemotePullStarted,
     lastApplied: lastRemotePullApplied,
@@ -785,14 +793,57 @@ export function buildRemotePullHealth(options, remotePullEvents) {
 
 export function buildRemotePushHealth(options, remotePushEvents) {
   const enabled = remotePushEnabled(options)
-  const latestRemotePushEvent = remotePushEvents.latestRemotePushEvent ?? null
-  const latestProblem = latestEvent([
+  const lastApplied = latestEvent([
+    remotePushEvents.lastRemotePushApplied,
+    enabled ? remotePushEvents.lastRemotePullApplied : null,
+  ])
+  const lastSkipped = latestEvent([
     remotePushEvents.lastRemotePushSkipped,
+    enabled ? remotePushEvents.lastRemotePullSkipped : null,
+  ])
+  const lastFailed = latestEvent([
     remotePushEvents.lastRemotePushFailed,
+    enabled ? remotePushEvents.lastRemotePullFailed : null,
+  ])
+  const latestRemotePushEvent = latestEvent([
+    remotePushEvents.latestRemotePushEvent,
+    enabled ? remotePushEvents.lastRemotePullApplied : null,
+    enabled ? remotePushEvents.lastRemotePullSkipped : null,
+    enabled ? remotePushEvents.lastRemotePullFailed : null,
+  ])
+  const latestConnectionEvent = latestEvent([
+    remotePushEvents.lastRemotePushStarted,
+    remotePushEvents.lastRemotePushConnected,
+    remotePushEvents.lastRemotePushDisconnected,
+  ])
+  const latestProblem = latestEvent([
+    lastSkipped,
+    lastFailed,
     remotePushEvents.lastRemotePushDisconnected,
   ])
   const latestProblemIsCurrent = latestProblem && latestProblem === latestRemotePushEvent
+  const latestPushedRevisionEvent = latestEvent([
+    remotePushEvents.lastRemotePushConnected,
+    remotePushEvents.lastRemotePushDisconnected,
+    remotePushEvents.lastRemotePushFallbackPolling,
+    remotePushEvents.lastRemotePushApplied,
+    remotePushEvents.lastRemotePushSkipped,
+    remotePushEvents.lastRemotePushFailed,
+  ].filter((event) => Number.isInteger(
+    event?.detail?.pushedRevision ?? event?.detail?.lastPushedRevision,
+  )))
   let state = enabled ? 'push-disconnected' : 'disabled'
+  let connectionState = enabled ? 'disconnected' : 'disabled'
+  let fallbackState = enabled ? 'standby' : 'disabled'
+
+  if (enabled && latestConnectionEvent?.event === 'remote-push.connected') {
+    connectionState = 'connected'
+  }
+  if (enabled && latestRemotePushEvent?.event === 'remote-push.fallback_polling') {
+    fallbackState = 'checking'
+  } else if (enabled && remotePushEvents.lastRemotePushFallbackPolling) {
+    fallbackState = 'available'
+  }
 
   if (enabled && latestRemotePushEvent?.event === 'remote-push.connected') {
     state = 'push-connected'
@@ -800,32 +851,38 @@ export function buildRemotePushHealth(options, remotePushEvents) {
     state = 'push-disconnected'
   } else if (enabled && latestRemotePushEvent?.event === 'remote-push.fallback_polling') {
     state = 'push-fallback-polling'
-  } else if (enabled && latestRemotePushEvent?.event === 'remote-push.skipped') {
+  } else if (enabled && (latestRemotePushEvent?.event === 'remote-push.skipped' || latestRemotePushEvent?.event === 'remote-pull.skipped')) {
     state = 'push-skipped'
-  } else if (enabled && latestRemotePushEvent?.event === 'remote-push.applied') {
+  } else if (enabled && (latestRemotePushEvent?.event === 'remote-push.applied' || latestRemotePushEvent?.event === 'remote-pull.applied')) {
     state = 'push-applied'
-  } else if (enabled && latestRemotePushEvent?.event === 'remote-push.failed') {
+  } else if (enabled && (latestRemotePushEvent?.event === 'remote-push.failed' || latestRemotePushEvent?.event === 'remote-pull.failed')) {
     state = 'push-disconnected'
   }
 
   return {
     enabled,
     state,
+    connectionState,
+    fallbackState,
     hubUrl: enabled ? remotePushUrl(options) : null,
+    reconciliationIntervalMs: enabled ? remoteRefreshIntervalMs(options) : null,
     safeRefreshOnly: enabled,
     lastStarted: remotePushEvents.lastRemotePushStarted ?? null,
     lastConnected: remotePushEvents.lastRemotePushConnected ?? null,
     lastDisconnected: remotePushEvents.lastRemotePushDisconnected ?? null,
     lastFallbackPolling: remotePushEvents.lastRemotePushFallbackPolling ?? null,
-    lastApplied: remotePushEvents.lastRemotePushApplied ?? null,
-    lastSkipped: remotePushEvents.lastRemotePushSkipped ?? null,
-    lastFailed: remotePushEvents.lastRemotePushFailed ?? null,
+    lastApplied,
+    lastSkipped,
+    lastFailed,
     latestEvent: latestRemotePushEvent,
-    lastEventId: latestRemotePushEvent?.detail?.eventId ?? null,
-    lastPushedRevision: latestRemotePushEvent?.detail?.pushedRevision ??
-      latestRemotePushEvent?.detail?.lastPushedRevision ??
+    lastEventId: latestRemotePushEvent?.detail?.eventId ??
+      remotePushEvents.lastRemotePushApplied?.detail?.eventId ??
       null,
-    lastAppliedRevision: remotePushEvents.lastRemotePushApplied?.detail?.toRevision ?? null,
+    lastPushedRevision: latestPushedRevisionEvent?.detail?.pushedRevision ??
+      latestPushedRevisionEvent?.detail?.lastPushedRevision ??
+      null,
+    lastAppliedRevision: lastApplied?.detail?.toRevision ?? null,
+    lastSkippedReason: lastSkipped?.detail?.reason ?? null,
     lastError: latestProblemIsCurrent ? (latestProblem.detail?.reason ?? null) : null,
   }
 }

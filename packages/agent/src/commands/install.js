@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { existsSync } from 'node:fs'
 import { __filename, workspaceMode } from '../constants.js'
-import { assertWorkspacePathSafe, cloudLocationFromOptions, cloudServiceTypeFromOptions, remotePullEnabled } from '../paths.js'
+import { assertWorkspacePathSafe, cloudLocationFromOptions, cloudServiceTypeFromOptions, remotePullEnabled, remotePushEnabled } from '../paths.js'
 import { startService } from '../service.js'
 import { workspaceRootFromOptions } from '../status-state.js'
 import { agentStateRootFromOptions, readWorkspaceIndex, upsertWorkspaceIndex, workspaceIndexPath, workspaceIndexSummary } from '../workspace-index.js'
@@ -122,11 +122,14 @@ HOPIT_D1_API_BASE_URL=${options['d1-api-base-url'] ?? 'https://hopit-d1-api.<acc
 HOPIT_AGENT_STATE_ROOT=${JSON.stringify(path.resolve(agentStateRootFromOptions(options)))}
 HOPIT_WORKSPACE_ROOT=${JSON.stringify(path.resolve(workspaceRootFromOptions(options)))}
 HOPIT_WORKSPACE_INDEX=${JSON.stringify(path.resolve(workspaceIndexPath(options)))}
+HOPIT_REQUESTER_ID=${options['requester-id'] ?? 'replace-after-device-approval'}
 HOPIT_SESSION_ID=${options['session-id'] ?? `session_${codebaseId}_${os.hostname().replace(/[^a-zA-Z0-9]+/g, '_')}`}
 HOPIT_DEVICE_NAME=${JSON.stringify(options['device-name'] ?? os.hostname() ?? 'local-device')}
 HOPIT_AGENT_SESSION_TOKEN=replace-after-hop-session-register
 HOPIT_REMOTE_PULL=1
 HOPIT_REMOTE_PULL_COOLDOWN_MS=${options['remote-pull-cooldown-ms'] ?? options['remote-refresh-interval-ms'] ?? '300000'}
+HOPIT_REMOTE_PUSH=${remotePushEnabled(options) ? '1' : '0'}
+HOPIT_REMOTE_PUSH_URL=${options['remote-push-url'] ?? ''}
 `
 }
 
@@ -152,6 +155,15 @@ export async function writeLaunchAgent(options) {
   ]
   if (remotePullEnabled(options)) {
     serviceArguments.push('--remote-pull')
+  }
+  if (options['requester-id']) {
+    serviceArguments.push('--requester-id', options['requester-id'])
+  }
+  if (remotePushEnabled(options)) {
+    serviceArguments.push('--remote-push')
+  }
+  if (options['remote-push-url']) {
+    serviceArguments.push('--remote-push-url', options['remote-push-url'])
   }
   if (options['remote-pull-cooldown-ms']) {
     serviceArguments.push('--remote-pull-cooldown-ms', options['remote-pull-cooldown-ms'])

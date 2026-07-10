@@ -1,6 +1,6 @@
 # HopIt Progress Tracker
 
-Last updated: 2026-07-09
+Last updated: 2026-07-10
 
 This tracker is the working view of what is done, what is in progress, what is next, and what is still deliberately out of scope. The roadmap source remains [MVP Plan](mvp-plan.md), and the agent contract source remains [Local Agent Architecture](agent-architecture.md). This file turns those plans into a practical implementation ledger.
 
@@ -64,7 +64,7 @@ work.
 
 The installed macOS service is owned by LaunchAgent `com.hopit.agent.hopit`; it is verified with `launchctl print` plus `curl http://127.0.0.1:4785/status`. `hop service status` is still pid-file oriented and can report `running: false` for the direct launchd-owned `service run` process even when `/status` is healthy.
 
-Current production state as of 2026-07-03: HopIt uses Cloudflare D1 as the only hosted graph backend. Vercel aliases and Clerk sign-in routing are live. The D1 database `hopit` is created, schema-applied, seeded from the historical export, reachable through `hopit-d1-api.hopit-robert.workers.dev`, configured in Vercel/local env for graph/status/file/codebase/account/action-job/member/invite/work-item/session/key paths, and serving the deployed `hopit.dev` app. Local remote-pull now uses activity-gated safe refresh with a five-minute cooldown so idle services do not burn Cloudflare Worker/D1 requests.
+Current production state as of 2026-07-10: HopIt uses Cloudflare D1 as the only hosted graph backend. Vercel aliases and Clerk sign-in routing are live. The D1 database `hopit` is created, schema-applied, seeded from the historical export, reachable through `hopit-d1-api.hopit-robert.workers.dev`, configured in Vercel/local env for graph/status/file/codebase/account/action-job/member/invite/work-item/session/key paths, and serving the deployed `hopit.dev` app. The push hub is deployed and the installed personal-production service reports push enabled; the latest observed pushed revision was safely skipped because unjournaled workspace drift blocked refresh, so a successful live apply remains to be proven. Push-enabled watch/service mode now supplements socket hints with a lightweight periodic graph-head reconciliation at the configured five-minute cadence.
 
 History: the retired hosted graph export was saved to `/Users/robert/HopIt-Backups/convex/hopit-convex-prod-2026-06-30-disabled-snapshot.zip` with SHA-256 `0e83df9ab7e80a81a9a3b06e1cd3399ff5b532fa968bded3c14334640b4c9f3d`. The migration script is retained for export rehearsals; the backend code path was removed by WS1 in [Remediation Plan July 2026](remediation-plan-2026-07.md).
 
@@ -100,7 +100,7 @@ Current verified result:
 - `npm run build`: passes when rerun with network permission for Next Google Fonts fetches.
 - `npm run package:hop`: builds the current macOS artifact with env/install support files.
 - `npm run d1:migrate:convex-export -- --export /Users/robert/HopIt-Backups/convex/hopit-convex-prod-2026-06-30-disabled-snapshot.zip --codebase-id hopit`: live D1 import completed with `58` files and the latest `500` events selected from `11,638` exported events; dry-run mode is still useful for future rehearsals.
-- Installed packaged runtime: LaunchAgent `com.hopit.agent.hopit` reports activity-gated remote pull enabled with a 300000 ms cooldown and no fixed interval polling.
+- Installed packaged runtime: LaunchAgent `com.hopit.agent.hopit` reports push enabled; the latest observed pushed revision was safely blocked by local drift. The current worktree adds a 300000 ms periodic graph-head reconciliation so missed hints no longer wait for another local edit.
 - `hop keys status --profile production`: packaged runtime reports the local keyring at `/Users/robert/Library/Application Support/HopIt/Agent/keys/hopit.device.json`, mode `0600`, device key `trusted`, user keyring `active`, and user vault wrap `active`.
 - `launchctl print gui/501/com.hopit.agent.hopit` plus `curl http://127.0.0.1:4785/status`: LaunchAgent is running and the loopback status endpoint reports `service=cloudflare-d1-graph`, `cloudExists=true`, and `fileCount=58`.
 - `node --test packages/agent/test/d1-backend.test.js`: passes D1 graph sync, collaboration routes, scoped session registration/list/touch/revoke, trusted device key registration, user keyring, and wrapped user-vault key metadata.
@@ -108,6 +108,44 @@ Current verified result:
 - `curl -I https://hopit.dev/`: returns `HTTP/2 307` to `/sign-in` for signed-out users, confirming Clerk protects the dashboard.
 - Production Clerk sign-in and D1 owner claim were smoke-tested on `https://hopit.dev`; Basic Auth fallback is no longer needed for the owner handoff.
 - Google Auth Platform Audience for project `hopit-auth-prod-rg`: shows `1 user (1 test, 0 other) / 100 user cap` and the test-user row `robertgordon761@gmail.com`.
+
+## 2026-07-10 Product-Goal Hardening Proof Ledger
+
+Implemented:
+
+- Active private change sets now hide all draft files from non-owner requesters; team/review visibility exposes shared paths to authorized members/viewers, Main exposes shared paths, and `.private/` remains owner-only.
+- Browser text edits now use guarded active-change-set journal commits, preserve Main, retain concurrent different-path writes, and fail with explicit conflicts for stale or unsupported object-backed edits.
+- Push-enabled watch/service mode now performs periodic graph-head reconciliation after missed hints, with more explicit connection/fallback/revision status and dashboard recovery guidance. Conservative scheduled cache pruning is opt-in and skips unresolved journal/sync state.
+- Device approval can create the account's first project, and the dashboard joins project, local agent, Workspace Root attach, and first-working-set readiness into one checklist.
+- The release publisher writes uniquely versioned objects before the mutable manifest pointer; partial-target plans never replace `latest`. The installer validates the exact sidecar/archive pair, hashes the archive directly, smoke-tests it, serializes installers, and atomically switches a launcher to the staged version. Public unsigned publication has no escape hatch; private dogfood uses local `package:hop` artifacts. Repository CI now covers quality, agent, build, and cross-platform packaging gates.
+
+Focused proof commands run from this worktree:
+
+```bash
+node --test cloudflare/d1/api-worker.test.js
+node --test --test-name-pattern "D1 backend supports scoped sessions|scoped D1 session can commit" packages/agent/test/d1-backend.test.js
+node --test packages/agent/test/access-security.test.js packages/agent/test/watch-schedulers.test.js packages/agent/test/remote-push.test.js packages/agent/test/release-channel.test.js packages/agent/test/install-script.test.js
+node --test --test-name-pattern "browser D1 file mutations" packages/agent/test/d1-backend.test.js
+npx vitest run src/app/device/codebase-options.test.ts
+npm run verify
+npm run package:hop -- --target all
+```
+
+Verified results:
+
+- The Worker security/atomicity command passed `21/21` tests, and the focused scoped-session D1 compatibility command passed `2/2` tests.
+- The combined visibility, reconciliation, auto-prune, release-channel, and installer command passed `28/28` tests.
+- The focused browser mutation command passed `1/1` test, including Main preservation and concurrent different-path writes.
+- The device codebase normalization command passed `2/2` tests.
+- The complete verification gate passed: agent `170/170`, web `16/16`, Worker `21/21`, and production-config `2/2`, plus lint, root/core types, agent types, and the production Next.js build.
+- Cross-platform packaging passed for all four supported targets: `darwin-arm64`, `darwin-x64`, `linux-arm64`, and `linux-x64`.
+
+Still external or deliberately incomplete:
+
+- Signing, notarization, public privacy/terms pages, and Google OAuth publication were not completed or claimed by this work.
+- No R2 release was uploaded; the immutable channel implementation was verified locally and publication remains gated.
+- The production push service is deployed/enabled, but its latest observed revision was safely skipped on workspace drift; a clean live apply remains to be proven.
+- Scoped raw SQL remains a transition boundary and should be replaced with typed Worker operations.
 
 ## 2026-07-08 Per-file D1 Journal Commits
 
@@ -412,10 +450,10 @@ Verification:
 
 Still open:
 
-- Editor/tool demand hydration when a local tool asks for a file body that is still metadata-only.
-- An automatic pruning policy on top of the explicit dry-run/execute primitive.
-- Production-grade push/subscription remote-update delivery beyond the current activity-gated polling/cursor path.
-- Broader blocked/conflicted UI detail and cross-device production verification for the full Workspace Root lifecycle.
+- Native read-triggered hydration when a local tool asks for a file body that is still metadata-only.
+- Production dogfood and default-policy decisions for the new opt-in automatic pruning scheduler.
+- A successful clean-workspace live push apply, plus broader cross-device production verification for the full Workspace Root lifecycle.
+- Broader blocked/conflicted UI detail and explicit conflict-resolution actions.
 
 ## Executive Progress
 
@@ -425,8 +463,8 @@ Still open:
 | Web product shell | Mostly done | The prototype UI polls live local agent state through `/api/agent/status`, maps files/events/revisions/review/merge/conflict/cache state, can read D1 dashboard state when configured, merges local workspace discovery into codebase cards, shows codebase-level workspace/remote-update readiness in the topology cards, and can run first-run Workspace Root setup/attach, hydrate/dehydrate, and file-level hydrate/pin/free-space actions through the local agent. |
 | HopIt Workspace Root | In progress | Production-profile paths, a root-level workspace index, per-path local cache state, D1 account-visible codebase discovery when credentials allow it, scoped-token configured-codebase fallback, automatic verified-owner bootstrap for migrated `local-owner` codebases, local attach/readiness summaries, metadata-only attach, dashboard setup/attach/hydrate/dehydrate actions, `workspace open`, hydration/materialized revision state, metadata-only/dehydrate, single-file and recursive-prefix hydrate, sibling hydrate opt-in, explicit pin/unpin, clean-cache prune, explicit metadata-first lazy materialization policy, and a remote cursor are in place; true read-triggered hydration remains deferred to native filesystem-provider research. |
 | Local managed-folder agent | Done for spike | The agent proves hydration, journaling, sync acknowledgement, recovery, watch startup gating, safe refresh, status, and same-owner continuity. |
-| Lazy materialization | In progress | `workspace attach`, `workspace open`, `workspace files`, `workspace hydrate-file`, `workspace hydrate-file --with-siblings`, `workspace hydrate-path --recursive`, safe full hydrate through `refresh`, `workspace pin|unpin`, dry-run-by-default `workspace prune`, dashboard file cache controls, and `workspace dehydrate --force` prove metadata-first attach, open-time first-working-set hydration, metadata listing, path-level hydration, explicit full materialization, clean local-body eviction, and metadata-only/partial/materialized state. V1 still needs native provider-backed read-triggered hydration and an automatic pruning policy. |
-| Vercel/D1 production baseline | Active dogfood | Vercel hosts the protected dashboard and Clerk sign-in routing is live. The D1 database/env/seeding sequence is complete, `hopit-d1-api` proxies D1 for Vercel, hosted D1 reads can skip schema re-checks with `HOPIT_D1_ASSUME_SCHEMA=1`, hosted status reads are cached/coalesced and the hosted client polls less often to protect the free D1 budget, `hopit.dev` live API smoke checks pass, and the packaged LaunchAgent reports D1 cloud status. Automatic remote-pull is now activity-gated with a five-minute cooldown when enabled. |
+| Lazy materialization | In progress | `workspace attach`, `workspace open`, `workspace files`, `workspace hydrate-file`, `workspace hydrate-file --with-siblings`, `workspace hydrate-path --recursive`, safe full hydrate through `refresh`, `workspace pin|unpin`, dry-run-by-default `workspace prune`, opt-in scheduled pruning, dashboard file cache controls, and `workspace dehydrate --force` prove metadata-first attach, open-time first-working-set hydration, metadata listing, path-level hydration, explicit full materialization, clean local-body eviction, and metadata-only/partial/materialized state. V1 still needs native provider-backed read-triggered hydration and pruning-policy dogfood. |
+| Vercel/D1 production baseline | Active dogfood | Vercel hosts the protected dashboard and Clerk sign-in routing is live. The D1 database/env/seeding sequence is complete, `hopit-d1-api` proxies D1 for Vercel, hosted D1 reads can skip schema re-checks with `HOPIT_D1_ASSUME_SCHEMA=1`, hosted status reads are cached/coalesced and the hosted client polls less often to protect the free D1 budget, `hopit.dev` live API smoke checks pass, and the packaged LaunchAgent reports D1 cloud status with push enabled. Push/pull service mode uses a lightweight five-minute periodic graph-head reconciliation; the latest observed pushed revision was safely blocked by local drift. |
 | D1 cloud graph | In progress | D1 now has schema, HTTP API backend, agent service integration, hosted status/codebase/file/account/action-job/member/invite/work-item/key-grant routes, automatic verified-owner bootstrap for `local-owner` migrations, account-visible codebase heads with actor access summaries, scoped-token configured-codebase fallback, actions-runner support, scoped D1 proxy session auth, scoped agent sessions, device key/user keyring/wrapped key metadata, project-board operations and UI, durable issue/discussion comments, historical export migration script, and D1 graph/collaboration/session/key round-trip tests. History reconstruction, retention policy, richer release assets, and full product write-path coverage remain to port or complete. |
 | Historical hosted graph export | Done | The retired export backup is retained under `/Users/robert/HopIt-Backups/convex/` as a migration/recovery source; the backend implementation was removed by WS1. |
 | Object blob storage | Mostly done | The agent has an S3-compatible blob provider boundary, Cloudflare R2 env contract, Backblaze B2-compatible migration path, filesystem-backed tests, metadata-only D1 commits, hash-verified hydrate/refresh/export, client-encrypted secret-object metadata, and dry-run-by-default storage GC. The live `hopit-blobs` R2 bucket exists, scoped local R2 credentials are configured for that bucket only, and read/write/hydrate/delete smoke coverage exists. Personal use keeps R2 free-only with an 8 GB cap and public access disabled; the 1-day auto-delete lifecycle rule was removed on 2026-07-08 so stored blobs persist durably (verified: no object-backed rows existed while the rule was active). Production retention policy and storage tier decisions remain. |
@@ -437,7 +475,7 @@ Still open:
 | Fixture cloud graph service boundary | Done | Commands now use a fixture-backed service boundary instead of direct command-level cloud JSON access. |
 | Main/change-set/owner/session/visibility contract | Done for fixture | The fixture graph and status surface include these identities and visibility fields. |
 | Same-owner two-session continuity | Done for spike | Device/session B can refresh acknowledged shared and `.private/` changes from device/session A. |
-| Automatic remote-update delivery | In progress | Remote-update events, explicit safe refresh, per-workspace materialization cursors, opt-in activity-gated `--remote-pull` with a five-minute default cooldown, graph-head cursor checks that avoid unchanged full graph reads, one-shot `hop remote-pull`, WS7a Stage 1 agent-side NDJSON push, and WS7a Stage 2 Cloudflare Durable Object WebSocket hub/D1 notify wiring with local tests exist. Default policy, deployment, and broader production verification remain. |
+| Automatic remote-update delivery | In progress | Remote-update events, explicit safe refresh, per-workspace materialization cursors, opt-in remote pull/push, five-minute periodic graph-head reconciliation, one-shot `hop remote-pull`, and the deployed Cloudflare Durable Object WebSocket hub/D1 notify path exist. Status exposes connection/fallback/revision/skip detail. A successful clean-workspace live apply, default policy, and broader production verification remain. |
 | Collaborator visibility simulation | Done for fixture | Tests prove private change sets hide non-owner content, team/review-visible change sets expose non-private paths, and `.private/` remains owner-only. |
 | Remote-update events | Done for spike | Refresh emits first-class `remote-update` events and status exposes the latest update. |
 | Review and merge | Done for fixture | Fixture commands open the selected active change set for review, merge it into Main, emit review/merge events, and expose review/merge state through status. |
@@ -1050,7 +1088,7 @@ Current foundation:
 
 ### 0.75. Automatic Remote-Update Delivery
 
-Status: `Next`
+Status: `In progress`
 
 Definition of done:
 
@@ -1066,12 +1104,14 @@ Current foundation:
 - Explicit `hop refresh` is safe and refuses pending or failed journal state and unjournaled local workspace drift.
 - Refresh emits `remote-update` events and status exposes the latest remote update.
 - Same-owner two-service simulation proves sequential handoff: device A syncs through the watcher, device B receives through explicit safe refresh.
-- The current worktree includes opt-in activity-gated `--remote-pull` support for `watch` and `service start`, plus `hop remote-pull` for a deterministic one-shot safe refresh attempt.
+- The current worktree includes opt-in `--remote-pull` support for `watch` and `service start`, plus `hop remote-pull` for a deterministic one-shot safe refresh attempt. Remote pull remains activity-triggered when enabled, and both pull- or push-enabled service modes run a periodic graph-head reconciliation at the configured cadence.
 - Remote-pull checks the codebase-level graph head before full graph refresh, so unchanged activity-triggered checks do not repeatedly read all file metadata from the graph backend.
 - The production-profile same-Mac dogfood test uses two isolated state/workspace roots against one fixture graph and covers metadata-only dehydrate, single-file hydrate, refresh fallback, one-shot remote-pull apply, unchanged cursor skip before dirty scanning, and dirty-state blocking after a remote move without requiring loopback service access.
 - WS7a Stage 1 adds opt-in `--remote-push` / `HOPIT_REMOTE_PUSH=1` agent transport against a compact NDJSON hint stream. The client connects with codebase/state/device cursor context, treats envelopes as hints, calls the same safe remote-refresh decision path as `remote-pull`, reconnects with exponential backoff, and runs a fallback head check after reconnect.
 - Status now exposes `remotePush` state and events for `push-connected`, `push-disconnected`, `push-fallback-polling`, `push-skipped`, and `push-applied`, including last event id, pushed revision, applied revision, and current skip/failure reason.
+- Status and the dashboard now separate socket connection, fallback state, pushed/applied revisions, current skip reason, and recovery guidance. A missed push hint or reconnect gap can converge through the periodic head check without requiring another local edit.
 - Fixture tests cover clean apply, pending-journal skip, manifest-drift skip, duplicate idempotence, out-of-order convergence, reconnect fallback catch-up, metadata-only no-body hydration, and same-owner/collaborator `.private/` visibility.
+- The production push hub is deployed and the installed agent has push enabled. The latest observed pushed revision was safely skipped because local workspace drift blocked refresh; clean-workspace live apply remains an explicit proof gap.
 
 ### 0.9. Installer, Daemon, And Production Hygiene
 
@@ -1098,6 +1138,9 @@ Current foundation:
 - `npm run hop:service:*`, `hop:backup`, `hop:private-export`, `hop:export`, and `hop:publish` wrap production-profile operations.
 - `docs/personal-production.md` covers install, login startup, observability, backup/export, and token rotation.
 - `scripts/check-production-config.mjs` performs stricter personal-production hygiene checks without printing secrets.
+- The dashboard and device-approval flow now join first-project creation, local-agent connection, Workspace Root attach, and bounded first-working-set hydration into one explicit checklist.
+- Automatic cache pruning is opt-in through `--auto-prune` / `HOPIT_AUTO_PRUNE=1`, defaults to a six-hour schedule and seven-day inactivity threshold, and skips when sync or the journal is unresolved while preserving pinned and non-clean content through the existing prune contract.
+- `.github/workflows/ci.yml` runs lint, web/Worker/config tests, TypeScript checks, and the production build on Ubuntu, plus agent tests and standalone packaging on Ubuntu and macOS. `npm run verify` and `npm run verify:release` provide the local equivalents.
 
 ### 1. Real Accounts And Auth
 
@@ -1221,7 +1264,9 @@ Current foundation:
 
 - D1 schema now includes releases and release assets.
 - Permission-gated list/create/publish/asset functions exist and validate the target codebase before creating releases.
-- The dashboard can draft releases and publish drafts. Immutable publish policy and artifact integration are still pending.
+- The dashboard can draft releases and publish drafts. The separate agent distribution channel now publishes versioned archives, checksums, and a schema-v2 manifest under immutable keys before uploading `latest/manifest.json` as the only mutable pointer.
+- The installer resolves one immutable version, requires direct SHA-256 verification of the named archive, smoke-tests the downloaded runtime, and atomically activates a versioned runtime under an installer lock. Public unsigned publication is blocked; private dogfood uses local package artifacts.
+- Linking dashboard release records to these distribution artifacts, signed/notarized bundles, and native installers remains pending.
 
 ### Later: Deeper Git Replacement Work
 
@@ -1252,7 +1297,7 @@ Current foundation:
 - [WS7c Object-Backed Diff And History Reconstruction Design](ws7c-object-backed-diff-history-design.md) defines per-file object-backed version rows, retention-aware storage GC, lazy blob fetches for compare views, and fixture demo acceptance criteria.
 - `packages/agent/test/agent-cli.test.js` now covers same-file two-device conflict preservation, crash-left pending journal recovery, skewed mtime/clock behavior, watch-mode sync racing refresh, and object-storage budget exhaustion.
 - WS7a Stage 1 implements the agent-side push client plus local fake push hub tests.
-- WS7a Stage 2 implements the Cloudflare Durable Object WebSocket fan-out hub, D1-route notify-after-commit wiring, Worker auth-gated WebSocket routing, Wrangler Durable Object config, and agent WebSocket transport selection. It is not deployed yet.
+- WS7a Stage 2 implements the Cloudflare Durable Object WebSocket fan-out hub, D1-route notify-after-commit wiring, Worker auth-gated WebSocket routing, Wrangler Durable Object config, and agent WebSocket transport selection. It was not deployed at this gate and has since been deployed to personal production.
 - WS7b implements open-time and intent-driven demand hydration for managed folders: `hop workspace open`, bounded metadata-driven open plans, sibling hydration opt-in, last-open status, missing-key/blocked-path reporting, and collaborator-safe visibility filtering.
 
 Proof command:
@@ -1261,7 +1306,7 @@ Proof command:
 node --test --test-name-pattern "adversarial|crash-left|skewed|racing refresh|storage budget failure" packages/agent/test/agent-cli.test.js
 ```
 
-WS7c implementation remains intentionally gated on owner approval of the design doc. WS7a Stage 2 remains local-only until the owner runs the documented Cloudflare deployment.
+WS7c implementation remains intentionally gated on owner approval of the design doc. WS7a Stage 2 was local-only at this gate; it has since been deployed to personal production, with a successful clean-workspace live apply still awaiting proof.
 
 ### 2026-07-08 WS7a Stage 1 — Agent Push Delivery
 
@@ -1309,10 +1354,10 @@ npm run typecheck:agent
 node packages/agent/src/cli.js help
 ```
 
-Deferred:
+Follow-up:
 
-- Owner-side Cloudflare deployment and live same-owner production dogfood verification.
-- Default enabling policy; push remains opt-in through `--remote-push` / `HOPIT_REMOTE_PUSH=1`.
+- Owner-side Cloudflare deployment is now complete. The installed service reports push enabled, but a successful clean-workspace live same-owner apply remains to be verified.
+- Default enabling policy remains opt-in through `--remote-push` / `HOPIT_REMOTE_PUSH=1`.
 
 ### 2026-07-08 WS7b — Open-Time And Intent-Driven Demand Hydration
 
@@ -1338,34 +1383,35 @@ npm run typecheck:agent
 Deferred:
 
 - True read-triggered hydration remains deferred until HopIt chooses a native filesystem provider such as macOS File Provider, FSKit, or FUSE. The v1 managed-folder adapter does not create source-code placeholder files and cannot intercept arbitrary OS reads.
-- Editor-specific signals, automatic pruning policy, and production dogfood rollout of open-time hydration remain follow-up work.
+- Editor-specific signals, production dogfood of the opt-in pruning policy, and production rollout of open-time hydration remain follow-up work.
 
 ## Known Gaps
 
 - No full HopIt Workspace Root contract yet: the root-level codebase/workspace index, D1 account-visible discovery with scoped-token fallback, automatic account bootstrap, metadata-only attach, dashboard setup/attach/hydrate/dehydrate/open actions, hydration cursor, metadata-only/partial/materialized state, per-file cache state, path-level hydrate/pin/prune primitives, open-time first-working-set hydration, and explicit metadata-first lazy materialization policy exist, but true read-triggered hydration is deferred until a native filesystem provider is chosen.
-- The current managed folder path has a safe metadata-first policy and dashboard controls, but metadata-only, path hydration, open-time hydration, and cache pruning are still bounded explicit/intent-driven operations rather than a complete native demand-hydration and automatic pruning system.
+- The current managed folder path has a safe metadata-first policy and dashboard controls, but metadata-only, path hydration, and open-time hydration are still bounded explicit/intent-driven operations rather than complete native demand hydration. Automatic pruning now exists as a conservative opt-in scheduler; default-on policy and production dogfood evidence remain pending.
 - Real account provider code exists and production Clerk DNS/issuer/live-key plus Google OAuth rollout is active; owner sign-in and D1 owner mapping are smoke-tested, and Basic Auth fallback env vars are removed from production.
-- Durable membership, role, invitation, hosted member/invite UI, and scoped agent-session token groundwork exist, but complete permission coverage is not done yet.
+- Durable membership, role, invitation, hosted member/invite UI, and scoped agent-session token groundwork exist. Active private/team/review change-set reads now enforce an owner/member/viewer/guest matrix, but complete permission coverage is not done yet.
 - The full private-repo encryption/key-grant model is documented but not
   implemented. Current client encryption is limited to routed secrets with a
   local key bridge; normal private repo files, private paths/metadata, per-device
   key grants, invite-time wrapping, independent secret grants, revocation, and
   recovery remain.
 - D1-backed graph storage and auth-backed user APIs exist for the first collaboration slice, but not every product command has moved to user-scoped auth yet.
+- Scoped device SQL now rejects unsupported statement shapes, cross-codebase predicates, mismatched parameters, and capability escapes, and Worker multi-statement writes use D1 batch when available. The raw-SQL proxy remains transitional and should be replaced with typed Worker operations rather than expanded.
 - D1 separates file metadata from file bytes for agent sync, records per-file version rows, exposes object-backed revision compare, and has dry-run-by-default retention-aware object GC. Production retention policy and full product write-path coverage are not complete yet.
-- Per-file revision-guarded mutation now covers D1 agent journal commits, but the full non-agent product write surface has not moved to the same model yet.
+- Per-file revision-guarded mutation now covers D1 agent journal commits and browser text edits. Browser edits require a writable active change set, preserve Main, retain concurrent different-path changes, and reject stale/object-backed cases; the remaining non-agent product write surface has not moved to the same model yet.
 - Graph contract validators exist for the agent/D1 graph path, but product-level validation is not yet comprehensive across every future object type.
 - Requester-aware dashboard filtering exists, but the auth-backed collaborator permission model is not enforced across every user-facing write yet.
 - A first read-only code-review browser slice exists, now with routeable codebase review/compare/history pages, durable review-linked follow-up issues/comments, D1-backed snapshot-anchored inline review threads, durable review decisions, and object-backed revision compare support. Web UI wiring for the compare API and richer tree/diff interactions are still pending.
 - Issue, discussion, release, durable comments, release-asset attachment, project-board UI, routeable work-item detail pages, and first codebase notification feed exist for the first slice; richer linked-object cards and complete permission coverage are still pending.
-- Cloudflare push/subscription remote-update delivery is implemented locally through WS7a Stage 2, but it has not been deployed or dogfooded in personal production yet. Explicit refresh, per-workspace cursor state, and opt-in activity-gated remote-pull remain the production fallback layers.
+- Cloudflare push/subscription remote-update delivery is deployed and enabled in personal production. The latest observed pushed revision was correctly skipped because local workspace drift blocked refresh, so a successful clean-workspace live apply still needs proof. Explicit refresh, per-workspace cursor state, reconnect fallback, and periodic graph-head reconciliation remain the safety layers.
 - Service mode syncs local edits and serves status. Local two-service simulation proves device A edits sync through the watcher, while device B pulls them through explicit safe refresh before switching devices.
 - No conflict resolution UI yet; fixture conflict detection/status exists.
 - `hop import-git` now provides a production-safe literal Git checkout conversion path for snapshot-style repo migration, including `.git/` as owner-private metadata and encrypted routed secrets. Full Git history import, ancestry preservation, and remote publish are still pending.
-- Explicit local cache pruning exists through `hop workspace prune`; automatic pruning policy and native provider-backed read-triggered hydration are still pending.
+- Explicit local cache pruning exists through `hop workspace prune`, and conservative scheduled pruning is available behind `--auto-prune` / `HOPIT_AUTO_PRUNE=1`. Default policy/rollout and native provider-backed read-triggered hydration are still pending.
 - No offline mode yet.
-- A public one-liner installer now exists (`curl -fsSL https://hopit.dev/install | sh`, served from `public/install.sh`) backed by an R2 release channel (`hopit-releases`, published via `npm run release:hop`, with `latest/` and immutable `releases/<version>/` layouts and sha256-verified cross-target bundles). Signing, notarization, native package manager integration, and a tray/menu agent wrapper are still pending.
-- `hop setup` now provides a polished four-stage terminal wizard: it opens the system folder picker with permission, renders an explicit existing-content cloud-upload/local-removal safety panel, creates a secure device keyring, opens a signed-in browser approval page with codebase selection, decrypts the returned scoped session locally, attaches the workspace, and starts background sync plus macOS start-on-login automatically. `--json`, `--advanced`, `--yes`, `--connect`/`--no-connect`, and explicit flags preserve machine-readable, lower-level, offline, and scripted operation. The public D1 device-code exchange stores only a hash of the secret device code and wraps the session token to the requesting device public key.
+- A public one-liner installer now exists (`curl -fsSL https://hopit.dev/install | sh`, served from `public/install.sh`) backed by an R2 release channel. The publisher writes unique versioned archives, checksums, and manifests under immutable keys, then updates `latest/manifest.json` last only for a complete target set; the installer ignores legacy moving archive keys. It resolves one version, fails closed without a checksum tool, validates and directly hashes the named archive, smoke-tests the candidate runtime, serializes installers, and atomically activates the launcher. Public unsigned publication has no escape hatch; signing, notarization, native package manager integration, and a tray/menu agent wrapper remain pending.
+- `hop setup` now provides a polished four-stage terminal wizard: it opens the system folder picker with permission, renders an explicit existing-content cloud-upload/local-removal safety panel, creates a secure device keyring, opens a signed-in browser approval page with codebase selection or inline first-project creation, decrypts the returned scoped session locally, attaches the workspace, and starts background sync plus macOS start-on-login automatically. The dashboard follows with an explicit cloud-project, local-agent, Workspace Root attach, and first-working-set checklist. `--json`, `--advanced`, `--yes`, `--connect`/`--no-connect`, and explicit flags preserve machine-readable, lower-level, offline, and scripted operation. The public D1 device-code exchange stores only a hash of the secret device code and wraps the session token to the requesting device public key.
 - Scoped token rotation is documented and CLI-backed, and the dashboard can track codebase keyring rotation state. Dashboard-guided recovery import, real rekey orchestration, and revocation workflows are still pending.
 - No cross-platform watch behavior matrix yet.
 

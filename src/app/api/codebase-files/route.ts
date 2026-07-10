@@ -37,7 +37,8 @@ export async function GET(request: Request) {
 
     return NextResponse.json({ ok: true, file: result }, responseInit())
   } catch (error) {
-    return fileError('file_read_failed', errorMessage(error), 400)
+    const failure = fileRequestFailure(error, 'file_read_failed')
+    return fileError(failure.code, failure.message, failure.status)
   }
 }
 
@@ -64,12 +65,14 @@ export async function PATCH(request: Request) {
       path: requireText(body.path, 'path'),
       content: requireString(body.content, 'content'),
       baseRevision: optionalRevision(body.baseRevision),
+      selectedStateId: requireText(body.selectedStateId, 'selectedStateId'),
       actor,
     })
 
     return NextResponse.json({ ok: true, result }, responseInit())
   } catch (error) {
-    return fileError('file_mutation_failed', errorMessage(error), 400)
+    const failure = fileRequestFailure(error, 'file_mutation_failed')
+    return fileError(failure.code, failure.message, failure.status)
   }
 }
 
@@ -112,4 +115,29 @@ function fileError(code: string, message: string, status = 400) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'File request failed.'
+}
+
+function fileRequestFailure(error: unknown, fallbackCode: string) {
+  const detail = recordValue(error)
+  const nestedDetail = recordValue(detail?.detail)
+  const reportedCode = typeof detail?.code === 'string'
+    ? detail.code
+    : typeof nestedDetail?.reason === 'string'
+      ? nestedDetail.reason
+      : null
+  const conflictCodes = new Set([
+    'base_revision_mismatch',
+    'object_blob_upload_required',
+    'selected_state_already_merged',
+    'selected_state_id_mismatch',
+    'selected_state_not_writable',
+    'selected_state_revision_mismatch',
+    'selected_state_type_mismatch',
+  ])
+  const code = reportedCode && conflictCodes.has(reportedCode) ? reportedCode : fallbackCode
+  return {
+    code,
+    message: errorMessage(error),
+    status: conflictCodes.has(code) ? 409 : 400,
+  }
 }

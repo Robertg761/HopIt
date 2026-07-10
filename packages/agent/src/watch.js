@@ -2,14 +2,14 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createCloudGraphService } from './cloud/d1-graph-service.js'
-import { hydrateWorkspace } from './commands/hydrate.js'
+import { hydrateWorkspace, pruneWorkspaceCache } from './commands/hydrate.js'
 import { initCloud } from './commands/import.js'
 import { recoverJournal, refreshWorkspace, syncOnce } from './commands/sync.js'
 import { workspaceMode } from './constants.js'
 import { emit, findLastEventOf, readNdjson } from './io.js'
 import { createRemotePushClient } from './remote-push.js'
 import { toCloudPath } from './journal.js'
-import { assertWorkspacePathSafe, remotePullEnabled, remoteRefreshIntervalMs } from './paths.js'
+import { assertWorkspacePathSafe, remotePullEnabled, remotePushEnabled, remoteRefreshIntervalMs } from './paths.js'
 import { normalizeWatchFilename, readJournalSafety, visibleRevisionFromEvent } from './status-state.js'
 import { findIndexedCodebase, readWorkspaceIndex } from './workspace-index.js'
 import { isLocalActivityMarkerPath, shouldSkipWorkspacePath, shouldTrackLocalActivityPath, workspaceLocalChanges } from './workspace-manifest.js'
@@ -55,6 +55,7 @@ export async function watchWorkspace(options) {
   let poller = null
   let remotePuller = null
   let remotePusher = null
+  let autoPruner = null
   const scheduleSync = createWatchSyncScheduler(options, {
     afterDrain: async (detail) => {
       await remotePuller?.schedule('local-change', detail)
@@ -108,6 +109,9 @@ export async function watchWorkspace(options) {
     remoteRefreshDecision,
     refreshWorkspace,
   })
+  autoPruner = await createAutoPruneScheduler(options, {
+    localSyncIdle: () => scheduleSync.isIdle?.() ?? true,
+  })
 
   console.log(`HopIt agent watching ${options.workspace}`)
   console.log('Press Ctrl+C to stop.')
@@ -122,8 +126,105 @@ export async function watchWorkspace(options) {
       poller?.close()
       remotePuller?.close()
       remotePusher?.close()
+      autoPruner?.close()
     },
   }
+}
+
+const defaultAutoPruneIntervalMs = 6 * 60 * 60 * 1000
+const defaultAutoPruneInactiveMs = 7 * 24 * 60 * 60 * 1000
+const minimumAutoPruneMs = 60 * 1000
+
+export async function createAutoPruneScheduler(options, schedulerOptions = {}) {
+  if (!options['auto-prune']) return null
+
+  const intervalMs = schedulerOptions.intervalMs ?? parseAutoPruneMs(
+    options['auto-prune-interval-ms'],
+    defaultAutoPruneIntervalMs,
+    '--auto-prune-interval-ms',
+  )
+  const inactiveMs = schedulerOptions.inactiveMs ?? parseAutoPruneMs(
+    options['auto-prune-inactive-ms'],
+    defaultAutoPruneInactiveMs,
+    '--auto-prune-inactive-ms',
+  )
+  const localSyncIdle = schedulerOptions.localSyncIdle ?? (() => true)
+  const pruneWorkspace = schedulerOptions.pruneWorkspace ?? pruneWorkspaceCache
+  let closed = false
+  let running = false
+
+  await emit(options, 'cache.auto_prune_started', {
+    state: 'scheduled',
+    workspace: options.workspace,
+    intervalMs,
+    inactiveMs,
+    cleanAcknowledgedOnly: true,
+    preservesPinned: true,
+  })
+
+  const run = async () => {
+    if (closed || running) return
+    running = true
+    try {
+      if (!localSyncIdle()) {
+        await emit(options, 'cache.auto_prune_skipped', {
+          state: 'skipped',
+          workspace: options.workspace,
+          reason: 'local_sync_pending',
+        })
+        return
+      }
+
+      const journalSafety = await readJournalSafety(options)
+      if (!journalSafety.safe) {
+        await emit(options, 'cache.auto_prune_skipped', {
+          state: 'skipped',
+          workspace: options.workspace,
+          reason: 'journal_has_unresolved_entries',
+          journal: journalSafety.summary,
+        })
+        return
+      }
+
+      await pruneWorkspace({
+        ...options,
+        path: 'all',
+        recursive: true,
+        execute: true,
+        'inactive-ms': String(inactiveMs),
+      })
+    } catch (error) {
+      await emit(options, 'cache.auto_prune_failed', {
+        state: 'failed',
+        workspace: options.workspace,
+        reason: error instanceof Error ? error.message : 'auto_prune_failed',
+      })
+    } finally {
+      running = false
+    }
+  }
+
+  const timer = setInterval(() => {
+    run().catch((error) => {
+      console.error(error)
+    })
+  }, intervalMs)
+  timer.unref?.()
+
+  return {
+    close() {
+      closed = true
+      clearInterval(timer)
+    },
+  }
+}
+
+export function parseAutoPruneMs(rawValue, fallback, optionName) {
+  const value = Number(rawValue ?? fallback)
+  if (!Number.isInteger(value) || value < minimumAutoPruneMs) {
+    throw new Error(`Invalid ${optionName} value: ${rawValue ?? fallback}. Use at least ${minimumAutoPruneMs}ms.`)
+  }
+  return value
 }
 
 export function createWatchSyncScheduler(options, schedulerOptions = {}) {
@@ -316,7 +417,9 @@ export async function snapshotWorkspace(root, options = {}) {
 }
 
 export async function createRemoteRefreshScheduler(options, schedulerOptions = {}) {
-  if (!remotePullEnabled(options)) return null
+  const activityTriggersEnabled = remotePullEnabled(options)
+  const pushReconciliationEnabled = remotePushEnabled(options)
+  if (!activityTriggersEnabled && !pushReconciliationEnabled) return null
 
   const cooldownMs = remoteRefreshIntervalMs(options)
   const localSyncIdle = schedulerOptions.localSyncIdle ?? (() => true)
@@ -327,13 +430,19 @@ export async function createRemoteRefreshScheduler(options, schedulerOptions = {
   let queuedTrigger = null
   let queuedDetail = null
   let lastRunAt = 0
+  let reconciliationTimer = null
 
   await emit(options, 'remote-pull.started', {
-    state: 'activity-gated',
-    mode: 'local-change-cooldown',
+    state: 'enabled',
+    mode: activityTriggersEnabled
+      ? 'periodic-head-reconciliation-with-activity'
+      : 'periodic-head-reconciliation',
     workspace: options.workspace,
     intervalMs: cooldownMs,
     cooldownMs,
+    reconciliationIntervalMs: cooldownMs,
+    activityTriggersEnabled,
+    pushReconciliationEnabled,
     adapter: workspaceMode.adapter,
     cacheMode: workspaceMode.cacheMode,
     safeRefreshOnly: true,
@@ -392,6 +501,7 @@ export async function createRemoteRefreshScheduler(options, schedulerOptions = {
 
   const schedule = async (trigger = 'local-change', detail = null) => {
     if (closed) return
+    if (trigger === 'local-change' && !activityTriggersEnabled) return
     queued = true
     queuedTrigger = trigger
     queuedDetail = detail
@@ -412,12 +522,23 @@ export async function createRemoteRefreshScheduler(options, schedulerOptions = {
     }, waitMs)
   }
 
+  reconciliationTimer = setInterval(() => {
+    schedule('periodic-head-reconciliation', {
+      trigger: 'periodic-head-reconciliation',
+    }).catch((error) => {
+      console.error(error)
+    })
+  }, cooldownMs)
+  reconciliationTimer.unref?.()
+
   return {
     schedule,
     close() {
       closed = true
       if (timer) clearTimeout(timer)
+      if (reconciliationTimer) clearInterval(reconciliationTimer)
       timer = null
+      reconciliationTimer = null
     },
   }
 }

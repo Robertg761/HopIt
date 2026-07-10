@@ -21,6 +21,7 @@ export function FileEditor({ file, codebaseId }: { file: AgentFile; codebaseId: 
   const [saving, setSaving] = React.useState(false)
   const [content, setContent] = React.useState('')
   const [baseRevision, setBaseRevision] = React.useState<number | null>(null)
+  const [selectedStateId, setSelectedStateId] = React.useState<string | null>(null)
 
   const showFailure = (title: string, error: FileApiFailure) => {
     if (error.code === 'browser_auth_required') {
@@ -59,19 +60,27 @@ export function FileEditor({ file, codebaseId }: { file: AgentFile; codebaseId: 
     }
     setContent(result.content)
     setBaseRevision(result.revision ?? file.revision)
+    setSelectedStateId(result.selectedStateId)
     setEditing(true)
   }
 
   const save = async () => {
-    if (!codebaseId || saving) return
+    if (!codebaseId || !selectedStateId || saving) return
     setSaving(true)
-    const result = await saveCodebaseFile({ codebaseId, path: file.path, content, baseRevision })
+    const result = await saveCodebaseFile({
+      codebaseId,
+      path: file.path,
+      content,
+      baseRevision,
+      selectedStateId,
+    })
     setSaving(false)
     if (!result.ok) {
       showFailure('Save failed', result)
       return
     }
     setBaseRevision(result.revision)
+    setSelectedStateId(result.selectedStateId)
     toast({
       title: 'File saved',
       description:
@@ -123,7 +132,7 @@ export function FileEditor({ file, codebaseId }: { file: AgentFile; codebaseId: 
         spellCheck={false}
       />
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" onClick={() => void save()} disabled={saving}>
+        <Button size="sm" onClick={() => void save()} disabled={saving || !selectedStateId}>
           {saving ? <Spinner className="size-3.5 text-primary-foreground" /> : <Save />}
           {saving ? 'Saving…' : 'Save'}
         </Button>

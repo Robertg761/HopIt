@@ -139,6 +139,7 @@ export async function mutateCloudTextFile(input: {
   path: string
   content: string
   baseRevision?: number | null
+  selectedStateId?: string
   actor: CloudActor
 }) {
   if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).mutateTextFile(input)

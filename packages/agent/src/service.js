@@ -415,6 +415,15 @@ export function runtimeArgsFromOptions(options) {
   if (options['remote-push-url']) {
     args.push('--remote-push-url', options['remote-push-url'])
   }
+  if (options['auto-prune']) {
+    args.push('--auto-prune')
+  }
+  if (options['auto-prune-interval-ms']) {
+    args.push('--auto-prune-interval-ms', options['auto-prune-interval-ms'])
+  }
+  if (options['auto-prune-inactive-ms']) {
+    args.push('--auto-prune-inactive-ms', options['auto-prune-inactive-ms'])
+  }
   if (options['remote-pull-cooldown-ms']) {
     args.push('--remote-pull-cooldown-ms', options['remote-pull-cooldown-ms'])
   } else if (options['remote-refresh-interval-ms']) {

@@ -54,7 +54,10 @@ export async function GET(request: Request) {
     return NextResponse.json({
       ok: true,
       ...authorization,
-      ...(approved ? { apiBaseUrl: publicAgentApiBaseUrl() } : {}),
+      ...(approved ? {
+        requesterId: requireText(authorization.requesterId, 'requesterId'),
+        apiBaseUrl: publicAgentApiBaseUrl(),
+      } : {}),
     }, responseInit())
   } catch (error) {
     return deviceAuthorizationError('device_authorization_poll_failed', errorMessage(error), 400)

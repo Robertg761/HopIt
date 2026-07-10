@@ -39,6 +39,7 @@ export function parseOptions(args) {
     'include-private',
     'remote-pull',
     'remote-push',
+    'auto-prune',
     'auto-refresh',
     'json',
     'start-service',
@@ -105,6 +106,15 @@ export function applyRuntimeDefaults(options, provided) {
   if (!provided.has('remote-push-url') && process.env.HOPIT_REMOTE_PUSH_URL) {
     options['remote-push-url'] = process.env.HOPIT_REMOTE_PUSH_URL
   }
+  if (!provided.has('auto-prune') && isTruthyEnv(process.env.HOPIT_AUTO_PRUNE)) {
+    options['auto-prune'] = true
+  }
+  if (!provided.has('auto-prune-interval-ms') && process.env.HOPIT_AUTO_PRUNE_INTERVAL_MS) {
+    options['auto-prune-interval-ms'] = process.env.HOPIT_AUTO_PRUNE_INTERVAL_MS
+  }
+  if (!provided.has('auto-prune-inactive-ms') && process.env.HOPIT_AUTO_PRUNE_INACTIVE_MS) {
+    options['auto-prune-inactive-ms'] = process.env.HOPIT_AUTO_PRUNE_INACTIVE_MS
+  }
   if (!provided.has('auto-refresh') && isTruthyEnv(process.env.HOPIT_AUTO_REFRESH)) {
     options['auto-refresh'] = true
   }
@@ -117,6 +127,9 @@ export function applyRuntimeDefaults(options, provided) {
   }
   if (!provided.has('session-id') && process.env.HOPIT_SESSION_ID) {
     options['session-id'] = process.env.HOPIT_SESSION_ID
+  }
+  if (!provided.has('requester-id') && process.env.HOPIT_REQUESTER_ID) {
+    options['requester-id'] = process.env.HOPIT_REQUESTER_ID
   }
   if (!provided.has('device-name') && process.env.HOPIT_DEVICE_NAME) {
     options['device-name'] = process.env.HOPIT_DEVICE_NAME

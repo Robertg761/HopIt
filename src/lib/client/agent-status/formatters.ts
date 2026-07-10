@@ -5,6 +5,12 @@ export function remotePullModeLabel(remotePull: RawAgentStatus['remotePull']) {
 
   const detailMode = remotePull.lastStarted?.detail?.mode
   const detailState = remotePull.lastStarted?.detail?.state
+  if (detailMode === 'periodic-head-reconciliation-with-activity') {
+    return 'Safety checks + activity'
+  }
+  if (detailMode === 'periodic-head-reconciliation') {
+    return 'Safety checks'
+  }
   if (detailMode === 'local-change-cooldown' || detailState === 'activity-gated') {
     return 'Activity gated'
   }
@@ -16,8 +22,11 @@ export function remotePullCadenceLabel(remotePull: RawAgentStatus['remotePull'])
   if (!remotePull?.enabled) return 'No remote pull'
 
   const cooldownMs =
-    numberOrNull(remotePull.lastStarted?.detail?.cooldownMs) ?? numberOrNull(remotePull.intervalMs)
-  return cooldownMs === null ? 'Cooldown unknown' : `${formatDuration(cooldownMs)} cooldown`
+    numberOrNull(remotePull.lastStarted?.detail?.reconciliationIntervalMs) ??
+    numberOrNull(remotePull.reconciliationIntervalMs) ??
+    numberOrNull(remotePull.lastStarted?.detail?.cooldownMs) ??
+    numberOrNull(remotePull.intervalMs)
+  return cooldownMs === null ? 'Safety cadence unknown' : `${formatDuration(cooldownMs)} safety check`
 }
 
 export function formatDuration(ms: number) {

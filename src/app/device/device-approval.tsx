@@ -1,9 +1,11 @@
 'use client'
 
 import * as React from 'react'
-import { ArrowRight, CheckCircle2, Clock3, Laptop, LoaderCircle, ShieldCheck } from 'lucide-react'
+import { ArrowRight, CheckCircle2, Clock3, Laptop, LoaderCircle, Plus, ShieldCheck } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { normalizeDeviceCodebaseOptions, type DeviceCodebaseOption } from './codebase-options'
 
 type DeviceInfo = {
   id?: string | null
@@ -24,10 +26,41 @@ export function DeviceApproval({
   expiresAt: string
   codebases: Array<{ id: string; name: string }>
 }) {
+  const [availableCodebases, setAvailableCodebases] = React.useState<DeviceCodebaseOption[]>(codebases)
   const [codebaseId, setCodebaseId] = React.useState(codebases[0]?.id ?? '')
+  const [newCodebaseName, setNewCodebaseName] = React.useState('')
   const [status, setStatus] = React.useState(initialStatus)
   const [error, setError] = React.useState<string | null>(null)
   const [busy, setBusy] = React.useState(false)
+  const [creatingCodebase, setCreatingCodebase] = React.useState(false)
+
+  async function createFirstCodebase() {
+    const name = newCodebaseName.trim()
+    if (!name || creatingCodebase) return
+    setCreatingCodebase(true)
+    setError(null)
+    try {
+      const response = await fetch('/api/codebases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      })
+      const body = await response.json().catch(() => null)
+      if (!response.ok || body?.ok !== true) {
+        throw new Error(body?.error?.message ?? 'Project creation failed.')
+      }
+      const options = normalizeDeviceCodebaseOptions(body.codebases)
+      if (options.length === 0) throw new Error('The project was created, but it could not be selected.')
+      const createdId = normalizeDeviceCodebaseOptions([body.codebase])[0]?.id
+      setAvailableCodebases(options)
+      setCodebaseId(createdId && options.some((option) => option.id === createdId) ? createdId : options[0].id)
+      setNewCodebaseName('')
+    } catch (creationError) {
+      setError(creationError instanceof Error ? creationError.message : 'Project creation failed.')
+    } finally {
+      setCreatingCodebase(false)
+    }
+  }
 
   async function approve() {
     if (!codebaseId || busy) return
@@ -91,19 +124,52 @@ export function DeviceApproval({
 
       <div className="my-6 h-px bg-[#e1e8e3]" />
 
-      <label className="block">
-        <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-[#637067]">Project access</span>
-        <select
-          value={codebaseId}
-          onChange={(event) => setCodebaseId(event.target.value)}
-          className="mt-2 h-11 w-full rounded-lg border border-[#bac8bf] bg-white px-3 text-sm font-medium shadow-sm outline-none transition focus:border-[#1a7f37] focus:ring-4 focus:ring-[#1a7f37]/10"
-        >
-          {codebases.length === 0 ? <option value="">No projects available</option> : null}
-          {codebases.map((codebase) => (
-            <option key={codebase.id} value={codebase.id}>{codebase.name}</option>
-          ))}
-        </select>
-      </label>
+      {availableCodebases.length > 0 ? (
+        <label className="block">
+          <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-[#637067]">Project access</span>
+          <select
+            value={codebaseId}
+            onChange={(event) => setCodebaseId(event.target.value)}
+            className="mt-2 h-11 w-full rounded-lg border border-[#bac8bf] bg-white px-3 text-sm font-medium shadow-sm outline-none transition focus:border-[#1a7f37] focus:ring-4 focus:ring-[#1a7f37]/10"
+          >
+            {availableCodebases.map((codebase) => (
+              <option key={codebase.id} value={codebase.id}>{codebase.name}</option>
+            ))}
+          </select>
+        </label>
+      ) : (
+        <div className="rounded-xl border border-[#cbd8cf] bg-[#f7faf8] p-4">
+          <p className="text-sm font-semibold text-[#26362c]">Create your first project</p>
+          <p className="mt-1 text-xs leading-5 text-[#66736b]">
+            This gives the new device a cloud workspace to attach before setup returns to your terminal.
+          </p>
+          <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+            <Input
+              value={newCodebaseName}
+              onChange={(event) => setNewCodebaseName(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') {
+                  event.preventDefault()
+                  void createFirstCodebase()
+                }
+              }}
+              placeholder="My project"
+              aria-label="New project name"
+              className="border-[#bac8bf] bg-white text-[#17211b]"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              className="shrink-0 border-[#bac8bf] bg-white text-[#17211b] hover:bg-[#eef5f0]"
+              disabled={!newCodebaseName.trim() || creatingCodebase}
+              onClick={() => void createFirstCodebase()}
+            >
+              {creatingCodebase ? <LoaderCircle className="animate-spin" /> : <Plus />}
+              {creatingCodebase ? 'Creating…' : 'Create project'}
+            </Button>
+          </div>
+        </div>
+      )}
 
       <div className="mt-5 rounded-xl border border-[#dce5df] bg-[#f7faf8] p-4">
         <div className="flex items-center justify-between gap-4">

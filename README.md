@@ -51,7 +51,13 @@ starts background sync automatically. The normal flow ends with a human-readable
 readiness summary rather than JSON. Use `hop setup --advanced` for lower-level
 prompts, `hop setup --json` for machine-readable output, `hop setup --yes` for
 unattended local setup, or `hop setup --no-connect` to skip cloud authorization.
-The bundle is not signed or notarized yet.
+If the account has no cloud codebase yet, the browser approval flow can create
+the first project before granting the device access. The dashboard then presents
+one setup checklist for choosing that cloud project, connecting the local agent,
+attaching its Workspace Root folder, and preparing the first working set. The
+bundle is not signed or notarized yet, so public release publication is blocked.
+Private dogfood artifacts are built locally with `npm run package:hop` and are
+never uploaded by an unsigned release escape hatch.
 
 ## Initial Scope
 
@@ -66,6 +72,7 @@ The bundle is not signed or notarized yet.
 - Automatic remote-update delivery so same-owner devices can receive current active change-set state without a manual refresh ritual.
 - Production storage based on Cloudflare D1 graph metadata, S3-compatible object blobs, content hashes, and per-file revision guards rather than whole-graph overwrites.
 - Scoped device/session auth separate from human product auth.
+- Active-change-set visibility enforced for owner, member, viewer, and guest reads, including summary counts that do not disclose private draft paths.
 - Client-side encryption, device trust, and wrapped key grants so private repos,
   `.private/`, and secrets are decrypted only by intended users/devices.
 - Git compatibility as an import/export and publish layer, not the source of continuity.
@@ -89,8 +96,11 @@ HopIt has moved past a local-only spike. The current dogfood baseline is a deplo
 - Local production-profile `hop` commands can import, attach, hydrate, sync, refresh, recover, review, merge, export, publish, and validate.
 - `hop workspace` persists a root-level `workspaces.json` index with per-workspace hydration/cursor and per-path local cache state, can discover account-visible D1 cloud codebases with local readiness when credentials allow it, falls back to the configured codebase under scoped device tokens, can attach a cloud codebase into the Workspace Root as metadata-only, list visible cloud files with local states, hydrate one file or recursive folder prefix, pin/unpin paths that should stay local, safely prune clean acknowledged cached bodies without cloud deletes, safely hydrate the full workspace through refresh, and dehydrate clean workspaces back to metadata-only state.
 - `hop device` / `hop session` can report local device identity. Scoped session registration, listing, touch, and revocation now work against D1.
+- Scoped device SQL is now constrained by a conservative statement-shape and codebase-equality policy while the raw-SQL proxy is replaced by typed Worker operations. Multi-statement D1 writes use the binding's atomic batch path when available.
 - `hop keys` can initialize a local per-codebase device keyring, report redacted key status, and export a passphrase-encrypted recovery file. The keyring stores device private keys locally and stores the user vault key only as a self-wrapped payload.
-- The dashboard now includes provider sign-in routes, automatic owner bootstrap for verified owner accounts, member/invite management, first-run Workspace Root setup and attach for discovered cloud codebases, hydrate/dehydrate workspace controls, file-level local cache state pills plus hydrate/pin/free-space actions, a read-only code browser, routeable codebase review/compare/history pages, first issue/discussion/release workflows, release assets, project-board movement, durable issue/discussion comments, snapshot-anchored inline review threads, review-linked follow-up comments, and a redacted key-grant status/rotation panel. Codebase listing, file reads/edits, status, account sync, hosted action jobs, member/invite routes, work-item collaboration routes, review-thread routes, and key-grant status now use the D1 backend selector with scoped-token configured-codebase fallback.
+- The dashboard now includes provider sign-in routes, automatic owner bootstrap for verified owner accounts, member/invite management, first-project creation during device approval, a four-step Workspace Root setup checklist, hydrate/dehydrate workspace controls, file-level local cache state pills plus hydrate/pin/free-space actions, a read-only code browser, routeable codebase review/compare/history pages, first issue/discussion/release workflows, release assets, project-board movement, durable issue/discussion comments, snapshot-anchored inline review threads, review-linked follow-up comments, and a redacted key-grant status/rotation panel. Codebase listing, file reads/edits, status, account sync, hosted action jobs, member/invite routes, work-item collaboration routes, review-thread routes, and key-grant status now use the D1 backend selector with scoped-token configured-codebase fallback.
+- Browser text edits now use the same guarded per-file journal commit boundary as the agent. They require a writable active change set, preserve Main until explicit merge, retain concurrent edits to different paths, and return stable conflict responses instead of saving a stale whole graph. Object-backed browser edits fail closed until a server-side blob upload path exists.
+- Push delivery is backed by periodic graph-head reconciliation, so a missed hint or disconnected socket does not depend on a later local edit to recover. Status distinguishes push connection, fallback, applied/skipped revisions, and recovery guidance. Conservative automatic cache pruning exists as an opt-in policy and preserves pinned, dirty, and unacknowledged content.
 - The literal mirror path supports binary files, symlinks, empty directories, `.git/`, root `.env.local` routing into `.private/env/repo-root/.env.local`, production-safe `import-git`, client-encrypted routed-secret sync, and dry-run object GC. The full repository still should not be treated as safely uploaded until the production-safe conversion flow has been run and verified.
 - Client-side encryption currently covers routed secrets only. Device keyrings,
   user vault keys, recovery export, D1 device/wrapped-key APIs, and
@@ -119,7 +129,7 @@ The v1 target is not a Git clone manager and not yet a true native filesystem pr
 - Other same-owner devices receive acknowledged changes automatically when the local journal is clean, or get a visible conflict/blocked state when it is not.
 - Web surfaces show code, diffs, review state, history, issues, discussions, projects, releases, members, invitations, and permissions.
 
-Today HopIt has the managed-folder spike, workspace-root command surface with a durable index, per-path local cache state, D1 account-visible codebase discovery when credentials allow it, scoped-token configured-codebase fallback, automatic verified-owner bootstrap for migrated `local-owner` codebases, dashboard-driven first-run Workspace Root setup/metadata-only attach, dashboard hydrate/dehydrate controls, file-level hydrate/pin/free-space actions, hydration/cursor status, metadata-only/dehydrate, single-file and recursive-prefix hydrate primitives, safe clean-cache pruning, an explicit metadata-first lazy materialization policy, service wrapper, a Cloudflare D1 graph backend, S3-compatible object-blob storage support, Clerk-protected hosted dashboard, routeable status-backed review/compare/history pages, first collaboration/project/comment/release-asset/key-grant surfaces, explicit refresh-based two-session continuity, D1-backed scoped session and trusted-device/key metadata, and opt-in activity-gated safe remote-pull plus one-shot remote-pull checks for personal dogfooding. Remote-pull uses a lightweight graph-head cursor before any full graph read and only runs in watch/service mode after local workspace activity, with a default five-minute cooldown. The current personal production D1 database is provisioned, schema-applied, seeded from the saved Convex export, and fronted by the `hopit-d1-api` Worker for Vercel. Remaining v1 work is editor/tool demand hydration, production-grade push/subscription remote-update delivery, true object-backed diff/history reconstruction, installer/tray setup, and broader cross-device verification.
+Today HopIt has the managed-folder spike, workspace-root command surface with a durable index, per-path local cache state, D1 account-visible codebase discovery when credentials allow it, scoped-token configured-codebase fallback, automatic verified-owner bootstrap for migrated `local-owner` codebases, dashboard-driven first-project and four-step Workspace Root setup, dashboard hydrate/dehydrate controls, file-level hydrate/pin/free-space actions, hydration/cursor status, metadata-only/dehydrate, single-file and recursive-prefix hydrate primitives, safe clean-cache pruning, an explicit metadata-first lazy materialization policy, service wrapper, a Cloudflare D1 graph backend, S3-compatible object-blob storage support, Clerk-protected hosted dashboard, routeable status-backed review/compare/history pages, first collaboration/project/comment/release-asset/key-grant surfaces, D1-backed scoped session and trusted-device/key metadata, and opt-in safe remote pull/push delivery. The installed personal-production service has push enabled, but the latest observed handoff was correctly skipped because local workspace drift blocked refresh; a successful live cross-device push apply is still to be proven. Push-enabled service mode now also performs bounded graph-head reconciliation at the configured refresh cadence, independent of local edits. Optional automatic cache pruning uses conservative clean/acknowledged and inactivity gates. Remaining v1 work includes native read-triggered hydration, successful live cross-device apply verification, typed Worker operations in place of scoped raw SQL, broader encryption/key grants, signed/notarized distribution, and richer object-backed history/review reconstruction.
 
 ## Product Principles
 
@@ -159,6 +169,11 @@ Build the production bundle with:
 npm run build
 ```
 
+Run the same repository-wide quality gate used by CI with `npm run verify`, or
+include standalone packaging with `npm run verify:release`. CI runs lint, web
+and Worker tests, TypeScript checks, the production build, and agent/package
+jobs on Ubuntu and macOS.
+
 Build a standalone `hop` artifact for the current macOS or Linux platform with:
 
 ```bash
@@ -174,6 +189,15 @@ packaging exits unsupported until the packager handles Node's Windows `.zip`
 runtime archives. The artifact also includes `examples/production.env.example`
 plus macOS LaunchAgent and Linux systemd user-service support scripts under
 `support/`. These artifacts are unsigned for now.
+
+The release publisher writes archives, checksums, and a versioned manifest under
+immutable `releases/<version>/` keys. `latest/manifest.json` is the one mutable
+channel pointer it updates and is uploaded last. The installer resolves that
+manifest to one immutable version, fails closed when no checksum tool is
+available, verifies SHA-256, and runs the downloaded `hop help` before replacing
+the installed runtime. `npm run release:hop` refuses every unsigned public
+upload; use `--dry-run` to verify its plan, or `npm run package:hop` to build
+local/private dogfood artifacts.
 
 ## Hosted Backend
 

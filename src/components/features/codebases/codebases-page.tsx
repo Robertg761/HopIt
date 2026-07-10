@@ -9,6 +9,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useWorkspace, type CodebaseSummary } from '@/components/workspace/workspace-provider'
 import { CodebaseRow } from './codebase-row'
+import { WorkspaceRootCard } from './workspace-root-card'
 import {
   DeleteCodebaseDialog,
   ImportGitDialog,
@@ -54,6 +55,8 @@ export function CodebasesPage() {
           <span>{humanizeMessage(codebasesError)}</span>
         </div>
       ) : null}
+
+      <WorkspaceRootCard onCreateCodebase={() => setNewOpen(true)} />
 
       <section aria-label="Codebases">
         {codebasesLoading && codebases.length === 0 ? (

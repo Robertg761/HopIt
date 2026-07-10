@@ -1,11 +1,16 @@
 'use client'
 
 import * as React from 'react'
+import { LifeBuoy, RefreshCw, TriangleAlert } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Spinner } from '@/components/ui/spinner'
 import { StatusDot, type StatusDotTone } from '@/components/ui/status-dot'
+import type { AgentCommand } from '@/components/workspace/workspace-provider'
 import type { AgentStatusSnapshot } from '@/lib/client/agent-status'
+import { handoffGuidance } from '@/lib/client/agent-status/guidance'
 
 import { InfoRow, MonoId, QuietNote, Stat } from './shared'
 
@@ -55,13 +60,29 @@ export function HealthCard({ status }: { status: AgentStatusSnapshot }) {
   )
 }
 
-export function SyncCard({ status }: { status: AgentStatusSnapshot }) {
+export function SyncCard({
+  status,
+  runningCommand,
+  onCommand,
+}: {
+  status: AgentStatusSnapshot
+  runningCommand: AgentCommand | null
+  onCommand: (command: AgentCommand) => Promise<void>
+}) {
   const behind = status.remoteBehindByRevisions
+  const push = status.remotePush
+  const guidance = handoffGuidance(status)
+  const connectionTone =
+    push.connectionState === 'connected'
+      ? 'hop'
+      : push.connectionState === 'disconnected'
+        ? 'amber'
+        : 'outline'
   return (
     <Card>
       <CardHeader>
-        <CardTitle>Sync</CardTitle>
-        <CardDescription>Write journal and remote pull state.</CardDescription>
+        <CardTitle>Cross-device handoff</CardTitle>
+        <CardDescription>Write journal, push delivery, and periodic safety checks.</CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid grid-cols-3 gap-2">
@@ -70,6 +91,37 @@ export function SyncCard({ status }: { status: AgentStatusSnapshot }) {
           <Stat label="Acknowledged" value={status.acknowledgedWrites} />
         </div>
         <dl className="grid gap-x-8 gap-y-3 sm:grid-cols-2">
+          <InfoRow label="Push connection">
+            <span className="flex flex-wrap items-center gap-2">
+              <Badge tone={connectionTone}>{push.connectionState}</Badge>
+              <span className="text-muted-foreground">{push.state}</span>
+            </span>
+          </InfoRow>
+          <InfoRow label="Safety fallback">
+            <span className="flex flex-wrap items-center gap-2">
+              <Badge tone={push.fallbackState === 'checking' ? 'amber' : push.enabled ? 'info' : 'outline'}>
+                {push.fallbackState}
+              </Badge>
+              <span className="text-muted-foreground">{push.reconciliationCadence}</span>
+            </span>
+          </InfoRow>
+          <InfoRow label="Last applied revision">
+            {push.lastAppliedRevision === null ? (
+              <span className="text-muted-foreground">None yet</span>
+            ) : (
+              <span>
+                rev {push.lastAppliedRevision}
+                <span className="text-muted-foreground"> · {push.lastApplied}</span>
+              </span>
+            )}
+          </InfoRow>
+          <InfoRow label="Last pushed revision">
+            {push.lastPushedRevision === null ? (
+              <span className="text-muted-foreground">None observed</span>
+            ) : (
+              <>rev {push.lastPushedRevision}</>
+            )}
+          </InfoRow>
           <InfoRow label="Remote pull">
             <span className="flex items-center gap-2">
               <Badge tone={status.remotePullEnabled ? 'hop' : 'outline'}>
@@ -94,6 +146,36 @@ export function SyncCard({ status }: { status: AgentStatusSnapshot }) {
             </span>
           </InfoRow>
         </dl>
+        {guidance ? (
+          <div className="flex flex-wrap items-start gap-3 rounded-lg border border-amber/40 bg-amber-soft/60 p-3">
+            <TriangleAlert aria-hidden className="mt-0.5 size-4 shrink-0 text-amber" />
+            <div className="min-w-0 flex-1">
+              <p className="text-sm font-medium">{guidance.title}</p>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{guidance.detail}</p>
+              {guidance.reason ? (
+                <p className="mt-1 font-mono text-[11px] text-muted-foreground">{guidance.reason}</p>
+              ) : null}
+            </div>
+            {guidance.command ? (
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!status.commandsAvailable || runningCommand !== null}
+                title={!status.commandsAvailable ? 'Run this command from the local HopIt dashboard.' : undefined}
+                onClick={() => void onCommand(guidance.command!)}
+              >
+                {runningCommand === guidance.command ? (
+                  <Spinner className="size-3.5" />
+                ) : guidance.command === 'recover' ? (
+                  <LifeBuoy className="size-4" />
+                ) : (
+                  <RefreshCw className="size-4" />
+                )}
+                {guidance.commandLabel}
+              </Button>
+            ) : null}
+          </div>
+        ) : null}
       </CardContent>
     </Card>
   )

@@ -15,12 +15,28 @@ INSTALL_DIR="${HOPIT_INSTALL_DIR:-$HOME/.hopit}"
 BIN_DIR="$HOME/.local/bin"
 
 TMP_DIR=""
+LOCK_DIR=""
+LOCK_HELD=0
+RUNTIME_STAGE=""
+LAUNCHER_STAGE=""
 cleanup() {
   if [ -n "$TMP_DIR" ] && [ -d "$TMP_DIR" ]; then
     rm -rf "$TMP_DIR"
   fi
+  if [ -n "$RUNTIME_STAGE" ] && [ -e "$RUNTIME_STAGE" ]; then
+    rm -rf "$RUNTIME_STAGE"
+  fi
+  if [ -n "$LAUNCHER_STAGE" ] && [ -e "$LAUNCHER_STAGE" ]; then
+    rm -f "$LAUNCHER_STAGE"
+  fi
+  if [ "$LOCK_HELD" -eq 1 ] && [ -n "$LOCK_DIR" ]; then
+    rm -rf "$LOCK_DIR"
+  fi
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 fail() {
   echo "hopit install: $1" >&2
@@ -49,10 +65,9 @@ esac
 
 TARGET="${PLATFORM}-${ARCH}"
 ARCHIVE="hop-${TARGET}.tar.gz"
-ARCHIVE_URL="${BASE}/${CHANNEL}/${ARCHIVE}"
-CHECKSUM_URL="${ARCHIVE_URL}.sha256"
+MANIFEST_URL="${BASE}/${CHANNEL}/manifest.json"
 
-echo "Installing HopIt for ${TARGET} from ${BASE}/${CHANNEL}" >&2
+echo "Resolving HopIt ${CHANNEL} for ${TARGET} from ${BASE}" >&2
 
 # --- Pick a downloader -----------------------------------------------------
 if command -v curl >/dev/null 2>&1; then
@@ -71,25 +86,72 @@ download() {
 
 TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/hopit-install.XXXXXX")" || fail "could not create temp dir"
 
+# Serialize installers before resolving the channel. A stale lock is reclaimed
+# only when its recorded process no longer exists.
+mkdir -p "$INSTALL_DIR"
+LOCK_DIR="$INSTALL_DIR/.install-lock"
+if mkdir "$LOCK_DIR" 2>/dev/null; then
+  LOCK_HELD=1
+else
+  lock_pid="$(sed -n '1p' "$LOCK_DIR/pid" 2>/dev/null || true)"
+  case "$lock_pid" in
+    '' | *[!0-9]*) fail "another HopIt installer owns an incomplete lock; retry shortly or remove $LOCK_DIR if no installer is running" ;;
+  esac
+  if kill -0 "$lock_pid" 2>/dev/null; then
+    fail "another HopIt installer is already running (pid $lock_pid)"
+  fi
+  stale_lock="$INSTALL_DIR/.install-lock.stale.$$"
+  mv "$LOCK_DIR" "$stale_lock" 2>/dev/null || fail "installer lock changed while it was being checked; retry"
+  rm -rf "$stale_lock"
+  mkdir "$LOCK_DIR" 2>/dev/null || fail "another HopIt installer started concurrently"
+  LOCK_HELD=1
+fi
+echo "$$" > "$LOCK_DIR/pid"
+
+MANIFEST_PATH="$TMP_DIR/manifest.json"
+download "$MANIFEST_URL" "$MANIFEST_PATH"
+
+# The mutable channel contains only a manifest. Resolve it to immutable release
+# objects so an interrupted publisher can never mix archive/checksum versions.
+VERSION="$(sed -n 's/^[[:space:]]*"version":[[:space:]]*"\([^"]*\)".*/\1/p' "$MANIFEST_PATH" | head -n 1)"
+case "$VERSION" in
+  '' | *[!A-Za-z0-9._+-]*) fail "release manifest contains an invalid version" ;;
+esac
+grep -F "\"$TARGET\"" "$MANIFEST_PATH" >/dev/null 2>&1 || fail "release manifest does not contain target $TARGET"
+
+RELEASE_PREFIX="releases/${VERSION}"
+ARCHIVE_URL="${BASE}/${RELEASE_PREFIX}/${ARCHIVE}"
+CHECKSUM_URL="${ARCHIVE_URL}.sha256"
 ARCHIVE_PATH="$TMP_DIR/$ARCHIVE"
 CHECKSUM_PATH="$TMP_DIR/$ARCHIVE.sha256"
 
+echo "Installing HopIt ${VERSION} for ${TARGET}" >&2
 download "$ARCHIVE_URL" "$ARCHIVE_PATH"
 download "$CHECKSUM_URL" "$CHECKSUM_PATH"
 
 # --- Verify checksum -------------------------------------------------------
-# The sidecar is "<hex>  <name>.tar.gz"; verify from inside the temp dir so the
-# relative filename in the sidecar resolves.
-(
-  cd "$TMP_DIR" || fail "could not enter temp dir"
-  if command -v shasum >/dev/null 2>&1; then
-    shasum -a 256 -c "$CHECKSUM_PATH" >/dev/null 2>&1 || fail "checksum verification failed"
-  elif command -v sha256sum >/dev/null 2>&1; then
-    sha256sum -c "$CHECKSUM_PATH" >/dev/null 2>&1 || fail "checksum verification failed"
-  else
-    echo "hopit install: warning: no shasum/sha256sum found; skipping checksum verification" >&2
-  fi
-)
+# Accept exactly one canonical sidecar line for the archive we downloaded,
+# then hash that archive directly. This prevents a malformed sidecar from
+# successfully checking some other file in the temporary directory.
+EXPECTED_CHECKSUM="$(awk -v archive="$ARCHIVE" '
+  NF == 2 && $2 == archive && $1 ~ /^[0-9A-Fa-f]+$/ {
+    digest = tolower($1)
+    matches += 1
+  }
+  END {
+    if (NR == 1 && matches == 1 && length(digest) == 64) print digest
+  }
+' "$CHECKSUM_PATH")"
+[ -n "$EXPECTED_CHECKSUM" ] || fail "release checksum sidecar is malformed or names the wrong archive"
+
+if command -v shasum >/dev/null 2>&1; then
+  ACTUAL_CHECKSUM="$(shasum -a 256 "$ARCHIVE_PATH" | awk 'NR == 1 { print tolower($1) }')"
+elif command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL_CHECKSUM="$(sha256sum "$ARCHIVE_PATH" | awk 'NR == 1 { print tolower($1) }')"
+else
+  fail "need shasum or sha256sum to verify the release"
+fi
+[ "$ACTUAL_CHECKSUM" = "$EXPECTED_CHECKSUM" ] || fail "checksum verification failed"
 
 # --- Extract ---------------------------------------------------------------
 EXTRACT_DIR="$TMP_DIR/extract"
@@ -103,26 +165,27 @@ if [ ! -d "$PACKAGE_SRC" ]; then
   PACKAGE_SRC="$(find "$EXTRACT_DIR" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
 fi
 [ -n "$PACKAGE_SRC" ] && [ -x "$PACKAGE_SRC/bin/hop" ] || fail "release archive did not contain bin/hop"
+"$PACKAGE_SRC/bin/hop" help >/dev/null 2>&1 || fail "downloaded HopIt runtime failed its pre-install smoke test"
 
-# --- Atomically replace <install-dir>/runtime -----------------------------
-mkdir -p "$INSTALL_DIR"
-RUNTIME_DIR="$INSTALL_DIR/runtime"
-RUNTIME_NEW="$INSTALL_DIR/runtime.new.$$"
-RUNTIME_OLD="$INSTALL_DIR/runtime.old.$$"
-
-rm -rf "$RUNTIME_NEW"
-# Move the freshly extracted, verified package into place under the install dir
-# first, so the old runtime is only removed after the new one is staged.
-mv "$PACKAGE_SRC" "$RUNTIME_NEW"
+# --- Stage an immutable versioned runtime ---------------------------------
+# Never rename the currently launched runtime out of the way. The old launcher
+# remains usable until its atomic replacement points at this fully staged tree.
+RUNTIMES_DIR="$INSTALL_DIR/runtimes"
+RUNTIME_DIR="$RUNTIMES_DIR/$VERSION"
+RUNTIME_STAGE="$RUNTIMES_DIR/.$VERSION.new.$$"
+mkdir -p "$RUNTIMES_DIR"
 
 if [ -e "$RUNTIME_DIR" ]; then
-  mv "$RUNTIME_DIR" "$RUNTIME_OLD"
+  [ -x "$RUNTIME_DIR/bin/hop" ] || fail "existing runtime $VERSION is incomplete"
+  "$RUNTIME_DIR/bin/hop" help >/dev/null 2>&1 || fail "existing runtime $VERSION failed its smoke test"
+else
+  mv "$PACKAGE_SRC" "$RUNTIME_STAGE"
+  chmod +x "$RUNTIME_STAGE/bin/hop" "$RUNTIME_STAGE/runtime/node" 2>/dev/null || true
+  mv "$RUNTIME_STAGE" "$RUNTIME_DIR" || fail "could not stage runtime $VERSION"
+  RUNTIME_STAGE=""
 fi
-mv "$RUNTIME_NEW" "$RUNTIME_DIR"
-rm -rf "$RUNTIME_OLD"
 
 HOP_BIN="$RUNTIME_DIR/bin/hop"
-chmod +x "$HOP_BIN" "$RUNTIME_DIR/runtime/node" 2>/dev/null || true
 
 # --- Link launcher ---------------------------------------------------------
 # The packaged launcher resolves its sibling runtime/app relative to its own
@@ -131,16 +194,19 @@ chmod +x "$HOP_BIN" "$RUNTIME_DIR/runtime/node" 2>/dev/null || true
 # real launcher by absolute path instead.
 mkdir -p "$BIN_DIR"
 LINK="$BIN_DIR/hop"
-rm -f "$LINK"
-cat > "$LINK" <<EOF
+LAUNCHER_STAGE="$BIN_DIR/.hop.new.$$"
+cat > "$LAUNCHER_STAGE" <<EOF
 #!/bin/sh
 exec "$HOP_BIN" "\$@"
 EOF
-chmod +x "$LINK"
+chmod +x "$LAUNCHER_STAGE"
+mv -f "$LAUNCHER_STAGE" "$LINK" || fail "could not activate the HopIt launcher"
+LAUNCHER_STAGE=""
 
 # --- Report ----------------------------------------------------------------
 echo "" >&2
 echo "HopIt installed." >&2
+echo "  version:  $VERSION" >&2
 echo "  runtime:  $RUNTIME_DIR" >&2
 echo "  launcher: $LINK -> $HOP_BIN" >&2
 

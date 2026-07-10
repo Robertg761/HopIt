@@ -49,7 +49,7 @@ export function HomePage() {
           description="Create or attach a repository to start working. HopIt keeps a synced workspace on each device."
           action={
             <Button asChild>
-              <Link href="/codebases">View repositories</Link>
+              <Link href="/codebases">Set up workspace</Link>
             </Button>
           }
         />

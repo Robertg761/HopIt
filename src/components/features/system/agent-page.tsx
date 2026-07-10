@@ -46,7 +46,13 @@ export function AgentPage() {
       ) : (
         <>
           <HealthCard status={status} />
-          <SyncCard status={status} />
+          <SyncCard
+            status={status}
+            runningCommand={runningCommand}
+            onCommand={async (command) => {
+              await runCommand(command)
+            }}
+          />
           <CommandsCard
             commandsAvailable={status.commandsAvailable}
             runningCommand={runningCommand}

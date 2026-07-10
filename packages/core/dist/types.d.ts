@@ -221,6 +221,26 @@ export type AgentFile = {
     contentPreviewTruncated: boolean;
     local: AgentFileLocal;
 };
+export type AgentRemotePushStatus = {
+    enabled: boolean;
+    state: string;
+    connectionState: 'connected' | 'disconnected' | 'disabled' | 'unknown';
+    fallbackState: 'checking' | 'available' | 'standby' | 'disabled' | 'unknown';
+    safeRefreshOnly: boolean;
+    hubUrl: string | null;
+    reconciliationCadence: string;
+    lastConnected: string;
+    lastDisconnected: string;
+    lastFallbackCheck: string;
+    lastApplied: string;
+    lastSkipped: string;
+    lastFailed: string;
+    lastEventId: string | null;
+    lastPushedRevision: number | null;
+    lastAppliedRevision: number | null;
+    lastSkippedReason: string | null;
+    lastError: string | null;
+};
 export type AgentStatusSnapshot = {
     id: string;
     state: AgentPanelState;
@@ -251,6 +271,7 @@ export type AgentStatusSnapshot = {
     remotePullEnabled: boolean;
     remotePullMode: string;
     remotePullCadence: string;
+    remotePush: AgentRemotePushStatus;
     workspaceHydrationState: string;
     workspaceMaterializedRevision: number | null;
     workspaceIndexPath: string | null;

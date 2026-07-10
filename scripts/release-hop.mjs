@@ -1,10 +1,8 @@
 #!/usr/bin/env node
 
-// Build every HopIt target and publish the archives, checksums, and a manifest
-// to the public R2 release bucket. `latest/` is the moving install channel and
-// `releases/<version>/` is immutable history. Uploads go through wrangler and
-// this script fails loudly on the first failed upload — no silent partial
-// releases.
+// Build every HopIt target and publish immutable archives/checksums first. The
+// single mutable `latest/manifest.json` pointer is uploaded last, so an aborted
+// release can leave only unreachable immutable objects — never a mixed channel.
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -38,6 +36,8 @@ const CACHE_IMMUTABLE = 'public, max-age=31536000, immutable'
 async function main() {
   const argv = process.argv.slice(2)
   const dryRun = argv.includes('--dry-run')
+  const allowUnsigned = argv.includes('--allow-unsigned')
+  assertReleasePublicationAllowed({ dryRun, allowUnsigned })
 
   // Default to every target; --target/HOP_PACKAGE_TARGET passthrough is honored.
   const hasExplicitTarget =
@@ -47,50 +47,22 @@ async function main() {
     ? parseTargets({ argv, env: process.env })
     : parseTargets({ argv: ['--target', 'all'], env: {} })
 
-  const version = releaseVersion()
   const builtAt = new Date().toISOString()
+  const version = releaseVersion(builtAt)
   const gitSha = shortGitSha()
 
   console.error(`Building ${targets.length} target(s) for release ${version} ...`)
   const built = await packageTargets(targets)
 
-  const manifest = {
-    version,
-    gitSha,
-    builtAt,
-    targets: {},
-  }
-  for (const result of built) {
-    manifest.targets[result.target] = {
-      key: `latest/${result.packageName}.tar.gz`,
-      sha256: result.sha256,
-      verified: result.verified,
-    }
-  }
+  const manifest = buildReleaseManifest({ version, gitSha, builtAt, built })
+  const publishChannel = hasCompleteReleaseTargetSet(built.map((result) => result.target))
 
   const manifestPath = path.join(artifactsRoot, `release-manifest-${version.replace(/[^\w.-]/g, '_')}.json`)
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
 
-  // Assemble the full upload plan before touching the network so a bad target
-  // list fails before any object is written.
-  const uploads = []
-  for (const result of built) {
-    const archiveName = `${result.packageName}.tar.gz`
-    const sha256Name = `${result.packageName}.tar.gz.sha256`
-    for (const [prefix, cacheControl] of [
-      ['latest', CACHE_LATEST],
-      [`releases/${version}`, CACHE_IMMUTABLE],
-    ]) {
-      uploads.push({ key: `${prefix}/${archiveName}`, file: result.archivePath, cacheControl })
-      uploads.push({ key: `${prefix}/${sha256Name}`, file: result.checksumPath, cacheControl })
-    }
-  }
-  for (const [prefix, cacheControl] of [
-    ['latest', CACHE_LATEST],
-    [`releases/${version}`, CACHE_IMMUTABLE],
-  ]) {
-    uploads.push({ key: `${prefix}/manifest.json`, file: manifestPath, cacheControl })
-  }
+  // Assemble the full upload plan before touching the network. The mutable
+  // channel pointer is deliberately the final item in this plan.
+  const uploads = buildReleaseUploadPlan({ version, built, manifestPath, publishChannel })
 
   for (const upload of uploads) {
     uploadObject(upload, dryRun)
@@ -99,14 +71,15 @@ async function main() {
   const publicUrls = {}
   for (const result of built) {
     publicUrls[result.target] = {
-      archive: `${PUBLIC_BASE_URL}/latest/${result.packageName}.tar.gz`,
-      sha256: `${PUBLIC_BASE_URL}/latest/${result.packageName}.tar.gz.sha256`,
+      archive: `${PUBLIC_BASE_URL}/releases/${version}/${result.packageName}.tar.gz`,
+      sha256: `${PUBLIC_BASE_URL}/releases/${version}/${result.packageName}.tar.gz.sha256`,
     }
   }
 
   console.log(JSON.stringify({
     ok: true,
     dryRun,
+    publishChannel,
     version,
     gitSha,
     builtAt,
@@ -154,8 +127,89 @@ function uploadObject(upload, dryRun) {
     stdio: ['ignore', 'inherit', 'inherit'],
   })
   if (result.status !== 0) {
-    throw new Error(`Upload failed for ${upload.key} (exit ${result.status}). Aborting release; no partial publish.`)
+    throw new Error(
+      `Upload failed for ${upload.key} (exit ${result.status}). Aborting before any later channel pointer update.`,
+    )
   }
+}
+
+export function buildReleaseManifest({ version, gitSha, builtAt, built }) {
+  const targets = {}
+  for (const result of built) {
+    const archiveName = `${result.packageName}.tar.gz`
+    targets[result.target] = {
+      key: `releases/${version}/${archiveName}`,
+      checksumKey: `releases/${version}/${archiveName}.sha256`,
+      sha256: result.sha256,
+      verified: result.verified,
+    }
+  }
+  return {
+    schemaVersion: 2,
+    version,
+    gitSha,
+    builtAt,
+    targets,
+  }
+}
+
+export function buildReleaseUploadPlan({
+  version,
+  built,
+  manifestPath,
+  publishChannel = hasCompleteReleaseTargetSet(built.map((result) => result.target)),
+}) {
+  const prefix = `releases/${version}`
+  const uploads = []
+  for (const result of built) {
+    const archiveName = `${result.packageName}.tar.gz`
+    uploads.push({
+      key: `${prefix}/${archiveName}`,
+      file: result.archivePath,
+      cacheControl: CACHE_IMMUTABLE,
+      phase: 'immutable',
+    })
+    uploads.push({
+      key: `${prefix}/${archiveName}.sha256`,
+      file: result.checksumPath,
+      cacheControl: CACHE_IMMUTABLE,
+      phase: 'immutable',
+    })
+  }
+  uploads.push({
+    key: `${prefix}/manifest.json`,
+    file: manifestPath,
+    cacheControl: CACHE_IMMUTABLE,
+    phase: 'immutable-manifest',
+  })
+  if (publishChannel) {
+    uploads.push({
+      key: 'latest/manifest.json',
+      file: manifestPath,
+      cacheControl: CACHE_LATEST,
+      phase: 'channel-pointer',
+    })
+  }
+  return uploads
+}
+
+export function assertReleasePublicationAllowed({ dryRun = false, allowUnsigned = false } = {}) {
+  if (dryRun && !allowUnsigned) return
+  if (allowUnsigned) {
+    throw new Error(
+      'Unsigned publication is disabled because this command targets HopIt public release storage. ' +
+      'Use package:hop for local/private dogfood artifacts instead.',
+    )
+  }
+  throw new Error(
+    'Release publication is blocked because HopIt artifacts are not signed or notarized. ' +
+    'Use --dry-run to verify the plan; public publication has no unsigned escape hatch.',
+  )
+}
+
+export function hasCompleteReleaseTargetSet(targets = []) {
+  const present = new Set(targets)
+  return VALID_TARGET_KEYS.every((target) => present.has(target)) && present.size === VALID_TARGET_KEYS.length
 }
 
 function contentTypeFor(key) {
@@ -165,12 +219,14 @@ function contentTypeFor(key) {
   return 'application/octet-stream'
 }
 
-function releaseVersion() {
+export function releaseVersion(builtAt = new Date().toISOString()) {
   const pkg = JSON.parse(spawnSync(process.execPath, ['-e', 'console.log(JSON.stringify(require("./package.json")))'], {
     cwd: repoRoot,
     encoding: 'utf8',
   }).stdout)
-  return `${pkg.version}+${shortGitSha()}`
+  const buildId = builtAt.replace(/\D/g, '').slice(0, 17)
+  if (buildId.length !== 17) throw new Error(`Unable to derive a release build id from ${builtAt}.`)
+  return `${pkg.version}+${shortGitSha()}.${buildId}`
 }
 
 function shortGitSha() {

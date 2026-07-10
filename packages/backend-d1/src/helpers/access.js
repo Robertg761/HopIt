@@ -12,13 +12,21 @@ export function hasCapability(access, capability) {
 }
 
 export function visibilityContextForGraph(graph, request = {}) {
-  if (!request.requesterId && !request.sessionId && graph.visibilityContext) return graph.visibilityContext
+  const requestedUserId = request.requesterId ?? request.userId ?? null
+  if (!requestedUserId && !request.sessionId && graph.visibilityContext) return graph.visibilityContext
   const ownerId = graph.owner?.id ?? graph.codebase?.ownerId ?? null
-  const requesterId = request.requesterId ?? ownerId
+  // A session id is routing metadata, not an authenticated user identity. If a
+  // caller has only a session id, keep the requester anonymous so visibility
+  // fails closed instead of silently inheriting the codebase owner.
+  const requesterId = requestedUserId ?? (request.sessionId ? null : ownerId)
   const membership = request.membership ?? null
   const collaborator = (graph.collaborators ?? []).find((entry) => (entry.id ?? entry.userId) === requesterId) ?? null
   const isOwner = Boolean(requesterId && requesterId === ownerId)
   const activeMembership = membership?.status === 'active' ? membership : null
+  const effectiveChangeSetVisibility =
+    stringOrNull(graph.selectedState?.effectiveVisibility) ??
+    stringOrNull(graph.visibility?.effective) ??
+    'private'
   const role = isOwner
     ? 'owner'
     : activeMembership
@@ -29,9 +37,13 @@ export function visibilityContextForGraph(graph, request = {}) {
   const context = {
     id: requesterId ?? null,
     sessionId: request.sessionId ?? null,
+    ownerId,
     role,
     isOwner,
     isCollaborator: role !== 'guest' && !isOwner,
+    selectedStateType: stringOrNull(graph.selectedState?.type),
+    selectedStateId: stringOrNull(graph.selectedState?.id),
+    effectiveChangeSetVisibility,
     membershipSource: isOwner
       ? 'owner'
       : activeMembership
@@ -77,8 +89,12 @@ export function filterVisibleGraphForAccess(graph, context) {
 }
 
 export function canRequesterSeePath(context, filePath) {
-  if (scopeForPath(filePath) !== 'owner-private') return visibleRoles.has(context.role)
-  return context.isOwner
+  if (context.isOwner) return true
+  if (scopeForPath(filePath) === 'owner-private') return false
+  if (!context.isCollaborator || !visibleRoles.has(context.role)) return false
+  if (context.selectedStateType === 'main') return true
+  return context.effectiveChangeSetVisibility === 'team-visible'
+    || context.effectiveChangeSetVisibility === 'review-visible'
 }
 
 export function canRead(context) {
@@ -107,11 +123,17 @@ export function accessContextForCodebaseHead(codebase, context) {
     stringOrNull(codebase.selectedState?.effectiveVisibility) ??
     stringOrNull(codebase.visibility?.effective) ??
     'private'
+  const selectedStateType = stringOrNull(codebase.selectedState?.type) ?? context.selectedStateType
+  const collaboratorCanSeeShared = context.isCollaborator && (
+    selectedStateType === 'main' ||
+    effectiveVisibility === 'team-visible' ||
+    effectiveVisibility === 'review-visible'
+  )
   const visibleFileCount = context.isOwner
     ? fileCount
-    : context.role === 'guest' || effectiveVisibility === 'private'
-      ? 0
-      : sharedFileCount
+    : collaboratorCanSeeShared
+      ? sharedFileCount
+      : 0
   const hiddenFileCount = Math.max(0, fileCount - visibleFileCount)
 
   return {

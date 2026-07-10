@@ -1,7 +1,7 @@
-import type { AgentPanelState, AgentStatusSnapshot } from '@hopit/core'
+import type { AgentPanelState, AgentRemotePushStatus, AgentStatusSnapshot } from '@hopit/core'
 
 import { offlineAgentStatus } from './defaults'
-import { formatEventTime, formatRevision, remotePullCadenceLabel, remotePullModeLabel } from './formatters'
+import { formatDuration, formatEventTime, formatRevision, remotePullCadenceLabel, remotePullModeLabel } from './formatters'
 import {
   backendName,
   mapCloudFiles,
@@ -21,6 +21,7 @@ export type {
   AgentFileLocalState,
   AgentMember,
   AgentPanelState,
+  AgentRemotePushStatus,
   AgentRequester,
   AgentStatusSnapshot,
 } from '@hopit/core'
@@ -177,11 +178,15 @@ export type RawAgentStatus = {
     enabled?: boolean
     state?: string
     intervalMs?: number | null
+    reconciliationIntervalMs?: number | null
     lastStarted?: {
       detail?: {
         state?: string
         mode?: string
         cooldownMs?: number | null
+        reconciliationIntervalMs?: number | null
+        activityTriggersEnabled?: boolean
+        pushReconciliationEnabled?: boolean
       } | null
     } | null
     cursor?: {
@@ -189,6 +194,28 @@ export type RawAgentStatus = {
       graphRevision?: number | null
       behindByRevisions?: number | null
     } | null
+  }
+  remotePush?: {
+    enabled?: boolean
+    state?: string | null
+    connectionState?: string | null
+    fallbackState?: string | null
+    safeRefreshOnly?: boolean
+    hubUrl?: string | null
+    reconciliationIntervalMs?: number | null
+    lastStarted?: RawAgentEvent | null
+    lastConnected?: RawAgentEvent | null
+    lastDisconnected?: RawAgentEvent | null
+    lastFallbackPolling?: RawAgentEvent | null
+    lastApplied?: RawAgentEvent | null
+    lastSkipped?: RawAgentEvent | null
+    lastFailed?: RawAgentEvent | null
+    latestEvent?: RawAgentEvent | null
+    lastEventId?: string | null
+    lastPushedRevision?: number | null
+    lastAppliedRevision?: number | null
+    lastSkippedReason?: string | null
+    lastError?: string | null
   }
   review?: {
     state?: string
@@ -246,11 +273,13 @@ export function mapAgentStatusResponse(response: unknown): AgentStatusSnapshot {
   const syncState = status.sync?.state ?? 'idle'
   const refreshState = status.refresh?.state ?? 'idle'
   const conflictState = status.conflict?.state ?? 'none'
+  const normalizedConflictState = conflictState.trim().toLowerCase()
+  const hasConflict = !['none', 'clean', 'resolved', 'unavailable'].includes(normalizedConflictState)
   const isBlocked =
     syncState === 'failed' ||
     failedWrites > 0 ||
     refreshState === 'blocked' ||
-    conflictState === 'conflicted'
+    hasConflict
   const isSyncing = syncState === 'syncing' || refreshState === 'refreshing' || pendingWrites > 0
   const state: AgentPanelState = isBlocked ? 'blocked' : isSyncing ? 'syncing' : 'online'
   const privateFiles = status.cloud?.scopeCounts?.private ?? 0
@@ -261,6 +290,7 @@ export function mapAgentStatusResponse(response: unknown): AgentStatusSnapshot {
   const remotePullEnabled = Boolean(status.remotePull?.enabled)
   const remotePullMode = remotePullModeLabel(status.remotePull)
   const remotePullCadence = remotePullCadenceLabel(status.remotePull)
+  const remotePush = normalizeRemotePush(status.remotePush)
   const workspaceHydration = status.workspace?.hydration
   const remoteCursor = status.remotePull?.cursor
   const backend = backendName(wrappedResponse?.capabilities?.backend)
@@ -270,7 +300,7 @@ export function mapAgentStatusResponse(response: unknown): AgentStatusSnapshot {
   return {
     id: status.codebaseName ? `${status.codebaseName}-agent` : 'local-hopit-agent',
     state,
-    healthLabel: status.ok === false ? 'Needs attention' : state === 'syncing' ? 'Syncing' : 'Online',
+    healthLabel: status.ok === false || state === 'blocked' ? 'Needs attention' : state === 'syncing' ? 'Syncing' : 'Online',
     codebaseId,
     managedWorkspacePath: status.workspace?.path ?? 'Workspace unavailable',
     codebaseName: status.codebaseName ?? 'Unknown codebase',
@@ -301,6 +331,7 @@ export function mapAgentStatusResponse(response: unknown): AgentStatusSnapshot {
     remotePullEnabled,
     remotePullMode,
     remotePullCadence,
+    remotePush,
     workspaceHydrationState: workspaceHydration?.state ?? status.readiness ?? 'unknown',
     workspaceMaterializedRevision:
       numberOrNull(workspaceHydration?.lastMaterializedRevision) ??
@@ -317,6 +348,60 @@ export function mapAgentStatusResponse(response: unknown): AgentStatusSnapshot {
   }
 }
 
+function normalizeRemotePush(remotePush: RawAgentStatus['remotePush']): AgentRemotePushStatus {
+  const enabled = Boolean(remotePush?.enabled)
+  const reconciliationIntervalMs = numberOrNull(remotePush?.reconciliationIntervalMs)
+
+  return {
+    enabled,
+    state: stringOrNull(remotePush?.state) ?? (enabled ? 'push-disconnected' : 'disabled'),
+    connectionState: remotePushConnectionState(remotePush?.connectionState, enabled),
+    fallbackState: remotePushFallbackState(remotePush?.fallbackState, enabled),
+    safeRefreshOnly: Boolean(remotePush?.safeRefreshOnly),
+    hubUrl: stringOrNull(remotePush?.hubUrl),
+    reconciliationCadence: enabled
+      ? reconciliationIntervalMs === null
+        ? 'Safety cadence unknown'
+        : `${formatDuration(reconciliationIntervalMs)} safety check`
+      : 'No safety check',
+    lastConnected: eventTime(remotePush?.lastConnected),
+    lastDisconnected: eventTime(remotePush?.lastDisconnected),
+    lastFallbackCheck: eventTime(remotePush?.lastFallbackPolling),
+    lastApplied: eventTime(remotePush?.lastApplied),
+    lastSkipped: eventTime(remotePush?.lastSkipped),
+    lastFailed: eventTime(remotePush?.lastFailed),
+    lastEventId: stringOrNull(remotePush?.lastEventId),
+    lastPushedRevision: numberOrNull(remotePush?.lastPushedRevision),
+    lastAppliedRevision: numberOrNull(remotePush?.lastAppliedRevision),
+    lastSkippedReason:
+      stringOrNull(remotePush?.lastSkippedReason) ??
+      stringOrNull(remotePush?.lastSkipped?.detail?.reason),
+    lastError: stringOrNull(remotePush?.lastError),
+  }
+}
+
+function remotePushConnectionState(
+  value: string | null | undefined,
+  enabled: boolean,
+): AgentRemotePushStatus['connectionState'] {
+  if (!enabled) return 'disabled'
+  if (value === 'connected' || value === 'disconnected') return value
+  return 'unknown'
+}
+
+function remotePushFallbackState(
+  value: string | null | undefined,
+  enabled: boolean,
+): AgentRemotePushStatus['fallbackState'] {
+  if (!enabled) return 'disabled'
+  if (value === 'checking' || value === 'available' || value === 'standby') return value
+  return 'unknown'
+}
+
+function eventTime(event: RawAgentEvent | null | undefined) {
+  return formatEventTime(event?.at ?? event?.timestamp)
+}
+
 function isRawAgentResponse(response: unknown): response is RawAgentResponse {
   return typeof response === 'object' && response !== null && ('status' in response || 'error' in response)
 }
@@ -328,4 +413,3 @@ function isRawAgentStatus(response: unknown): response is RawAgentStatus {
     ('ok' in response || 'generatedAt' in response || 'codebaseName' in response)
   )
 }
-

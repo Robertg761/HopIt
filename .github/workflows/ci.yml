@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: hopit-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Quality and web
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run typecheck:agent
+      - run: npm run test:web
+      - run: npm run test:worker
+      - run: npm run test:config
+      - run: npm run build
+
+  agent-and-package:
+    name: Agent and package (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-14]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm run package:hop -- --target all
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hop-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            artifacts/hop-*.tar.gz
+            artifacts/hop-*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7

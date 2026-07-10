@@ -2,7 +2,7 @@
 
 HopIt's local agent materializes selected cloud codebase state under a HopIt Workspace Root. For accepted project state that selected state can be Main; for day-to-day editing it is usually the user's active change set. The v1 architecture should optimize for OS and editor compatibility: a normal local folder, agent-owned cache metadata, lazy materialization where safe, a safety journal, automatic remote-update delivery, a status API, and an event log. A true OS filesystem mount is future optional research, not the default product path.
 
-Current production-shaped dogfood uses the hosted dashboard at `https://hopit.dev`, packaged `hop-darwin-arm64` runtime from `/Users/robert/Library/Application Support/HopIt/Runtime`, LaunchAgent `com.hopit.agent.hopit`, workspace root `/Users/robert/HopIt Workspaces`, Cloudflare D1 as the free-first graph target, the `hopit-d1-api` Worker as Vercel's D1 API adapter, and private Cloudflare R2 bucket `hopit-blobs` for object blobs. As of 2026-07-02, Convex production is disabled for Free-plan limits, the D1-backed production app is deployed, and the LaunchAgent is running with D1 cloud status; remote-pull is activity-gated and uses a five-minute cooldown when enabled. Concrete account ids, DNS records, auth state, env locations, log paths, and temporary/long-term setup notes live in [Personal Production Runbook](personal-production.md).
+Current production-shaped dogfood uses the hosted dashboard at `https://hopit.dev`, packaged `hop-darwin-arm64` runtime from `/Users/robert/Library/Application Support/HopIt/Runtime`, LaunchAgent `com.hopit.agent.hopit`, workspace root `/Users/robert/HopIt Workspaces`, Cloudflare D1 as the free-first graph target, the `hopit-d1-api` Worker as Vercel's D1 API adapter, and private Cloudflare R2 bucket `hopit-blobs` for object blobs. The retired hosted backend is disabled and removed from the runtime path, the D1-backed production app and push hub are deployed, and the LaunchAgent reports push enabled. Push/pull service mode uses safe periodic graph-head reconciliation at a five-minute default cadence; the latest observed live push was blocked by local drift, so successful clean-workspace apply remains to be proven. Concrete account ids, DNS records, auth state, env locations, log paths, and temporary/long-term setup notes live in [Personal Production Runbook](personal-production.md).
 
 ## Core Pieces
 
@@ -34,7 +34,7 @@ The cloud file graph is the durable model for a codebase:
 - workspace revision number
 - device/session sync state
 
-The spike stores a simplified single selected state in `.hopit-agent/cloud.json`. The production service splits metadata into Cloudflare D1 and file bytes into S3-compatible content-addressed object storage, but exposes the same graph-shaped API to the agent with explicit Main, active change-set, owner, and visibility fields. Convex remains only as a legacy backend and migration source while the D1 port finishes.
+The spike stores a simplified single selected state in `.hopit-agent/cloud.json`. The production service splits metadata into Cloudflare D1 and file bytes into S3-compatible content-addressed object storage, but exposes the same graph-shaped API to the agent with explicit Main, active change-set, owner, and visibility fields. The retired hosted graph survives only as a saved export and migration source; its runtime backend was removed.
 
 Solid v1 storage requirements:
 
@@ -48,6 +48,15 @@ Solid v1 storage requirements:
 - snapshots can be reconstructed from file metadata and blob references
 
 HopIt v1 does not have an ignore-file model. The graph should store visibility metadata for `.private/` paths: those files are snapshotted, synced, and versioned, but visible only to the owner. Files outside `.private/` are governed by the active change set's effective visibility and the codebase's permissions.
+
+The current D1 boundary enforces that distinction for both file graphs and
+codebase-head counts: owners see their selected draft, members/viewers see
+shared files only when the active change set is team- or review-visible, guests
+see no private draft, and `.private/` remains owner-only. Main can expose shared
+paths to authorized collaborators without exposing owner-private paths. Scoped
+device SQL is additionally limited to conservative statement shapes, exact
+codebase equality, and the session's capabilities while the raw-SQL proxy is
+replaced by typed Worker operations.
 
 Exception: `.private/env/` is local-only unless object storage and a local decrypt-capable key source are configured. Today that source can be the legacy `HOPIT_CLIENT_ENCRYPTION_KEY` or a `hop keys init-device` keyring that unwraps the user vault key locally. Routed env files can live there on disk, and the agent may upload them only as client-encrypted object blobs; it must never upload their raw bytes to D1, Convex, R2, B2, or any other provider.
 
@@ -114,6 +123,14 @@ that selected active change set to Main, advances Main only at that point,
 records merge state, and emits `change_set.merged`. Sync acknowledgements before
 merge continue to advance the active change set, not Main.
 
+Browser text edits follow the same rule. They become guarded per-file journal
+commits against the current selected active-change-set head, preserve Main, and
+retry a moving change-set head only when the same file base is still current.
+Stale same-file edits return an explicit conflict. Browser replacement of an
+object-backed file fails closed until the server can upload its replacement
+blob before metadata commit. D1 multi-statement commits use an atomic batch when
+the production binding provides it.
+
 ### Workspace Adapter
 
 The workspace adapter is the boundary between normal local tools and HopIt state.
@@ -150,6 +167,11 @@ Responsibilities:
 - prune clean cached content when policy allows
 - never evict writes that are still awaiting cloud acknowledgement
 - record which local paths are metadata-only, partially hydrated, clean, dirty, blocked, or conflicted
+
+The watch/service loop can opt into scheduled pruning with `--auto-prune` or
+`HOPIT_AUTO_PRUNE=1`. It defaults to a six-hour cadence and seven-day inactivity
+threshold, skips whenever local sync or the journal is unresolved, and delegates
+to the same cache-prune contract that preserves pinned and non-clean content.
 
 RAM-only caching can be revisited later for specialized workflows, but it is not the v1 default.
 
@@ -220,7 +242,17 @@ Refresh expectations:
 
 ### Automatic Remote-Update Delivery
 
-Explicit `hop refresh` is the current safe primitive. The current worktree also has opt-in activity-gated `--remote-pull` for `watch` and `service start`; it wakes after local workspace activity, observes a five-minute cooldown by default, and calls the same safe refresh path only when local state is fully materialized, clean against the hash-only materialization manifest, and the per-workspace index cursor is behind the cloud revision. D1-backed remote-pull reads only codebase-level revision metadata before any full graph read, so idle services do not continuously query the graph and unchanged checks avoid scanning the file table. Solid v1 should keep that safety contract but make remote-update delivery production-grade, observable, and suitable for normal same-owner device handoff.
+Explicit `hop refresh` remains the deterministic safe primitive. Watch/service
+mode supports opt-in remote pull and push. Local activity can trigger a pull
+when `--remote-pull` is enabled, while either pull or push enables a periodic
+graph-head reconciliation at the configured cadence (five minutes by default).
+Push hints, reconnect fallback, and periodic reconciliation all call the same
+safe refresh decision: local state must be fully materialized, clean against
+the hash-only materialization manifest, free of unresolved journal work, and
+behind the cloud revision. D1 reads only codebase-level revision metadata before
+any full graph read, so unchanged checks avoid scanning the file table. This
+means a missed hint no longer waits for another local edit, while a dirty
+workspace still blocks materialization.
 
 Remote-update delivery expectations:
 
@@ -232,6 +264,8 @@ Remote-update delivery expectations:
 - metadata-only or partially materialized workspaces stay lazy until an explicit hydrate or refresh operation changes that state
 - remote updates preserve `.private/` visibility and requester filtering
 - status exposes whether the last update was applied, skipped as unchanged, blocked by local work, or failed
+- status separates push connection/fallback state, pushed/applied revisions,
+  skip reason, and actionable recovery guidance
 
 ### Status API
 
@@ -378,7 +412,7 @@ The local-agent contract is good enough for personal dogfooding, but the solid v
 
 - Run two agent sessions against the same active change set.
 - Show that writes acknowledged from device/session A become visible to same-owner device/session B after B performs the safe refresh flow.
-- Then promote the activity-gated remote-pull proof to production-grade automatic remote-update delivery when B's local journal is clean.
+- Prove deployed push plus periodic reconciliation applying on device B when its local journal and materialization manifest are clean.
 - Simulate A syncing both non-private content and `.private/` owner-private content, then B refreshing as the same owner and seeing both sets of files with their visibility metadata preserved.
 - Keep collaborator visibility simulations passing: private change sets stay hidden, team-visible and review-visible change sets expose non-private paths to permitted collaborators, and `.private/` remains owner-only in every mode.
 - Emit event-log entries for remote updates and cache invalidation.
@@ -387,7 +421,7 @@ The local-agent contract is good enough for personal dogfooding, but the solid v
 ### 6. Tighten Managed-Folder Behavior
 
 - Handle creates, writes, deletes, renames, and `.private/` visibility paths consistently.
-- Add automatic pruning policy on top of the explicit conservative prune command.
+- Dogfood and tune the opt-in automatic pruning policy built on the explicit conservative prune command.
 - Preserve normal editor and terminal compatibility as the primary v1 constraint.
 
 ### 7. Add Review And Merge

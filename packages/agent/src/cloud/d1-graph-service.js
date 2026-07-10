@@ -294,7 +294,7 @@ export class D1CloudGraphService extends CloudflareD1HopBackend {
   }
 
   applyJournalEntry(cloud, entry, options = {}) {
-    return applyJournalEntryToCloud(cloud, entry, options)
+    return super.applyJournalEntry(cloud, entry, options)
   }
 
   async commitJournalEntry(cloud, entry, options = {}) {
@@ -715,7 +715,10 @@ export function visibilityContextForGraph(cloud, request = {}) {
   }
 
   const ownerId = cloud.owner?.id ?? cloud.codebase?.ownerId ?? null
-  const requesterId = request.requesterId ?? ownerId
+  // A bare session id does not prove which user owns that session. Connected
+  // setup persists requesterId separately; callers missing it must remain a
+  // guest rather than inheriting owner visibility.
+  const requesterId = request.requesterId ?? (request.sessionId ? null : ownerId)
   const collaborator = (cloud.collaborators ?? []).find((entry) => entry.id === requesterId) ?? null
   const isOwner = Boolean(ownerId && requesterId === ownerId)
   const isCollaborator = Boolean(collaborator)

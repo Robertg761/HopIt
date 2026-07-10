@@ -88,11 +88,14 @@ Options:
   --capabilities <csv> Session capabilities, default read,write,sync,watch
   --host <host>        Status server host, defaults to 127.0.0.1
   --port <port>        Status server port, defaults to 4785
-  --remote-pull        Opt into activity-gated safe cloud refresh in watch/service mode
+  --remote-pull        Opt into periodic and activity-triggered safe cloud refresh
   --remote-push        Opt into push-delivered safe cloud refresh hints in watch/service mode
   --remote-push-url <url> Push hub NDJSON stream URL, or HOPIT_REMOTE_PUSH_URL
-  --remote-pull-cooldown-ms <ms> Minimum delay between activity-triggered remote pulls, default 300000
+  --remote-pull-cooldown-ms <ms> Remote head safety-check cadence, default 300000
   --remote-refresh-interval-ms <ms> Legacy alias for --remote-pull-cooldown-ms
+  --auto-prune         Opt in to safe cache pruning, or HOPIT_AUTO_PRUNE=1
+  --auto-prune-interval-ms <ms> Schedule, default 6h; HOPIT_AUTO_PRUNE_INTERVAL_MS
+  --auto-prune-inactive-ms <ms> Inactivity, default 7d; HOPIT_AUTO_PRUNE_INACTIVE_MS
   --start-service      install: start the production service after preparing paths
   --write-env          install: write hopit.env.example under the agent state root
   --launch-agent       install: write a macOS LaunchAgent for start-on-login

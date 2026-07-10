@@ -213,6 +213,40 @@ test('D1 account bootstrap claims local-owner codebases for the verified owner',
   assert.equal(secondBootstrap.claimed.length, 0)
 })
 
+test('D1 allocates distinct tenant-safe ids for the same common codebase name', async (t) => {
+  const server = await startD1ApiServer(t)
+  const backend = createD1Backend({
+    'codebase-id': 'allocation-test',
+    'd1-api-base-url': server.baseUrl,
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_test',
+    'd1-api-token': 'token_test',
+  })
+
+  const first = await backend.createCodebase({
+    name: 'My Project',
+    actor: { userId: 'user_account_one' },
+  })
+  const second = await backend.createCodebase({
+    name: 'My Project',
+    actor: { userId: 'user_account_two' },
+  })
+
+  assert.match(first.codebase.id, /^my-project-[0-9a-f-]{36}$/)
+  assert.match(second.codebase.id, /^my-project-[0-9a-f-]{36}$/)
+  assert.notEqual(first.codebase.id, second.codebase.id)
+  assert.equal((await backend.readGraph(first.codebase.id)).codebase.ownerId, 'user_account_one')
+  assert.equal((await backend.readGraph(second.codebase.id)).codebase.ownerId, 'user_account_two')
+  assert.deepEqual(
+    (await backend.listCodebases({ userId: 'user_account_one' })).map((head) => head.codebase.id),
+    [first.codebase.id],
+  )
+  assert.deepEqual(
+    (await backend.listCodebases({ userId: 'user_account_two' })).map((head) => head.codebase.id),
+    [second.codebase.id],
+  )
+})
+
 test('D1 backend supports members, invitations, and collaboration work items', async (t) => {
   const server = await startD1ApiServer(t)
   const previousOwnerEmail = process.env.HOPIT_OWNER_EMAIL
@@ -741,6 +775,7 @@ test('D1 device authorization exchanges a one-time code for a device-encrypted s
   const polled = await backend.pollDeviceAuthorization(created.deviceCode)
   assert.equal(polled.status, 'approved')
   assert.equal(polled.codebaseId, 'device-auth-core')
+  assert.equal(polled.requesterId, 'user_owner')
   assert.match(polled.sessionId, /^session_/)
   const token = unwrapSymmetricKeyFromDevice({
     wrappedKey: polled.wrappedSessionToken,
@@ -762,6 +797,73 @@ test('D1 device authorization exchanges a one-time code for a device-encrypted s
   assert.equal(stored.device_code_hash.includes(created.deviceCode), false)
   assert.equal(stored.wrapped_session_token_json.includes(token), false)
   assert.equal((await backend.pollDeviceAuthorization('hdc_' + 'x'.repeat(43))).status, 'not_found')
+})
+
+test('collaborator device authorization preserves identity and visibility on scoped reads', async (t) => {
+  const server = await startD1ApiServer(t)
+  const backend = createD1Backend({
+    'codebase-id': 'collaborator-device-core',
+    'd1-api-base-url': server.baseUrl,
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_test',
+    'd1-api-token': 'token_test',
+  })
+  const graph = makeD1Graph({
+    codebaseId: 'collaborator-device-core',
+    files: {
+      'README.md': { kind: 'file', content: 'shared\n', encoding: 'utf8', revision: 1 },
+      '.private/notes.md': { kind: 'file', content: 'owner only\n', encoding: 'utf8', revision: 1 },
+    },
+  })
+  graph.collaborators = [{ id: 'user_collaborator', role: 'member', status: 'active' }]
+  graph.visibility = { ...graph.visibility, changeSetOverride: 'team-visible', effective: 'team-visible' }
+  graph.selectedState = {
+    ...graph.selectedState,
+    visibility: 'team-visible',
+    effectiveVisibility: 'team-visible',
+  }
+  await backend.initialize(graph)
+
+  const device = createDeviceKeyMaterial({
+    deviceId: 'dev_collaborator_auth_test',
+    deviceName: 'Collaborator Device',
+    platform: 'test-platform',
+  })
+  const created = await backend.createDeviceAuthorization({
+    deviceKey: publicDeviceKeyDescriptor(device),
+    requestFingerprint: 'collaborator_fingerprint_test',
+  })
+  await backend.approveDeviceAuthorization({
+    userCode: created.userCode,
+    codebaseId: 'collaborator-device-core',
+    actor: { userId: 'user_collaborator' },
+  })
+  const polled = await backend.pollDeviceAuthorization(created.deviceCode)
+  assert.equal(polled.requesterId, 'user_collaborator')
+
+  const token = unwrapSymmetricKeyFromDevice({
+    wrappedKey: polled.wrappedSessionToken,
+    recipientPrivateKeyPem: device.encryption.privateKeyPem,
+    context: polled.tokenContext,
+  }).toString('utf8')
+  const scoped = new D1CloudGraphService({
+    'codebase-id': 'collaborator-device-core',
+    'd1-api-base-url': server.baseUrl,
+    'session-token': token,
+    'requester-id': polled.requesterId,
+    'session-id': polled.sessionId,
+  })
+  const visible = await scoped.readVisibleGraph({
+    requesterId: polled.requesterId,
+    sessionId: polled.sessionId,
+  })
+  assert.deepEqual(Object.keys(visible.files), ['README.md'])
+  assert.equal(visible.visibilityContext.id, 'user_collaborator')
+  assert.equal(visible.visibilityContext.role, 'member')
+
+  const sessionOnly = await scoped.readVisibleGraph({ sessionId: polled.sessionId })
+  assert.deepEqual(Object.keys(sessionOnly.files), [])
+  assert.equal(sessionOnly.visibilityContext.isOwner, false)
 })
 
 test('D1 backend records file versions and compares retained revisions', async (t) => {
@@ -910,14 +1012,7 @@ test('D1 backend records file versions and compares retained revisions', async (
     updatedAt: now,
   }
   await backend.writeGraph(objectGraph, { actor: { userId: 'user_owner' } })
-  await backend.mutateTextFile({
-    codebaseId: 'history-core',
-    path: 'OBJECT.md',
-    content: 'object body changed\n',
-    baseRevision: 4,
-    actor: { userId: 'user_owner' },
-  })
-  const missingCompare = await backend.compareRevisions(4, 5, {
+  const missingCompare = await backend.compareRevisions(3, 4, {
     codebaseId: 'history-core',
     requesterId: 'user_owner',
     path: 'OBJECT.md',
@@ -925,6 +1020,26 @@ test('D1 backend records file versions and compares retained revisions', async (
   const objectEntry = missingCompare.entries.find((entry) => entry.path === 'OBJECT.md')
   assert.equal(objectEntry.state, 'missing_blob')
   assert.equal(missingCompare.summary.missingBlob, 1)
+
+  await assert.rejects(
+    () => backend.mutateTextFile({
+      codebaseId: 'history-core',
+      path: 'OBJECT.md',
+      content: 'object body changed\n',
+      baseRevision: 4,
+      actor: { userId: 'user_owner' },
+    }),
+    (error) => {
+      assert.equal(error.code, 'object_blob_upload_required')
+      return true
+    },
+  )
+  const objectAfterRejectedEdit = (await backend.readGraph('history-core')).files['OBJECT.md']
+  assert.equal(objectAfterRejectedEdit.contentStorage, 'object-blob')
+  assert.equal(objectAfterRejectedEdit.blobProvider, 'filesystem')
+  assert.equal(objectAfterRejectedEdit.blobKey, objectGraph.files['OBJECT.md'].blobKey)
+  assert.equal(objectAfterRejectedEdit.blobHash, objectHash)
+  assert.equal(objectAfterRejectedEdit.revision, 4)
 })
 
 async function startD1ApiServer(t, { statements = null, statementRecords = null, requestBatches = null, pushNamespace = null } = {}) {
@@ -1117,6 +1232,177 @@ async function runCli(command, args = []) {
   })
 }
 
+test('browser D1 file mutations advance only the selected change set and preserve concurrent paths', async (t) => {
+  const statementRecords = []
+  const server = await startD1ApiServer(t, { statementRecords })
+  const now = '2026-07-08T00:00:00.000Z'
+  const backend = createD1Backend({
+    'codebase-id': 'browser-mutation-core',
+    'd1-api-base-url': server.baseUrl,
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_test',
+    'd1-api-token': 'token_test',
+  })
+  await backend.initialize(makeD1Graph({
+    codebaseId: 'browser-mutation-core',
+    now,
+    files: {
+      'README.md': {
+        kind: 'file',
+        content: 'readme one\n',
+        encoding: 'utf8',
+        revision: 1,
+        updatedAt: now,
+      },
+      'src/other.js': {
+        kind: 'file',
+        content: 'export const other = 1\n',
+        encoding: 'utf8',
+        revision: 1,
+        updatedAt: now,
+      },
+    },
+  }))
+  const initial = await backend.readGraph()
+  const initialMain = structuredClone(initial.main)
+
+  statementRecords.length = 0
+  const first = await backend.mutateTextFile({
+    codebaseId: 'browser-mutation-core',
+    path: 'README.md',
+    content: 'readme two\n',
+    baseRevision: 1,
+    actor: { userId: 'user_owner' },
+  })
+  assert.equal(first.revision, 2)
+  assert.equal(first.selectedStateId, initial.selectedState.id)
+  assert.equal(first.selectedStateRevision, 2)
+
+  const afterFirst = await backend.readGraph()
+  assert.deepEqual(afterFirst.main, initialMain)
+  assert.equal(afterFirst.revision, 2)
+  assert.equal(afterFirst.selectedState.revision, afterFirst.revision)
+  assert.equal(afterFirst.selectedState.baseRevision, initialMain.revision)
+  assert.equal(afterFirst.files['README.md'].revision, 2)
+  assert.equal(afterFirst.files['src/other.js'].revision, 1)
+
+  await assert.rejects(
+    () => backend.mutateTextFile({
+      codebaseId: 'browser-mutation-core',
+      path: 'README.md',
+      content: 'stale overwrite\n',
+      baseRevision: 1,
+      actor: { userId: 'user_owner' },
+    }),
+    (error) => {
+      assert.equal(error.code, 'base_revision_mismatch')
+      assert.equal(error.detail.expectedRevision, 1)
+      assert.equal(error.detail.actualRevision, 2)
+      return true
+    },
+  )
+  const afterMismatch = await backend.readGraph()
+  assert.equal(afterMismatch.revision, 2)
+  assert.equal(afterMismatch.files['README.md'].content, 'readme two\n')
+
+  const switchedState = { ...afterFirst.selectedState, id: 'cs_browser_switched' }
+  server.db.prepare(
+    `update codebases set selected_state_json = ? where codebase_id = ?`,
+  ).run(JSON.stringify(switchedState), 'browser-mutation-core')
+  await assert.rejects(
+    () => backend.mutateTextFile({
+      codebaseId: 'browser-mutation-core',
+      path: 'README.md',
+      content: 'must not cross change sets\n',
+      baseRevision: 2,
+      selectedStateId: initial.selectedState.id,
+      actor: { userId: 'user_owner' },
+    }),
+    (error) => {
+      assert.equal(error.code, 'selected_state_id_mismatch')
+      assert.equal(error.detail.expectedId, initial.selectedState.id)
+      assert.equal(error.detail.actualId, 'cs_browser_switched')
+      return true
+    },
+  )
+  server.db.prepare(
+    `update codebases set selected_state_json = ? where codebase_id = ?`,
+  ).run(JSON.stringify(afterFirst.selectedState), 'browser-mutation-core')
+
+  const otherBackend = createD1Backend({
+    'codebase-id': 'browser-mutation-core',
+    'd1-api-base-url': server.baseUrl,
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_test',
+    'd1-api-token': 'token_test',
+  })
+  let gatedReads = 0
+  let releaseReads
+  const bothRead = new Promise((resolve) => {
+    releaseReads = resolve
+  })
+  for (const candidate of [backend, otherBackend]) {
+    const readGraph = candidate.readGraph.bind(candidate)
+    let gated = false
+    candidate.readGraph = async (...args) => {
+      const graph = await readGraph(...args)
+      if (gated) return graph
+      gated = true
+      gatedReads += 1
+      if (gatedReads === 2) releaseReads()
+      await bothRead
+      return graph
+    }
+  }
+
+  const concurrentResults = await Promise.all([
+    backend.mutateTextFile({
+      codebaseId: 'browser-mutation-core',
+      path: 'README.md',
+      content: 'readme three\n',
+      baseRevision: 2,
+      actor: { userId: 'user_owner' },
+    }),
+    otherBackend.mutateTextFile({
+      codebaseId: 'browser-mutation-core',
+      path: 'src/other.js',
+      content: 'export const other = 2\n',
+      baseRevision: 1,
+      actor: { userId: 'user_owner' },
+    }),
+  ])
+  assert.deepEqual(concurrentResults.map((result) => result.revision).sort((left, right) => left - right), [3, 4])
+
+  const finalGraph = await backend.readGraph()
+  assert.deepEqual(finalGraph.main, initialMain)
+  assert.equal(finalGraph.revision, 4)
+  assert.equal(finalGraph.selectedState.revision, finalGraph.revision)
+  assert.equal(finalGraph.files['README.md'].content, 'readme three\n')
+  assert.equal(finalGraph.files['src/other.js'].content, 'export const other = 2\n')
+  assert.equal(finalGraph.files['README.md'].contentStorage, 'inline')
+  assert.equal(finalGraph.files['src/other.js'].contentStorage, 'inline')
+
+  const mutationStatements = statementRecords.map((record) => record.sql)
+  assert.equal(mutationStatements.filter((sql) => /^\s*update\s+codebases\s+set\s+revision\s*=\s*\?/i.test(sql)).length, 4)
+  assert.equal(mutationStatements.some((sql) => /^\s*insert\s+into\s+codebases\b/i.test(sql)), false)
+  assert.equal(mutationStatements.some((sql) => /path\s+not\s+in/i.test(sql)), false)
+  assert.equal(mutationStatements.some((sql) => /^\s*delete\s+from\s+files\s+where\s+codebase_id\s*=\s*\?\s*$/i.test(sql)), false)
+
+  const versions = await backend.listFileVersions()
+  const mutationVersions = versions.filter((row) => row.graphRevision > 1)
+  assert.deepEqual(mutationVersions.map((row) => row.graphRevision), [2, 3, 4])
+  assert.equal(mutationVersions[0].path, 'README.md')
+  assert.deepEqual(mutationVersions.slice(1).map((row) => row.path).sort(), ['README.md', 'src/other.js'])
+  const mutationEvents = server.db.prepare(
+    `select detail_json from agent_events where codebase_id = ? and event = 'file.mutated' order by id asc`,
+  ).all('browser-mutation-core')
+  assert.equal(mutationEvents.length, 3)
+  assert.deepEqual(
+    mutationEvents.map((row) => JSON.parse(row.detail_json).selectedStateRevision),
+    [2, 3, 4],
+  )
+})
+
 test('D1 journal commit uses bounded per-file statements on wide graphs', async (t) => {
   const statementRecords = []
   const server = await startD1ApiServer(t, { statementRecords })
@@ -1161,6 +1447,8 @@ test('D1 journal commit uses bounded per-file statements on wide graphs', async 
 
   const written = await backend.readGraph()
   assert.equal(written.revision, 2)
+  assert.equal(written.main.revision, 1)
+  assert.equal(written.selectedState.revision, 2)
   assert.equal(Object.keys(written.files).length, 120)
   assert.equal(written.files['src/file-060.js'].content, 'export const value60 = 6000\n')
   assert.equal(written.files['src/file-061.js'].content, 'export const value61 = 61\n')
@@ -1229,6 +1517,8 @@ test('D1 bulk journal commit chunks wide imports into bounded requests', async (
 
   const written = await backend.readGraph()
   assert.equal(written.revision, 301)
+  assert.equal(written.main.revision, 1)
+  assert.equal(written.selectedState.revision, 301)
   assert.equal(Object.keys(written.files).length, 300)
   assert.equal(written.files['src/imported-299.js'].content, 'export const imported299 = 299\n')
   const versions = await backend.listFileVersions()
@@ -1373,6 +1663,7 @@ test('D1 journal commit detects a remote head race without partial file writes',
     },
   }))
   const cloud = await backend.readGraph()
+  const cloudBeforeRejectedCommit = structuredClone(cloud)
   server.db.prepare(`update codebases set revision = ? where codebase_id = ?`).run(99, 'journal-race-core')
 
   statementRecords.length = 0
@@ -1398,8 +1689,42 @@ test('D1 journal commit detects a remote head race without partial file writes',
   const written = await backend.readGraph()
   assert.equal(written.files['README.md'].content, 'original\n')
   assert.equal(written.files['README.md'].revision, 1)
+  assert.deepEqual(cloud, cloudBeforeRejectedCommit)
   const versions = await backend.listFileVersions()
   assert.equal(versions.some((row) => row.graphRevision === 2), false)
+})
+
+test('agent D1 service cannot journal directly into Main or a merged change set', () => {
+  const backend = new D1CloudGraphService({
+    'codebase-id': 'journal-state-guard-core',
+    'd1-api-base-url': 'https://example.invalid',
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_test',
+    'd1-api-token': 'token_test',
+  })
+  const mainGraph = makeD1Graph({ codebaseId: 'journal-state-guard-core' })
+  mainGraph.selectedState = { type: 'main', id: 'main', revision: 1 }
+  assert.throws(
+    () => backend.applyJournalEntry(mainGraph, {
+      id: 'entry-main-rejected',
+      type: 'write',
+      path: 'README.md',
+      baseRevision: 1,
+    }, { entry: { kind: 'file', content: 'rejected\n', encoding: 'utf8' } }),
+    (error) => error.code === 'selected_state_not_writable',
+  )
+
+  const mergedGraph = makeD1Graph({ codebaseId: 'journal-state-guard-core' })
+  mergedGraph.selectedState.mergeState = 'merged'
+  assert.throws(
+    () => backend.applyJournalEntry(mergedGraph, {
+      id: 'entry-merged-rejected',
+      type: 'write',
+      path: 'README.md',
+      baseRevision: 1,
+    }, { entry: { kind: 'file', content: 'rejected\n', encoding: 'utf8' } }),
+    (error) => error.code === 'selected_state_already_merged',
+  )
 })
 
 test('scoped D1 session can commit a per-file journal entry and emits one push envelope', async (t) => {

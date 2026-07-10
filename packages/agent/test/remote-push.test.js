@@ -460,6 +460,51 @@ test('remote-push clean device applies a pushed revision within the wait window'
   assert.equal(status.remotePush.lastAppliedRevision, cloud.revision)
 })
 
+test('remote-push watcher periodically reconciles an idle clean device after a missed push', async (t) => {
+  const hub = await startFakePushHub(t)
+  if (!hub) return
+  const { deviceA, deviceB } = await makeRemotePushState()
+  await initAndHydratePair(deviceA, deviceB)
+
+  const watchProcess = await startWatch(deviceB, t, [
+    '--remote-push',
+    '--remote-push-url',
+    hub.url,
+    '--remote-refresh-interval-ms',
+    '100',
+  ])
+  await waitForOutput(watchProcess, /remote-push\.connected/)
+  await waitForOutput(watchProcess, /periodic-head-reconciliation/)
+  await hub.waitForConnections(1)
+
+  const missedContent = '# hopit-core\n\nMissed push recovered by an idle safety check.\n'
+  const cloud = await syncDeviceA(deviceA, 'README.md', missedContent)
+  // Deliberately do not publish an envelope and do not touch device B.
+
+  await waitFor(async () => {
+    return (await fs.readFile(path.join(deviceB.workspace, 'README.md'), 'utf8')) === missedContent
+  })
+
+  const events = await readNdjson(deviceB.events)
+  const reconciliation = events.findLast((event) => event.event === 'remote-pull.applied')
+  assert.equal(reconciliation.detail.trigger, 'periodic-head-reconciliation')
+  assert.equal(reconciliation.detail.toRevision, cloud.revision)
+  assert.equal(events.some((event) => event.event === 'remote-push.applied'), false)
+
+  const status = JSON.parse((await runCli('status', [
+    ...stateArgs(deviceB),
+    '--remote-push',
+    '--remote-push-url',
+    hub.url,
+    '--remote-refresh-interval-ms',
+    '100',
+  ])).stdout)
+  assert.equal(status.remotePull.enabled, true)
+  assert.equal(status.remotePull.pushReconciliationEnabled, true)
+  assert.equal(status.remotePush.connectionState, 'connected')
+  assert.equal(status.remotePush.lastAppliedRevision, cloud.revision)
+})
+
 test('remote-push skips a pending-journal device without changing disk files', async (t) => {
   const hub = await startFakePushHub(t)
   if (!hub) return
@@ -489,6 +534,10 @@ test('remote-push skips a pending-journal device without changing disk files', a
   })
   assert.equal(skipped.detail.reason, 'journal_has_unresolved_entries')
   assert.equal(await fs.readFile(path.join(deviceB.workspace, 'README.md'), 'utf8'), original)
+  const status = JSON.parse((await runCli('status', [...stateArgs(deviceB), '--remote-push'])).stdout)
+  assert.equal(status.remotePush.connectionState, 'connected')
+  assert.equal(status.remotePush.lastSkippedReason, 'journal_has_unresolved_entries')
+  assert.equal(status.remotePush.lastError, 'journal_has_unresolved_entries')
 })
 
 test('remote-push skips manifest drift without changing disk files', async (t) => {
@@ -511,6 +560,8 @@ test('remote-push skips manifest drift without changing disk files', async (t) =
   })
   assert.equal(skipped.detail.reason, 'workspace_has_unjournaled_changes')
   assert.equal(await fs.readFile(path.join(deviceB.workspace, 'README.md'), 'utf8'), localDraft)
+  const status = JSON.parse((await runCli('status', [...stateArgs(deviceB), '--remote-push'])).stdout)
+  assert.equal(status.remotePush.lastSkippedReason, 'workspace_has_unjournaled_changes')
 })
 
 test('remote-push duplicate envelope for one revision is idempotent', async (t) => {
