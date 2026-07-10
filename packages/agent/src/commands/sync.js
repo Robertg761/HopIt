@@ -9,7 +9,7 @@ import { actorIdFromOptions, bufferFromCloudFileEntry, cloudEntryEquals, countCl
 import { assertWorkspacePathSafe } from '../paths.js'
 import { classifyJournalEntries, hasUnresolvedSyncFailure, prepareRecovery, readJournalSafety, syncContextDetail, visibleRevisionFromEvent } from '../status-state.js'
 import { deletableCloudPathsForWorkspace, findIndexedCodebase, hydratedPathsAfterSync, readWorkspaceIndex, upsertWorkspaceIndexFromCloud, workspaceIndexHydrationStateForSync } from '../workspace-index.js'
-import { readWorkspaceFiles, workspaceFilePath, workspaceLocalChanges } from '../workspace-manifest.js'
+import { exonerateWorkspaceChangesAgainstCloud, readWorkspaceFiles, workspaceFilePath, workspaceLocalChanges } from '../workspace-manifest.js'
 import { scopeForPath } from '@hopit/core/privacy-zone'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
@@ -57,9 +57,17 @@ export async function refreshWorkspace(options) {
 
   const workspaceIndex = await readWorkspaceIndex(options)
   const indexedCodebase = findIndexedCodebase(workspaceIndex, cloud.codebase?.id ?? options['codebase-id'], options.workspace)
-  const localChanges = existsSync(options.workspace)
-    ? await workspaceLocalChanges(options, indexedCodebase)
+  const rawLocalChanges = existsSync(options.workspace)
+    ? await workspaceLocalChanges(options, indexedCodebase, { includePaths: true })
     : { safe: true, state: 'missing', reason: null }
+  // A stale content manifest can flag already-committed files as unjournaled
+  // and deadlock refresh (the only thing that rebuilds the manifest). Exonerate
+  // against the cloud graph we just read: if every reported change already
+  // matches cloud, the refresh below rebuilds the manifest and self-heals.
+  // The exonerated result is compact (counts + ≤10-path samples), so embedding
+  // it in the refresh.blocked detail below stays bounded.
+  const localChanges = await exonerateWorkspaceChangesAgainstCloud(options, rawLocalChanges, cloud)
+  const manifestSelfHealed = Boolean(localChanges?.manifestStale)
   if (!localChanges.safe) {
     const blockedDetail = {
       ...startedDetail,
@@ -93,6 +101,13 @@ export async function refreshWorkspace(options) {
   await emit(options, 'refresh.complete', {
     ...startedDetail,
     ...result,
+    ...(manifestSelfHealed
+      ? {
+          manifestSelfHealed: true,
+          manifestStaleSamplePaths: localChanges.exoneratedSamplePaths ?? [],
+          manifestStalePathCount: localChanges.exoneratedCount ?? 0,
+        }
+      : {}),
   })
   await upsertWorkspaceIndexFromCloud(options, cloud, {
     reason: 'refresh',

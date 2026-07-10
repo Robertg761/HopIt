@@ -564,6 +564,39 @@ test('remote-push skips manifest drift without changing disk files', async (t) =
   assert.equal(status.remotePush.lastSkippedReason, 'workspace_has_unjournaled_changes')
 })
 
+test('remote-push applies when a stale manifest matches the cloud graph', async (t) => {
+  const hub = await startFakePushHub(t)
+  if (!hub) return
+  const { deviceA, deviceB } = await makeRemotePushState()
+  await initAndHydratePair(deviceA, deviceB)
+
+  // Device B already has the file on disk with the exact bytes device A is
+  // about to commit. Device B's manifest predates it (stale), so the local
+  // scan flags it as unjournaled even though it is identical to cloud.
+  const sharedContent = '# hopit-core\n\nAlready committed and identical on disk.\n'
+  await fs.writeFile(path.join(deviceB.workspace, 'shared.md'), sharedContent, 'utf8')
+  await startPushClient(deviceB, t, hub)
+  await hub.waitForConnections(1)
+
+  const cloud = await syncDeviceA(deviceA, 'shared.md', sharedContent)
+  hub.publish(envelopeFromCloud(cloud, randomUUID(), ['shared.md']))
+
+  const applied = await waitFor(async () => {
+    const events = await readNdjson(deviceB.events)
+    return events.findLast((event) => event.event === 'remote-push.applied' && event.detail.toRevision === cloud.revision)
+  })
+  assert.equal(applied.detail.trigger, 'remote-push')
+  // The identical disk file is preserved and the manifest self-heals.
+  assert.equal(await fs.readFile(path.join(deviceB.workspace, 'shared.md'), 'utf8'), sharedContent)
+  const events = await readNdjson(deviceB.events)
+  const skipped = events.findLast(
+    (event) => event.event === 'remote-push.skipped' && event.detail.reason === 'workspace_has_unjournaled_changes',
+  )
+  assert.equal(skipped, undefined, 'a stale manifest must not skip the push apply')
+  const refreshComplete = events.findLast((event) => event.event === 'refresh.complete')
+  assert.equal(refreshComplete.detail.manifestSelfHealed, true)
+})
+
 test('remote-push duplicate envelope for one revision is idempotent', async (t) => {
   const hub = await startFakePushHub(t)
   if (!hub) return

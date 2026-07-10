@@ -1638,6 +1638,75 @@ test('D1 journal delete removes the file row and writes a tombstone version', as
   assert.equal(tombstone.newFile, null)
 })
 
+test('D1 per-file and bulk journal commits stamp zone_id with the real codebase id', async (t) => {
+  const server = await startD1ApiServer(t)
+  const now = '2026-07-08T00:00:00.000Z'
+  const codebaseId = 'zone-stamp-core'
+  const backend = new D1CloudGraphService({
+    'codebase-id': codebaseId,
+    'd1-api-base-url': server.baseUrl,
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_test',
+    'd1-api-token': 'token_test',
+  })
+  await backend.initialize(makeD1Graph({ codebaseId, files: {}, now }))
+  const cloud = await backend.readGraph()
+
+  // Per-file commit (payload never carries zoneId, mirroring agent journals).
+  await backend.commitJournalEntry(cloud, {
+    id: 'zone-entry-shared',
+    type: 'create',
+    path: 'src/app.js',
+    kind: 'file',
+    baseRevision: null,
+    targetStateRevision: 1,
+  }, { entry: { kind: 'file', content: 'export const a = 1\n', encoding: 'utf8' }, now })
+  await backend.commitJournalEntry(cloud, {
+    id: 'zone-entry-private',
+    type: 'create',
+    path: '.private/secret.md',
+    kind: 'file',
+    baseRevision: null,
+    targetStateRevision: 2,
+  }, { entry: { kind: 'file', content: 'top secret\n', encoding: 'utf8' }, now })
+
+  // Bulk commit path.
+  const entries = []
+  const entryPayloads = new Map()
+  for (let index = 0; index < 25; index += 1) {
+    const entry = {
+      id: `zone-bulk-${index}`,
+      type: 'create',
+      path: `pkg/mod-${String(index).padStart(2, '0')}.js`,
+      kind: 'file',
+      baseRevision: null,
+      createdAt: now,
+      status: 'pending',
+    }
+    entries.push(entry)
+    entryPayloads.set(entry.id, { kind: 'file', content: `export const m${index} = ${index}\n`, encoding: 'utf8' })
+  }
+  await backend.commitJournalEntries(cloud, entries, { entryPayloads, now, chunkSize: 40 })
+
+  const fileRows = server.db.prepare(`select path, zone_id from files where codebase_id = ?`).all(codebaseId)
+  assert.ok(fileRows.length >= 27)
+  for (const row of fileRows) {
+    assert.equal(row.zone_id.startsWith('unknown:'), false, `zone_id for ${row.path} must not use the unknown placeholder`)
+    assert.equal(row.zone_id.startsWith(`${codebaseId}:`), true, `zone_id for ${row.path} must be scoped to ${codebaseId}`)
+  }
+  const sharedRow = fileRows.find((row) => row.path === 'src/app.js')
+  assert.equal(sharedRow.zone_id, `${codebaseId}:repo-content`)
+  const privateRow = fileRows.find((row) => row.path === '.private/secret.md')
+  assert.equal(privateRow.zone_id, `${codebaseId}:owner-private`)
+
+  const versionRows = server.db.prepare(`select path, zone_id from file_versions where codebase_id = ?`).all(codebaseId)
+  assert.ok(versionRows.length >= 27)
+  for (const row of versionRows) {
+    assert.equal(row.zone_id.startsWith('unknown:'), false, `file_versions zone_id for ${row.path} must not use the unknown placeholder`)
+    assert.equal(row.zone_id.startsWith(`${codebaseId}:`), true)
+  }
+})
+
 test('D1 journal commit detects a remote head race without partial file writes', async (t) => {
   const statementRecords = []
   const server = await startD1ApiServer(t, { statementRecords })

@@ -4,7 +4,7 @@ import path from 'node:path'
 import { createObjectBlobStore, normalizeBlobProvider } from './blob-stores/index.js'
 import { entryEncoding, entryKind } from './constants.js'
 import { clientEncryptionScopeFromOptions, clientEncryptionScopes, hasPrivatePrivacyZone, isLocalOnlySecretPath, privacyZoneForPath, rawClientEncryptionKey } from '@hopit/core/crypto'
-import { encodeBufferForCloud, hashBuffer, hashDirectoryEntry, hashSymlinkTarget, normalizeCloudFileEntry, toCloudPath } from './journal.js'
+import { cloudEntryEquals, encodeBufferForCloud, hashBuffer, hashDirectoryEntry, hashSymlinkTarget, normalizeCloudFileEntry, toCloudPath } from './journal.js'
 import { latestEvent, visibleRevisionFromEvent } from './status-state.js'
 import { uniqueCloudPaths } from './workspace-index.js'
 import { scopeForPath } from '@hopit/core/privacy-zone'
@@ -68,7 +68,12 @@ export function contentManifestSummary(manifest) {
   }
 }
 
-export async function workspaceLocalChanges(options, indexedCodebase) {
+// Returns a compact scan shape safe to embed in events and status output:
+// counts + samplePaths (max 10). Pass scanOptions.includePaths to also get the
+// full addedPaths/modifiedPaths/deletedPaths arrays — internal use only (the
+// exoneration flow); full arrays must never reach events.ndjson or CLI JSON,
+// where a large dirty workspace would write multi-thousand-element payloads.
+export async function workspaceLocalChanges(options, indexedCodebase, scanOptions = {}) {
   if (!existsSync(options.workspace)) {
     return {
       safe: false,
@@ -117,8 +122,87 @@ export async function workspaceLocalChanges(options, indexedCodebase) {
     addedCount: diff.addedCount,
     modifiedCount: diff.modifiedCount,
     deletedCount: diff.deletedCount,
+    ...(scanOptions.includePaths
+      ? {
+          addedPaths: diff.addedPaths,
+          modifiedPaths: diff.modifiedPaths,
+          deletedPaths: diff.deletedPaths,
+        }
+      : {}),
     samplePaths: diff.samplePaths,
   }
+}
+
+// A stale content manifest (rebuilt only on materialize/refresh/hydrate) can
+// report files as unjournaled even though they are already committed and
+// acknowledged in the cloud graph. This helper reclassifies a dirty scan
+// against a freshly read cloud graph: an added/modified path whose disk entry
+// exactly matches the current cloud entry is already committed, and a deleted
+// path that is also absent from the cloud graph is already reflected there.
+// Anything that genuinely differs from cloud keeps blocking (fail-closed).
+//
+// The input scan must carry the full path arrays (workspaceLocalChanges with
+// includePaths). The returned object is deliberately compact — counts,
+// samplePaths (≤10), exoneratedCount, exoneratedSamplePaths (≤10) — because
+// callers embed it verbatim in event and status payloads.
+export function exoneratedLocalChanges(changes, cloud, diskEntries = {}) {
+  if (!changes || changes.safe) return changes
+  const cloudFiles = cloud?.files ?? {}
+  const remainingAdded = []
+  const remainingModified = []
+  const remainingDeleted = []
+  const exoneratedPaths = []
+
+  const reconcileAgainstCloud = (relativePath, remaining) => {
+    if (diskEntryMatchesCloud(relativePath, diskEntries, cloudFiles)) {
+      exoneratedPaths.push(relativePath)
+    } else {
+      remaining.push(relativePath)
+    }
+  }
+
+  for (const relativePath of changes.addedPaths ?? []) reconcileAgainstCloud(relativePath, remainingAdded)
+  for (const relativePath of changes.modifiedPaths ?? []) reconcileAgainstCloud(relativePath, remainingModified)
+  for (const relativePath of changes.deletedPaths ?? []) {
+    // A local delete is not drift when the cloud graph no longer has the path.
+    if (!cloudFiles[relativePath]) exoneratedPaths.push(relativePath)
+    else remainingDeleted.push(relativePath)
+  }
+
+  const dirty = remainingAdded.length > 0 || remainingModified.length > 0 || remainingDeleted.length > 0
+  const samplePaths = [...remainingAdded, ...remainingModified, ...remainingDeleted].slice(0, 10)
+
+  return {
+    safe: !dirty,
+    state: dirty ? 'dirty' : 'clean',
+    reason: dirty ? 'workspace_has_unjournaled_changes' : null,
+    addedCount: remainingAdded.length,
+    modifiedCount: remainingModified.length,
+    deletedCount: remainingDeleted.length,
+    samplePaths,
+    exoneratedCount: exoneratedPaths.length,
+    exoneratedSamplePaths: exoneratedPaths.slice(0, 10),
+    manifestStale: exoneratedPaths.length > 0 && !dirty,
+  }
+}
+
+function diskEntryMatchesCloud(relativePath, diskEntries, cloudFiles) {
+  const diskEntry = diskEntries?.[relativePath]
+  const cloudEntry = cloudFiles?.[relativePath]
+  if (!diskEntry || !cloudEntry) return false
+  return cloudEntryEquals(
+    normalizeCloudFileEntry(relativePath, diskEntry),
+    normalizeCloudFileEntry(relativePath, cloudEntry),
+  )
+}
+
+// Reads the workspace from disk and exonerates a dirty scan against the given
+// cloud graph. Returns the reclassified scan (safe: true when the only
+// discrepancy was a stale manifest that the caller can now heal).
+export async function exonerateWorkspaceChangesAgainstCloud(options, changes, cloud) {
+  if (!changes || changes.safe) return changes
+  const diskEntries = await readWorkspaceFiles(options.workspace, options)
+  return exoneratedLocalChanges(changes, cloud, diskEntries)
 }
 
 export async function workspaceHasIncludedEntries(root, options = {}) {
@@ -161,15 +245,16 @@ export async function diffWorkspaceAgainstManifest(root, baseline, options = {})
   const baselineFiles = baseline?.files ?? {}
   const seen = new Set()
   const samplePaths = []
-  let addedCount = 0
-  let modifiedCount = 0
+  const addedPaths = []
+  const modifiedPaths = []
+  const deletedPaths = []
 
   function sample(relativePath) {
     if (samplePaths.length < 10) samplePaths.push(relativePath)
   }
 
   function recordAdded(relativePath) {
-    addedCount += 1
+    addedPaths.push(relativePath)
     sample(relativePath)
   }
 
@@ -183,7 +268,7 @@ export async function diffWorkspaceAgainstManifest(root, baseline, options = {})
     seen.add(relativePath)
     const actual = await actualFactory()
     if (manifestEntryChanged(expected, actual)) {
-      modifiedCount += 1
+      modifiedPaths.push(relativePath)
       sample(relativePath)
     }
   }
@@ -225,17 +310,19 @@ export async function diffWorkspaceAgainstManifest(root, baseline, options = {})
 
   await walk(root)
 
-  let deletedCount = 0
   for (const relativePath of Object.keys(baselineFiles).sort()) {
     if (seen.has(relativePath)) continue
-    deletedCount += 1
+    deletedPaths.push(relativePath)
     sample(relativePath)
   }
 
   return {
-    addedCount,
-    modifiedCount,
-    deletedCount,
+    addedCount: addedPaths.length,
+    modifiedCount: modifiedPaths.length,
+    deletedCount: deletedPaths.length,
+    addedPaths,
+    modifiedPaths,
+    deletedPaths,
     samplePaths,
   }
 }

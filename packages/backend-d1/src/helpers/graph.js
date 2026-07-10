@@ -130,17 +130,21 @@ export function normalizeGraph(graph) {
   const files = {}
   for (const [filePath, file] of Object.entries(next.files)) {
     assertSafeGraphPath(filePath)
-    files[filePath] = normalizeFileEntry(filePath, file, next.revision, file?.updatedAt ?? new Date().toISOString())
+    files[filePath] = normalizeFileEntry(filePath, file, next.revision, file?.updatedAt ?? new Date().toISOString(), next.codebase.id)
   }
   next.files = files
   return next
 }
 
-export function normalizeFileEntry(filePath, file, revision, now) {
+export function normalizeFileEntry(filePath, file, revision, now, codebaseId = null) {
   const value = file && typeof file === 'object' ? { ...file } : {}
   const kind = value.kind === 'symlink' || value.kind === 'directory' ? value.kind : 'file'
   const scope = scopeForPath(filePath)
   const privacyZone = privacyZoneForPath(filePath)
+  // Agent journal payloads never carry zoneId. Compute it from the real
+  // codebase id so we never persist a `unknown:<zone>` placeholder; when the
+  // caller has no codebase id we leave it null for the writer to fill.
+  const zoneId = stringOrNull(value.zoneId) ?? (codebaseId ? privacyZoneIdForPath(codebaseId, filePath) : null)
 
   if (kind === 'directory') {
     return {
@@ -152,7 +156,7 @@ export function normalizeFileEntry(filePath, file, revision, now) {
       size: 0,
       scope,
       privacyZone,
-      zoneId: stringOrNull(value.zoneId) ?? privacyZoneIdForPath('unknown', filePath),
+      zoneId,
       revision: integerValue(value.revision, revision),
       updatedAt: stringOrNull(value.updatedAt) ?? now,
     }
@@ -169,7 +173,7 @@ export function normalizeFileEntry(filePath, file, revision, now) {
       size: integerOrNull(value.size) ?? byteLength(target),
       scope,
       privacyZone,
-      zoneId: stringOrNull(value.zoneId) ?? privacyZoneIdForPath('unknown', filePath),
+      zoneId,
       revision: integerValue(value.revision, revision),
       updatedAt: stringOrNull(value.updatedAt) ?? now,
     }
@@ -196,7 +200,7 @@ export function normalizeFileEntry(filePath, file, revision, now) {
     size: integerOrNull(value.size) ?? byteLength(content),
     scope,
     privacyZone,
-    zoneId: stringOrNull(value.zoneId) ?? privacyZoneIdForPath('unknown', filePath),
+    zoneId,
     revision: integerValue(value.revision, revision),
     updatedAt: stringOrNull(value.updatedAt) ?? now,
   }
@@ -449,7 +453,7 @@ export function applyJournalEntryToCloud(cloud, entry, options = {}) {
       encoding: entry.encoding ?? 'utf8',
       hash: entry.hash,
       size: entry.bytes,
-    }, nextRevision, now)
+    }, nextRevision, now, cloud.codebase?.id ?? null)
   }
 
   return {

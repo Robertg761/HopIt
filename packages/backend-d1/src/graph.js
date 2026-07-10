@@ -891,7 +891,7 @@ export function attachGraphMethods(Backend) {
 }
 
 function upsertFileStatement(codebaseId, filePath, file, graphRevision, now = new Date().toISOString(), guard = null) {
-  const normalized = normalizeFileEntry(filePath, file, graphRevision, now)
+  const normalized = normalizeFileEntry(filePath, file, graphRevision, now, codebaseId)
   const params = [
     codebaseId,
     filePath,

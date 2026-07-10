@@ -1,7 +1,7 @@
 // @ts-check
 import fs from 'node:fs/promises'
 import path from 'node:path'
-import { createCloudGraphService } from './cloud/d1-graph-service.js'
+import { createCloudGraphService, visibilityRequestFromOptions } from './cloud/d1-graph-service.js'
 import { hydrateWorkspace, pruneWorkspaceCache } from './commands/hydrate.js'
 import { initCloud } from './commands/import.js'
 import { recoverJournal, refreshWorkspace, syncOnce } from './commands/sync.js'
@@ -12,7 +12,7 @@ import { toCloudPath } from './journal.js'
 import { assertWorkspacePathSafe, remotePullEnabled, remotePushEnabled, remoteRefreshIntervalMs } from './paths.js'
 import { normalizeWatchFilename, readJournalSafety, visibleRevisionFromEvent } from './status-state.js'
 import { findIndexedCodebase, readWorkspaceIndex } from './workspace-index.js'
-import { isLocalActivityMarkerPath, shouldSkipWorkspacePath, shouldTrackLocalActivityPath, workspaceLocalChanges } from './workspace-manifest.js'
+import { exonerateWorkspaceChangesAgainstCloud, isLocalActivityMarkerPath, shouldSkipWorkspacePath, shouldTrackLocalActivityPath, workspaceLocalChanges } from './workspace-manifest.js'
 import { watch } from 'node:fs'
 
 export async function watchWorkspace(options) {
@@ -713,7 +713,17 @@ export async function remoteRefreshDecision(options, context) {
     }
   }
 
-  const localChanges = await workspaceLocalChanges(options, indexedCodebase)
+  const rawLocalChanges = await workspaceLocalChanges(options, indexedCodebase, { includePaths: true })
+  let localChanges = rawLocalChanges
+  if (!rawLocalChanges.safe) {
+    // A stale content manifest can flag already-committed files as unjournaled
+    // and wrongly skip a push apply. Read the visible graph (refresh was about
+    // to do that anyway) and exonerate changes that already match cloud. The
+    // exonerated result is compact (counts + ≤10-path samples), so the skip
+    // detail embedded below stays bounded even for huge dirty workspaces.
+    const visibleCloud = await cloudService.readVisibleGraph(visibilityRequestFromOptions(options))
+    localChanges = await exonerateWorkspaceChangesAgainstCloud(options, rawLocalChanges, visibleCloud)
+  }
   if (!localChanges.safe) {
     return {
       state: 'skip',
@@ -732,5 +742,12 @@ export async function remoteRefreshDecision(options, context) {
     state: 'refresh',
     fromRevision: visibleRevision,
     toRevision: cloudHead.revision,
+    ...(localChanges.manifestStale
+      ? {
+          manifestSelfHealed: true,
+          manifestStaleSamplePaths: localChanges.exoneratedSamplePaths ?? [],
+          manifestStalePathCount: localChanges.exoneratedCount ?? 0,
+        }
+      : {}),
   }
 }
