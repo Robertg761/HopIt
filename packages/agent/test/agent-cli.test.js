@@ -2497,6 +2497,55 @@ test('service start exposes status and service stop cleans up the pid file', asy
   assert.equal(stoppedStatus.ok, false)
 })
 
+test('service starts a metadata-only attached workspace without object storage credentials', async (t) => {
+  const state = await makeState()
+  const blobRoot = path.join(state.root, 'blobs')
+  const workspaceRoot = path.join(state.root, 'attached-workspaces')
+  const workspace = path.join(workspaceRoot, 'hopit-core')
+  const workspaceIndex = path.join(state.root, 'workspaces.json')
+  const pid = path.join(state.root, 'run', 'hopit.pid')
+  const port = await getAvailablePort(t)
+  if (!port) return
+
+  await runCli('init', [
+    ...stateArgs(state),
+    '--force',
+    '--blob-provider',
+    'filesystem',
+    '--blob-root',
+    blobRoot,
+  ])
+  const serviceArgs = [
+    '--cloud', state.cloud,
+    '--workspace', workspace,
+    '--journal', state.journal,
+    '--events', state.events,
+    '--workspace-root', workspaceRoot,
+    '--workspace-index', workspaceIndex,
+    '--codebase-id', 'hopit-core',
+    '--pid', pid,
+    '--host', '127.0.0.1',
+    '--port', String(port),
+  ]
+  await runCli('workspace', ['attach', ...serviceArgs])
+
+  const started = JSON.parse((await runCli('service', ['start', ...serviceArgs])).stdout)
+  t.after(async () => {
+    try {
+      await runCli('service', ['stop', ...serviceArgs])
+    } catch {
+      // The test may already have stopped the service.
+    }
+  })
+  assert.equal(started.ok, true)
+  assert.equal(started.service.agent.readiness, 'ready')
+  assert.equal(started.service.agent.workspace.hydration.state, 'metadata-only')
+  assert.match(started.service.agent.watch.state, /^(watching|polling-degraded)$/)
+  assert.equal(await pathExists(path.join(workspace, 'README.md')), false)
+
+  await runCli('service', ['stop', ...serviceArgs])
+})
+
 test('service start fails cleanly when the status port is already occupied', async (t) => {
   const state = await makeState()
   const pid = path.join(state.root, 'run', 'hopit.pid')

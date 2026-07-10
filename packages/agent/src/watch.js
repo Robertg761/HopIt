@@ -29,12 +29,26 @@ export async function watchWorkspace(options) {
     })
     throw new Error('Watch startup blocked because pending journal entries could not be recovered.')
   }
-  await hydrateWorkspace(options)
+  const workspaceIndex = await readWorkspaceIndex(options)
+  const indexedCodebase = findIndexedCodebase(
+    workspaceIndex,
+    options['codebase-id'],
+    options.workspace,
+  )
+  const hydrationState = indexedCodebase?.hydration?.state ?? null
+  if (!hydrationState || hydrationState === 'materialized') {
+    await hydrateWorkspace(options)
+  } else {
+    // Attached and partially hydrated workspaces are intentionally lazy caches.
+    // Starting the watcher must not turn service startup into a full download.
+    await fs.mkdir(options.workspace, { recursive: true })
+  }
   await emit(options, 'watch.started', {
     state: 'watching',
     workspace: options.workspace,
     adapter: workspaceMode.adapter,
     cacheMode: workspaceMode.cacheMode,
+    hydrationState,
   })
 
   let watcher
