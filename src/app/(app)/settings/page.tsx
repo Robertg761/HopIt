@@ -1,5 +1,5 @@
-import { SettingsPage } from '@/components/features/system/settings-page'
+import { RepoRedirect } from '@/components/shell/repo-redirect'
 
-export default function Settings() {
-  return <SettingsPage />
+export default function SettingsRedirectPage() {
+  return <RepoRedirect segment="settings" />
 }

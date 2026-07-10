@@ -16,60 +16,53 @@ export function StatTiles({ status }: { status: AgentStatusSnapshot }) {
 
   return (
     <section aria-label="Workspace at a glance" className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-      <StatTile index="01" label="Files in view" icon={Files} accent="lime">
-        <strong>{formatCount(status.fileCount)}</strong>
-        <span>{status.hiddenFileCount > 0 ? `+${formatCount(status.hiddenFileCount)} private` : 'Ready everywhere'}</span>
+      <StatTile label="Files" icon={Files}>
+        <strong className="text-2xl font-semibold tabular-nums">{formatCount(status.fileCount)}</strong>
+        <span className="text-xs text-muted-foreground">
+          {status.hiddenFileCount > 0 ? `+${formatCount(status.hiddenFileCount)} private` : 'Tracked'}
+        </span>
       </StatTile>
-      <StatTile index="02" label="Writes in flight" icon={ArrowUpRight} accent="orange">
-        <strong>{formatCount(status.pendingWrites)}</strong>
-        <span>{status.failedWrites > 0 ? `${formatCount(status.failedWrites)} need attention` : 'Journal is clear'}</span>
+      <StatTile label="Pending writes" icon={ArrowUpRight}>
+        <strong className="text-2xl font-semibold tabular-nums">{formatCount(status.pendingWrites)}</strong>
+        <span className="text-xs text-muted-foreground">
+          {status.failedWrites > 0 ? `${formatCount(status.failedWrites)} failed` : 'Journal clear'}
+        </span>
       </StatTile>
-      <StatTile index="03" label="Remote distance" icon={ArrowDownLeft} accent="blue">
-        <strong>{behind === null ? '—' : formatCount(behind)}</strong>
-        <span>{behind && behind > 0 ? `${behind === 1 ? 'revision' : 'revisions'} behind` : 'Right on pace'}</span>
+      <StatTile label="Behind remote" icon={ArrowDownLeft}>
+        <strong className="text-2xl font-semibold tabular-nums">{behind === null ? '—' : formatCount(behind)}</strong>
+        <span className="text-xs text-muted-foreground">
+          {behind && behind > 0 ? `${behind === 1 ? 'revision' : 'revisions'} behind` : 'Up to date'}
+        </span>
       </StatTile>
-      <StatTile index="04" label="Review gate" icon={GitPullRequest} accent="ink">
-        <div className="flex flex-wrap gap-1.5 pt-2">
+      <StatTile label="Review" icon={GitPullRequest}>
+        <div className="flex flex-wrap gap-1.5 pt-0.5">
           <Badge tone={reviewTone(status.reviewState)}>{status.reviewState}</Badge>
           <Badge tone={status.mergeState === 'merged' ? 'hop' : 'outline'}>{status.mergeState}</Badge>
         </div>
-        <span>{status.conflictState === 'none' ? 'No conflicts' : status.conflictState}</span>
+        <span className="text-xs text-muted-foreground">
+          {status.conflictState === 'none' ? 'No conflicts' : status.conflictState}
+        </span>
       </StatTile>
     </section>
   )
 }
 
 function StatTile({
-  index,
   label,
   icon: Icon,
-  accent,
   children,
 }: {
-  index: string
   label: string
   icon: typeof Files
-  accent: 'lime' | 'orange' | 'blue' | 'ink'
   children: React.ReactNode
 }) {
-  const accentClass = {
-    lime: 'bg-[var(--signal)] text-[#17352e]',
-    orange: 'bg-[var(--signal-orange)] text-white',
-    blue: 'bg-iris text-white',
-    ink: 'bg-foreground text-background',
-  }[accent]
-
   return (
-    <article className="relative min-h-32 overflow-hidden rounded-[1.25rem] border border-border bg-card/90 p-4 sm:p-5">
-      <div className="flex items-center justify-between">
-        <span className="mono-label text-muted-foreground">{index} / {label}</span>
-        <span className={`grid size-7 place-items-center rounded-full ${accentClass}`}>
-          <Icon className="size-3.5" />
-        </span>
+    <article className="rounded-md border border-border bg-card p-4">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-xs font-medium text-muted-foreground">{label}</span>
+        <Icon className="size-3.5 text-muted-foreground" aria-hidden />
       </div>
-      <div className="mt-4 flex flex-col gap-1 [&_strong]:font-display [&_strong]:text-[2.35rem] [&_strong]:font-normal [&_strong]:leading-none [&_strong]:tracking-[-0.04em] [&>span]:text-[0.68rem] [&>span]:text-muted-foreground">
-        {children}
-      </div>
+      <div className="flex flex-col gap-1">{children}</div>
     </article>
   )
 }

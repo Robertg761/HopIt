@@ -51,7 +51,7 @@ export function MembersPage() {
 
   if (!codebaseId) {
     return (
-      <PageScaffold title="Members" description="People, invitations, and key grants for this codebase.">
+      <PageScaffold title="Collaborators" description="People, invitations, and key grants for this repository.">
         {statusLoading ? (
           <Skeleton className="h-40 w-full" />
         ) : (
@@ -71,7 +71,7 @@ export function MembersPage() {
   }
 
   return (
-    <PageScaffold title="Members" description="People, invitations, and key grants for this codebase.">
+    <PageScaffold title="Collaborators" description="People, invitations, and key grants for this repository.">
       <YouCard
         requester={status.requester}
         members={members}

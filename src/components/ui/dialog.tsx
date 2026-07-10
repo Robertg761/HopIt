@@ -69,17 +69,17 @@ function Dialog({
         aria-labelledby={titleId}
         tabIndex={-1}
         className={cn(
-          "relative z-10 w-full max-w-lg rounded-[1.5rem] border border-border bg-popover text-popover-foreground shadow-[0_32px_100px_rgba(10,19,15,0.28)] outline-none",
+          "relative z-10 w-full max-w-lg rounded-md border border-border bg-popover text-popover-foreground shadow-lg outline-none",
           "animate-in fade-in zoom-in-95 duration-150",
           className
         )}
       >
-        <div className="flex items-start justify-between gap-4 px-6 pt-6">
+        <div className="flex items-start justify-between gap-4 px-5 pt-5">
           <div className="flex flex-col gap-1">
-            <h2 id={titleId} className="font-display text-2xl tracking-[-0.03em]">
+            <h2 id={titleId} className="text-base font-semibold">
               {title}
             </h2>
-            {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
+            {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
           </div>
           <Button
             variant="ghost"

@@ -1,5 +1,5 @@
-import { WorkItemsPage } from '@/components/features/work/work-items-page'
+import { RepoRedirect } from '@/components/shell/repo-redirect'
 
-export default function WorkItems() {
-  return <WorkItemsPage />
+export default function WorkItemsRedirectPage() {
+  return <RepoRedirect segment="issues" />
 }

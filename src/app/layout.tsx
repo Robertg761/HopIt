@@ -6,17 +6,17 @@ import { ClerkAuthProvider } from "@/components/providers/clerk-auth-provider";
 import { shouldEnableClerkUi } from "@/lib/auth-config";
 
 export const metadata: Metadata = {
-  title: "HopIt — Your code, on every device",
+  title: "HopIt",
   description:
-    "HopIt is a cloud-native code workspace: codebases live in the cloud, every device stays a thin, synced view of them.",
-  keywords: ["HopIt", "developer workspace", "cloud codebase", "file sync", "change sets"],
+    "HopIt is a cloud-native code host: repositories live in the cloud, and every device keeps a synced workspace.",
+  keywords: ["HopIt", "code host", "repositories", "pull requests", "issues", "file sync"],
   authors: [{ name: "HopIt Labs" }],
   icons: {
     icon: "/logo.svg",
   },
   openGraph: {
-    title: "HopIt — Your code, on every device",
-    description: "Codebases live in the cloud; every device stays a thin, synced view of them.",
+    title: "HopIt",
+    description: "Cloud-native repositories, pull requests, issues, and synced workspaces.",
     siteName: "HopIt",
     type: "website",
   },

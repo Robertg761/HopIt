@@ -1,5 +1,5 @@
-import { ActivityPage } from '@/components/features/activity/activity-page'
+import { RepoRedirect } from '@/components/shell/repo-redirect'
 
-export default function Activity() {
-  return <ActivityPage />
+export default function ActivityRedirectPage() {
+  return <RepoRedirect segment="activity" />
 }

@@ -1,15 +1,10 @@
 import {
-  Activity,
-  Boxes,
-  CircleDot,
-  FolderTree,
-  GitPullRequestArrow,
+  BookMarked,
   House,
-  Radio,
-  Settings,
-  Users,
   type LucideIcon,
 } from 'lucide-react'
+
+import { repoTabs } from '@/components/shell/repo-nav'
 
 export type NavItem = {
   id: string
@@ -26,100 +21,27 @@ export type NavGroup = {
   items: NavItem[]
 }
 
+/** Account-level sidebar only. Repository features live under repo top tabs. */
 export const navGroups: NavGroup[] = [
   {
-    id: 'workspace',
+    id: 'main',
     label: null,
     items: [
       {
         id: 'home',
         href: '/',
-        label: 'Home',
-        description: 'Workspace health, sync state, and what needs attention.',
+        label: 'Dashboard',
+        description: 'Overview of your workspace and repositories.',
         icon: House,
         keywords: ['home', 'overview', 'dashboard', 'summary'],
       },
       {
-        id: 'activity',
-        href: '/activity',
-        label: 'Activity',
-        description: 'Recent syncs, reviews, merges, and device events.',
-        icon: Activity,
-        keywords: ['events', 'feed', 'audit', 'log', 'history'],
-      },
-    ],
-  },
-  {
-    id: 'code',
-    label: 'Code',
-    items: [
-      {
         id: 'codebases',
         href: '/codebases',
-        label: 'Codebases',
-        description: 'Cloud codebases, attach state, and workspace roots.',
-        icon: Boxes,
-        keywords: ['repos', 'repositories', 'projects', 'import', 'attach'],
-      },
-      {
-        id: 'files',
-        href: '/files',
-        label: 'Files',
-        description: 'Browse, edit, hydrate, and pin workspace files.',
-        icon: FolderTree,
-        keywords: ['drive', 'folders', 'browser', 'hydrate', 'pin', 'editor'],
-      },
-      {
-        id: 'review',
-        href: '/review',
-        label: 'Review',
-        description: 'Active change set, threads, decisions, and merge.',
-        icon: GitPullRequestArrow,
-        keywords: ['diff', 'merge', 'change set', 'threads', 'compare', 'history'],
-      },
-    ],
-  },
-  {
-    id: 'collaborate',
-    label: 'Collaborate',
-    items: [
-      {
-        id: 'work-items',
-        href: '/work-items',
-        label: 'Work items',
-        description: 'Issues, discussions, projects, and releases.',
-        icon: CircleDot,
-        keywords: ['issues', 'discussions', 'projects', 'releases', 'kanban'],
-      },
-      {
-        id: 'members',
-        href: '/members',
-        label: 'Members',
-        description: 'People, invitations, roles, and key grants.',
-        icon: Users,
-        keywords: ['people', 'invite', 'roles', 'access', 'keys'],
-      },
-    ],
-  },
-  {
-    id: 'system',
-    label: 'System',
-    items: [
-      {
-        id: 'agent',
-        href: '/status',
-        label: 'Agent',
-        description: 'Local agent health, commands, and action jobs.',
-        icon: Radio,
-        keywords: ['status', 'daemon', 'device', 'commands', 'jobs', 'ci'],
-      },
-      {
-        id: 'settings',
-        href: '/settings',
-        label: 'Settings',
-        description: 'Sync policy, privacy, and workspace configuration.',
-        icon: Settings,
-        keywords: ['settings', 'config', 'policy', 'privacy'],
+        label: 'Repositories',
+        description: 'Browse and manage cloud repositories.',
+        icon: BookMarked,
+        keywords: ['repos', 'repositories', 'codebases', 'projects', 'import', 'attach'],
       },
     ],
   },
@@ -129,11 +51,39 @@ export const navItems: NavItem[] = navGroups.flatMap((group) => group.items)
 
 export function activeNavId(pathname: string): string {
   if (pathname === '/' || pathname === '/overview') return 'home'
-  if (pathname.startsWith('/codebases/') ) {
-    if (pathname.includes('/work-items')) return 'work-items'
-    if (pathname.includes('/review') || pathname.includes('/compare') || pathname.includes('/history')) return 'review'
+  if (pathname.startsWith('/codebases')) return 'codebases'
+  // Legacy routes still highlight Repositories while redirecting.
+  if (
+    pathname.startsWith('/files') ||
+    pathname.startsWith('/review') ||
+    pathname.startsWith('/work-items') ||
+    pathname.startsWith('/activity') ||
+    pathname.startsWith('/members') ||
+    pathname.startsWith('/settings') ||
+    pathname.startsWith('/status')
+  ) {
     return 'codebases'
   }
-  const match = navItems.find((item) => item.href !== '/' && pathname.startsWith(item.href))
-  return match?.id ?? 'home'
+  return 'home'
+}
+
+/** Command-palette entries for the active repository, if any. */
+export function repoPaletteItems(codebaseId: string): Array<{
+  id: string
+  href: string
+  label: string
+  description: string
+  icon: LucideIcon
+  keywords: string[]
+}> {
+  return repoTabs.map((tab) => ({
+    id: `repo-${tab.id}`,
+    href: tab.segment
+      ? `/codebases/${encodeURIComponent(codebaseId)}/${tab.segment}`
+      : `/codebases/${encodeURIComponent(codebaseId)}`,
+    label: tab.label,
+    description: tab.description,
+    icon: tab.icon,
+    keywords: tab.keywords,
+  }))
 }

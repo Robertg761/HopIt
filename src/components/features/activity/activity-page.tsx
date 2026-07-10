@@ -12,7 +12,7 @@ export function ActivityPage() {
   return (
     <PageScaffold
       title="Activity"
-      description="Notifications and the event ledger for this workspace."
+      description="Notifications and recent workspace events."
       actions={<CadenceNote backend={status.backend} />}
     >
       {selectedCodebaseId ? <NotificationsCard codebaseId={selectedCodebaseId} /> : null}

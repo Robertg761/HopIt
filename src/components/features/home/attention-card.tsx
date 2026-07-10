@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Spinner } from '@/components/ui/spinner'
 import { StatusDot, type StatusDotTone } from '@/components/ui/status-dot'
 import { useWorkspace, type AgentCommand } from '@/components/workspace/workspace-provider'
+import { repoPath } from '@/components/shell/repo-nav'
 import { useAgentCommandRunner } from './use-agent-command'
 
 const RESOLVED_CONFLICT_STATES = new Set(['none', 'clean', '', 'unavailable'])
@@ -22,8 +23,9 @@ type AttentionRow = {
 
 /** Lists workspace problems that need action. Renders nothing when healthy. */
 export function AttentionCard() {
-  const { status } = useWorkspace()
+  const { status, selectedCodebaseId } = useWorkspace()
   const { run, runningCommand, commandsAvailable } = useAgentCommandRunner()
+  const codebaseId = selectedCodebaseId ?? status.codebaseId
 
   const commandAction = (command: AgentCommand, label: string) => (
     <Button
@@ -46,6 +48,8 @@ export function AttentionCard() {
   const behind = status.remoteBehindByRevisions ?? 0
   const conflictActive = !RESOLVED_CONFLICT_STATES.has(status.conflictState.toLowerCase())
   const rows: AttentionRow[] = []
+  const activityHref = codebaseId ? repoPath(codebaseId, 'activity') : '/activity'
+  const pullsHref = codebaseId ? repoPath(codebaseId, 'pulls') : '/review'
 
   if (status.failedWrites > 0) {
     rows.push({
@@ -54,7 +58,7 @@ export function AttentionCard() {
       message: `${status.failedWrites} write${status.failedWrites === 1 ? '' : 's'} failed to reach the cloud.`,
       action: commandsAvailable
         ? commandAction('sync', 'Retry sync')
-        : linkAction('/activity', 'View activity'),
+        : linkAction(activityHref, 'View activity'),
     })
   }
 
@@ -63,7 +67,7 @@ export function AttentionCard() {
       id: 'conflict',
       tone: 'danger',
       message: `The active change set has conflicts (${status.conflictState}).`,
-      action: linkAction('/review', 'Open review'),
+      action: linkAction(pullsHref, 'Open pull request'),
     })
   }
 
@@ -71,10 +75,8 @@ export function AttentionCard() {
     rows.push({
       id: 'behind-remote',
       tone: 'amber',
-      message: `Workspace is behind the remote by ${behind} revision${behind === 1 ? '' : 's'}.`,
-      action: commandsAvailable
-        ? commandAction('hydrateWorkspace', 'Hydrate workspace')
-        : linkAction('/codebases', 'View codebases'),
+      message: `${behind} new cloud revision${behind === 1 ? '' : 's'} available.`,
+      action: linkAction(activityHref, 'View activity'),
     })
   }
 
@@ -83,7 +85,7 @@ export function AttentionCard() {
       id: 'blocked',
       tone: 'danger',
       message: 'The agent is blocked — check recent activity for details.',
-      action: linkAction('/activity', 'View activity'),
+      action: linkAction(activityHref, 'View activity'),
     })
   }
 
@@ -102,7 +104,7 @@ export function AttentionCard() {
           {rows.map((row) => (
             <li
               key={row.id}
-              className="flex items-center gap-3 rounded-lg px-2 py-2 hover:bg-muted/50"
+              className="flex items-center gap-3 rounded-md px-2 py-2 hover:bg-muted/50"
             >
               <StatusDot tone={row.tone} />
               <p className="min-w-0 flex-1 text-sm">{row.message}</p>

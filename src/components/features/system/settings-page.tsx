@@ -14,16 +14,20 @@ import { formatCount } from '@/lib/client/format'
 import { InfoRow, ManagedCaption, MonoId } from './shared'
 
 export function SettingsPage() {
-  const { status } = useWorkspace()
+  const { status, selectedCodebaseId } = useWorkspace()
   const hostedBackend = status.backend === 'd1'
+  const codebaseId = selectedCodebaseId ?? status.codebaseId
+  const agentHref = codebaseId
+    ? `/codebases/${encodeURIComponent(codebaseId)}/agent`
+    : '/status'
 
   return (
     <PageScaffold
       title="Settings"
-      description="How this codebase syncs, stores, reviews, and protects files. These policies are managed by the agent and backend."
+      description="Sync, storage, review, and privacy policy for this repository."
       actions={
         <Button asChild variant="outline" size="sm">
-          <Link href="/status">
+          <Link href={agentHref}>
             <TerminalSquare className="size-4" />
             Agent commands
           </Link>
@@ -73,7 +77,7 @@ export function SettingsPage() {
         </CardContent>
         <CardFooter>
           <ManagedCaption>
-            Hydration and cache are managed by the agent — use the Agent page to hydrate or free space.
+            Hydration and cache policy are managed automatically by the local agent.
           </ManagedCaption>
         </CardFooter>
       </Card>

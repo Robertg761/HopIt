@@ -27,20 +27,20 @@ export function HopItLogo({
       >
         <defs>
           <clipPath id={clipId}>
-            <rect x="2" y="2" width="44" height="44" rx="14" />
+            <rect x="2" y="2" width="44" height="44" rx="8" />
           </clipPath>
         </defs>
-        <rect x="2" y="2" width="44" height="44" rx="14" fill="var(--signal)" />
+        <rect x="2" y="2" width="44" height="44" rx="8" fill="var(--signal)" />
         <g clipPath={`url(#${clipId})`}>
-          <path d="M-4 41L17 20" stroke="#17352e" strokeWidth="6" />
-          <path d="M16 32L30 18" stroke="#17352e" strokeWidth="6" />
-          <path d="M29 25L48 6" stroke="#17352e" strokeWidth="6" />
-          <circle cx="17" cy="20" r="3.2" fill="#f16c43" stroke="#17352e" strokeWidth="2" />
-          <circle cx="30" cy="18" r="3.2" fill="#f3f0e6" stroke="#17352e" strokeWidth="2" />
+          <path d="M-4 41L17 20" stroke="#ffffff" strokeWidth="6" />
+          <path d="M16 32L30 18" stroke="#ffffff" strokeWidth="6" />
+          <path d="M29 25L48 6" stroke="#ffffff" strokeWidth="6" />
+          <circle cx="17" cy="20" r="3.2" fill="#ffffff" stroke="#0d1117" strokeWidth="1.5" />
+          <circle cx="30" cy="18" r="3.2" fill="#ffffff" stroke="#0d1117" strokeWidth="1.5" />
         </g>
       </svg>
       {showWordmark ? (
-        <span className="text-[0.9rem] font-black uppercase leading-none tracking-[0.16em]">HopIt</span>
+        <span className="text-sm font-semibold tracking-tight">HopIt</span>
       ) : null}
     </span>
   )

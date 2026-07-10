@@ -1,6 +1,7 @@
 'use client'
 
 import * as React from 'react'
+import Link from 'next/link'
 import { FolderGit2 } from 'lucide-react'
 
 import { PageScaffold } from '@/components/shell/page-scaffold'
@@ -9,6 +10,8 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/hooks/use-toast'
 import { createCollaborationItem } from '@/lib/collaboration'
 import { useWorkspace, type AgentCommand } from '@/components/workspace/workspace-provider'
+import { cn } from '@/lib/utils'
+import { repoPath } from '@/components/shell/repo-nav'
 import { ChangedFilesCard } from './changed-files'
 import { CompareView } from './compare-view'
 import { DecisionsCard } from './decisions-card'
@@ -23,16 +26,16 @@ export type ReviewPageMode = 'review' | 'compare' | 'history'
 
 const MODE_COPY: Record<ReviewPageMode, { title: string; description: string }> = {
   review: {
-    title: 'Review',
-    description: 'Inspect the active change set, discuss lines inline, and record decisions.',
+    title: 'Pull request',
+    description: 'Inspect the active change set, discuss lines, and record decisions.',
   },
   compare: {
     title: 'Compare',
-    description: 'See where the active change set stands against Main.',
+    description: 'Active change set vs Main.',
   },
   history: {
     title: 'History',
-    description: 'Review, merge, and sync activity for this codebase.',
+    description: 'Review, merge, and sync activity for this repository.',
   },
 }
 
@@ -149,7 +152,9 @@ export function ReviewPage({ mode, codebaseId }: { mode: ReviewPageMode; codebas
       if (result.ok) {
         toast({
           title: 'Follow-up issue filed',
-          description: 'Track it under Work items at /work-items.',
+          description: status.codebaseId
+            ? `Track it under Issues in this repository.`
+            : 'Track it under Issues.',
         })
       } else {
         toast({
@@ -164,6 +169,7 @@ export function ReviewPage({ mode, codebaseId }: { mode: ReviewPageMode; codebas
   }
 
   const copy = MODE_COPY[mode]
+  const activeId = codebaseId ?? status.codebaseId
 
   return (
     <PageScaffold
@@ -175,13 +181,14 @@ export function ReviewPage({ mode, codebaseId }: { mode: ReviewPageMode; codebas
         ) : undefined
       }
     >
+      {activeId ? <PullsSubnav codebaseId={activeId} mode={mode} /> : null}
       {loading ? (
         <ReviewPageSkeleton />
       ) : !status.codebaseId ? (
         <EmptyState
           icon={FolderGit2}
-          title="No codebase selected"
-          description="Pick a codebase from the sidebar to review its active change set."
+          title="No repository selected"
+          description="Open a repository to review its active change set."
         />
       ) : mode === 'history' ? (
         <HistoryTimelineCard events={filterReviewHistory(status.events)} />
@@ -225,6 +232,36 @@ export function ReviewPage({ mode, codebaseId }: { mode: ReviewPageMode; codebas
         </>
       )}
     </PageScaffold>
+  )
+}
+
+function PullsSubnav({ codebaseId, mode }: { codebaseId: string; mode: ReviewPageMode }) {
+  const items: Array<{ id: ReviewPageMode; label: string; href: string }> = [
+    { id: 'review', label: 'Conversation', href: repoPath(codebaseId, 'pulls') },
+    { id: 'compare', label: 'Compare', href: repoPath(codebaseId, 'compare') },
+    { id: 'history', label: 'History', href: repoPath(codebaseId, 'history') },
+  ]
+
+  return (
+    <div className="flex flex-wrap gap-1 border-b border-border pb-0">
+      {items.map((item) => {
+        const active = item.id === mode
+        return (
+          <Link
+            key={item.id}
+            href={item.href}
+            className={cn(
+              'border-b-2 px-3 py-1.5 text-sm font-medium',
+              active
+                ? 'border-foreground text-foreground'
+                : 'border-transparent text-muted-foreground hover:text-foreground',
+            )}
+          >
+            {item.label}
+          </Link>
+        )
+      })}
+    </div>
   )
 }
 

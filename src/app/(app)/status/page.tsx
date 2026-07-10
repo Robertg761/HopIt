@@ -1,5 +1,5 @@
-import { AgentPage } from '@/components/features/system/agent-page'
+import { RepoRedirect } from '@/components/shell/repo-redirect'
 
-export default function Status() {
-  return <AgentPage />
+export default function StatusRedirectPage() {
+  return <RepoRedirect segment="agent" />
 }

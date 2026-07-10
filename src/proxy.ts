@@ -15,8 +15,6 @@ const REALM = 'Basic realm="HopIt"'
 const isPublicRoute = createRouteMatcher(['/sign-in(.*)', '/sign-up(.*)'])
 
 const clerkProxy = clerkMiddleware(async (auth, request) => {
-  if (isPublicRoute(request)) return NextResponse.next()
-
   await auth.protect({ unauthenticatedUrl: new URL(signInPath, request.url).toString() })
   return NextResponse.next()
 })
@@ -24,7 +22,8 @@ const clerkProxy = clerkMiddleware(async (auth, request) => {
 export function proxy(request: NextRequest, event: NextFetchEvent) {
   if (shouldUseClerkAuth()) {
     if (!isClerkServerConfigured()) return authProviderMissing()
-    if (!isPublicRoute(request) && hasValidBasicAuthFallbackCredentials(request.headers)) {
+    if (isPublicRoute(request)) return NextResponse.next()
+    if (hasValidBasicAuthFallbackCredentials(request.headers)) {
       return NextResponse.next()
     }
     return clerkProxy(request, event)

@@ -1,56 +1,56 @@
 'use client'
 
 import Link from 'next/link'
-import { ArrowRight, Boxes } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { CodebaseSummary } from '@/components/workspace/workspace-provider'
+import { repoPath } from '@/components/shell/repo-nav'
 import { formatCount } from '@/lib/client/format'
 
 export function CodebasesPreviewCard({ codebases, loading }: { codebases: CodebaseSummary[]; loading: boolean }) {
-  const preview = codebases.slice(0, 4)
+  const preview = codebases.slice(0, 5)
 
   return (
-    <Card className="overflow-hidden bg-[var(--signal)] text-[#17352e]">
-      <CardHeader className="flex-row items-start justify-between pb-5">
-        <div>
-          <p className="mono-label mb-2 text-[#17352e]/60">Account / {formatCount(codebases.length)} total</p>
-          <CardTitle className="font-display text-2xl font-normal tracking-[-0.03em] text-[#17352e]">Codebases in orbit</CardTitle>
-        </div>
-        <span className="grid size-10 place-items-center rounded-full bg-[#17352e] text-[var(--signal)]">
-          <Boxes className="size-4" />
-        </span>
+    <Card>
+      <CardHeader className="flex-row items-center justify-between border-b border-border pb-3">
+        <CardTitle>Repositories</CardTitle>
+        <Link href="/codebases" className="text-xs font-medium text-iris hover:underline">
+          View all
+        </Link>
       </CardHeader>
-      <CardContent className="pt-1">
+      <CardContent className="p-0 sm:p-0">
         {loading ? (
-          <div className="space-y-2"><Skeleton className="h-12" /><Skeleton className="h-12" /></div>
+          <div className="space-y-2 p-4">
+            <Skeleton className="h-10" />
+            <Skeleton className="h-10" />
+          </div>
         ) : preview.length === 0 ? (
-          <p className="py-5 text-sm text-[#17352e]/70">No codebases in this account yet.</p>
+          <p className="px-4 py-8 text-sm text-muted-foreground sm:px-5">No repositories yet.</p>
         ) : (
-          <ul className="divide-y divide-[#17352e]/15 border-y border-[#17352e]/15">
-            {preview.map((codebase, index) => (
-              <li key={codebase.id}>
-                <Link href="/codebases" className="group grid grid-cols-[1.5rem_1fr_auto] items-center gap-2 py-3 outline-none">
-                  <span className="font-mono text-[0.58rem] text-[#17352e]/50">{String(index + 1).padStart(2, '0')}</span>
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-bold">{codebase.name}</p>
-                    <p className="mt-0.5 text-[0.65rem] text-[#17352e]/65">{formatCount(codebase.fileCount)} files · {codebase.hydrationState}</p>
+          <ul>
+            {preview.map((codebase) => (
+              <li key={codebase.id} className="border-b border-border last:border-0">
+                <Link
+                  href={repoPath(codebase.id)}
+                  className="flex items-center gap-3 px-4 py-3 outline-none hover:bg-muted/50 sm:px-5"
+                >
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-iris hover:underline">{codebase.name}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {formatCount(codebase.fileCount)} files ·{' '}
+                      {codebase.behindByRevisions > 0
+                        ? `${formatCount(codebase.behindByRevisions)} rev${codebase.behindByRevisions === 1 ? '' : 's'} behind`
+                        : 'Up to date'}
+                    </p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Badge className="border-[#17352e]/20 bg-transparent text-[#17352e]" tone="outline">{codebase.attached ? 'Attached' : 'Cloud'}</Badge>
-                    <ArrowRight className="size-4 transition-transform group-hover:translate-x-1" />
-                  </div>
+                  <Badge tone="outline">{codebase.attached ? 'Attached' : 'Cloud'}</Badge>
                 </Link>
               </li>
             ))}
           </ul>
         )}
-        <Button asChild variant="ghost" className="mt-4 px-0 text-[#17352e] hover:bg-transparent">
-          <Link href="/codebases">Manage all codebases <ArrowRight /></Link>
-        </Button>
       </CardContent>
     </Card>
   )

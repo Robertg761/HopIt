@@ -52,7 +52,7 @@ export function IssueDetailPage({
       title={`#${issue.number} ${issue.title}`}
       actions={
         <>
-          <BackToWorkItemsButton />
+          <BackToWorkItemsButton codebaseId={codebaseId} />
           <Button
             variant="outline"
             size="sm"
@@ -132,7 +132,7 @@ export function DiscussionDetailPage({
       title={`#${discussion.number} ${discussion.title}`}
       actions={
         <>
-          <BackToWorkItemsButton />
+          <BackToWorkItemsButton codebaseId={codebaseId} />
           <DiscussionStatusButtons
             discussion={discussion}
             codebaseId={codebaseId}

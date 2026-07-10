@@ -1,5 +1,5 @@
-import { ReviewPage } from '@/components/features/review/review-page'
+import { RepoRedirect } from '@/components/shell/repo-redirect'
 
-export default function Review() {
-  return <ReviewPage mode="review" />
+export default function ReviewRedirectPage() {
+  return <RepoRedirect segment="pulls" />
 }

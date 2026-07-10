@@ -1,7 +1,7 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 
-/* HopIt workspace relay visual system. */
+/* HopIt — quiet GitHub-like product surface */
 
 @custom-variant dark (&:is(.dark *));
 
@@ -56,119 +56,125 @@
   --color-chart-4: var(--chart-4);
   --color-chart-5: var(--chart-5);
 
-  --radius-sm: calc(var(--radius) - 6px);
-  --radius-md: calc(var(--radius) - 3px);
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: calc(var(--radius) - 1px);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 6px);
+  --radius-xl: calc(var(--radius) + 2px);
 }
 
 :root {
-  --font-body: "Avenir Next", Avenir, "Helvetica Neue", sans-serif;
-  --font-display: "Iowan Old Style", "Baskerville", "Times New Roman", serif;
-  --font-code: "SFMono-Regular", "Cascadia Code", "Roboto Mono", Consolas, monospace;
-  --radius: 0.875rem;
+  --font-body: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
+  --font-display: var(--font-body);
+  --font-code: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+  --radius: 0.375rem;
 
-  --background: #f3f0e6;
-  --foreground: #14231f;
-  --card: #fbfaf4;
-  --card-foreground: #14231f;
-  --popover: #fffef9;
-  --popover-foreground: #14231f;
+  --background: #ffffff;
+  --foreground: #1f2328;
+  --card: #ffffff;
+  --card-foreground: #1f2328;
+  --popover: #ffffff;
+  --popover-foreground: #1f2328;
 
-  --primary: #173f35;
-  --primary-foreground: #f8ffd5;
-  --secondary: #e7e2d4;
-  --secondary-foreground: #22342e;
-  --muted: #eae6da;
-  --muted-foreground: #68736d;
-  --accent: #c9f45c;
-  --accent-foreground: #173125;
-  --destructive: #d84a32;
-  --destructive-foreground: #fff8f0;
-  --border: #d3cebf;
-  --input: #bfb9a8;
-  --ring: #4c72f0;
+  --primary: #1f883d;
+  --primary-foreground: #ffffff;
+  --secondary: #f6f8fa;
+  --secondary-foreground: #1f2328;
+  --muted: #f6f8fa;
+  --muted-foreground: #656d76;
+  --accent: #ddf4ff;
+  --accent-foreground: #0969da;
+  --destructive: #cf222e;
+  --destructive-foreground: #ffffff;
+  --border: #d0d7de;
+  --input: #d0d7de;
+  --ring: #0969da;
 
-  --hop: #8abf2f;
-  --hop-foreground: #14231f;
-  --hop-soft: #e6f5b8;
-  --hop-soft-foreground: #35540b;
-  --iris: #4c72f0;
+  --hop: #1a7f37;
+  --hop-foreground: #ffffff;
+  --hop-soft: #dafbe1;
+  --hop-soft-foreground: #116329;
+  --iris: #0969da;
   --iris-foreground: #ffffff;
-  --iris-soft: #e1e8ff;
-  --iris-soft-foreground: #2447bd;
-  --amber: #d47d27;
-  --amber-foreground: #fff9f1;
-  --amber-soft: #f8e4c7;
-  --amber-soft-foreground: #7b4311;
-  --danger-soft: #f8d9d2;
-  --danger-soft-foreground: #962e1d;
-  --info: #087f8c;
-  --info-foreground: #f1ffff;
-  --info-soft: #d5eff0;
-  --info-soft-foreground: #075e67;
+  --iris-soft: #ddf4ff;
+  --iris-soft-foreground: #0550ae;
+  --amber: #9a6700;
+  --amber-foreground: #ffffff;
+  --amber-soft: #fff8c5;
+  --amber-soft-foreground: #7d4e00;
+  --danger-soft: #ffebe9;
+  --danger-soft-foreground: #a40e26;
+  --info: #0969da;
+  --info-foreground: #ffffff;
+  --info-soft: #ddf4ff;
+  --info-soft-foreground: #0550ae;
 
-  --sidebar: #17352e;
-  --sidebar-foreground: #f4f1e7;
-  --sidebar-muted: #9baea6;
-  --signal: #c9f45c;
-  --signal-orange: #f16c43;
-  --paper-grid: rgba(29, 55, 47, 0.055);
+  --sidebar: #f6f8fa;
+  --sidebar-foreground: #1f2328;
+  --sidebar-muted: #656d76;
+  --signal: #1a7f37;
+  --signal-orange: #bc4c00;
+  --paper-grid: transparent;
 
-  --chart-1: #8abf2f;
-  --chart-2: #4c72f0;
-  --chart-3: #f16c43;
-  --chart-4: #087f8c;
-  --chart-5: #7c7568;
+  --chart-1: #1a7f37;
+  --chart-2: #0969da;
+  --chart-3: #bc4c00;
+  --chart-4: #8250df;
+  --chart-5: #656d76;
 }
 
 .dark {
-  --background: #111915;
-  --foreground: #f0eee4;
-  --card: #18231e;
-  --card-foreground: #f0eee4;
-  --popover: #1d2923;
-  --popover-foreground: #f0eee4;
+  --background: #0d1117;
+  --foreground: #e6edf3;
+  --card: #0d1117;
+  --card-foreground: #e6edf3;
+  --popover: #161b22;
+  --popover-foreground: #e6edf3;
 
-  --primary: #c9f45c;
-  --primary-foreground: #173125;
-  --secondary: #27332d;
-  --secondary-foreground: #f0eee4;
-  --muted: #233029;
-  --muted-foreground: #9caaa3;
-  --accent: #c9f45c;
-  --accent-foreground: #173125;
-  --destructive: #f4765c;
-  --destructive-foreground: #2c0f08;
-  --border: #324139;
-  --input: #48584f;
-  --ring: #829cff;
+  --primary: #238636;
+  --primary-foreground: #ffffff;
+  --secondary: #161b22;
+  --secondary-foreground: #e6edf3;
+  --muted: #161b22;
+  --muted-foreground: #8b949e;
+  --accent: #121d2f;
+  --accent-foreground: #2f81f7;
+  --destructive: #da3633;
+  --destructive-foreground: #ffffff;
+  --border: #30363d;
+  --input: #30363d;
+  --ring: #2f81f7;
 
-  --hop: #c9f45c;
-  --hop-foreground: #173125;
-  --hop-soft: #30451e;
-  --hop-soft-foreground: #dffb9b;
-  --iris: #829cff;
-  --iris-foreground: #101735;
-  --iris-soft: #27335d;
-  --iris-soft-foreground: #b9c7ff;
-  --amber: #f0a355;
-  --amber-foreground: #291805;
-  --amber-soft: #432d17;
-  --amber-soft-foreground: #ffd39f;
-  --danger-soft: #442019;
-  --danger-soft-foreground: #ffb3a2;
-  --info: #56c2ce;
-  --info-foreground: #06272b;
-  --info-soft: #17383b;
-  --info-soft-foreground: #98e8ee;
+  --hop: #3fb950;
+  --hop-foreground: #0d1117;
+  --hop-soft: #12261e;
+  --hop-soft-foreground: #3fb950;
+  --iris: #2f81f7;
+  --iris-foreground: #ffffff;
+  --iris-soft: #121d2f;
+  --iris-soft-foreground: #79c0ff;
+  --amber: #d29922;
+  --amber-foreground: #0d1117;
+  --amber-soft: #2a2111;
+  --amber-soft-foreground: #e3b341;
+  --danger-soft: #2d1214;
+  --danger-soft-foreground: #ff7b72;
+  --info: #2f81f7;
+  --info-foreground: #ffffff;
+  --info-soft: #121d2f;
+  --info-soft-foreground: #79c0ff;
 
-  --sidebar: #0b110e;
-  --sidebar-foreground: #f0eee4;
-  --sidebar-muted: #8b9b93;
-  --signal: #c9f45c;
-  --signal-orange: #ff805b;
-  --paper-grid: rgba(230, 238, 232, 0.035);
+  --sidebar: #010409;
+  --sidebar-foreground: #e6edf3;
+  --sidebar-muted: #8b949e;
+  --signal: #3fb950;
+  --signal-orange: #db6d28;
+  --paper-grid: transparent;
+
+  --chart-1: #3fb950;
+  --chart-2: #2f81f7;
+  --chart-3: #db6d28;
+  --chart-4: #a371f7;
+  --chart-5: #8b949e;
 }
 
 @layer base {
@@ -189,11 +195,6 @@
   body {
     @apply bg-background text-foreground font-sans text-sm antialiased;
     min-height: 100dvh;
-    font-feature-settings: "ss01", "ss02", "cv02", "cv11";
-    background-image:
-      linear-gradient(var(--paper-grid) 1px, transparent 1px),
-      linear-gradient(90deg, var(--paper-grid) 1px, transparent 1px);
-    background-size: 32px 32px;
   }
 
   button,
@@ -205,22 +206,23 @@
   }
 
   ::selection {
-    color: #14231f;
-    background: var(--signal);
+    color: var(--foreground);
+    background: color-mix(in oklch, var(--ring) 28%, transparent);
   }
 }
 
 @layer utilities {
   .font-display {
     font-family: var(--font-display);
+    font-weight: 600;
   }
 
   .mono-label {
     font-family: var(--font-code);
-    font-size: 0.65rem;
-    font-weight: 650;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
+    font-size: 0.75rem;
+    font-weight: 500;
+    letter-spacing: 0;
+    text-transform: none;
   }
 
   .text-balance {
@@ -228,8 +230,8 @@
   }
 
   .scroll-thin::-webkit-scrollbar {
-    width: 7px;
-    height: 7px;
+    width: 8px;
+    height: 8px;
   }
 
   .scroll-thin::-webkit-scrollbar-track {
@@ -237,7 +239,7 @@
   }
 
   .scroll-thin::-webkit-scrollbar-thumb {
-    background: color-mix(in oklch, var(--muted-foreground) 32%, transparent);
+    background: color-mix(in oklch, var(--muted-foreground) 28%, transparent);
     border: 2px solid transparent;
     border-radius: 999px;
     background-clip: padding-box;
@@ -248,46 +250,31 @@
     position: absolute;
     inset: -1px;
     border-radius: inherit;
-    animation: relay-pulse 2.2s ease-out infinite;
+    animation: status-pulse 2.2s ease-out infinite;
   }
 
-  @keyframes relay-pulse {
-    0% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--hop) 70%, transparent); }
-    75%, 100% { box-shadow: 0 0 0 7px transparent; }
+  @keyframes status-pulse {
+    0% { box-shadow: 0 0 0 0 color-mix(in oklch, var(--hop) 55%, transparent); }
+    75%, 100% { box-shadow: 0 0 0 6px transparent; }
   }
 
   .page-enter {
-    animation: page-rise 480ms cubic-bezier(.2,.75,.2,1) both;
+    animation: page-rise 200ms ease-out both;
   }
 
   @keyframes page-rise {
-    from { opacity: 0; transform: translateY(10px); }
-    to { opacity: 1; transform: translateY(0); }
+    from { opacity: 0; }
+    to { opacity: 1; }
   }
 
   .relay-dash {
     background-image: linear-gradient(90deg, currentColor 50%, transparent 0);
-    background-size: 10px 1px;
+    background-size: 8px 1px;
     background-repeat: repeat-x;
   }
 
   .signal-sheen {
     position: relative;
-    isolation: isolate;
-    overflow: hidden;
-  }
-
-  .signal-sheen::after {
-    content: "";
-    position: absolute;
-    z-index: -1;
-    width: 16rem;
-    height: 16rem;
-    right: -8rem;
-    bottom: -10rem;
-    border-radius: 999px;
-    background: color-mix(in oklch, var(--signal) 32%, transparent);
-    filter: blur(1px);
   }
 }
 

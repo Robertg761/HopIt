@@ -16,7 +16,6 @@ import {
   RenameCodebaseDialog,
 } from './codebase-dialogs'
 import { humanizeMessage } from './codebases-api'
-import { WorkspaceRootCard } from './workspace-root-card'
 
 export function CodebasesPage() {
   const { codebases, codebasesLoading, codebasesError, status } = useWorkspace()
@@ -31,8 +30,8 @@ export function CodebasesPage() {
 
   return (
     <PageScaffold
-      title="Codebases"
-      description="Cloud codebases for this account, and the local workspace root they hydrate into."
+      title="Repositories"
+      description="Cloud repositories for this account."
       actions={
         <>
           <Button
@@ -44,13 +43,11 @@ export function CodebasesPage() {
             <GitBranch /> Import from Git
           </Button>
           <Button onClick={() => setNewOpen(true)}>
-            <Plus /> New codebase
+            <Plus /> New repository
           </Button>
         </>
       }
     >
-      <WorkspaceRootCard />
-
       {codebasesError ? (
         <div className="flex items-start gap-2 rounded-lg bg-amber-soft px-3 py-2 text-xs text-amber-soft-foreground">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" aria-hidden />
@@ -68,12 +65,12 @@ export function CodebasesPage() {
         ) : showEmpty ? (
           <EmptyState
             icon={FolderGit2}
-            title="No codebases yet"
-            description="A codebase lives in the cloud; every device hydrates a thin, synced view of it. Create an empty codebase to start fresh, or import an existing Git repository."
+            title="No repositories yet"
+            description="A repository lives in the cloud and stays synced across your devices. Create one or import from Git."
             action={
               <div className="flex flex-wrap items-center justify-center gap-2">
                 <Button onClick={() => setNewOpen(true)}>
-                  <Plus /> New codebase
+                  <Plus /> New repository
                 </Button>
                 <Button
                   variant="outline"
@@ -87,7 +84,7 @@ export function CodebasesPage() {
             }
           />
         ) : (
-          <div className="rounded-xl border border-border bg-card p-2">
+          <div className="rounded-md border border-border bg-card">
             <ul className="space-y-1">
               {codebases.map((codebase) => (
                 <CodebaseRow

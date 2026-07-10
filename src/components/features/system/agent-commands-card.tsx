@@ -2,8 +2,6 @@
 
 import * as React from 'react'
 import {
-  CloudDownload,
-  CloudOff,
   Eraser,
   GitBranch,
   LifeBuoy,
@@ -32,8 +30,6 @@ const COMMANDS: Array<{ command: AgentCommand; label: string; icon: LucideIcon }
   { command: 'refresh', label: 'Refresh', icon: RotateCw },
   { command: 'sync', label: 'Sync now', icon: RefreshCw },
   { command: 'recover', label: 'Recover', icon: LifeBuoy },
-  { command: 'hydrateWorkspace', label: 'Hydrate workspace', icon: CloudDownload },
-  { command: 'dehydrateWorkspace', label: 'Dehydrate workspace', icon: CloudOff },
 ]
 
 export function CommandsCard({

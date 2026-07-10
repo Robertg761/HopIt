@@ -3,18 +3,18 @@
 import * as React from 'react'
 import { createPortal } from 'react-dom'
 import { useRouter } from 'next/navigation'
-import { ArrowDownUp, RefreshCw, CloudDownload, Search } from 'lucide-react'
+import { ArrowDownUp, RefreshCw, Search } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { Kbd } from '@/components/ui/kbd'
-import { navItems } from '@/components/shell/nav'
+import { navItems, repoPaletteItems } from '@/components/shell/nav'
 import { useWorkspace, type AgentCommand } from '@/components/workspace/workspace-provider'
 import { useToast } from '@/hooks/use-toast'
 
 type PaletteEntry = {
   id: string
-  group: 'Go to' | 'Agent'
+  group: 'Go to' | 'Repository' | 'Agent'
   label: string
   description: string
   icon: LucideIcon
@@ -43,13 +43,6 @@ const agentActions: Array<{
     icon: RefreshCw,
     keywords: ['pull', 'update', 'latest'],
   },
-  {
-    command: 'hydrateWorkspace',
-    label: 'Hydrate workspace',
-    description: 'Materialize all cloud files locally.',
-    icon: CloudDownload,
-    keywords: ['download', 'materialize', 'local'],
-  },
 ]
 
 export function CommandPalette({
@@ -60,7 +53,7 @@ export function CommandPalette({
   onOpenChange: (open: boolean) => void
 }) {
   const router = useRouter()
-  const { status, runCommand } = useWorkspace()
+  const { status, selectedCodebaseId, runCommand } = useWorkspace()
   const { toast } = useToast()
   const [query, setQuery] = React.useState('')
   const [activeIndex, setActiveIndex] = React.useState(0)
@@ -100,6 +93,18 @@ export function CommandPalette({
       keywords: item.keywords,
       run: () => router.push(item.href),
     }))
+    const codebaseId = selectedCodebaseId ?? status.codebaseId
+    const repo: PaletteEntry[] = codebaseId
+      ? repoPaletteItems(codebaseId).map((item) => ({
+          id: item.id,
+          group: 'Repository',
+          label: item.label,
+          description: item.description,
+          icon: item.icon,
+          keywords: item.keywords,
+          run: () => router.push(item.href),
+        }))
+      : []
     const agent: PaletteEntry[] = status.commandsAvailable
       ? agentActions.map((action) => ({
           id: `agent-${action.command}`,
@@ -111,8 +116,8 @@ export function CommandPalette({
           run: () => runAgentCommand(action.command, action.label),
         }))
       : []
-    return [...nav, ...agent]
-  }, [router, runAgentCommand, status.commandsAvailable])
+    return [...nav, ...repo, ...agent]
+  }, [router, runAgentCommand, selectedCodebaseId, status.codebaseId, status.commandsAvailable])
 
   const filtered = React.useMemo(() => {
     const trimmed = query.trim().toLowerCase()
@@ -166,7 +171,7 @@ export function CommandPalette({
         role="dialog"
         aria-modal="true"
         aria-label="Command palette"
-        className="relative z-10 w-full max-w-xl overflow-hidden rounded-[1.5rem] border border-border bg-popover shadow-[0_32px_100px_rgba(10,19,15,0.3)] animate-in fade-in zoom-in-95 duration-150"
+        className="relative z-10 w-full max-w-xl overflow-hidden rounded-md border border-border bg-popover shadow-lg animate-in fade-in zoom-in-95 duration-150"
       >
         <div className="flex items-center gap-2.5 border-b border-border px-4">
           <Search className="size-4 shrink-0 text-muted-foreground" />

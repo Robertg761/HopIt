@@ -1,6 +1,6 @@
 'use client'
 
-import { FolderSync, HardDriveDownload, RotateCw, type LucideIcon } from 'lucide-react'
+import { FolderSync, RotateCw, type LucideIcon } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
@@ -10,7 +10,6 @@ import { useAgentCommandRunner } from './use-agent-command'
 const ACTIONS: ReadonlyArray<{ command: AgentCommand; label: string; icon: LucideIcon }> = [
   { command: 'sync', label: 'Sync now', icon: FolderSync },
   { command: 'refresh', label: 'Refresh', icon: RotateCw },
-  { command: 'hydrateWorkspace', label: 'Hydrate workspace', icon: HardDriveDownload },
 ]
 
 /** Row of agent quick actions; hidden entirely when commands are unavailable. */

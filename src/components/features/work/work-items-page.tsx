@@ -43,14 +43,14 @@ export function WorkItemsPage() {
 
   if (!codebaseId) {
     return (
-      <PageScaffold title="Work items" description="Issues, discussions, projects, and releases.">
+      <PageScaffold title="Issues" description="Issues, discussions, projects, and releases.">
         <EmptyState
           icon={FolderGit2}
-          title="No codebase selected"
-          description="Pick a codebase to see its issues, discussions, projects, and releases."
+          title="No repository selected"
+          description="Pick a repository to see its issues, discussions, projects, and releases."
           action={
             <Button asChild variant="outline" size="sm">
-              <Link href="/codebases">Browse codebases</Link>
+              <Link href="/codebases">Browse repositories</Link>
             </Button>
           }
         />
@@ -80,7 +80,7 @@ export function WorkItemsPage() {
 
   return (
     <PageScaffold
-      title="Work items"
+      title="Issues"
       description={`Issues, discussions, projects, and releases for ${status.codebaseName}.`}
       actions={
         <Button

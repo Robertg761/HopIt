@@ -30,7 +30,7 @@ export function AgentPage() {
   return (
     <PageScaffold
       title="Agent"
-      description="Health, sync, and workspace commands for the HopIt agent."
+      description="Local agent health, sync, and workspace commands."
       actions={
         <Button variant="outline" size="sm" onClick={() => void refreshStatus()} disabled={refreshing}>
           <RotateCw className={refreshing ? 'size-4 animate-spin' : 'size-4'} />

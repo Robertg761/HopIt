@@ -53,7 +53,7 @@ function TabsList({ className, children }: { className?: string; children: React
   return (
     <div
       role="tablist"
-      className={cn("flex w-fit max-w-full items-center gap-1 overflow-x-auto rounded-full border border-border bg-card/70 p-1", className)}
+      className={cn("flex w-full max-w-full items-center gap-0 overflow-x-auto border-b border-border", className)}
     >
       {children}
     </div>
@@ -83,10 +83,10 @@ function TabsTrigger({
       aria-controls={`${tabs.idBase}-panel-${value}`}
       onClick={() => tabs.setValue(value)}
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-bold transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/40",
+        "inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
         active
-          ? "bg-foreground text-background"
-          : "text-muted-foreground hover:bg-muted hover:text-foreground",
+          ? "border-[var(--signal-orange)] text-foreground"
+          : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
         className
       )}
     >

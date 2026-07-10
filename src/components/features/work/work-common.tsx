@@ -165,12 +165,15 @@ export const RELEASE_STATUS_TONE: Record<CollaborationRelease['status'], BadgeTo
   archived: 'neutral',
 }
 
-export function BackToWorkItemsButton() {
+export function BackToWorkItemsButton({ codebaseId }: { codebaseId?: string }) {
+  const href = codebaseId
+    ? `/codebases/${encodeURIComponent(codebaseId)}/issues`
+    : '/work-items'
   return (
     <Button asChild variant="ghost" size="sm">
-      <Link href="/work-items">
+      <Link href={href}>
         <ArrowLeft className="size-3.5" />
-        Work items
+        Issues
       </Link>
     </Button>
   )

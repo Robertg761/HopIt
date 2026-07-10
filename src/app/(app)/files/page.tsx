@@ -1,5 +1,5 @@
-import { FilesPage } from '@/components/features/files/files-page'
+import { RepoRedirect } from '@/components/shell/repo-redirect'
 
-export default function Files() {
-  return <FilesPage />
+export default function FilesRedirectPage() {
+  return <RepoRedirect segment="" />
 }

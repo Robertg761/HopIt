@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { FilePlus2, FileText, Files } from 'lucide-react'
+import { DownloadCloud, FilePlus2, FileText, Files, GitBranch } from 'lucide-react'
 
 import { PageScaffold } from '@/components/shell/page-scaffold'
 import { Button } from '@/components/ui/button'
@@ -9,7 +9,10 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { Segmented } from '@/components/ui/segmented'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Spinner } from '@/components/ui/spinner'
+import { useToast } from '@/hooks/use-toast'
 import { useWorkspace } from '@/components/workspace/workspace-provider'
+import { ImportGitDialog } from '@/components/features/codebases/codebase-dialogs'
 import { FileDetail } from './file-detail'
 import { FileList } from './file-list'
 import { NewFileDialog } from './new-file-dialog'
@@ -30,15 +33,54 @@ const LOCALITY_OPTIONS = [
 ] as const
 
 export function FilesPage() {
-  const { status, loading, selectedCodebaseId, refresh } = useWorkspace()
+  const {
+    status,
+    loading,
+    selectedCodebaseId,
+    refresh,
+    codebases,
+    codebasesLoading,
+    runCommand,
+    runningCommand,
+  } = useWorkspace()
+  const { toast } = useToast()
   const [query, setQuery] = React.useState('')
   const [scope, setScope] = React.useState<ScopeFilter>('all')
   const [locality, setLocality] = React.useState<LocalityFilter>('all')
   const [selectedPath, setSelectedPath] = React.useState<string | null>(null)
   const [newFileOpen, setNewFileOpen] = React.useState(false)
+  const [importOpen, setImportOpen] = React.useState(false)
 
   const codebaseId = selectedCodebaseId ?? status.codebaseId
   const files = status.files
+  const codebase = codebases.find((entry) => entry.id === codebaseId)
+  const cloudFileCount = codebase?.fileCount ?? status.fileCount
+  const hydrationState = (codebase?.hydrationState ?? status.workspaceHydrationState).toLowerCase()
+  const showEmptyState = !loading && !codebasesLoading && files.length === 0
+  const workspaceNotReady =
+    showEmptyState &&
+    cloudFileCount > 0 &&
+    (status.state === 'offline' ||
+      codebase?.attached === false ||
+      ['cloud-only', 'metadata-only', 'partial', 'not_attached', 'needs-hydration', 'unavailable', 'unknown'].includes(
+        hydrationState,
+      ))
+  const emptyRepository = showEmptyState && !workspaceNotReady
+  const hydrating = runningCommand === 'hydrateWorkspace'
+
+  const hydrateWorkspace = async () => {
+    if (!codebaseId || !status.commandsAvailable || hydrating) return
+    const result = await runCommand('hydrateWorkspace', { codebaseId })
+    if (result.ok) {
+      toast({ title: 'Workspace hydration started', description: result.summary ?? 'Files are being prepared locally.' })
+    } else {
+      toast({
+        title: 'Workspace hydration failed',
+        description: result.error?.message ?? result.stderr ?? 'Command failed.',
+        variant: 'destructive',
+      })
+    }
+  }
 
   const filtered = React.useMemo(() => {
     const needle = query.trim().toLowerCase()
@@ -59,19 +101,37 @@ export function FilesPage() {
 
   return (
     <PageScaffold
-      title="Files"
-      description="Browse and edit the cloud files of the selected codebase."
+      title="Code"
+      description="Browse and edit files in the selected repository."
       actions={
-        <Button
-          onClick={() => setNewFileOpen(true)}
-          disabled={!codebaseId}
-          title={codebaseId ? undefined : 'Select a codebase first'}
-        >
-          <FilePlus2 /> New file
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {workspaceNotReady ? (
+            <Button
+              onClick={() => void hydrateWorkspace()}
+              disabled={!codebaseId || !status.commandsAvailable || hydrating}
+              title={status.commandsAvailable ? undefined : 'Available from the local agent'}
+            >
+              {hydrating ? <Spinner className="size-3.5" /> : <DownloadCloud />}
+              Hydrate workspace
+            </Button>
+          ) : (
+            <Button
+              onClick={() => setNewFileOpen(true)}
+              disabled={!codebaseId}
+              title={codebaseId ? undefined : 'Select a codebase first'}
+            >
+              <FilePlus2 /> {emptyRepository ? 'Create first file' : 'New file'}
+            </Button>
+          )}
+          {emptyRepository ? (
+            <Button variant="outline" onClick={() => setImportOpen(true)} disabled={!status.commandsAvailable}>
+              <GitBranch /> Import from Git
+            </Button>
+          ) : null}
+        </div>
       }
     >
-      {loading && files.length === 0 ? (
+      {loading || codebasesLoading ? (
         <div className="grid gap-6 lg:grid-cols-5">
           <div className="space-y-2 lg:col-span-2">
             <Skeleton className="h-8 w-full" />
@@ -82,12 +142,34 @@ export function FilesPage() {
       ) : files.length === 0 ? (
         <EmptyState
           icon={Files}
-          title="No cloud files"
-          description="This codebase has no visible cloud files yet. Attach or hydrate a workspace from the Codebases page to sync files here."
+          title={workspaceNotReady ? "Files aren't available on this device yet" : 'No files yet'}
+          description={
+            workspaceNotReady
+              ? 'The repository has cloud files, but this device has not prepared its local workspace yet.'
+              : 'Create the first file or import a repository. HopIt keeps it synced across your devices.'
+          }
           action={
-            <Button variant="outline" asChild>
-              <a href="/codebases">Go to Codebases</a>
-            </Button>
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              {workspaceNotReady ? (
+                <Button
+                  onClick={() => void hydrateWorkspace()}
+                  disabled={!codebaseId || !status.commandsAvailable || hydrating}
+                  title={status.commandsAvailable ? undefined : 'Available from the local agent'}
+                >
+                  {hydrating ? <Spinner className="size-3.5" /> : <DownloadCloud />}
+                  Hydrate workspace
+                </Button>
+              ) : (
+                <>
+                  <Button onClick={() => setNewFileOpen(true)} disabled={!codebaseId}>
+                    <FilePlus2 /> Create first file
+                  </Button>
+                  <Button variant="outline" onClick={() => setImportOpen(true)} disabled={!status.commandsAvailable}>
+                    <GitBranch /> Import from Git
+                  </Button>
+                </>
+              )}
+            </div>
           }
         />
       ) : (
@@ -134,6 +216,7 @@ export function FilesPage() {
           void refresh()
         }}
       />
+      <ImportGitDialog open={importOpen} onOpenChange={setImportOpen} />
     </PageScaffold>
   )
 }

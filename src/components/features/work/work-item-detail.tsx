@@ -59,9 +59,12 @@ export function WorkItemDetail({
   const { actorId } = useWorkspace()
   const { data, loading, busyKey, runMutation } = useWorkItemsController(codebaseId)
 
+  const back = <BackToWorkItemsButton codebaseId={codebaseId} />
+  const issuesHref = `/codebases/${encodeURIComponent(codebaseId)}/issues`
+
   if (loading) {
     return (
-      <PageScaffold title="Work item" actions={<BackToWorkItemsButton />}>
+      <PageScaffold title="Work item" actions={back}>
         <div className="space-y-3">
           <Skeleton className="h-24 w-full" />
           <Skeleton className="h-40 w-full" />
@@ -72,11 +75,11 @@ export function WorkItemDetail({
 
   if (!data) {
     return (
-      <PageScaffold title="Work item" actions={<BackToWorkItemsButton />}>
+      <PageScaffold title="Work item" actions={back}>
         <EmptyState
           icon={SearchX}
           title="Work items unavailable"
-          description="The collaboration backend did not return work items for this codebase."
+          description="The collaboration backend did not return work items for this repository."
         />
       </PageScaffold>
     )
@@ -84,7 +87,7 @@ export function WorkItemDetail({
 
   if (!data.ok) {
     return (
-      <PageScaffold title="Work item" actions={<BackToWorkItemsButton />}>
+      <PageScaffold title="Work item" actions={back}>
         <WorkItemsUnavailable response={data} />
       </PageScaffold>
     )
@@ -93,14 +96,14 @@ export function WorkItemDetail({
   const resolved = resolveWorkItem(data, kind, itemId)
   if (!resolved) {
     return (
-      <PageScaffold title="Work item" actions={<BackToWorkItemsButton />}>
+      <PageScaffold title="Work item" actions={back}>
         <EmptyState
           icon={SearchX}
           title="Work item not found"
-          description="This item may have been removed, or the link points at a different codebase."
+          description="This item may have been removed, or the link points at a different repository."
           action={
             <Button asChild variant="outline" size="sm">
-              <Link href="/work-items">Back to work items</Link>
+              <Link href={issuesHref}>Back to issues</Link>
             </Button>
           }
         />
@@ -128,7 +131,7 @@ export function WorkItemDetail({
     return (
       <PageScaffold
         title={`${resolved.release.version} ${resolved.release.title}`}
-        actions={<BackToWorkItemsButton />}
+        actions={back}
       >
         <ReleaseDetailSection release={resolved.release} {...shared} />
       </PageScaffold>
@@ -139,7 +142,7 @@ export function WorkItemDetail({
     <PageScaffold
       title={resolved.project.name}
       description={resolved.project.description ?? undefined}
-      actions={<BackToWorkItemsButton />}
+      actions={back}
     >
       <ProjectDetailSection project={resolved.project} {...shared} />
     </PageScaffold>

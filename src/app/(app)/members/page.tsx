@@ -1,5 +1,5 @@
-import { MembersPage } from '@/components/features/members/members-page'
+import { RepoRedirect } from '@/components/shell/repo-redirect'
 
-export default function Members() {
-  return <MembersPage />
+export default function MembersRedirectPage() {
+  return <RepoRedirect segment="collaborators" />
 }
