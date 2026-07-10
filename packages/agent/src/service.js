@@ -299,10 +299,27 @@ export async function serviceStatus(options) {
     }
   }
 
-  const running = processRunning || (Boolean(record?.pid) && endpointReachable && agent?.ok !== false)
+  // A healthy loopback /status response proves the service is alive even when
+  // no pid file exists (e.g. launchd owns the `service run` process directly).
+  // Only trust the probe when we can positively confirm it serves the expected
+  // codebase, so an unrelated service on the same host:port cannot masquerade as
+  // this one. The production profile always sets a codebase-id, so the launchd
+  // path is covered; without an expected codebase-id we fall back to the pid
+  // file rather than guessing.
+  const expectedCodebaseId = options['codebase-id'] ?? null
+  const probeHealthy =
+    endpointReachable &&
+    agent?.ok !== false &&
+    !error &&
+    fresh &&
+    Boolean(expectedCodebaseId) &&
+    agent?.codebaseId === expectedCodebaseId
+  const running = processRunning || probeHealthy
+  const source = processRunning ? 'pid-file' : probeHealthy ? 'health-probe' : null
   return {
     ok: running && !error && fresh && agent?.ok !== false,
     running,
+    source,
     pid,
     pidPath,
     statusUrl: `http://${options.host}:${options.port}/status`,
