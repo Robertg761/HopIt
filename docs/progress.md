@@ -1365,7 +1365,7 @@ Deferred:
 - Explicit local cache pruning exists through `hop workspace prune`; automatic pruning policy and native provider-backed read-triggered hydration are still pending.
 - No offline mode yet.
 - No signed production installer, notarization, native package manager integration, or tray/menu agent wrapper yet.
-- Start-on-login setup is script/template based and expects the operator to create a correct local env file.
+- `hop setup` now provides an interactive first-run onboarding flow (choose the HopIt Workspace Root, seed local agent state/workspace/index, optionally write a pre-filled production env file, and optionally install the macOS start-on-login agent), with a `--yes`/flag-driven non-interactive mode. Start-on-login itself still relies on the script/template LaunchAgent plumbing that `hop setup` and the packaged installer share, and the operator must still fill real credential values into the local env file.
 - Scoped token rotation is documented and CLI-backed, and the dashboard can track codebase keyring rotation state. Dashboard-guided recovery import, real rekey orchestration, and revocation workflows are still pending.
 - No cross-platform watch behavior matrix yet.
 

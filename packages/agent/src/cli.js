@@ -7,6 +7,7 @@ import { compareCloudRevisions } from './commands/compare.js'
 import { hydrateWorkspace } from './commands/hydrate.js'
 import { importGitProject, importLocalProject, importRemoteGitProject, initCloud, mirrorLocalProject } from './commands/import.js'
 import { installAgent } from './commands/install.js'
+import { runSetup } from './commands/setup.js'
 import { runSessionCommand } from './commands/keys.js'
 import { mergeChangeSet, openChangeSetReview, recoverJournal, refreshWorkspace, syncOnce } from './commands/sync.js'
 import { manageStorage } from './commands/storage.js'
@@ -31,7 +32,10 @@ async function main() {
   const keysAction =
     command === 'keys' && args[0] && !args[0].startsWith('--') ? args.shift() : 'status'
   const parsedOptions = parseOptions(args)
-  const options = command === 'keys' ? parsedOptions : await applyLocalDeviceKeyring(parsedOptions)
+  const options =
+    command === 'keys' || command === 'setup'
+      ? parsedOptions
+      : await applyLocalDeviceKeyring(parsedOptions)
 
   if (command === 'init') return initCloud(options)
   if (command === 'import-local') return importLocalProject(options)
@@ -57,6 +61,7 @@ async function main() {
   if (command === 'doctor') return runDoctor(options)
   if (command === 'backup') return backupAgentState(options)
   if (command === 'install') return installAgent(options)
+  if (command === 'setup') return runSetup(options)
   if (command === 'workspace') return runWorkspaceCommand(workspaceAction, options)
   if (command === 'session') return runSessionCommand(sessionAction, options)
   if (command === 'keys') return runKeysCommand(keysAction, options)

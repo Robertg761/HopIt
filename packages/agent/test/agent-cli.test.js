@@ -3976,3 +3976,164 @@ test('sync scan skips generated dependency directories like node_modules', async
   assert.equal(status.journal.pendingCount, 0)
   assert.equal(status.workspace.localChanges.state, 'clean')
 })
+
+async function makeSetupState() {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hopit-agent-setup-test-'))
+  return {
+    root,
+    stateRoot: path.join(root, 'state'),
+    workspaceRoot: path.join(root, 'workspaces'),
+    envFile: path.join(root, 'config', 'production.env'),
+  }
+}
+
+function setupArgs(state, extra = []) {
+  return [
+    '--workspace-root',
+    state.workspaceRoot,
+    '--state-root',
+    state.stateRoot,
+    '--env-path',
+    state.envFile,
+    ...extra,
+  ]
+}
+
+function runSetupInteractive(args, input) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [cliPath, 'setup', ...args], {
+      cwd: repoRoot,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.setEncoding('utf8')
+    child.stderr.setEncoding('utf8')
+    child.stdout.on('data', (chunk) => {
+      stdout += chunk
+    })
+    child.stderr.on('data', (chunk) => {
+      stderr += chunk
+    })
+    child.on('error', reject)
+    child.on('close', (code) => resolve({ code, stdout, stderr }))
+    child.stdin.write(input)
+    child.stdin.end()
+  })
+}
+
+test('setup --yes bootstraps state, workspace, index, and a pre-filled env file', async () => {
+  const state = await makeSetupState()
+
+  const result = parseLastJsonObject(
+    (await runCli('setup', setupArgs(state, ['--yes', '--codebase-id', 'setup-demo']))).stdout,
+  )
+
+  assert.equal(result.ok, true)
+  assert.equal(result.action, 'setup')
+  assert.equal(result.codebaseId, 'setup-demo')
+  assert.equal(result.workspaceRoot, path.resolve(state.workspaceRoot))
+  assert.equal(result.agentStateRoot, path.resolve(state.stateRoot))
+  assert.equal(result.workspace, path.join(path.resolve(state.workspaceRoot), 'setup-demo'))
+  assert.equal(result.envFile.status, 'written')
+  assert.equal(result.envFile.path, path.resolve(state.envFile))
+  assert.equal(result.launchAgent.installed, false)
+  assert.ok(Array.isArray(result.nextSteps) && result.nextSteps.length > 0)
+
+  assert.equal(await pathExists(path.join(state.stateRoot, 'run')), true)
+  assert.equal(await pathExists(path.join(state.stateRoot, 'backups')), true)
+  assert.equal(await pathExists(path.join(state.workspaceRoot, 'setup-demo')), true)
+
+  const index = await readJson(path.join(state.stateRoot, 'workspaces.json'))
+  assert.equal(index.codebases.length, 1)
+  assert.equal(index.codebases[0].id, 'setup-demo')
+
+  const envContent = await fs.readFile(state.envFile, 'utf8')
+  assert.ok(envContent.includes('HOPIT_PROFILE=production'))
+  assert.ok(envContent.includes('HOPIT_CODEBASE_ID=setup-demo'))
+  assert.ok(envContent.includes('HOPIT_WORKSPACE_ROOT='))
+  assert.ok(envContent.includes(path.resolve(state.workspaceRoot)))
+})
+
+test('setup is idempotent: a second run keeps the env file and does not duplicate index entries', async () => {
+  const state = await makeSetupState()
+  const args = setupArgs(state, ['--yes', '--codebase-id', 'setup-demo'])
+
+  const first = parseLastJsonObject((await runCli('setup', args)).stdout)
+  assert.equal(first.envFile.status, 'written')
+  assert.ok(first.created.length > 0)
+
+  const second = parseLastJsonObject((await runCli('setup', args)).stdout)
+  assert.equal(second.envFile.status, 'kept')
+  assert.equal(second.created.length, 0)
+
+  const index = await readJson(path.join(state.stateRoot, 'workspaces.json'))
+  assert.equal(index.codebases.length, 1)
+  assert.equal(index.codebases[0].id, 'setup-demo')
+})
+
+test('setup keeps an existing env file byte-for-byte unless --force-env is passed', async () => {
+  const state = await makeSetupState()
+  await fs.mkdir(path.dirname(state.envFile), { recursive: true })
+  const sentinel = 'SENTINEL=keepme\n'
+  await fs.writeFile(state.envFile, sentinel, 'utf8')
+
+  const kept = parseLastJsonObject(
+    (await runCli('setup', setupArgs(state, ['--yes', '--codebase-id', 'setup-demo']))).stdout,
+  )
+  assert.equal(kept.envFile.status, 'kept')
+  assert.equal(await fs.readFile(state.envFile, 'utf8'), sentinel)
+
+  const forced = parseLastJsonObject(
+    (await runCli('setup', setupArgs(state, ['--yes', '--codebase-id', 'setup-demo', '--force-env']))).stdout,
+  )
+  assert.equal(forced.envFile.status, 'written')
+  const rewritten = await fs.readFile(state.envFile, 'utf8')
+  assert.notEqual(rewritten, sentinel)
+  assert.ok(rewritten.includes('HOPIT_PROFILE=production'))
+})
+
+test('setup without --yes fails fast when stdin is not a TTY', async () => {
+  const failure = await runCliFailure('setup', [])
+  assert.equal(failure.code, 1)
+  assert.match(failure.stderr, /--yes/)
+})
+
+test('setup interactive prompts resolve workspace root and codebase id from stdin', async () => {
+  const state = await makeSetupState()
+  const answers = `${state.workspaceRoot}\ninteractive-demo\n\n`
+
+  const run = await runSetupInteractive(
+    [
+      '--interactive',
+      '--state-root',
+      state.stateRoot,
+      '--env-path',
+      state.envFile,
+      '--no-launch-agent',
+    ],
+    answers,
+  )
+
+  assert.equal(run.code, 0)
+  const result = parseLastJsonObject(run.stdout)
+  assert.equal(result.action, 'setup')
+  assert.equal(result.codebaseId, 'interactive-demo')
+  assert.equal(result.workspaceRoot, path.resolve(state.workspaceRoot))
+  assert.equal(result.envFile.status, 'written')
+  assert.equal(result.launchAgent.installed, false)
+
+  assert.equal(await pathExists(path.join(state.workspaceRoot, 'interactive-demo')), true)
+  const index = await readJson(path.join(state.stateRoot, 'workspaces.json'))
+  assert.equal(index.codebases[0].id, 'interactive-demo')
+})
+
+test('setup refuses an unsafe workspace root', async () => {
+  const state = await makeSetupState()
+  const failure = await runCliFailure(
+    'setup',
+    ['--yes', '--workspace-root', '/', '--state-root', state.stateRoot, '--env-path', state.envFile],
+  )
+  assert.equal(failure.code, 1)
+  assert.match(failure.stderr, /unsafe workspace path/)
+})

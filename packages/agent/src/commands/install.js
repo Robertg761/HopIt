@@ -2,11 +2,73 @@
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { existsSync } from 'node:fs'
 import { __filename, workspaceMode } from '../constants.js'
 import { assertWorkspacePathSafe, cloudLocationFromOptions, cloudServiceTypeFromOptions, remotePullEnabled } from '../paths.js'
 import { startService } from '../service.js'
 import { workspaceRootFromOptions } from '../status-state.js'
 import { agentStateRootFromOptions, readWorkspaceIndex, upsertWorkspaceIndex, workspaceIndexPath, workspaceIndexSummary } from '../workspace-index.js'
+
+export async function ensureAgentDirectories({ stateRoot, workspaceRoot, workspace }) {
+  const directories = [
+    path.join(stateRoot, 'cloud'),
+    path.join(stateRoot, 'journal'),
+    path.join(stateRoot, 'events'),
+    path.join(stateRoot, 'run'),
+    path.join(stateRoot, 'backups'),
+    workspaceRoot,
+    workspace,
+  ]
+  const created = []
+  for (const directory of directories) {
+    if (!existsSync(directory)) created.push(directory)
+    await fs.mkdir(directory, { recursive: true })
+  }
+  return created
+}
+
+export async function ensureWorkspaceIndexEntry(options, { codebaseId, workspaceRoot }) {
+  const existing = await readWorkspaceIndex(options)
+  if (existing) return existing
+
+  return upsertWorkspaceIndex(options, {
+    id: codebaseId,
+    name: codebaseId,
+    initialized: false,
+    workspace: {
+      root: workspaceRoot,
+      path: path.resolve(options.workspace),
+      exists: true,
+      adapter: workspaceMode.adapter,
+      cacheMode: workspaceMode.cacheMode,
+      virtualized: false,
+    },
+    cloud: {
+      path: cloudLocationFromOptions(options, codebaseId),
+      service: cloudServiceTypeFromOptions(options),
+      exists: false,
+    },
+    materialization: 'metadata-only',
+    hydration: {
+      state: 'metadata-only',
+      lastMaterializedAt: null,
+      lastMaterializedRevision: null,
+      selectedStateRevision: null,
+      source: 'install',
+      lastEvent: null,
+      hydratedPathCount: 0,
+    },
+    hydratedPaths: [],
+    remoteCursor: {
+      graphRevision: null,
+      selectedStateRevision: null,
+      materializedRevision: null,
+      lastMaterializedAt: null,
+    },
+    virtualized: false,
+    updatedAt: new Date().toISOString(),
+  })
+}
 
 export async function installAgent(options) {
   await assertWorkspacePathSafe(options)
@@ -14,54 +76,9 @@ export async function installAgent(options) {
   const workspaceRoot = path.resolve(workspaceRootFromOptions(options))
   const codebaseId = options['codebase-id'] ?? path.basename(path.resolve(options.workspace))
 
-  await fs.mkdir(path.join(stateRoot, 'cloud'), { recursive: true })
-  await fs.mkdir(path.join(stateRoot, 'journal'), { recursive: true })
-  await fs.mkdir(path.join(stateRoot, 'events'), { recursive: true })
-  await fs.mkdir(path.join(stateRoot, 'run'), { recursive: true })
-  await fs.mkdir(path.join(stateRoot, 'backups'), { recursive: true })
-  await fs.mkdir(workspaceRoot, { recursive: true })
-  await fs.mkdir(options.workspace, { recursive: true })
+  await ensureAgentDirectories({ stateRoot, workspaceRoot, workspace: options.workspace })
 
-  let index = await readWorkspaceIndex(options)
-  if (!index) {
-    index = await upsertWorkspaceIndex(options, {
-      id: codebaseId,
-      name: codebaseId,
-      initialized: false,
-      workspace: {
-        root: workspaceRoot,
-        path: path.resolve(options.workspace),
-        exists: true,
-        adapter: workspaceMode.adapter,
-        cacheMode: workspaceMode.cacheMode,
-        virtualized: false,
-      },
-      cloud: {
-        path: cloudLocationFromOptions(options, codebaseId),
-        service: cloudServiceTypeFromOptions(options),
-        exists: false,
-      },
-      materialization: 'metadata-only',
-      hydration: {
-        state: 'metadata-only',
-        lastMaterializedAt: null,
-        lastMaterializedRevision: null,
-        selectedStateRevision: null,
-        source: 'install',
-        lastEvent: null,
-        hydratedPathCount: 0,
-      },
-      hydratedPaths: [],
-      remoteCursor: {
-        graphRevision: null,
-        selectedStateRevision: null,
-        materializedRevision: null,
-        lastMaterializedAt: null,
-      },
-      virtualized: false,
-      updatedAt: new Date().toISOString(),
-    })
-  }
+  const index = await ensureWorkspaceIndexEntry(options, { codebaseId, workspaceRoot })
 
   const envExamplePath = path.join(stateRoot, 'hopit.env.example')
   if (options['write-env']) {

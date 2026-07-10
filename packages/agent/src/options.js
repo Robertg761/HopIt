@@ -50,6 +50,10 @@ export function parseOptions(args) {
     'recursive',
     'with-siblings',
     'skip-cloud-registration',
+    'yes',
+    'interactive',
+    'advanced',
+    'force-env',
   ])
 
   for (let i = 0; i < args.length; i += 1) {
@@ -57,6 +61,12 @@ export function parseOptions(args) {
     if (!arg.startsWith('--')) continue
 
     const key = arg.slice(2)
+    if (key.startsWith('no-') && booleanOptions.has(key.slice(3))) {
+      const negated = key.slice(3)
+      options[negated] = false
+      provided.add(negated)
+      continue
+    }
     if (booleanOptions.has(key)) {
       options[key] = true
       provided.add(key)

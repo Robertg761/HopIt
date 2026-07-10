@@ -317,7 +317,7 @@ chmod +x "$PACKAGE_ROOT/bin/hop" "$PACKAGE_ROOT/runtime/node" "$PACKAGE_ROOT/sup
 
 if [ ! -f "$ENV_FILE" ]; then
   cp "$PACKAGE_ROOT/examples/production.env.example" "$ENV_FILE"
-  echo "Created $ENV_FILE. Edit it with real HopIt values, then rerun this installer." >&2
+  echo "Created $ENV_FILE. Run '$PACKAGE_ROOT/bin/hop setup' for guided first-run configuration, or edit it with real HopIt values, then rerun this installer." >&2
   exit 1
 fi
 
@@ -410,7 +410,7 @@ RUNNER="$HOME/.config/hopit/run-agent.sh"
 mkdir -p "$(dirname "$ENV_FILE")" "$SERVICE_DIR" "$(dirname "$RUNNER")"
 if [ ! -f "$ENV_FILE" ]; then
   cp "$PACKAGE_ROOT/examples/production.env.example" "$ENV_FILE"
-  echo "Created $ENV_FILE. Edit it with real HopIt values, then rerun this installer." >&2
+  echo "Created $ENV_FILE. Run '$PACKAGE_ROOT/bin/hop setup' for guided first-run configuration, or edit it with real HopIt values, then rerun this installer." >&2
   exit 1
 fi
 

@@ -448,7 +448,31 @@ The packaged artifact contains:
 - `support/install-macos-launch-agent.sh`: user-level macOS start-on-login setup. It copies the package into `~/Library/Application Support/HopIt/Runtime` before writing the LaunchAgent so launchd does not need to execute from a project or downloads folder.
 - `support/install-systemd-user-service.sh`: user-level Linux start-on-login setup.
 
-Create the local env file before installing a login service:
+### First-run setup
+
+`hop setup` is the interactive front door for a new device. It asks where HopIt
+should keep and watch your codebases (the HopIt Workspace Root), then seeds the
+agent state directories, workspace folder, and workspace index, and offers to
+write a pre-filled `~/.config/hopit/production.env` (workspace root, workspace
+index, agent state root, codebase id, and `HOPIT_PROFILE=production` are filled
+in; credential keys are left as placeholders to edit). On macOS it can also
+install and load the start-on-login LaunchAgent.
+
+```bash
+/tmp/hop-darwin-arm64/bin/hop setup
+```
+
+Run it non-interactively in scripts or CI with `--yes` (accept all defaults) or
+explicit flags: `--workspace-root`, `--state-root`, `--codebase-id`,
+`--env-path`, `--write-env`/`--no-write-env`, `--force-env`, `--advanced`, and
+`--launch-agent`/`--no-launch-agent`. It never overwrites an existing env file
+unless `--force-env` is passed, and it does not require cloud credentials or
+network access. After setup, fill the credential values in the env file, then
+run `hop keys init-device`, `hop session register`, `hop workspace attach`, and
+`hop service start`.
+
+Create the local env file before installing a login service (or let `hop setup`
+write it for you):
 
 ```bash
 mkdir -p "$HOME/.config/hopit"
