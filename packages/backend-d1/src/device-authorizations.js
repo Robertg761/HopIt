@@ -140,6 +140,7 @@ export function attachDeviceAuthorizationMethods(Backend) {
           recipientPublicKeyPem: deviceKey.encryptionPublicKey,
           context,
         })
+        const registeredSessionId = requireTextValue(registered.session?.sessionId, 'Registered session id')
         const approvedAt = new Date().toISOString()
         await this.query(
           `update device_authorizations set
@@ -147,7 +148,7 @@ export function attachDeviceAuthorizationMethods(Backend) {
             approved_at = ?, updated_at = ?
            where authorization_id = ? and status = 'approving' and user_id = ?`,
           [
-            registered.session.id,
+            registeredSessionId,
             stringifyJson(wrappedSessionToken),
             approvedAt,
             approvedAt,

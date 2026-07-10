@@ -741,6 +741,7 @@ test('D1 device authorization exchanges a one-time code for a device-encrypted s
   const polled = await backend.pollDeviceAuthorization(created.deviceCode)
   assert.equal(polled.status, 'approved')
   assert.equal(polled.codebaseId, 'device-auth-core')
+  assert.match(polled.sessionId, /^session_/)
   const token = unwrapSymmetricKeyFromDevice({
     wrappedKey: polled.wrappedSessionToken,
     recipientPrivateKeyPem: device.encryption.privateKeyPem,
