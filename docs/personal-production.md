@@ -256,8 +256,9 @@ self-heal the manifest (`manifestSelfHealed` in `refresh.complete`); genuine
 drift still fails closed. The live manifest was healed on 2026-07-10 with a
 repo-checkout `hop refresh --profile production` (0 written, 0 deleted, 24
 exonerated) and the LaunchAgent was restarted with a clean scan at revision
-4436. A live push-applied proof still needs one genuinely remote change (for
-example a dashboard file edit) delivered over the hub.
+4436. The live push-applied proof landed on 2026-07-11: a second isolated
+device synced revision 4436 → 4437 and the production service applied it over
+the hub (trigger `remote-push`, ~8s later) — see "Verified 2026-07-11" below.
 
 Two related hardenings from the same investigation:
 
@@ -316,35 +317,42 @@ periodic graph-head check at `HOPIT_REMOTE_PULL_COOLDOWN_MS` still catch up
 through the same safe-refresh decision path; reconciliation no longer waits for
 another local edit.
 
-#### Pending Manual Verification (as of 2026-07-10)
+#### Verified 2026-07-11 (both prior manual items closed)
 
-These need a human with dashboard access; everything else in the 2026-07-10
-deadlock work is already proven by tests or observed live.
+The two items left pending as of 2026-07-10 were both verified live on
+2026-07-11 after a runtime repackage and reinstall. The installed runtime at
+`~/Library/Application Support/HopIt/Runtime/hop-darwin-arm64` now includes
+commits `0492579`, `2955f8e`, `6a1f7a7`, and `c916def`; the pre-reinstall
+binary was backed up alongside as
+`hop-darwin-arm64.pre-guards-20260710233509.bak`.
 
-1. Live `push-applied` proof (the last open item for cross-device handoff):
-   - Preconditions (already true): workspace scan clean at revision 4436,
-     service `push-connected`, `remotePush.lastApplied` still `null`.
-   - Sign in at `https://hopit.dev`, open any file in the dashboard editor,
-     and make a trivial edit (an already-seen hub event is never retried, so
-     only a genuinely new remote change can trigger an apply).
-   - Within seconds, `curl http://127.0.0.1:4785/status` should show
-     `remotePush.state: "push-applied"`, a non-null `remotePush.lastApplied`,
-     and `lastAppliedRevision` at the new head; the edit should appear in
-     `/Users/robert/HopIt Workspaces/hopit`.
-   - If it skips instead, read `remotePush.latestEvent.detail.reason`;
-     `workspace_has_unjournaled_changes` with paths whose hashes match cloud
-     means a stale manifest again (the installed runtime predates the
-     self-heal fix until the next repackage).
-2. After the next `npm run package:hop` + runtime reinstall (picks up the
-   2026-07-10 fixes in the deployed binary):
-   - `hop service status --profile production` with launchd owning the
-     process should report `running: true` with `source: "health-probe"`.
-   - `hop doctor --profile production` should pass the new
-     `requester-identity` check (this Mac's env now sets
-     `HOPIT_REQUESTER_ID`; unsetting it should turn the check into a failure).
-   - Optional guard spot-check on a scratch profile: a refresh whose visible
+1. Live `push-applied` proof (the last open item for cross-device handoff) is
+   proven. A second isolated device workspace (same packaged binary; separate
+   state root, workspace root, `HOPIT_SESSION_ID=session_robert_proof_device2`)
+   hydrated codebase `hopit` at revision 4436, scanned clean, then appended one
+   line to `docs/progress.md`; `hop sync` journaled exactly 1 write and the
+   cloud acknowledged revision 4437. The production service, push-connected to
+   `wss://hopit-d1-api.hopit-robert.workers.dev/events`, received hub event
+   `evt_hopit_4437_913f1166-a104-49b8-8bf9-16607751d1b3` and emitted
+   `remote-push.applied` (trigger `remote-push`, revision 4436 → 4437) at
+   `2026-07-11T02:41:38Z`, ~8 seconds after the second device's sync.
+   `remotePush.lastApplied` is now non-null, `lastAppliedRevision` is 4437, and
+   the edited line materialized in
+   `/Users/robert/HopIt Workspaces/hopit/docs/progress.md`. The proof used a
+   genuinely new hub event, not the old `evt_hopit_1759` event (which was never
+   retried, as designed).
+2. Post-reinstall checks pass:
+   - `hop service status --profile production` with launchd owning the process
+     reports `running: true` with `source: "health-probe"` (pid null).
+   - `hop doctor --profile production` passes all checks (cloud, workspace,
+     hydration, journal, remote-cursor, requester-identity, service). Negative
+     test confirmed: unsetting `HOPIT_REQUESTER_ID` flips the
+     `requester-identity` check to a failure warning that visibility-filtered
+     reads would run as guest and see zero files.
+   - Optional guard spot-check on a scratch profile (a refresh whose visible
      graph is empty while disk files exist must block with
-     `visible_graph_empty_local_files_present` instead of deleting anything.
+     `visible_graph_empty_local_files_present`) remains optional and is already
+     covered by tests.
 
 Use Cloudflare Worker logs
 as the connection-count source: each active agent should produce an
