@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { existsSync } from 'node:fs'
 import { __filename, workspaceMode } from '../constants.js'
+import { deriveServicePort } from '../options.js'
 import { assertWorkspacePathSafe, cloudLocationFromOptions, cloudServiceTypeFromOptions, remotePullEnabled, remotePushEnabled } from '../paths.js'
 import { startService } from '../service.js'
 import { workspaceRootFromOptions } from '../status-state.js'
@@ -143,6 +144,9 @@ export async function writeLaunchAgent(options) {
   const plistPath = path.join(launchAgentsRoot, `${label}.plist`)
   const hopBin = options['hop-bin'] ?? process.argv[1] ?? __filename
   const envFilePath = options['env-path']
+  // Embed the resolved status-server port explicitly so each launchd service is
+  // self-describing and two codebases never both default to 127.0.0.1:4785.
+  const port = options.port ?? String(deriveServicePort(codebaseId))
   const serviceArguments = [
     process.execPath,
     hopBin,
@@ -152,6 +156,8 @@ export async function writeLaunchAgent(options) {
     'production',
     '--codebase-id',
     codebaseId,
+    '--port',
+    String(port),
   ]
   if (remotePullEnabled(options)) {
     serviceArguments.push('--remote-pull')

@@ -87,7 +87,7 @@ Options:
   --device-name <name> Device name for session registration
   --capabilities <csv> Session capabilities, default read,write,sync,watch
   --host <host>        Status server host, defaults to 127.0.0.1
-  --port <port>        Status server port, defaults to 4785
+  --port <port>        Status server port; defaults to 4785 for the 'hopit' codebase and a stable per-codebase port otherwise
   --remote-pull        Opt into periodic and activity-triggered safe cloud refresh
   --remote-push        Opt into push-delivered safe cloud refresh hints in watch/service mode
   --remote-push-url <url> Push hub NDJSON stream URL, or HOPIT_REMOTE_PUSH_URL

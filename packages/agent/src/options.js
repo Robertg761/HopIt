@@ -89,6 +89,36 @@ export function parseOptions(args) {
   return applyRuntimeDefaults(options, provided)
 }
 
+export const baseServicePort = 4785
+export const defaultCodebaseId = 'hopit'
+
+/**
+ * Deterministic per-codebase status-server port.
+ *
+ * The default codebase ('hopit') keeps the historical base port (4785) so
+ * existing installs are unaffected. Every other codebase gets a stable port
+ * derived from its id: `4785 + 1 + (stableHash(codebaseId) % 1000)`, i.e. a
+ * value in [4786, 5785]. The `+ 1` guarantees a non-default codebase can never
+ * collapse onto the base port, so two codebases installed as separate launchd
+ * services bind distinct ports instead of the second crashing with EADDRINUSE
+ * on 127.0.0.1:4785. The derivation is pure (same id -> same port), so every
+ * service subcommand and status probe resolves the same port for a codebase.
+ */
+export function deriveServicePort(codebaseId) {
+  if (!codebaseId || codebaseId === defaultCodebaseId) return baseServicePort
+  return baseServicePort + 1 + (stableStringHash(codebaseId) % 1000)
+}
+
+/** FNV-1a 32-bit hash, returned as an unsigned integer. Stable across runs. */
+export function stableStringHash(value) {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < value.length; i += 1) {
+    hash ^= value.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193)
+  }
+  return hash >>> 0
+}
+
 export function applyRuntimeDefaults(options, provided) {
   const profile = options.profile ?? process.env.HOPIT_PROFILE ?? 'development'
   const codebaseId = options['codebase-id'] ?? process.env.HOPIT_CODEBASE_ID ?? 'hopit'
@@ -97,6 +127,12 @@ export function applyRuntimeDefaults(options, provided) {
   options.profile = profile
   if (!provided.has('codebase-id') && process.env.HOPIT_CODEBASE_ID) {
     options['codebase-id'] = process.env.HOPIT_CODEBASE_ID
+  }
+  // Resolve the status-server port. An explicit `--port` always wins, then an
+  // env override (HOPIT_AGENT_PORT), then a deterministic per-codebase default
+  // so co-installed codebases never collide on 127.0.0.1:4785.
+  if (!provided.has('port')) {
+    options.port = process.env.HOPIT_AGENT_PORT ?? String(deriveServicePort(codebaseId))
   }
   if (!provided.has('remote-pull') && isTruthyEnv(process.env.HOPIT_REMOTE_PULL)) {
     options['remote-pull'] = true
