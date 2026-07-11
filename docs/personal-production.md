@@ -28,7 +28,7 @@ Last updated: 2026-07-10
 - Cloudflare R2 public access: disabled
 - Seeded codebase id: `hopit`
 - Production workspace: `/Users/robert/HopIt Workspaces/hopit`
-- Local LaunchAgent label: `com.hopit.agent.hopit` (running with D1-backed cloud status and push enabled; the latest observed pushed revision was safely skipped because local workspace drift blocked refresh)
+- Local LaunchAgent label: `com.hopit.agent.hopit` (running with D1-backed cloud status and push enabled; the long-standing push skip was diagnosed as a stale content manifest and healed on 2026-07-10, so the workspace is scan-clean at revision 4436 with a live push-applied proof still pending)
 - LaunchAgent plist: `/Users/robert/Library/LaunchAgents/com.hopit.agent.hopit.plist`
 - Packaged runtime: `/Users/robert/Library/Application Support/HopIt/Runtime/hop-darwin-arm64`
 - Agent state root: `/Users/robert/Library/Application Support/HopIt/Agent`
@@ -314,7 +314,39 @@ Healthy push state should show `remotePush.state` moving through
 `push-fallback-polling`. If a pushed event is missed, reconnect fallback and a
 periodic graph-head check at `HOPIT_REMOTE_PULL_COOLDOWN_MS` still catch up
 through the same safe-refresh decision path; reconciliation no longer waits for
-another local edit. Use Cloudflare Worker logs
+another local edit.
+
+#### Pending Manual Verification (as of 2026-07-10)
+
+These need a human with dashboard access; everything else in the 2026-07-10
+deadlock work is already proven by tests or observed live.
+
+1. Live `push-applied` proof (the last open item for cross-device handoff):
+   - Preconditions (already true): workspace scan clean at revision 4436,
+     service `push-connected`, `remotePush.lastApplied` still `null`.
+   - Sign in at `https://hopit.dev`, open any file in the dashboard editor,
+     and make a trivial edit (an already-seen hub event is never retried, so
+     only a genuinely new remote change can trigger an apply).
+   - Within seconds, `curl http://127.0.0.1:4785/status` should show
+     `remotePush.state: "push-applied"`, a non-null `remotePush.lastApplied`,
+     and `lastAppliedRevision` at the new head; the edit should appear in
+     `/Users/robert/HopIt Workspaces/hopit`.
+   - If it skips instead, read `remotePush.latestEvent.detail.reason`;
+     `workspace_has_unjournaled_changes` with paths whose hashes match cloud
+     means a stale manifest again (the installed runtime predates the
+     self-heal fix until the next repackage).
+2. After the next `npm run package:hop` + runtime reinstall (picks up the
+   2026-07-10 fixes in the deployed binary):
+   - `hop service status --profile production` with launchd owning the
+     process should report `running: true` with `source: "health-probe"`.
+   - `hop doctor --profile production` should pass the new
+     `requester-identity` check (this Mac's env now sets
+     `HOPIT_REQUESTER_ID`; unsetting it should turn the check into a failure).
+   - Optional guard spot-check on a scratch profile: a refresh whose visible
+     graph is empty while disk files exist must block with
+     `visible_graph_empty_local_files_present` instead of deleting anything.
+
+Use Cloudflare Worker logs
 as the connection-count source: each active agent should produce an
 authenticated `hopit.d1.proxy.request` entry for `/events` on connect or
 reconnect. Normal D1 writes should not produce
@@ -667,11 +699,12 @@ launchctl print "gui/$(id -u)/com.hopit.agent.hopit"
 curl http://127.0.0.1:4785/status
 ```
 
-`hop service status` is still useful for the pid-file-managed `service start`
-debug path. The current LaunchAgent runs `hop service run` directly under
-launchd, so launchd plus the loopback `/status` endpoint are the source of truth
-for that always-running install until `service run` writes its own supervisor
-pid record.
+`hop service status` is useful for the pid-file-managed `service start`
+debug path, and now also trusts a codebase-verified loopback `/status` probe, so
+the current LaunchAgent's pid-file-less `hop service run` process reports
+`running: true` with `source: "health-probe"`. `launchctl print` plus the
+loopback `/status` endpoint remain the primary source of truth for that
+always-running install.
 
 For cross-device handoff today, the safety primitive is still refresh. Push
 hints, periodic graph-head reconciliation, one-shot remote pull, and explicit
@@ -746,10 +779,12 @@ only content inactive for seven days; it skips while local sync or the journal
 is unresolved and reuses the normal prune contract that preserves pinned and
 non-clean content.
 
-Known current nuance: when launchd owns the foreground `service run` process
-directly, `hop service status` can report `running: false` if there is no
-pid-file record even while the `/status` endpoint is healthy. Treat that as a
-service-status integration gap, not as evidence the LaunchAgent is stopped.
+Service-status detection: when launchd owns the foreground `service run` process
+directly there is no pid-file record, but `hop service status` now trusts a
+healthy loopback `/status` probe that matches the expected codebase id and
+reports `running: true` with `source: "health-probe"`. A `running: false` result
+therefore means the probe could not confirm the expected service, not merely a
+missing pid file.
 
 In the current Mac setup, the LaunchAgent is the preferred always-running path.
 Logs go to
@@ -836,7 +871,7 @@ If you are using the manual pid-file debug service instead of LaunchAgent, use
 - Full literal cloud sync of the current HopIt repository should be performed through the production-safe import/mirror flow, not by raw copying. Treat `/Users/robert/HopIt Workspaces/hopit` as the local managed workspace and verify cloud object counts before assuming large file bodies are uploaded.
 - Git export/publish creates a clean local Git repo; it does not push to a remote.
 - The standalone artifact includes start-on-login support scripts and the release channel now publishes immutable objects before its manifest pointer, but it is not signed, notarized, or packaged as a native installer. Public unsigned publication is blocked with no escape hatch; private dogfood stays local through `package:hop`.
-- LaunchAgent health is currently verified with `launchctl print` plus the loopback `/status` endpoint. `hop service status` is still pid-file oriented and should be tightened so direct supervisor-owned `service run` installs report as running.
+- LaunchAgent health is verified with `launchctl print` plus the loopback `/status` endpoint. `hop service status` now also trusts a codebase-verified loopback `/status` probe, so direct supervisor-owned `service run` installs without a pid file report `running: true` with `source: "health-probe"`.
 - Token rotation is CLI/runbook driven; there is no dashboard UX for device credential recovery yet.
 - The dashboard now has first-project device approval, a four-step Workspace Root checklist, a first read-only code browser, plus issue, discussion, release, project-board, durable comment, member/invite, and key-grant status surfaces. Web compare UI wiring, richer release artifacts, key approval/rotation UX, and a successful clean-workspace live push-apply proof remain future work.
 - Public privacy-policy and terms pages, Google OAuth publication/verification, artifact signing, and macOS notarization are not complete. Do not treat the private dogfood controls as public-launch clearance.

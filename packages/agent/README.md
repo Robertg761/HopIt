@@ -371,9 +371,10 @@ file instead of leaving stale service state behind.
 For user-level supervisors such as launchd or systemd, run the foreground
 `hop service run` process. In the current macOS LaunchAgent install, launchd is
 the process owner, so health is verified with `launchctl print` plus
-`curl http://127.0.0.1:4785/status`. `hop service status` remains pid-file
-oriented for the `service start` debug path until direct supervisor-owned
-`service run` installs write a pid record.
+`curl http://127.0.0.1:4785/status`. `hop service status` now also trusts a
+healthy loopback `/status` probe that matches the expected codebase id, so a
+launchd-owned `service run` process without a pid file reports `running: true`
+with `source: "health-probe"`.
 
 Service mode syncs local workspace edits from the current device. It does not
 run remote-pull by default, so the conservative cross-device handoff remains:

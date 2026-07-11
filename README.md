@@ -129,7 +129,7 @@ The v1 target is not a Git clone manager and not yet a true native filesystem pr
 - Other same-owner devices receive acknowledged changes automatically when the local journal is clean, or get a visible conflict/blocked state when it is not.
 - Web surfaces show code, diffs, review state, history, issues, discussions, projects, releases, members, invitations, and permissions.
 
-Today HopIt has the managed-folder spike, workspace-root command surface with a durable index, per-path local cache state, D1 account-visible codebase discovery when credentials allow it, scoped-token configured-codebase fallback, automatic verified-owner bootstrap for migrated `local-owner` codebases, dashboard-driven first-project and four-step Workspace Root setup, dashboard hydrate/dehydrate controls, file-level hydrate/pin/free-space actions, hydration/cursor status, metadata-only/dehydrate, single-file and recursive-prefix hydrate primitives, safe clean-cache pruning, an explicit metadata-first lazy materialization policy, service wrapper, a Cloudflare D1 graph backend, S3-compatible object-blob storage support, Clerk-protected hosted dashboard, routeable status-backed review/compare/history pages, first collaboration/project/comment/release-asset/key-grant surfaces, D1-backed scoped session and trusted-device/key metadata, and opt-in safe remote pull/push delivery. The installed personal-production service has push enabled, but the latest observed handoff was correctly skipped because local workspace drift blocked refresh; a successful live cross-device push apply is still to be proven. Push-enabled service mode now also performs bounded graph-head reconciliation at the configured refresh cadence, independent of local edits. Optional automatic cache pruning uses conservative clean/acknowledged and inactivity gates. Remaining v1 work includes native read-triggered hydration, successful live cross-device apply verification, typed Worker operations in place of scoped raw SQL, broader encryption/key grants, signed/notarized distribution, and richer object-backed history/review reconstruction.
+Today HopIt has the managed-folder spike, workspace-root command surface with a durable index, per-path local cache state, D1 account-visible codebase discovery when credentials allow it, scoped-token configured-codebase fallback, automatic verified-owner bootstrap for migrated `local-owner` codebases, dashboard-driven first-project and four-step Workspace Root setup, dashboard hydrate/dehydrate controls, file-level hydrate/pin/free-space actions, hydration/cursor status, metadata-only/dehydrate, single-file and recursive-prefix hydrate primitives, safe clean-cache pruning, an explicit metadata-first lazy materialization policy, service wrapper, a Cloudflare D1 graph backend, S3-compatible object-blob storage support, Clerk-protected hosted dashboard, routeable status-backed review/compare/history pages, first collaboration/project/comment/release-asset/key-grant surfaces, D1-backed scoped session and trusted-device/key metadata, and opt-in safe remote pull/push delivery. The installed personal-production service has push enabled and, after the 2026-07-10 stale-manifest heal, runs against a scan-clean workspace; a successful live cross-device push apply is still to be proven. Push-enabled service mode now also performs bounded graph-head reconciliation at the configured refresh cadence, independent of local edits. Optional automatic cache pruning uses conservative clean/acknowledged and inactivity gates. Remaining v1 work includes native read-triggered hydration, successful live cross-device apply verification, typed Worker operations in place of scoped raw SQL, broader encryption/key grants, signed/notarized distribution, and richer object-backed history/review reconstruction.
 
 ## Product Principles
 
@@ -220,6 +220,10 @@ HOPIT_AGENT_STATE_ROOT="/Users/you/Library/Application Support/HopIt/Agent"
 HOPIT_WORKSPACE_ROOT="/Users/you/HopIt Workspaces"
 HOPIT_WORKSPACE_INDEX="/Users/you/Library/Application Support/HopIt/Agent/workspaces.json"
 HOPIT_SESSION_ID=replace-with-this-device-session-id
+# Required alongside HOPIT_SESSION_ID: a bare session id reads as an
+# unauthenticated guest (zero visible files), so hop refresh fails closed via
+# the mass-delete guard and hop doctor reports a requester-identity failure.
+HOPIT_REQUESTER_ID=replace-with-codebase-owner-user-id
 HOPIT_DEVICE_NAME="Your Mac"
 HOPIT_AGENT_SESSION_TOKEN=replace-after-hop-session-register
 HOPIT_AGENT_SESSION_CAPABILITIES=read,write,sync,watch
@@ -342,9 +346,10 @@ curl http://127.0.0.1:4785/events
 ```
 
 For the installed macOS LaunchAgent, trust `launchctl print` plus the loopback
-`/status` endpoint. `hop service status` is for the pid-file-managed
-`service start` debug path and may not report the direct launchd-owned
-`service run` process as running until that integration is tightened.
+`/status` endpoint. `hop service status` now also trusts a healthy loopback
+`/status` probe that matches the expected codebase id, so a launchd-owned
+`service run` process without a pid file reports `running: true` with
+`source: "health-probe"`.
 
 For the full one-person production setup, see [docs/personal-production.md](docs/personal-production.md).
 
