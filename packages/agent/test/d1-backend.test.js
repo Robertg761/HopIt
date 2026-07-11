@@ -799,6 +799,34 @@ test('D1 device authorization exchanges a one-time code for a device-encrypted s
   assert.equal((await backend.pollDeviceAuthorization('hdc_' + 'x'.repeat(43))).status, 'not_found')
 })
 
+test('D1 device authorization records the requested codebase for the approval page', async (t) => {
+  const server = await startD1ApiServer(t)
+  const backend = createD1Backend({
+    'codebase-id': 'requested-core',
+    'd1-api-base-url': server.baseUrl,
+    'd1-account-id': 'account_test',
+    'd1-database-id': 'database_test',
+    'd1-api-token': 'token_test',
+  })
+  const device = createDeviceKeyMaterial({
+    deviceId: 'dev_requested_codebase_test',
+    deviceName: 'Requested Codebase Device',
+    platform: 'test-platform',
+  })
+
+  const created = await backend.createDeviceAuthorization({
+    deviceKey: publicDeviceKeyDescriptor(device),
+    requestFingerprint: 'fingerprint_requested',
+    requestedCodebaseId: 'My New Project',
+    requestedCodebaseName: 'My New Project',
+  })
+  const approvalView = await backend.readDeviceAuthorizationForApproval(created.userCode)
+  assert.equal(approvalView.requestedCodebaseId, 'my-new-project')
+  assert.equal(approvalView.requestedCodebaseName, 'My New Project')
+  // Codebase id is not yet resolved until the browser user approves a target.
+  assert.equal(approvalView.codebaseId, null)
+})
+
 test('collaborator device authorization preserves identity and visibility on scoped reads', async (t) => {
   const server = await startD1ApiServer(t)
   const backend = createD1Backend({

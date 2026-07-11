@@ -23,6 +23,8 @@ export async function POST(request: Request) {
     const authorization = await createCloudDeviceAuthorization({
       deviceKey: record.deviceKey,
       requestFingerprint: requestFingerprint(request),
+      requestedCodebaseId: optionalText(record.requestedCodebaseId),
+      requestedCodebaseName: optionalText(record.requestedCodebaseName),
     }) as Record<string, unknown>
     const userCode = requireText(authorization.userCode, 'userCode')
     const verificationUri = new URL('/device', request.url)
@@ -82,6 +84,10 @@ function publicAgentApiBaseUrl() {
 function requireText(value: unknown, label: string) {
   if (typeof value !== 'string' || value.trim().length === 0) throw new Error(`${label} is required.`)
   return value.trim()
+}
+
+function optionalText(value: unknown) {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined
 }
 
 function recordValue(value: unknown): Record<string, unknown> | null {

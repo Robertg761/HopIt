@@ -5,6 +5,7 @@ export function printHelp() {
 
 Commands:
   setup       Guided first run: choose a projects folder and prepare this device
+  add         Connect any local folder as a new HopIt codebase (alias: project add)
   init        Seed a local cloud file graph
   import      Import a real local folder into the HopIt graph and hydrate it
   import-git  Production-safe literal Git checkout conversion into HopIt
@@ -106,6 +107,8 @@ Options:
   --force-env          setup: overwrite an existing production env file
   --no-connect         setup: prepare local files without opening browser account authorization
   --no-launch-agent    setup: skip the macOS start-on-login agent prompt/step
+  --service            add: install and load the per-codebase macOS start-on-login service (default off)
+  --auth-base-url <url> add/setup: device-authorization dashboard base URL, default https://hopit.dev
   --interactive        setup: force interactive prompts even when stdin is not a TTY (testing/advanced; env HOPIT_SETUP_ASSUME_TTY=1)
   --skip-service-control mirror: do not stop or restart the macOS LaunchAgent
   --json              setup: include the machine-readable result after the interactive flow

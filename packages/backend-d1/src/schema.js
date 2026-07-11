@@ -173,6 +173,13 @@ export const d1SchemaStatements = [
     consumed_at text,
     updated_at text not null
   )`,
+  // Requested-codebase approval columns land as additive migrations so they
+  // apply cleanly to databases created before the feature. They must not be
+  // declared in the create-table statement above, or the alter would fail with
+  // "duplicate column name" on a fresh database. ensureSchema still tolerates
+  // that error so the alters are safe to re-run on already-migrated databases.
+  `alter table device_authorizations add column requested_codebase_id text`,
+  `alter table device_authorizations add column requested_codebase_name text`,
   `create index if not exists idx_device_authorizations_device_code on device_authorizations(device_code_hash)`,
   `create index if not exists idx_device_authorizations_user_code on device_authorizations(user_code)`,
   `create index if not exists idx_device_authorizations_fingerprint_created on device_authorizations(request_fingerprint, created_at)`,

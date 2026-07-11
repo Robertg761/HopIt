@@ -19,31 +19,41 @@ export function DeviceApproval({
   device,
   expiresAt,
   codebases,
+  requestedCodebaseId = null,
+  requestedCodebaseName = null,
 }: {
   userCode: string
   initialStatus: string
   device: DeviceInfo
   expiresAt: string
   codebases: Array<{ id: string; name: string }>
+  requestedCodebaseId?: string | null
+  requestedCodebaseName?: string | null
 }) {
+  const requestedId = requestedCodebaseId?.trim() || null
+  const requestedName = requestedCodebaseName?.trim() || requestedId || null
   const [availableCodebases, setAvailableCodebases] = React.useState<DeviceCodebaseOption[]>(codebases)
-  const [codebaseId, setCodebaseId] = React.useState(codebases[0]?.id ?? '')
-  const [newCodebaseName, setNewCodebaseName] = React.useState('')
+  const requestedExists = requestedId ? availableCodebases.some((option) => option.id === requestedId) : false
+  const [codebaseId, setCodebaseId] = React.useState(
+    requestedId && requestedExists ? requestedId : codebases[0]?.id ?? '',
+  )
+  const [newCodebaseName, setNewCodebaseName] = React.useState(requestedName ?? '')
   const [status, setStatus] = React.useState(initialStatus)
   const [error, setError] = React.useState<string | null>(null)
   const [busy, setBusy] = React.useState(false)
   const [creatingCodebase, setCreatingCodebase] = React.useState(false)
 
-  async function createFirstCodebase() {
-    const name = newCodebaseName.trim()
-    if (!name || creatingCodebase) return
+  // Create a project, optionally with the id the terminal requested, then select it.
+  async function createCodebase(name: string, desiredId?: string | null) {
+    const trimmedName = name.trim()
+    if (!trimmedName || creatingCodebase) return
     setCreatingCodebase(true)
     setError(null)
     try {
       const response = await fetch('/api/codebases', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
+        body: JSON.stringify(desiredId ? { name: trimmedName, codebaseId: desiredId } : { name: trimmedName }),
       })
       const body = await response.json().catch(() => null)
       if (!response.ok || body?.ok !== true) {
@@ -54,12 +64,16 @@ export function DeviceApproval({
       const createdId = normalizeDeviceCodebaseOptions([body.codebase])[0]?.id
       setAvailableCodebases(options)
       setCodebaseId(createdId && options.some((option) => option.id === createdId) ? createdId : options[0].id)
-      setNewCodebaseName('')
+      if (!desiredId) setNewCodebaseName('')
     } catch (creationError) {
       setError(creationError instanceof Error ? creationError.message : 'Project creation failed.')
     } finally {
       setCreatingCodebase(false)
     }
+  }
+
+  function createFirstCodebase() {
+    return createCodebase(newCodebaseName)
   }
 
   async function approve() {
@@ -124,6 +138,33 @@ export function DeviceApproval({
 
       <div className="my-6 h-px bg-[#e1e8e3]" />
 
+      {requestedId && !requestedExists ? (
+        <div className="mb-5 rounded-xl border border-[#b7dfc1] bg-[#f0fff4] p-4">
+          <p className="text-sm font-semibold text-[#116329]">Create the requested project</p>
+          <p className="mt-1 text-xs leading-5 text-[#3d6b4c]">
+            Your terminal asked to connect a new project.
+          </p>
+          <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-[#b7dfc1] bg-white px-3 py-2">
+            <span className="min-w-0">
+              <span className="block truncate text-sm font-semibold text-[#17211b]" title={requestedName ?? requestedId}>{requestedName}</span>
+              <span className="block font-mono text-[11px] text-[#5d6a62]">{requestedId}</span>
+            </span>
+            <Button
+              type="button"
+              className="shrink-0 bg-[#1a7f37] text-white hover:bg-[#116329]"
+              disabled={creatingCodebase}
+              onClick={() => void createCodebase(requestedName ?? requestedId, requestedId)}
+            >
+              {creatingCodebase ? <LoaderCircle className="animate-spin" /> : <Plus />}
+              {creatingCodebase ? 'Creating…' : 'Create project'}
+            </Button>
+          </div>
+          {availableCodebases.length > 0 ? (
+            <p className="mt-3 text-xs leading-5 text-[#66736b]">Or choose an existing project below.</p>
+          ) : null}
+        </div>
+      ) : null}
+
       {availableCodebases.length > 0 ? (
         <label className="block">
           <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-[#637067]">Project access</span>
@@ -137,7 +178,7 @@ export function DeviceApproval({
             ))}
           </select>
         </label>
-      ) : (
+      ) : requestedId ? null : (
         <div className="rounded-xl border border-[#cbd8cf] bg-[#f7faf8] p-4">
           <p className="text-sm font-semibold text-[#26362c]">Create your first project</p>
           <p className="mt-1 text-xs leading-5 text-[#66736b]">

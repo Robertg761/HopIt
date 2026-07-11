@@ -84,6 +84,8 @@ export default async function DeviceAuthorizationPage({
               device={authorization.device}
               expiresAt={authorization.expiresAt}
               codebases={codebases}
+              requestedCodebaseId={authorization.requestedCodebaseId ?? null}
+              requestedCodebaseName={authorization.requestedCodebaseName ?? null}
             />
           )}
         </div>

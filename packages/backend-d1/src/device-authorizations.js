@@ -41,12 +41,15 @@ export function attachDeviceAuthorizationMethods(Backend) {
       const deviceCode = `hdc_${randomBytes(32).toString('base64url')}`
       const userCode = await this.createUniqueDeviceUserCode()
       const expiresAt = new Date(now.getTime() + authorizationLifetimeMs).toISOString()
+      const requestedCodebaseId = normalizeRequestedCodebaseId(options.requestedCodebaseId)
+      const requestedCodebaseName = stringOrNull(options.requestedCodebaseName)
       await this.query(
         `insert into device_authorizations (
           authorization_id, device_code_hash, user_code, request_fingerprint,
           device_id, device_name, platform, device_key_json, status,
+          requested_codebase_id, requested_codebase_name,
           created_at, expires_at, updated_at
-        ) values (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?, ?)`,
         [
           authorizationId,
           hashDeviceCode(deviceCode),
@@ -56,6 +59,8 @@ export function attachDeviceAuthorizationMethods(Backend) {
           stringOrNull(deviceKey.displayName),
           stringOrNull(deviceKey.platform),
           stringifyJson(deviceKey),
+          requestedCodebaseId,
+          requestedCodebaseName,
           now.toISOString(),
           expiresAt,
           now.toISOString(),
@@ -279,6 +284,13 @@ function hashDeviceCode(value) {
   return hashText(code)
 }
 
+function normalizeRequestedCodebaseId(value) {
+  const text = stringOrNull(value)
+  if (!text) return null
+  const normalized = text.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '')
+  return normalized || null
+}
+
 function deviceAuthorizationTokenContext(authorizationId) {
   return `device-authorization:${authorizationId}:session-token`
 }
@@ -295,6 +307,8 @@ function summarizeForApproval(row) {
       platform: row.platform,
     },
     codebaseId: row.codebase_id ?? null,
+    requestedCodebaseId: row.requested_codebase_id ?? null,
+    requestedCodebaseName: row.requested_codebase_name ?? null,
     requesterId: row.user_id ?? null,
     expiresAt: row.expires_at,
     approvedAt: row.approved_at ?? null,

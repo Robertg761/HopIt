@@ -8,6 +8,8 @@ import { hydrateWorkspace } from './commands/hydrate.js'
 import { importGitProject, importLocalProject, importRemoteGitProject, initCloud, mirrorLocalProject } from './commands/import.js'
 import { installAgent } from './commands/install.js'
 import { runSetup } from './commands/setup.js'
+import { runAdd } from './commands/add.js'
+import { applyConnectionStore } from './connections.js'
 import { runSessionCommand } from './commands/keys.js'
 import { mergeChangeSet, openChangeSetReview, recoverJournal, refreshWorkspace, syncOnce } from './commands/sync.js'
 import { manageStorage } from './commands/storage.js'
@@ -21,8 +23,14 @@ import { remotePullOnce, watchWorkspace } from './watch.js'
 
 async function main() {
   const [rawCommand = 'help', ...rawArgs] = process.argv.slice(2)
-  const command = normalizeCommand(rawCommand)
+  let command = normalizeCommand(rawCommand)
   const args = [...rawArgs]
+  // `hop project add` is an alias for `hop add`.
+  if (command === 'project') {
+    const sub = args[0] && !args[0].startsWith('--') ? args.shift() : ''
+    if (sub && sub !== 'add') throw new Error(`Unknown project subcommand: ${sub}. Try: hop project add`)
+    command = 'add'
+  }
   const serviceAction =
     command === 'service' && args[0] && !args[0].startsWith('--') ? args.shift() : 'status'
   const workspaceAction =
@@ -33,9 +41,9 @@ async function main() {
     command === 'keys' && args[0] && !args[0].startsWith('--') ? args.shift() : 'status'
   const parsedOptions = parseOptions(args)
   const options =
-    command === 'keys' || command === 'setup'
+    command === 'keys' || command === 'setup' || command === 'add'
       ? parsedOptions
-      : await applyLocalDeviceKeyring(parsedOptions)
+      : await applyConnectionStore(await applyLocalDeviceKeyring(parsedOptions))
 
   if (command === 'init') return initCloud(options)
   if (command === 'import-local') return importLocalProject(options)
@@ -62,6 +70,7 @@ async function main() {
   if (command === 'backup') return backupAgentState(options)
   if (command === 'install') return installAgent(options)
   if (command === 'setup') return runSetup(options)
+  if (command === 'add') return runAdd(options)
   if (command === 'workspace') return runWorkspaceCommand(workspaceAction, options)
   if (command === 'session') return runSessionCommand(sessionAction, options)
   if (command === 'keys') return runKeysCommand(keysAction, options)

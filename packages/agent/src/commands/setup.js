@@ -294,12 +294,22 @@ function renderCompletion({ workspaceRoot, keyringPath, envFilePath, cloudConnec
   writeLine()
 }
 
-export async function authorizeDeviceWithBrowser({ keyring, authBaseUrl, openBrowser = true }) {
+export async function authorizeDeviceWithBrowser({
+  keyring,
+  authBaseUrl,
+  openBrowser = true,
+  requestedCodebaseId = null,
+  requestedCodebaseName = null,
+}) {
   const baseUrl = String(authBaseUrl ?? defaultDeviceAuthorizationBaseUrl).replace(/\/+$/, '')
   const createResponse = await fetch(`${baseUrl}/api/device-authorizations`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ deviceKey: publicDeviceKeyDescriptor(keyring) }),
+    body: JSON.stringify({
+      deviceKey: publicDeviceKeyDescriptor(keyring),
+      ...(requestedCodebaseId ? { requestedCodebaseId: String(requestedCodebaseId) } : {}),
+      ...(requestedCodebaseName ? { requestedCodebaseName: String(requestedCodebaseName) } : {}),
+    }),
   })
   const created = await readJsonResponse(createResponse, 'Could not start device authorization.')
   const verificationUrl = requireResponseText(created.verificationUriComplete, 'verificationUriComplete')

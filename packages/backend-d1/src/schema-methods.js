@@ -28,7 +28,14 @@ export function attachSchemaMethods(Backend) {
       return
     }
     for (const sql of d1SchemaStatements) {
-      await this.query(sql)
+      try {
+        await this.query(sql)
+      } catch (error) {
+        // Idempotent `alter table ... add column` migrations throw once the
+        // column already exists (or on a fresh table that already declares it).
+        if (/duplicate column name/i.test(error?.message ?? '')) continue
+        throw error
+      }
     }
     ensuredSchemaKeys.add(cacheKey)
     this.schemaEnsured = true
