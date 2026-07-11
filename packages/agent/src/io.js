@@ -4,6 +4,7 @@ import path from 'node:path'
 import { CloudflareD1HopBackend, d1ConfigFromOptions, isD1Configured } from '@hopit/backend-d1'
 import { randomUUID } from 'node:crypto'
 import { existsSync, watch } from 'node:fs'
+import { humanOutputMode, reportEvent } from './output.js'
 
 export function slugify(value) {
   return value
@@ -66,7 +67,15 @@ export async function emit(options, event, detail) {
   }
   await appendNdjson(options.events, payload)
   await appendRemoteEvent(options, payload)
-  if (!options.quiet) console.log(`${event} ${JSON.stringify(detail)}`)
+  if (options.quiet) return
+  // Human commands render concise progress; everything else (daemons, --json,
+  // machine consumers) keeps the exact raw event line on stdout as before. The
+  // events journal above records every event regardless of output mode.
+  if (humanOutputMode(options)) {
+    reportEvent(options, event, detail)
+  } else {
+    console.log(`${event} ${JSON.stringify(detail)}`)
+  }
 }
 
 export async function appendRemoteEvent(options, payload) {

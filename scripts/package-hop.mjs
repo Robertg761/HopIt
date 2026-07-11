@@ -452,6 +452,34 @@ launchctl unload "$PLIST" >/dev/null 2>&1 || true
 launchctl load "$PLIST"
 launchctl start "$LABEL" >/dev/null 2>&1 || true
 
+# --- Global hop launcher ---------------------------------------------------
+# The packaged launcher resolves its sibling runtime/app relative to its own
+# directory via "\$0", so install a tiny wrapper that execs the real launcher
+# by absolute path instead of a bare symlink. Regenerated on every install so
+# it survives runtime reinstalls; PACKAGE_ROOT is stable across reinstalls.
+if [ -w /usr/local/bin ]; then
+  BIN_DIR=/usr/local/bin
+else
+  BIN_DIR="$HOME/.local/bin"
+fi
+mkdir -p "$BIN_DIR"
+HOP_LINK="$BIN_DIR/hop"
+HOP_STAGE="$BIN_DIR/.hop.new.$$"
+cat > "$HOP_STAGE" <<EOF
+#!/bin/sh
+exec "$PACKAGE_ROOT/bin/hop" "\\$@"
+EOF
+chmod +x "$HOP_STAGE"
+mv -f "$HOP_STAGE" "$HOP_LINK"
+echo "Global command: $HOP_LINK -> $PACKAGE_ROOT/bin/hop"
+case ":\${PATH}:" in
+  *":$BIN_DIR:"*) ;;
+  *)
+    echo "$BIN_DIR is not on your PATH. Add it with:" >&2
+    echo "  export PATH=\\"$BIN_DIR:\\$PATH\\"" >&2
+    ;;
+esac
+
 echo "Installed HopIt launch agent: $PLIST"
 echo "Logs: $LOG_DIR/agent.out.log and $LOG_DIR/agent.err.log"
 `,
@@ -534,6 +562,34 @@ chmod 700 "$RUNNER"
 
 systemctl --user daemon-reload
 systemctl --user enable --now hopit-agent.service
+
+# --- Global hop launcher ---------------------------------------------------
+# The packaged launcher resolves its sibling runtime/app relative to its own
+# directory via "\$0", so install a tiny wrapper that execs the real launcher
+# by absolute path instead of a bare symlink. Regenerated on every install so
+# it survives runtime reinstalls; PACKAGE_ROOT is stable across reinstalls.
+if [ -w /usr/local/bin ]; then
+  BIN_DIR=/usr/local/bin
+else
+  BIN_DIR="$HOME/.local/bin"
+fi
+mkdir -p "$BIN_DIR"
+HOP_LINK="$BIN_DIR/hop"
+HOP_STAGE="$BIN_DIR/.hop.new.$$"
+cat > "$HOP_STAGE" <<EOF
+#!/bin/sh
+exec "$PACKAGE_ROOT/bin/hop" "\\$@"
+EOF
+chmod +x "$HOP_STAGE"
+mv -f "$HOP_STAGE" "$HOP_LINK"
+echo "Global command: $HOP_LINK -> $PACKAGE_ROOT/bin/hop"
+case ":\${PATH}:" in
+  *":$BIN_DIR:"*) ;;
+  *)
+    echo "$BIN_DIR is not on your PATH. Add it with:" >&2
+    echo "  export PATH=\\"$BIN_DIR:\\$PATH\\"" >&2
+    ;;
+esac
 
 echo "Installed HopIt systemd user service: $SERVICE_FILE"
 echo "Status: systemctl --user status hopit-agent.service"

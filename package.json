@@ -60,7 +60,7 @@
     "agent:serve": "node packages/agent/src/cli.js serve",
     "agent:status-server": "node packages/agent/src/cli.js serve",
     "preagent:test": "npm run build:core",
-    "agent:test": "node --test --test-concurrency=1 packages/agent/test/*.test.js",
+    "agent:test": "HOPIT_NO_ENV_FILE=1 HOPIT_JSON=1 node --test --test-concurrency=1 packages/agent/test/*.test.js",
     "prepackage:hop": "npm run build:core"
   },
   "dependencies": {

@@ -6,6 +6,7 @@ import { createCloudGraphService, summarizeGraphContract } from '../cloud/d1-gra
 import { defaultFileStorageBudgetBytes, defaultLaunchAgentLabelPrefix, defaultMirrorSecretRoutes, entryKind, fixturePath, mirrorNonSecretEnvSuffixes, mirrorSecretFileNames } from '../constants.js'
 import { isLocalOnlySecretPath, privacyZoneForPath } from '@hopit/core/crypto'
 import { emit, readJson, slugify, writeJson } from '../io.js'
+import { reportResult } from '../output.js'
 import { countCloudScopes, countPathScopes, hashBuffer, hashContent, hashDirectoryEntry, hashSymlinkTarget, toCloudPath } from '../journal.js'
 import { assertWorkspacePathSafe } from '../paths.js'
 import { agentStateRootFromOptions, assertWorkspaceNotIndexedForOtherCodebase } from '../workspace-index.js'
@@ -212,7 +213,7 @@ export async function mirrorLocalProject(options, context = {}) {
       diff,
       backup: backup.output,
     })
-    console.log(JSON.stringify(result, null, 2))
+    finishMirror(options, result)
     process.exitCode = 1
     return
   }
@@ -222,7 +223,7 @@ export async function mirrorLocalProject(options, context = {}) {
       reason: 'root_env_local_present',
       backup: backup.output,
     })
-    console.log(JSON.stringify(result, null, 2))
+    finishMirror(options, result)
     process.exitCode = 1
     return
   }
@@ -234,7 +235,7 @@ export async function mirrorLocalProject(options, context = {}) {
       backup: backup.output,
       service: stoppedService,
     })
-    console.log(JSON.stringify(result, null, 2))
+    finishMirror(options, result)
     return
   }
 
@@ -246,7 +247,7 @@ export async function mirrorLocalProject(options, context = {}) {
       backup: backup.output,
       service: stoppedService,
     })
-    console.log(JSON.stringify(result, null, 2))
+    finishMirror(options, result)
     return
   }
 
@@ -267,7 +268,30 @@ export async function mirrorLocalProject(options, context = {}) {
     backup: backup.output,
     sync: result.sync,
   })
-  console.log(JSON.stringify(result, null, 2))
+  finishMirror(options, result)
+}
+
+// Print the mirror result: raw JSON under --json (unchanged), or a concise human
+// summary. Suppressed entirely for internal callers (add, import-git) so only the
+// top-level command summarizes.
+function finishMirror(options, result) {
+  reportResult(options, result, (w) => {
+    if (result.ok) {
+      w.line()
+      w.line(`  ${w.success('✓')} ${w.bold('Mirror complete')} ${w.muted(result.codebaseId ?? '')}`)
+      w.line(`     ${w.muted('Workspace')} ${result.workspace}`)
+      const synced = result.sync?.attempted && !result.sync?.skipped
+      w.line(`     ${w.muted('Cloud')}     ${synced ? 'synced' : (result.sync?.reason ?? 'not synced')}`)
+    } else {
+      w.line()
+      w.line(`  ${w.danger('✗')} ${w.bold('Mirror did not complete cleanly')}`)
+      const reason = result.manifest?.diff && !result.manifest.diff.clean
+        ? 'workspace manifest mismatch'
+        : (result.secrets?.rootEnvExists ? 'unrouted .env.local present' : 'see details')
+      w.line(`     ${w.muted('Reason')}    ${reason}`)
+      w.line(`     ${w.muted('Backup')}    ${result.backup?.output ?? 'n/a'}`)
+    }
+  })
 }
 
 export async function importGitProject(options) {

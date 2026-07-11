@@ -16,13 +16,44 @@ import { manageStorage } from './commands/storage.js'
 import { runWorkspaceCommand } from './commands/workspace.js'
 import { runDemo } from './commands/demo.js'
 import { normalizeCommand, parseOptions } from './options.js'
+import { autoloadEnvFile } from './env-file.js'
+import { runInteractive } from './commands/interactive.js'
 import { printHelp } from './help.js'
 import { readAgentState } from './status-state.js'
 import { runServiceCommand, runServiceProcess, serveStatus } from './service.js'
 import { remotePullOnce, watchWorkspace } from './watch.js'
 
+// One-shot, user-facing commands that render concise human progress by default.
+// Daemons (watch, service run) and structured queries (status, serve, keys, …)
+// stay on the raw event/JSON output that logs and machine consumers rely on.
+const HUMAN_OUTPUT_COMMANDS = new Set([
+  'add',
+  'init',
+  'import-local',
+  'mirror-local',
+  'import-git',
+  'import-git-url',
+  'hydrate',
+  'refresh',
+  'sync-once',
+  'recover',
+])
+
 async function main() {
-  const [rawCommand = 'help', ...rawArgs] = process.argv.slice(2)
+  // Auto-load ~/.config/hopit/production.env (or $HOPIT_ENV_FILE) before parsing
+  // options so HOPIT_PROFILE=production and the other deployed settings take
+  // effect without the user sourcing the file or passing --profile. Explicit
+  // environment always wins; $HOPIT_NO_ENV_FILE=1 skips it.
+  autoloadEnvFile()
+
+  const argv = process.argv.slice(2)
+  // Bare `hop` on an interactive terminal opens the menu; piped/non-TTY prints
+  // help so scripts never hang. Explicit `hop help` still prints help.
+  if (argv.length === 0) {
+    return runInteractive()
+  }
+
+  const [rawCommand = 'help', ...rawArgs] = argv
   let command = normalizeCommand(rawCommand)
   const args = [...rawArgs]
   // `hop project add` is an alias for `hop add`.
@@ -44,6 +75,7 @@ async function main() {
     command === 'keys' || command === 'setup' || command === 'add'
       ? parsedOptions
       : await applyConnectionStore(await applyLocalDeviceKeyring(parsedOptions))
+  if (HUMAN_OUTPUT_COMMANDS.has(command)) options._humanOutput = true
 
   if (command === 'init') return initCloud(options)
   if (command === 'import-local') return importLocalProject(options)

@@ -292,6 +292,7 @@ function renderCompletion({ workspaceRoot, keyringPath, envFilePath, cloudConnec
     writeLine(`        ${muted(`Configuration: ${envFilePath}`)}`)
   }
   writeLine(`        ${muted('Run hop setup --advanced for operator settings.')}`)
+  writeLine(`        ${muted('The hop command is now available. Try: hop status')}`)
   writeLine()
 }
 

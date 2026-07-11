@@ -16,6 +16,15 @@ import { serviceStatus, startService } from '../service.js'
 import { ensureAgentDirectories, ensureWorkspaceIndexEntry, writeLaunchAgent } from './install.js'
 import { workspaceIndexPath, workspaceIndexSummary } from '../workspace-index.js'
 import {
+  accent,
+  bold,
+  humanOutputMode,
+  muted,
+  reportResult,
+  success,
+  writeLine,
+} from '../output.js'
+import {
   assertSafeConnectionCodebaseId,
   listConnectionCodebaseIds,
   writeConnectionEntry,
@@ -29,10 +38,6 @@ function expandHome(value) {
   if (value === '~') return os.homedir()
   if (value.startsWith('~/') || value.startsWith('~\\')) return path.join(os.homedir(), value.slice(2))
   return value
-}
-
-function writeLine(message = '') {
-  process.stderr.write(`${message}\n`)
 }
 
 /**
@@ -103,6 +108,9 @@ async function loadLaunchAgent(installOptions, launchAgent) {
 export async function runAdd(options, inject = {}) {
   const authorize = inject.authorize ?? authorizeDeviceWithBrowser
   const provided = options._provided ?? new Set()
+  const human = humanOutputMode(options)
+  // Styled phase breadcrumb, shown only in human mode; raw/--json stays clean.
+  const say = (message) => { if (human) writeLine(message) }
 
   if (!options.source) {
     throw new Error('Missing --source <path> for hop add.')
@@ -134,8 +142,9 @@ export async function runAdd(options, inject = {}) {
     takenIds,
   })
 
-  writeLine(`  Adding ${source}`)
-  writeLine(`  Requested codebase: ${codebaseName} (${requestedCodebaseId})`)
+  if (human) writeLine()
+  say(`  ${accent('◆')} ${bold('Add a project')}  ${muted(source)}`)
+  say(`  ${accent('1/3')}  Requesting codebase ${muted(`${codebaseName} (${requestedCodebaseId})`)}`)
 
   // 2. Prepare the shared device keyring before anything leaves the device.
   const deviceKeysPath = provided.has('device-keys')
@@ -155,7 +164,7 @@ export async function runAdd(options, inject = {}) {
 
   // 3. Browser approval for the NEW codebase. The browser user decides; the
   //    token comes back wrapped to this device's key.
-  writeLine('  Waiting for browser approval…')
+  say(`       ${muted('Waiting for browser approval…')}`)
   const connection = await authorize({
     keyring: keyring.keyring,
     authBaseUrl: options['auth-base-url'] ?? process.env.HOPIT_AUTH_BASE_URL ?? defaultDeviceAuthorizationBaseUrl,
@@ -188,7 +197,7 @@ export async function runAdd(options, inject = {}) {
   }
 
   const codebaseId = approvedCodebaseId
-  writeLine(`  Approved codebase: ${codebaseId}`)
+  say(`  ${success('✓')}  Approved ${muted(codebaseId)}`)
 
   // 4. Persist the per-codebase scoped connection (0600).
   const stored = await writeConnectionEntry({ 'state-root': stateRoot }, {
@@ -231,16 +240,18 @@ export async function runAdd(options, inject = {}) {
 
   // 6. Import the folder through the existing production-safe paths.
   const hasGit = existsSync(path.join(source, '.git'))
-  writeLine(`  Importing ${hasGit ? 'Git checkout' : 'folder'}…`)
+  say(`  ${accent('2/3')}  Importing ${hasGit ? 'Git checkout' : 'folder'}…`)
   // The import owns file movement only; the launchd service lifecycle is handled
   // in step 8 (or left to the printed enable command), so keep the mirror path
-  // from stopping/restarting a service mid-add.
+  // from stopping/restarting a service mid-add. `internal: true` keeps the
+  // import/mirror step from printing its own human summary — hop add prints one.
   const importOptions = {
     ...installOptions,
     source,
     'codebase-id': codebaseId,
     'codebase-name': codebaseName,
     'skip-service-control': true,
+    internal: true,
   }
   if (hasGit) {
     await importGitProject(importOptions)
@@ -308,8 +319,19 @@ export async function runAdd(options, inject = {}) {
     nextSteps,
   }
 
-  writeLine(`  Connected ${codebaseId} at ${workspace}`)
-  if (!serviceRequested) writeLine(`  Enable background sync: ${enableServiceCommand}`)
-  console.log(JSON.stringify(result, null, 2))
+  reportResult(options, result, (w) => {
+    w.line()
+    w.line(`  ${w.success('✓')} ${w.bold('Connected')} ${w.muted(codebaseId)}`)
+    w.line(`     ${w.muted('Folder')}   ${workspace}`)
+    w.line(`     ${w.muted('Source')}   ${source}`)
+    if (serviceRequested && service?.started) {
+      w.line(`     ${w.muted('Sync')}     background service started`)
+    }
+    w.line()
+    if (!serviceRequested) {
+      w.line(`  ${w.muted('Next')}  Run background sync at login:`)
+      w.line(`        ${w.accent(enableServiceCommand)}`)
+    }
+  })
   return result
 }
