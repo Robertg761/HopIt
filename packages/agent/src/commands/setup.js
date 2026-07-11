@@ -17,6 +17,7 @@ import {
   writeLocalDeviceKeyring,
 } from './keys.js'
 import { attachWorkspace } from './hydrate.js'
+import { isTransientCloudError, withCloudFetchRetry } from '../cloud-retry.js'
 import { serviceStatus, startService } from '../service.js'
 import {
   ensureAgentDirectories,
@@ -302,16 +303,21 @@ export async function authorizeDeviceWithBrowser({
   requestedCodebaseName = null,
 }) {
   const baseUrl = String(authBaseUrl ?? defaultDeviceAuthorizationBaseUrl).replace(/\/+$/, '')
-  const createResponse = await fetch(`${baseUrl}/api/device-authorizations`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      deviceKey: publicDeviceKeyDescriptor(keyring),
-      ...(requestedCodebaseId ? { requestedCodebaseId: String(requestedCodebaseId) } : {}),
-      ...(requestedCodebaseName ? { requestedCodebaseName: String(requestedCodebaseName) } : {}),
-    }),
+  // The create call gets bounded retry-with-backoff: a transient network fault or
+  // 5xx/429 here should not abort setup before the user even sees a code. A 4xx
+  // (auth/validation) still fails fast so a bad request is not hammered.
+  const created = await withCloudFetchRetry(async () => {
+    const createResponse = await fetch(`${baseUrl}/api/device-authorizations`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        deviceKey: publicDeviceKeyDescriptor(keyring),
+        ...(requestedCodebaseId ? { requestedCodebaseId: String(requestedCodebaseId) } : {}),
+        ...(requestedCodebaseName ? { requestedCodebaseName: String(requestedCodebaseName) } : {}),
+      }),
+    })
+    return readJsonResponse(createResponse, 'Could not start device authorization.')
   })
-  const created = await readJsonResponse(createResponse, 'Could not start device authorization.')
   const verificationUrl = requireResponseText(created.verificationUriComplete, 'verificationUriComplete')
   const deviceCode = requireResponseText(created.deviceCode, 'deviceCode')
   const expiresAt = requireResponseText(created.expiresAt, 'expiresAt')
@@ -326,13 +332,26 @@ export async function authorizeDeviceWithBrowser({
   }
   writeLine(`  ${muted('Waiting for approval in your browser…')}`)
 
+  let warnedTransientPoll = false
   while (Date.now() < Date.parse(expiresAt)) {
     await delay(intervalMs)
-    const pollResponse = await fetch(
-      `${baseUrl}/api/device-authorizations?device_code=${encodeURIComponent(deviceCode)}`,
-      { headers: { Accept: 'application/json' } },
-    )
-    const polled = await readJsonResponse(pollResponse, 'Could not check device authorization.')
+    let polled
+    try {
+      polled = await pollDeviceAuthorization(baseUrl, deviceCode)
+    } catch (error) {
+      // A single dropped connection or 5xx/429/non-JSON blip must not invalidate
+      // the user's pending code. Treat it as a missed poll and keep waiting until
+      // the authorization's own expiry deadline. Only a non-transient failure
+      // (4xx auth/validation with a JSON error body) aborts the flow immediately.
+      if (isTransientPollError(error)) {
+        if (!warnedTransientPoll) {
+          warnedTransientPoll = true
+          writeLine(`  ${caution('Network hiccup while checking approval.')} ${muted('Still waiting…')}`)
+        }
+        continue
+      }
+      throw error
+    }
     if (polled.status === 'pending') continue
     if (polled.status !== 'approved') {
       throw new Error(`Device authorization is ${polled.status ?? 'unavailable'}. Run hop setup again.`)
@@ -382,9 +401,37 @@ async function openUrl(url) {
 async function readJsonResponse(response, fallbackMessage) {
   const body = await response.json().catch(() => null)
   if (!response.ok || body?.ok !== true) {
-    throw new Error(body?.error?.message ?? fallbackMessage)
+    const error = new Error(body?.error?.message ?? fallbackMessage)
+    // Surface the HTTP status so isTransientCloudError can decide whether a
+    // retry is warranted (429/5xx) or the request is a hard 4xx failure.
+    error.status = response.status
+    throw error
   }
   return body
+}
+
+// One poll attempt against the device-authorization endpoint. On any non-success
+// response it throws an Error carrying the HTTP status (for transient
+// classification). A missing/non-JSON body is flagged `transient` so a proxy
+// error page or truncated response counts as a retryable blip rather than a hard
+// failure.
+async function pollDeviceAuthorization(baseUrl, deviceCode) {
+  const response = await fetch(
+    `${baseUrl}/api/device-authorizations?device_code=${encodeURIComponent(deviceCode)}`,
+    { headers: { Accept: 'application/json' } },
+  )
+  const body = await response.json().catch(() => null)
+  if (body && typeof body === 'object' && !Array.isArray(body) && body.ok === true) {
+    return body
+  }
+  const error = new Error(body?.error?.message ?? 'Could not check device authorization.')
+  error.status = response.status
+  if (!body || typeof body !== 'object') error.transient = true
+  throw error
+}
+
+function isTransientPollError(error) {
+  return error?.transient === true || isTransientCloudError(error)
 }
 
 function requireResponseText(value, label) {
