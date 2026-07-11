@@ -5,6 +5,10 @@ It is written for an AI coding agent (or contractor) with no prior context on th
 Execute workstreams **in order** — each one shrinks or de-risks the next. One workstream
 per session/branch/PR. Do not combine them.
 
+> Sequencing note (2026-07-11): the phase ordering here is superseded by
+> [docs/product-roadmap.md](product-roadmap.md). The workstream content below
+> (WS7b, WS7c, and the rest) remains authoritative.
+
 ## How to delegate
 
 Per workstream, give the agent:

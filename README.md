@@ -1,6 +1,6 @@
 # HopIt
 
-HopIt is an early-stage cloud-native code workspace. The core idea is that a codebase lives in the cloud, while each device gets a HopIt Workspace Root that exposes managed local folders and syncs edits back automatically.
+HopIt is a cloud-native code workspace whose goal is to replace GitHub — by being much better and much easier to use. The core idea is that a codebase lives in the cloud, while each device gets a HopIt Workspace Root that exposes managed local folders and syncs edits back automatically. The authoritative product direction and phase plan is [docs/product-roadmap.md](docs/product-roadmap.md).
 
 The first product bet is simple: working on code should feel local, but live in the cloud. A developer should be able to open a HopIt codebase on any device, edit it with normal tools, and continue somewhere else without a clone to manage, stale checkout, push, pull, stash, or half-finished recovery flow.
 
