@@ -5,7 +5,8 @@ import { createCloudGraphService, graphHeadFromGraph, normalizeCloudGraphHead, r
 import { defaultOpenHydrationMaxBytes, defaultOpenHydrationMaxFiles, defaultOpenHydrationSmallFileBytes, localCacheSchemaVersion, workspaceMode } from '../constants.js'
 import { privacyZoneForPath, rawClientEncryptionKey } from '@hopit/core/crypto'
 import { emit, readNdjson } from '../io.js'
-import { countCloudScopes, countPathScopes, normalizeCloudFileEntry } from '../journal.js'
+import { cloudEntryEquals, countCloudScopes, countPathScopes, normalizeCloudFileEntry } from '../journal.js'
+import { withCloudFetchRetry } from '../cloud-retry.js'
 import { assertWorkspacePathSafe, cloudLocationFromOptions } from '../paths.js'
 import { classifyJournalEntries, readJournalSafety, workspaceRootFromOptions } from '../status-state.js'
 import { findIndexedCodebase, hydratedPathUnion, hydratedPathsAfterPrune, hydrationStateForHydratedPaths, latestIsoTimestamp, localCachePatchForPaths, materializationForHydrationState, parseNonNegativeIntegerOption, readWorkspaceIndex, selectedCloudPaths, upsertWorkspaceIndex, upsertWorkspaceIndexFromCloud, workspaceIndexEntryFromCloud, workspaceIndexEntryKey, workspaceIndexRoot, workspaceIndexSummary } from '../workspace-index.js'
@@ -23,11 +24,43 @@ export async function hydrateWorkspace(options) {
   const requester = summarizeRequester(cloud.visibilityContext)
   await fs.mkdir(options.workspace, { recursive: true })
 
+  const codebaseId = cloud.codebase?.id ?? options['codebase-id'] ?? 'hopit'
+  // Cheap local verify pass: on a restart of an already-materialized workspace
+  // most files are byte-identical to cloud. Reading the disk graph once (local
+  // hash/size, no per-file cloud reads) lets us skip the slow path — fetch +
+  // rewrite + `file.hydrated` — for every clean file, so a large clean workspace
+  // reaches `workspace.ready` (and the watcher/remote-push start) in seconds
+  // instead of re-downloading thousands of files. Files that are missing, stale,
+  // or dirty on disk still take the slow path below. The content manifest is
+  // rebuilt in full by the upsert at the end, so a stale manifest self-heals
+  // regardless of what was skipped.
+  const diskEntries = await readWorkspaceFiles(options.workspace, options)
+  const workspaceIndex = await readWorkspaceIndex(options)
+  const indexedCodebase = findIndexedCodebase(workspaceIndex, codebaseId, options.workspace)
+  let materializedCount = 0
+  let verifiedCount = 0
+
   for (const [relativePath, file] of Object.entries(cloud.files)) {
     const scope = scopeForPath(relativePath)
     const entry = normalizeCloudFileEntry(relativePath, file)
+    const diskEntry = diskEntries[relativePath]
+      ? normalizeCloudFileEntry(relativePath, diskEntries[relativePath])
+      : null
+    const manifestEntry = indexedCodebase?.contentManifest?.files?.[relativePath] ?? null
+    // Byte-identical on disk (and consistent with the last acknowledged
+    // manifest when one exists) means no cloud read or rewrite is needed.
+    if (
+      diskEntry &&
+      cloudEntryEquals(diskEntry, entry) &&
+      (!manifestEntry || manifestMatchesCloudEntry(manifestEntry, entry))
+    ) {
+      verifiedCount += 1
+      continue
+    }
+
     await materializeCloudEntry(options.workspace, relativePath, entry, cloudService, {
-      codebaseId: cloud.codebase?.id ?? options['codebase-id'] ?? 'hopit',
+      codebaseId,
+      fetchRetry: hydrateFetchRetry(options, relativePath),
     })
     await emit(options, 'file.hydrated', {
       path: relativePath,
@@ -37,6 +70,7 @@ export async function hydrateWorkspace(options) {
       bytes: entry.size,
       revision: entry.revision,
     })
+    materializedCount += 1
   }
 
   await emit(options, 'workspace.ready', {
@@ -49,6 +83,8 @@ export async function hydrateWorkspace(options) {
     cacheMode: workspaceMode.cacheMode,
     scopeCounts: countCloudScopes(cloud),
     hiddenScopeCounts: cloud.visibilityContext?.hiddenScopeCounts ?? { shared: 0, private: 0 },
+    materializedFileCount: materializedCount,
+    verifiedFileCount: verifiedCount,
   })
   await upsertWorkspaceIndexFromCloud(options, cloud, {
     reason: 'hydrate',
@@ -56,6 +92,25 @@ export async function hydrateWorkspace(options) {
     hydrationState: 'materialized',
     hydratedPaths: Object.keys(cloud.files ?? {}),
   })
+}
+
+// Builds the per-entry retry wrapper used by hydration's cloud fetches. On a
+// recovered transient fault it journals `cloud.fetch_recovered` so the flakiness
+// is observable; exhaustion still throws and fails the command.
+export function hydrateFetchRetry(options, relativePath, retryOptions = {}) {
+  return (fn) =>
+    withCloudFetchRetry(fn, {
+      ...retryOptions,
+      onRetrySuccess: async ({ attempt, failures, error }) => {
+        await emit(options, 'cloud.fetch_recovered', {
+          path: relativePath,
+          attempts: attempt,
+          failures,
+          reason: error instanceof Error ? error.message : error != null ? String(error) : null,
+          code: error?.code ?? error?.cause?.code ?? null,
+        })
+      },
+    })
 }
 
 export async function hydrateWorkspaceFile(options) {

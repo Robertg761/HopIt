@@ -249,10 +249,15 @@ export async function materializeCloudEntry(root, relativePath, file, cloudServi
   }
 
   await replacePathIfWrongType(absolutePath, 'file')
-  const body = await bufferFromCloudFileEntry(entry, cloudService, {
+  const fetchBody = () => bufferFromCloudFileEntry(entry, cloudService, {
     ...context,
     relativePath,
   })
+  // Only the cloud fetch is wrapped in retry-with-backoff (callers that hydrate
+  // opt in via context.fetchRetry); the local fs writes below stay single-shot.
+  const body = typeof context.fetchRetry === 'function'
+    ? await context.fetchRetry(fetchBody, { relativePath })
+    : await fetchBody()
   try {
     await fs.writeFile(absolutePath, body)
   } catch (error) {
