@@ -62,9 +62,9 @@ repo/private/secret zone keys, invite-time key sharing, independent secret
 grants, private path metadata, and complete revocation/rekey flows remain next
 work.
 
-The installed macOS service is owned by LaunchAgent `com.hopit.agent.hopit`; it is verified with `launchctl print` plus `curl http://127.0.0.1:4785/status`. `hop service status` is still pid-file oriented and can report `running: false` for the direct launchd-owned `service run` process even when `/status` is healthy.
+The installed macOS service is owned by LaunchAgent `com.hopit.agent.hopit`; it is verified with `launchctl print` plus `curl http://127.0.0.1:4785/status`. `hop service status` now also trusts a healthy loopback `/status` probe that positively matches the expected codebase id, so a launchd-owned `service run` process without a pid file reports `running: true` with `source: "health-probe"`.
 
-Current production state as of 2026-07-10: HopIt uses Cloudflare D1 as the only hosted graph backend. Vercel aliases and Clerk sign-in routing are live. The D1 database `hopit` is created, schema-applied, seeded from the historical export, reachable through `hopit-d1-api.hopit-robert.workers.dev`, configured in Vercel/local env for graph/status/file/codebase/account/action-job/member/invite/work-item/session/key paths, and serving the deployed `hopit.dev` app. The push hub is deployed and the installed personal-production service reports push enabled; the latest observed pushed revision was safely skipped because unjournaled workspace drift blocked refresh, so a successful live apply remains to be proven. Push-enabled watch/service mode now supplements socket hints with a lightweight periodic graph-head reconciliation at the configured five-minute cadence.
+Current production state as of 2026-07-10: HopIt uses Cloudflare D1 as the only hosted graph backend. Vercel aliases and Clerk sign-in routing are live. The D1 database `hopit` is created, schema-applied, seeded from the historical export, reachable through `hopit-d1-api.hopit-robert.workers.dev`, configured in Vercel/local env for graph/status/file/codebase/account/action-job/member/invite/work-item/session/key paths, and serving the deployed `hopit.dev` app. The push hub is deployed and the installed personal-production service reports push enabled. The long-standing "workspace drift" that skipped every push apply was diagnosed on 2026-07-10 as a stale content manifest rather than real drift; refresh and the remote-push decision now self-heal that case, the live manifest was healed (24 phantom paths exonerated, clean scan at revision 4436), and the service was restarted clean. A live `push-applied` proof still needs one genuinely remote change delivered over the hub. Push-enabled watch/service mode supplements socket hints with a lightweight periodic graph-head reconciliation at the configured five-minute cadence.
 
 History: the retired hosted graph export was saved to `/Users/robert/HopIt-Backups/convex/hopit-convex-prod-2026-06-30-disabled-snapshot.zip` with SHA-256 `0e83df9ab7e80a81a9a3b06e1cd3399ff5b532fa968bded3c14334640b4c9f3d`. The migration script is retained for export rehearsals; the backend code path was removed by WS1 in [Remediation Plan July 2026](remediation-plan-2026-07.md).
 
@@ -100,7 +100,7 @@ Current verified result:
 - `npm run build`: passes when rerun with network permission for Next Google Fonts fetches.
 - `npm run package:hop`: builds the current macOS artifact with env/install support files.
 - `npm run d1:migrate:convex-export -- --export /Users/robert/HopIt-Backups/convex/hopit-convex-prod-2026-06-30-disabled-snapshot.zip --codebase-id hopit`: live D1 import completed with `58` files and the latest `500` events selected from `11,638` exported events; dry-run mode is still useful for future rehearsals.
-- Installed packaged runtime: LaunchAgent `com.hopit.agent.hopit` reports push enabled; the latest observed pushed revision was safely blocked by local drift. The current worktree adds a 300000 ms periodic graph-head reconciliation so missed hints no longer wait for another local edit.
+- Installed packaged runtime: LaunchAgent `com.hopit.agent.hopit` reports push enabled and, since the 2026-07-10 manifest heal and restart, a clean workspace scan at revision 4436. The runtime predates the self-heal/guard commits and should be repackaged at the next release. The 300000 ms periodic graph-head reconciliation means missed hints no longer wait for another local edit.
 - `hop keys status --profile production`: packaged runtime reports the local keyring at `/Users/robert/Library/Application Support/HopIt/Agent/keys/hopit.device.json`, mode `0600`, device key `trusted`, user keyring `active`, and user vault wrap `active`.
 - `launchctl print gui/501/com.hopit.agent.hopit` plus `curl http://127.0.0.1:4785/status`: LaunchAgent is running and the loopback status endpoint reports `service=cloudflare-d1-graph`, `cloudExists=true`, and `fileCount=58`.
 - `node --test packages/agent/test/d1-backend.test.js`: passes D1 graph sync, collaboration routes, scoped session registration/list/touch/revoke, trusted device key registration, user keyring, and wrapped user-vault key metadata.
@@ -144,8 +144,34 @@ Still external or deliberately incomplete:
 
 - Signing, notarization, public privacy/terms pages, and Google OAuth publication were not completed or claimed by this work.
 - No R2 release was uploaded; the immutable channel implementation was verified locally and publication remains gated.
-- The production push service is deployed/enabled, but its latest observed revision was safely skipped on workspace drift; a clean live apply remains to be proven.
+- The production push service is deployed/enabled and the workspace scan is clean after the 2026-07-10 manifest heal; a live `push-applied` proof still needs one genuinely remote change (for example a dashboard file edit) delivered over the hub.
 - Scoped raw SQL remains a transition boundary and should be replaced with typed Worker operations.
+
+## 2026-07-10 Push-Apply Deadlock Diagnosis And Continuity Guards
+
+The push-blocking "workspace drift" was diagnosed against live production and closed with three fixes plus two data/config repairs.
+
+Diagnosis: a manual `hop sync` on 2026-07-09 committed 24 files to D1 (revision 4412 → 4436, all journal entries acknowledged), but the workspace content manifest is only rebuilt on materialize/refresh/hydrate, and the service restart preserved the pre-sync manifest. The local-changes scan diffs disk against the manifest, so it reported 24 phantom "added" files, which marked the workspace dirty and blocked refresh — the only operation that rebuilds the manifest. Every push apply skipped with `workspace_has_unjournaled_changes` while cloud, journal, and disk were fully consistent.
+
+Implemented:
+
+- `hop service status` trusts a codebase-verified loopback health probe, so launchd-owned services without a pid file report `running: true` (`source: "health-probe"`).
+- Refresh and the remote-push decision exonerate scan findings that already match the cloud graph byte-for-byte (kind/hash/size/scope/target) and proceed, rebuilding the manifest; `refresh.complete` reports `manifestSelfHealed`, `manifestStaleSamplePaths` (≤10), and `manifestStalePathCount`. Genuine drift still fails closed, and all event/status payloads keep the compact scan shape (counts plus ≤10 samples).
+- `materializeCloudToWorkspace` fails closed before deleting when the visible cloud graph is empty while disk files exist (`visible_graph_empty_local_files_present`) or when a refresh would delete more than 100 files and half the workspace (`refresh_would_mass_delete`); `--allow-mass-delete` overrides. This guards the observed guest/zero-visibility hazard: a device env with `HOPIT_SESSION_ID` but no `HOPIT_REQUESTER_ID` reads zero visible files, and a clean-workspace refresh would have deleted all 4,491 files. `hop doctor` now flags the missing requester identity.
+- D1 journal commit paths stamped `files`/`file_versions.zone_id` with a hardcoded `unknown` codebase id; the normalizer now threads the real codebase id (or leaves null for the writer to fill).
+
+Live repairs:
+
+- `scripts/repair-zone-ids.sql` rewrote the 8,865 affected live rows to `<codebaseId>:<zone>`; verified zero `unknown:` rows remain and revision/file counts unchanged.
+- `HOPIT_REQUESTER_ID` was added to this Mac's `production.env` (backup kept), restoring owner visibility (4,491 visible / 0 hidden).
+- A repo-checkout `hop refresh --profile production` healed the live manifest: `manifestSelfHealed: true`, 24 paths exonerated, 0 written, 0 deleted, unchanged 4,491; the LaunchAgent was restarted and reports a clean scan at revision 4436.
+
+Verified: agent `190/190`, web `16/16`, Worker `21/21`, lint and all typecheck gates clean (commits `0492579`, `2955f8e`, `6a1f7a7`).
+
+Still open from this work:
+
+- The live `push-applied` proof needs one genuinely remote change (dashboard edit) delivered over the hub to the clean workspace.
+- The installed packaged runtime predates these commits; repackage/reinstall at the next release so the self-heal and mass-delete guards run in production.
 
 ## 2026-07-08 Per-file D1 Journal Commits
 

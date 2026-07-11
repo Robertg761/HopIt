@@ -116,6 +116,11 @@ HOPIT_AGENT_STATE_ROOT="$HOME/Library/Application Support/HopIt/Agent"
 HOPIT_WORKSPACE_ROOT="$HOME/HopIt Workspaces"
 HOPIT_WORKSPACE_INDEX="$HOME/Library/Application Support/HopIt/Agent/workspaces.json"
 HOPIT_SESSION_ID=<this-device-session-id-after-register>
+# Required alongside HOPIT_SESSION_ID: a bare session id is treated as an
+# unauthenticated guest by visibility-filtered reads (zero visible files).
+# Without it, hop refresh fails closed via the mass-delete guard and hop
+# doctor reports a requester-identity failure. Set to the codebase owner id.
+HOPIT_REQUESTER_ID=<codebase-owner-user-id>
 HOPIT_DEVICE_NAME="<your-device-name>"
 HOPIT_AGENT_SESSION_TOKEN=<scoped-session-token-after-register>
 HOPIT_AGENT_SESSION_CAPABILITIES=read,write,sync,watch
@@ -238,10 +243,38 @@ Cloudflare dashboard rate-limit rule to configure alongside the in-worker failed
 WS7a Stage 2 adds the D1 API Worker's `HOPIT_PUSH_HUB` Durable Object binding
 and the SQLite-backed `CodebasePushHub` migration in
 `cloudflare/d1/wrangler.proxy.jsonc`. That push path is deployed and enabled on
-the current personal-production agent. The latest observed pushed revision was
-safely skipped because local workspace drift blocked refresh, so successful
-live apply still needs a clean-workspace dogfood proof. Use this command for a
-future Worker update:
+the current personal-production agent.
+
+The "workspace drift" that skipped every push apply through 2026-07-10 was
+diagnosed as a stale content manifest, not real drift: a manual `hop sync`
+committed 24 files to D1 (revision 4436, all acknowledged), but the manifest is
+only rebuilt on materialize/refresh/hydrate, and the scan that gates refresh
+compares disk against the manifest — so the stale manifest blocked the one
+operation that would rebuild it. Refresh and the remote-push decision now
+exonerate scan findings that already match the cloud graph byte-for-byte and
+self-heal the manifest (`manifestSelfHealed` in `refresh.complete`); genuine
+drift still fails closed. The live manifest was healed on 2026-07-10 with a
+repo-checkout `hop refresh --profile production` (0 written, 0 deleted, 24
+exonerated) and the LaunchAgent was restarted with a clean scan at revision
+4436. A live push-applied proof still needs one genuinely remote change (for
+example a dashboard file edit) delivered over the hub.
+
+Two related hardenings from the same investigation:
+
+- A device env with `HOPIT_SESSION_ID` but no `HOPIT_REQUESTER_ID` reads the
+  graph as a guest with zero visible files; a refresh would then have deleted
+  the whole workspace. `materializeCloudToWorkspace` now fails closed before
+  deleting when the visible graph is empty while disk files exist, or when a
+  refresh would delete more than 100 files and half the workspace
+  (`--allow-mass-delete` overrides), and `hop doctor` flags the missing
+  requester identity. This Mac's `production.env` gained `HOPIT_REQUESTER_ID`
+  on 2026-07-10 (previous file kept as `production.env.bak-2026-07-10`).
+- Journal commit paths stamped `files`/`file_versions.zone_id` with a
+  hardcoded `unknown` codebase id. The normalizer now threads the real id, and
+  the 8,865 affected live rows were rewritten with the one-time
+  `scripts/repair-zone-ids.sql`.
+
+Use this command for a future Worker update:
 
 ```bash
 npx wrangler deploy --config cloudflare/d1/wrangler.proxy.jsonc
