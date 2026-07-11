@@ -65,6 +65,13 @@ export const defaultSiblingHydrationMaxFiles = 8
 export const defaultSiblingHydrationMaxBytes = 128_000
 export const bulkJournalCommitThreshold = 20
 export const bulkJournalCommitChunkSize = 40
+// Refresh deletion safety: refresh materialization deletes every workspace file
+// absent from the visible cloud graph. A visibility misconfiguration (session id
+// without a requester id reads the cloud as a guest and sees zero files) can turn
+// a refresh into a full-workspace wipe. Fail closed when the deletion looks like a
+// mass wipe rather than a legitimate small drop.
+export const refreshMassDeleteMinFiles = 100
+export const refreshMassDeleteFraction = 0.5
 export const r2FreeStorageTierBytes = 10_000_000_000
 export const r2DefaultFreeOnlyBudgetBytes = 8_000_000_000
 export const serviceReadyTimeoutMs = 60_000

@@ -2,7 +2,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { canRequesterSeePath, createCloudGraphService, filterVisibleGraphForRequester, removeEmptyAncestorDirectories, summarizeGraphContract, summarizeRequester, visibilityContextForGraph, visibilityRequestFromOptions } from '../cloud/d1-graph-service.js'
-import { bulkJournalCommitChunkSize, bulkJournalCommitThreshold, ConflictError, entryKind, workspaceMode } from '../constants.js'
+import { bulkJournalCommitChunkSize, bulkJournalCommitThreshold, ConflictError, entryKind, refreshMassDeleteFraction, refreshMassDeleteMinFiles, workspaceMode } from '../constants.js'
 import { privacyZoneForPath } from '@hopit/core/crypto'
 import { appendNdjson, emit, findLastEventOf, readNdjson } from '../io.js'
 import { actorIdFromOptions, bufferFromCloudFileEntry, cloudEntryEquals, countCloudScopes, countEntryScopes, countPathScopes, ensureActiveChangeSet, journalContextForCloud, normalizeCloudFileEntry, recordChangeSetConflict } from '../journal.js'
@@ -122,6 +122,17 @@ export async function materializeCloudToWorkspace(options, cloud, cloudService =
 
   const diskEntries = await readWorkspaceFiles(options.workspace, options)
   const cloudPaths = new Set(Object.keys(cloud.files ?? {}))
+  const wouldDeletePaths = Object.keys(diskEntries).filter((relativePath) => !cloudPaths.has(relativePath))
+
+  // Fail closed before any deletion when refresh would wipe an implausible share
+  // of the workspace. A guest/zero-visibility read (session id without requester
+  // id) reports zero visible files, which would otherwise delete every disk file.
+  await assertRefreshDeletionSafe(options, cloud, cloudService, {
+    diskFileCount: Object.keys(diskEntries).length,
+    visibleFileCount: cloudPaths.size,
+    wouldDeleteCount: wouldDeletePaths.length,
+  })
+
   const changedPaths = []
   const deletedPaths = []
   let written = 0
@@ -162,6 +173,61 @@ export async function materializeCloudToWorkspace(options, cloud, cloudService =
     scopeCounts: countCloudScopes(cloud),
     hiddenScopeCounts: cloud.visibilityContext?.hiddenScopeCounts ?? { shared: 0, private: 0 },
   }
+}
+
+export async function assertRefreshDeletionSafe(options, cloud, cloudService, counts) {
+  const { diskFileCount, visibleFileCount, wouldDeleteCount } = counts
+
+  // Nothing to delete, or the operator explicitly opted into a mass delete.
+  if (wouldDeleteCount === 0) return
+  if (options['allow-mass-delete']) return
+
+  const requesterRole = cloud.visibilityContext?.role ?? null
+  const hiddenFileCount = cloud.visibilityContext?.hiddenFileCount ?? 0
+  const guestLike = requesterRole
+    ? requesterRole === 'guest'
+    : !cloud.visibilityContext?.isOwner && !cloud.visibilityContext?.isCollaborator
+
+  const emptyGraphWipe = visibleFileCount === 0 && diskFileCount > 0
+  const deleteFraction = diskFileCount > 0 ? wouldDeleteCount / diskFileCount : 0
+  const massDelete = wouldDeleteCount > refreshMassDeleteMinFiles && deleteFraction > refreshMassDeleteFraction
+
+  if (!emptyGraphWipe && !massDelete) return
+
+  const reason = emptyGraphWipe ? 'visible_graph_empty_local_files_present' : 'refresh_would_mass_delete'
+  await emit(options, 'refresh.blocked', {
+    state: 'blocked',
+    reason,
+    workspace: options.workspace,
+    revision: cloud.revision,
+    service: cloudService?.type ?? null,
+    contract: summarizeGraphContract(cloud),
+    requester: summarizeRequester(cloud.visibilityContext),
+    requesterRole,
+    visibleFileCount,
+    hiddenFileCount,
+    diskFileCount,
+    wouldDeleteCount,
+    deleteFraction: Number(deleteFraction.toFixed(4)),
+  })
+
+  // When the read looks like a guest (or the visible graph is empty while files
+  // are hidden), the most likely cause is a missing requester identity rather
+  // than a genuine cloud-side deletion — surface that so the operator can fix it.
+  const guestHint =
+    guestLike || (emptyGraphWipe && hiddenFileCount > 0)
+      ? ` This device is reading the cloud as ${requesterRole ?? 'a guest'} and likely has no requester identity configured; set HOPIT_REQUESTER_ID to the codebase owner id (or re-run connected setup) so visibility-filtered reads see the codebase.`
+      : ''
+  const overrideHint = ' Pass --allow-mass-delete to override if this deletion is intended.'
+
+  if (emptyGraphWipe) {
+    throw new Error(
+      `Refresh blocked to prevent mass deletion: the visible cloud graph has 0 files but the workspace holds ${diskFileCount} file(s), so refresh would delete all of them (${hiddenFileCount} file(s) hidden from this requester).${guestHint}${overrideHint}`,
+    )
+  }
+  throw new Error(
+    `Refresh blocked to prevent mass deletion: refresh would delete ${wouldDeleteCount} of ${diskFileCount} workspace file(s) (${Math.round(deleteFraction * 100)}%).${guestHint}${overrideHint}`,
+  )
 }
 
 export async function materializeCloudEntry(root, relativePath, file, cloudService = null, context = {}) {

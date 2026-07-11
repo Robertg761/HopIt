@@ -124,6 +124,29 @@ export async function runDoctor(options) {
     checks.push(checkResult('agent-state', false, error.message))
   }
 
+  const sessionConfigured = Boolean(
+    options['session-id'] ||
+      options['session-token'] ||
+      process.env.HOPIT_SESSION_ID ||
+      process.env.HOPIT_AGENT_SESSION_TOKEN,
+  )
+  const requesterConfigured = Boolean(options['requester-id'] || process.env.HOPIT_REQUESTER_ID)
+  if (sessionConfigured && !requesterConfigured) {
+    checks.push(checkResult(
+      'requester-identity',
+      false,
+      'A session id/token is configured but no requester id is set, so visibility-filtered reads run as guest and see zero files (refresh would treat every workspace file as deletable). Set HOPIT_REQUESTER_ID to the codebase owner id, or re-run connected setup.',
+    ))
+  } else {
+    checks.push(checkResult(
+      'requester-identity',
+      true,
+      requesterConfigured
+        ? 'Requester identity is configured for visibility-filtered reads.'
+        : 'No session identity configured; reads run with local owner visibility.',
+    ))
+  }
+
   try {
     service = await serviceStatus(options)
     checks.push(checkResult(

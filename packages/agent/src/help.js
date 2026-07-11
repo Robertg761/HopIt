@@ -112,6 +112,7 @@ Options:
   --message <text>    Git commit message for export/publish
   --include-private   Include .private files in export only; publish always omits them
   --allow-unsafe-workspace Override workspace path safety checks
+  --allow-mass-delete Allow refresh to delete a full/large share of the workspace (bypasses the empty-graph and mass-delete guards)
   --allow-local-cloud Allow production profile to use local JSON cloud for dry runs
   --force             Overwrite the cloud graph on init
 `)

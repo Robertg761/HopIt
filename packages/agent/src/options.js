@@ -35,6 +35,7 @@ export function parseOptions(args) {
   const booleanOptions = new Set([
     'force',
     'allow-unsafe-workspace',
+    'allow-mass-delete',
     'allow-local-cloud',
     'include-private',
     'remote-pull',
