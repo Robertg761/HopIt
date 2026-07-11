@@ -555,6 +555,18 @@ connected, the dashboard exposes the same outcome as a four-step checklist:
 choose/create the cloud project, connect the local agent, attach the managed
 folder under the Workspace Root, and prepare the first bounded working set.
 
+Adding further codebases from an already-connected device does not require a
+fresh `hop setup`. `hop add <path>` (alias `hop project add`) onboards any local
+folder as a new codebase in one command: it derives the codebase id, runs
+browser device approval (which can create the requested project), stores the
+scoped token in a `0600` per-codebase connection entry under the agent state
+root (`connections/<codebaseId>.json`), imports through the production-safe
+path, and attaches the result under the Workspace Root. The approval flow hard
+-fails before any side effect if the approved codebase differs from the
+requested one, so a misrouted approval cannot overwrite the primary workspace.
+LunarLog was migrated this way on 2026-07-11 (816 files at revision 816) while
+the primary `hopit` codebase stayed untouched at revision 4437.
+
 ```bash
 /tmp/hop-darwin-arm64/bin/hop setup
 ```

@@ -1,6 +1,6 @@
 # HopIt Progress Tracker
 
-Last updated: 2026-07-10
+Last updated: 2026-07-11
 
 This tracker is the working view of what is done, what is in progress, what is next, and what is still deliberately out of scope. The roadmap source remains [MVP Plan](mvp-plan.md), and the agent contract source remains [Local Agent Architecture](agent-architecture.md). This file turns those plans into a practical implementation ledger.
 
@@ -44,6 +44,7 @@ Current live deployment:
 - Seeded codebase id: `hopit`
 - Seeded graph size: 58 source files
 - Production workspace: `/Users/robert/HopIt Workspaces/hopit`
+- Second onboarded codebase (2026-07-11, via `hop add`): `lunarlog`, 816 files at revision 816, managed folder `/Users/robert/HopIt Workspaces/lunarlog`, scoped session for `lunarlog` only
 
 Domain-dependent production auth setup is no longer pinned. `hopit.dev` is live, Clerk production DNS/SSL are verified, Vercel has the redacted live Clerk env vars, and Vercel Production now uses `HOPIT_AUTH_PROVIDER=clerk`. Google OAuth is enabled in Clerk production through the Google Cloud project `hopit-auth-prod-rg`; the Google app remains in Testing mode with `robertgordon761@gmail.com` added as the owner test user. Production owner sign-in and D1 owner claim are smoke-tested, and Basic Auth fallback env vars have been removed from Vercel Production.
 
@@ -108,6 +109,51 @@ Current verified result:
 - `curl -I https://hopit.dev/`: returns `HTTP/2 307` to `/sign-in` for signed-out users, confirming Clerk protects the dashboard.
 - Production Clerk sign-in and D1 owner claim were smoke-tested on `https://hopit.dev`; Basic Auth fallback is no longer needed for the owner handoff.
 - Google Auth Platform Audience for project `hopit-auth-prod-rg`: shows `1 user (1 test, 0 other) / 100 user cap` and the test-user row `robertgordon761@gmail.com`.
+
+## 2026-07-11 hop add Onboarding, Wrong-Codebase Incident, And First Real Migration
+
+A one-command `hop add` onboarding path landed, a live wrong-codebase incident during its first use was contained with zero cloud data loss, the flow was hardened until the same misroute fails closed, and the first genuinely new codebase (LunarLog) was migrated end to end through the hardened path.
+
+`hop add` onboarding (`39a5035`):
+
+- `hop add` (alias `hop project add`) onboards any local folder as a new codebase in one command: it derives the codebase id from the folder, runs browser device approval (the approval page can create the requested project), stores the returned scoped token in a `0600` per-codebase connection entry under the agent state root (`connections/<codebaseId>.json`), imports through the production-safe path, and attaches the result under the Workspace Root.
+- Option resolution transparently uses the stored connection entries for non-primary codebases, so later commands against an added codebase reuse its scoped token without re-approval.
+- The additive D1 columns `requested_codebase_id`/`requested_codebase_name` were migrated on production with `wrangler` to carry the requested project through device authorization.
+
+Wrong-codebase incident during the first live `hop add` (LunarLog) — local-only damage, zero cloud data loss:
+
+- The browser approval returned the EXISTING primary codebase `hopit` instead of creating the requested `lunarlog` (the page made approving an existing project too easy), and `runAdd` proceeded with the approved id. It mirrored LunarLog into the primary `hopit` managed workspace (the mirror step took its designed pre-wipe backup) and journaled roughly 14,879 pending deletes/creates against `cs_hopit_local`.
+- The process was killed before any journal entry was acknowledged to cloud, so cloud and R2 were never touched. Damage was local only.
+- Recovery: the poisoned journal and the bad connection entry were quarantined, the contaminated workspace was removed and re-hydrated from the intact cloud (revision 4437, 4,491 files, scan-clean afterward, all `hop doctor` checks pass), and the mis-issued session was revoked directly in D1 because `hop session revoke` itself was broken (fixed below). Zero data loss.
+
+Hardening so the same misroute fails closed (`cfd5d57`; all deployed — runtime reinstalled, worker redeployed, dashboard deployed to hopit.dev):
+
+- `hop add` hard-fails before ANY side effect when the approved codebase differs from the requested one, with a louder variant when the approval matches the device's primary codebase; there is no override flag.
+- `importLocalProject` and `mirrorLocalProject` each independently fail closed before wiping a workspace directory that the index says belongs to a different codebase.
+- The device approval page makes "Create <requested>" the only one-click action; approving a different existing project now requires expanding a secondary section and ticking an acknowledgment.
+- Scoped-session revoke/touch SQL now binds `codebase_id`, so the worker statement policy accepts same-codebase revokes (cross-codebase stays rejected).
+- Tests at that commit: agent 218, worker 23, web 20.
+
+Device-authorization resilience (`c2f099a`):
+
+- The device-authorization create fetch retries transient faults with bounded backoff, and the poll loop treats dropped sockets, 5xx, 429, and non-JSON responses as missed polls until the code's own expiry. Observed live failure that motivated it: a `read EADDRNOTAVAIL` killed a pending approval. Agent tests 221.
+
+First real migration succeeded through the hardened flow (LunarLog):
+
+- Approval matched (`Approved codebase: lunarlog`), the codebase was created, and 816 files landed at revision 816 in cloud, with the managed folder at `~/HopIt Workspaces/lunarlog` fully hydrated (816/816) and a scoped session active for `lunarlog` only.
+- The primary `hopit` codebase stayed at revision 4437 and healthy throughout.
+- Remaining projects are self-service via `hop add --source <path>`; approval codes are single-use with roughly a 10-minute expiry.
+
+Supporting context from earlier the same day (already in the ledger, referenced not duplicated):
+
+- Storage/pricing research is in [storage-pricing-research-2026-07.md](storage-pricing-research-2026-07.md) (`ad62c97`); the R2 blob budget was raised from 8 GB to 9.5 GB in the local env files (`production.env` and `.env.local`), which are env-only and not tracked in the repo.
+
+Follow-up issues found during this session (recorded, not fixed):
+
+- The expired-approval page still says "Run hop setup again" even when reached from `hop add`, and offers no refresh path.
+- Stale approval tabs linger after auto-open; each attempt opens a new tab rather than reusing one.
+- The orphan `~/HopIt Workspaces/token-addicts-anonymous` folder from the first failed canary attempt should be cleaned up.
+- `hop add --service` exists but was not exercised live yet.
 
 ## 2026-07-11 Runtime Reinstall, Live Push-Apply Proof, And Per-Codebase Ports
 
