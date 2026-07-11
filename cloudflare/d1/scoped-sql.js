@@ -121,6 +121,9 @@ function isOwnAgentSessionRead(sql, params, session) {
   if (/^select \* from agent_sessions where codebase_id = \? and token_hash = \? limit 1$/.test(sql)) {
     return params[0] === session?.codebase_id && params[1] === session?.token_hash
   }
+  if (/^select \* from agent_sessions where codebase_id = \? and session_id = \? limit 1$/.test(sql)) {
+    return params[0] === session?.codebase_id && params[1] === session?.session_id
+  }
   if (/^select \* from agent_sessions where session_id = \? limit 1$/.test(sql)) {
     return params[0] === session?.session_id
   }

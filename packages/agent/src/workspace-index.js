@@ -388,6 +388,40 @@ export function findIndexedCodebase(index, codebaseId, workspacePath = null) {
   )
 }
 
+/**
+ * Every indexed codebase whose managed workspace resolves to `workspacePath`.
+ * Used to fail closed before a destructive import/mirror wipe would clobber a
+ * workspace directory that the index says belongs to a different codebase.
+ */
+export function findIndexedCodebasesByWorkspacePath(index, workspacePath) {
+  if (!index || !workspacePath) return []
+  const resolvedWorkspace = path.resolve(workspacePath)
+  return (index.codebases ?? []).filter(
+    (codebase) => codebase.workspace?.path && path.resolve(codebase.workspace.path) === resolvedWorkspace,
+  )
+}
+
+/**
+ * Defense in depth for the mirror/import layer: refuse to resolve codebase X's
+ * import to a managed workspace directory whose workspace-index entry belongs to
+ * codebase Y. This runs BEFORE any `fs.rm(workspace, ...)` wipe so a caller that
+ * mis-resolves the workspace path (e.g. after a codebase-mismatch) can never
+ * destroy another codebase's managed workspace.
+ */
+export async function assertWorkspaceNotIndexedForOtherCodebase(options, codebaseId) {
+  const workspace = path.resolve(options.workspace)
+  const index = await readWorkspaceIndex(options)
+  const conflict = findIndexedCodebasesByWorkspacePath(index, workspace).find(
+    (entry) => entry.id && entry.id !== codebaseId,
+  )
+  if (!conflict) return
+  throw new Error(
+    `Refusing to import codebase "${codebaseId}" into ${workspace}: that workspace directory is already `
+    + `indexed for a different codebase "${conflict.id}". This would destroy the other codebase's managed `
+    + `workspace. Resolve the workspace conflict (or detach "${conflict.id}") before importing.`,
+  )
+}
+
 export function storableWorkspaceIndexEntry(entry) {
   if (!entry?.workspace?.index) return entry
   const { index: _index, ...workspace } = entry.workspace

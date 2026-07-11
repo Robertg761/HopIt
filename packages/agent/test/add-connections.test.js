@@ -236,6 +236,114 @@ test('hop add connects a folder end-to-end with a stubbed browser authorization'
   assert.notEqual(keyring.credentials?.agentSessionToken, 'hst_add_session_token')
 })
 
+test('hop add hard-fails when browser approval returns a different codebase than requested', async () => {
+  const root = await makeRoot('hopit-add-mismatch-')
+  const source = path.join(root, 'source-project')
+  await fs.mkdir(source, { recursive: true })
+  await fs.writeFile(path.join(source, 'README.md'), '# Requested project\n', 'utf8')
+
+  const stateRoot = path.join(root, 'state')
+  const workspaceRoot = path.join(root, 'workspaces')
+
+  // A pre-existing managed workspace for the codebase the browser wrongly
+  // approves. It must be left completely untouched.
+  const victimWorkspace = path.join(workspaceRoot, 'other-existing')
+  await fs.mkdir(victimWorkspace, { recursive: true })
+  await fs.writeFile(path.join(victimWorkspace, 'SENTINEL.md'), 'do not delete\n', 'utf8')
+
+  const base = parseOptions([
+    '--source', source,
+    '--codebase-name', 'My Project',
+    '--state-root', stateRoot,
+    '--workspace-root', workspaceRoot,
+    '--env-path', path.join(root, 'config', 'production.env'),
+    '--cloud-backend', 'local',
+    '--allow-local-cloud',
+  ])
+
+  let authorizeCalls = 0
+  const authorize = async ({ requestedCodebaseId }) => {
+    authorizeCalls += 1
+    assert.equal(requestedCodebaseId, 'my-project')
+    // The browser user approved a DIFFERENT existing project.
+    return {
+      codebaseId: 'other-existing',
+      requesterId: 'user_owner',
+      sessionId: 'session_device',
+      sessionToken: 'hst_wrong_token',
+      apiBaseUrl: 'https://agent-api.example.test',
+      remotePushUrl: 'wss://agent-api.example.test/events',
+      authorizationId: 'dau_mismatch_test',
+    }
+  }
+
+  await assert.rejects(
+    () => runAdd(base, { authorize }),
+    /approved a different project than requested.*Requested "my-project" but the approval returned "other-existing"/s,
+  )
+  assert.equal(authorizeCalls, 1)
+
+  // No connection entry was written for either the requested or approved id.
+  assert.equal(await readConnectionEntry({ 'state-root': stateRoot }, 'my-project'), null)
+  assert.equal(await readConnectionEntry({ 'state-root': stateRoot }, 'other-existing'), null)
+
+  // The wrongly-approved codebase's workspace was NOT wiped or re-imported.
+  assert.equal(await fs.readFile(path.join(victimWorkspace, 'SENTINEL.md'), 'utf8'), 'do not delete\n')
+  assert.equal(await fs.stat(path.join(victimWorkspace, 'README.md')).then(() => true).catch(() => false), false)
+
+  // No journal entries were produced for either codebase.
+  assert.equal(await fs.stat(path.join(stateRoot, 'journal', 'other-existing.ndjson')).then(() => true).catch(() => false), false)
+  assert.equal(await fs.stat(path.join(stateRoot, 'journal', 'my-project.ndjson')).then(() => true).catch(() => false), false)
+})
+
+test('hop add gives the primary-project variant of the abort and never touches the primary workspace', async () => {
+  const root = await makeRoot('hopit-add-primary-mismatch-')
+  const source = path.join(root, 'source-project')
+  await fs.mkdir(source, { recursive: true })
+  await fs.writeFile(path.join(source, 'README.md'), '# Requested project\n', 'utf8')
+
+  const stateRoot = path.join(root, 'state')
+  const workspaceRoot = path.join(root, 'workspaces')
+
+  // The device's primary managed workspace. Destroying this was the live incident.
+  const primaryWorkspace = path.join(workspaceRoot, 'hopit')
+  await fs.mkdir(primaryWorkspace, { recursive: true })
+  await fs.writeFile(path.join(primaryWorkspace, 'SENTINEL.md'), 'primary project\n', 'utf8')
+
+  const base = parseOptions([
+    '--source', source,
+    '--codebase-name', 'Lunar Log',
+    '--state-root', stateRoot,
+    '--workspace-root', workspaceRoot,
+    '--env-path', path.join(root, 'config', 'production.env'),
+    '--cloud-backend', 'local',
+    '--allow-local-cloud',
+  ])
+
+  const authorize = async () => ({
+    codebaseId: 'hopit',
+    requesterId: 'user_owner',
+    sessionId: 'session_device',
+    sessionToken: 'hst_wrong_token',
+    apiBaseUrl: 'https://agent-api.example.test',
+    remotePushUrl: 'wss://agent-api.example.test/events',
+    authorizationId: 'dau_primary_test',
+  })
+
+  await withEnv({ HOPIT_CODEBASE_ID: 'hopit' }, async () => {
+    await assert.rejects(
+      () => runAdd(base, { authorize }),
+      /primary project "hopit".*requested a new project "lunar-log".*destroy its managed workspace/s,
+    )
+  })
+
+  // The primary workspace is intact and the source was not imported into it.
+  assert.equal(await fs.readFile(path.join(primaryWorkspace, 'SENTINEL.md'), 'utf8'), 'primary project\n')
+  assert.equal(await readConnectionEntry({ 'state-root': stateRoot }, 'hopit'), null)
+  assert.equal(await readConnectionEntry({ 'state-root': stateRoot }, 'lunar-log'), null)
+  assert.equal(await fs.stat(path.join(stateRoot, 'journal', 'hopit.ndjson')).then(() => true).catch(() => false), false)
+})
+
 test('hop add uses the production-safe import-git path when the source is a Git checkout', async (t) => {
   if (await skipUnlessGit(t)) return
 

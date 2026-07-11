@@ -162,7 +162,32 @@ export async function runAdd(options, inject = {}) {
     requestedCodebaseId,
     requestedCodebaseName: codebaseName,
   })
-  const codebaseId = assertSafeConnectionCodebaseId(connection.codebaseId)
+  const approvedCodebaseId = assertSafeConnectionCodebaseId(connection.codebaseId)
+
+  // 3a. HARD-FAIL on codebase mismatch. The browser user could approve an
+  //     existing project instead of creating the one this command requested.
+  //     If we proceeded, we would store a connection for, resolve the workspace
+  //     path of, and rm -rf + re-import into the WRONG codebase's managed
+  //     workspace. Abort before any connection entry, import/mirror/attach, or
+  //     workspace path is touched. There is no override flag.
+  if (approvedCodebaseId !== requestedCodebaseId) {
+    const primaryEnvCodebase = process.env.HOPIT_CODEBASE_ID?.trim()
+    if (primaryEnvCodebase && approvedCodebaseId === primaryEnvCodebase) {
+      throw new Error(
+        `hop add aborted: the browser approved this device's primary project "${approvedCodebaseId}", `
+        + `but this command requested a new project "${requestedCodebaseId}". Continuing would import `
+        + `${source} into your primary project and destroy its managed workspace. Nothing was changed. `
+        + `Re-run hop add and choose "Create ${requestedCodebaseId}" on the approval page instead of an existing project.`,
+      )
+    }
+    throw new Error(
+      `hop add aborted: the browser approved a different project than requested. Requested `
+      + `"${requestedCodebaseId}" but the approval returned "${approvedCodebaseId}". Nothing was changed. `
+      + `Re-run hop add and choose "Create ${requestedCodebaseId}" on the approval page instead of an existing project.`,
+    )
+  }
+
+  const codebaseId = approvedCodebaseId
   writeLine(`  Approved codebase: ${codebaseId}`)
 
   // 4. Persist the per-codebase scoped connection (0600).

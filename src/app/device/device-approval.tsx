@@ -5,7 +5,7 @@ import { ArrowRight, CheckCircle2, Clock3, Laptop, LoaderCircle, Plus, ShieldChe
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { normalizeDeviceCodebaseOptions, type DeviceCodebaseOption } from './codebase-options'
+import { deviceApprovalGate, normalizeDeviceCodebaseOptions, type DeviceCodebaseOption } from './codebase-options'
 
 type DeviceInfo = {
   id?: string | null
@@ -34,14 +34,35 @@ export function DeviceApproval({
   const requestedName = requestedCodebaseName?.trim() || requestedId || null
   const [availableCodebases, setAvailableCodebases] = React.useState<DeviceCodebaseOption[]>(codebases)
   const requestedExists = requestedId ? availableCodebases.some((option) => option.id === requestedId) : false
+  // When the terminal asked to create a project that does not exist yet, we must
+  // NOT pre-select an existing project — otherwise a single click on "Approve"
+  // would connect the device to the wrong project (the live incident).
   const [codebaseId, setCodebaseId] = React.useState(
-    requestedId && requestedExists ? requestedId : codebases[0]?.id ?? '',
+    requestedId ? (requestedExists ? requestedId : '') : codebases[0]?.id ?? '',
   )
   const [newCodebaseName, setNewCodebaseName] = React.useState(requestedName ?? '')
   const [status, setStatus] = React.useState(initialStatus)
   const [error, setError] = React.useState<string | null>(null)
   const [busy, setBusy] = React.useState(false)
   const [creatingCodebase, setCreatingCodebase] = React.useState(false)
+  // Secondary, deliberately-gated path for approving a DIFFERENT existing project
+  // than the one the terminal requested.
+  const [showExistingOverride, setShowExistingOverride] = React.useState(false)
+  const [overrideAcknowledged, setOverrideAcknowledged] = React.useState(false)
+
+  const { requestedNeedsCreate, canApprove } = deviceApprovalGate({
+    requestedId,
+    requestedExists,
+    selectedCodebaseId: codebaseId,
+    overrideAcknowledged,
+    busy,
+  })
+
+  function collapseExistingOverride() {
+    setShowExistingOverride(false)
+    setOverrideAcknowledged(false)
+    setCodebaseId('')
+  }
 
   // Create a project, optionally with the id the terminal requested, then select it.
   async function createCodebase(name: string, desiredId?: string | null) {
@@ -138,34 +159,86 @@ export function DeviceApproval({
 
       <div className="my-6 h-px bg-[#e1e8e3]" />
 
-      {requestedId && !requestedExists ? (
-        <div className="mb-5 rounded-xl border border-[#b7dfc1] bg-[#f0fff4] p-4">
-          <p className="text-sm font-semibold text-[#116329]">Create the requested project</p>
-          <p className="mt-1 text-xs leading-5 text-[#3d6b4c]">
-            Your terminal asked to connect a new project.
-          </p>
-          <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-[#b7dfc1] bg-white px-3 py-2">
-            <span className="min-w-0">
-              <span className="block truncate text-sm font-semibold text-[#17211b]" title={requestedName ?? requestedId}>{requestedName}</span>
-              <span className="block font-mono text-[11px] text-[#5d6a62]">{requestedId}</span>
-            </span>
-            <Button
-              type="button"
-              className="shrink-0 bg-[#1a7f37] text-white hover:bg-[#116329]"
-              disabled={creatingCodebase}
-              onClick={() => void createCodebase(requestedName ?? requestedId, requestedId)}
-            >
-              {creatingCodebase ? <LoaderCircle className="animate-spin" /> : <Plus />}
-              {creatingCodebase ? 'Creating…' : 'Create project'}
-            </Button>
+      {requestedNeedsCreate ? (
+        <>
+          <div className="mb-5 rounded-xl border border-[#b7dfc1] bg-[#f0fff4] p-4">
+            <p className="text-sm font-semibold text-[#116329]">Create the requested project</p>
+            <p className="mt-1 text-xs leading-5 text-[#3d6b4c]">
+              Your terminal asked to connect a new project. This is the action you almost certainly want.
+            </p>
+            <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-[#b7dfc1] bg-white px-3 py-2">
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-semibold text-[#17211b]" title={requestedName ?? requestedId ?? ''}>{requestedName}</span>
+                <span className="block font-mono text-[11px] text-[#5d6a62]">{requestedId}</span>
+              </span>
+              <Button
+                type="button"
+                className="shrink-0 bg-[#1a7f37] text-white hover:bg-[#116329]"
+                disabled={creatingCodebase}
+                onClick={() => void createCodebase(requestedName ?? requestedId ?? '', requestedId)}
+              >
+                {creatingCodebase ? <LoaderCircle className="animate-spin" /> : <Plus />}
+                {creatingCodebase ? 'Creating…' : `Create ${requestedId}`}
+              </Button>
+            </div>
           </div>
-          {availableCodebases.length > 0 ? (
-            <p className="mt-3 text-xs leading-5 text-[#66736b]">Or choose an existing project below.</p>
-          ) : null}
-        </div>
-      ) : null}
 
-      {availableCodebases.length > 0 ? (
+          {availableCodebases.length > 0 ? (
+            <div className="mb-5 rounded-xl border border-[#e4b9bd] bg-[#fff5f5] p-4">
+              {!showExistingOverride ? (
+                <button
+                  type="button"
+                  className="text-xs font-semibold text-[#a40e26] underline underline-offset-2"
+                  onClick={() => setShowExistingOverride(true)}
+                >
+                  Choose an existing project instead…
+                </button>
+              ) : (
+                <div>
+                  <p className="text-sm font-semibold text-[#a40e26]">Connect to an existing project instead</p>
+                  <p className="mt-1 text-xs leading-5 text-[#7d2b34]">
+                    Your terminal asked for <span className="font-mono font-semibold">{requestedId}</span>. Pointing it at
+                    a different existing project makes this device operate on that project — its managed workspace can be
+                    overwritten by the import. Only do this if you are certain.
+                  </p>
+                  <label className="mt-3 block">
+                    <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-[#7d2b34]">Existing project</span>
+                    <select
+                      value={codebaseId}
+                      onChange={(event) => setCodebaseId(event.target.value)}
+                      className="mt-2 h-11 w-full rounded-lg border border-[#e4b9bd] bg-white px-3 text-sm font-medium shadow-sm outline-none transition focus:border-[#a40e26] focus:ring-4 focus:ring-[#a40e26]/10"
+                    >
+                      <option value="">Select a project…</option>
+                      {availableCodebases.map((codebase) => (
+                        <option key={codebase.id} value={codebase.id}>{codebase.name}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="mt-3 flex items-start gap-2 text-xs leading-5 text-[#7d2b34]">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 size-4 shrink-0 accent-[#a40e26]"
+                      checked={overrideAcknowledged}
+                      onChange={(event) => setOverrideAcknowledged(event.target.checked)}
+                    />
+                    <span>
+                      I understand this device asked for <span className="font-mono font-semibold">{requestedId}</span> and
+                      connecting it to the selected existing project will make it operate on that project.
+                    </span>
+                  </label>
+                  <button
+                    type="button"
+                    className="mt-3 text-xs font-medium text-[#66736b] underline underline-offset-2"
+                    onClick={collapseExistingOverride}
+                  >
+                    Cancel — create {requestedId} instead
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : null}
+        </>
+      ) : availableCodebases.length > 0 ? (
         <label className="block">
           <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-[#637067]">Project access</span>
           <select
@@ -178,7 +251,7 @@ export function DeviceApproval({
             ))}
           </select>
         </label>
-      ) : requestedId ? null : (
+      ) : (
         <div className="rounded-xl border border-[#cbd8cf] bg-[#f7faf8] p-4">
           <p className="text-sm font-semibold text-[#26362c]">Create your first project</p>
           <p className="mt-1 text-xs leading-5 text-[#66736b]">
@@ -229,7 +302,7 @@ export function DeviceApproval({
       <Button
         size="lg"
         className="mt-6 h-11 w-full rounded-lg bg-[#1a7f37] text-white shadow-[0_8px_20px_rgba(26,127,55,0.2)] hover:bg-[#116329]"
-        disabled={!codebaseId || busy}
+        disabled={!canApprove}
         onClick={approve}
       >
         {busy ? <LoaderCircle className="animate-spin" /> : <ShieldCheck />}

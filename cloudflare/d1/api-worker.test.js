@@ -245,6 +245,53 @@ test('generic write capability cannot rewrite privileged codebase, membership, s
   }
 })
 
+test('scoped SQL policy accepts codebase-scoped agent-session revoke and rejects cross-codebase or unscoped revoke', () => {
+  const session = scopedSession()
+  const revokeSql = `update agent_sessions set status = 'revoked', revoked_by_user_id = ?, revoked_at = ?, updated_at = ?
+    where codebase_id = ? and session_id = ?`
+
+  // Same-codebase admin revoke of another session, plus the lookup/read it needs.
+  const accepted = [
+    { sql: 'select * from agent_sessions where codebase_id = ? and session_id = ? limit 1', params: ['codebase-1', 'session-2'] },
+    { sql: revokeSql, params: ['user-1', 'now', 'now', 'codebase-1', 'session-2'] },
+    // Self-read stays a read (own codebase + own session id).
+    { sql: 'select * from agent_sessions where codebase_id = ? and session_id = ? limit 1', params: ['codebase-1', 'session-1'] },
+  ]
+  for (const statement of accepted) {
+    assert.doesNotThrow(() => assertScopedSessionStatementAllowed(session, statement), statement.sql)
+  }
+
+  const rejected = [
+    { name: 'cross-codebase revoke lookup', sql: 'select * from agent_sessions where codebase_id = ? and session_id = ? limit 1', params: ['codebase-2', 'session-2'] },
+    { name: 'cross-codebase revoke update', sql: revokeSql, params: ['user-1', 'now', 'now', 'codebase-2', 'session-2'] },
+    // The pre-fix, unscoped revoke that reproduced the live failure.
+    {
+      name: 'unscoped revoke update',
+      sql: "update agent_sessions set status = 'revoked', revoked_by_user_id = ?, revoked_at = ?, updated_at = ? where session_id = ?",
+      params: ['user-1', 'now', 'now', 'session-2'],
+    },
+  ]
+  for (const statement of rejected) {
+    assert.throws(
+      () => assertScopedSessionStatementAllowed(session, statement),
+      /Scoped agent session SQL must be constrained to its codebase/,
+      statement.name,
+    )
+  }
+})
+
+test('write-only scoped session cannot revoke another agent session', () => {
+  const session = scopedSession({ capabilities_json: JSON.stringify(['write']) })
+  assert.throws(
+    () => assertScopedSessionStatementAllowed(session, {
+      sql: `update agent_sessions set status = 'revoked', revoked_by_user_id = ?, revoked_at = ?, updated_at = ?
+        where codebase_id = ? and session_id = ?`,
+      params: ['user-1', 'now', 'now', 'codebase-1', 'session-2'],
+    }),
+    /admin capability/,
+  )
+})
+
 test('guarded journal head policy preserves Main and selected-state security fields', () => {
   const session = scopedSession({ capabilities_json: JSON.stringify(['write']) })
   const previousSelected = { type: 'active-change-set', id: 'cs_1', revision: 1, effectiveVisibility: 'private', mergeState: 'unmerged' }

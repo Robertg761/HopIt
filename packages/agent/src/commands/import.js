@@ -8,7 +8,7 @@ import { isLocalOnlySecretPath, privacyZoneForPath } from '@hopit/core/crypto'
 import { emit, readJson, slugify, writeJson } from '../io.js'
 import { countCloudScopes, countPathScopes, hashBuffer, hashContent, hashDirectoryEntry, hashSymlinkTarget, toCloudPath } from '../journal.js'
 import { assertWorkspacePathSafe } from '../paths.js'
-import { agentStateRootFromOptions } from '../workspace-index.js'
+import { agentStateRootFromOptions, assertWorkspaceNotIndexedForOtherCodebase } from '../workspace-index.js'
 import { assertSafeCloudPath, readImportableProjectFiles, secretSyncStatus, shouldSkipLiteralMirrorPath, sortedDirEntries } from '../workspace-manifest.js'
 import { assertBackupOutputSafe, backupDirectoryName } from './export.js'
 import { hydrateWorkspace } from './hydrate.js'
@@ -111,6 +111,9 @@ export async function importLocalProject(options) {
   }
 
   const cloud = await cloudService.initialize(graph)
+  // Defense in depth: never wipe a workspace directory the index says belongs to
+  // a different codebase, even if a caller mis-resolved options.workspace.
+  await assertWorkspaceNotIndexedForOtherCodebase(options, codebaseId)
   await fs.rm(options.workspace, { recursive: true, force: true })
   await fs.rm(options.journal, { force: true })
   await fs.rm(options.events, { force: true })
@@ -145,6 +148,9 @@ export async function mirrorLocalProject(options, context = {}) {
   }
 
   const codebaseId = options['codebase-id'] ?? path.basename(workspace)
+  // Defense in depth: fail closed before stopping the service, backing up, or
+  // wiping if this workspace directory is indexed for a different codebase.
+  await assertWorkspaceNotIndexedForOtherCodebase(options, codebaseId)
   const launchAgentLabel = options['launch-agent-label'] ?? `${defaultLaunchAgentLabelPrefix}.${codebaseId}`
   const routes = await mirrorSecretRoutesFromOptions(source, options)
   const secretSync = secretSyncStatus(options)

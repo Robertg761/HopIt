@@ -3,6 +3,30 @@ export type DeviceCodebaseOption = {
   name: string
 }
 
+/**
+ * Gate the device-approval "Approve this device" action. When the terminal asked
+ * to CREATE a specific project that does not exist yet, approving a DIFFERENT
+ * existing project would silently make the device operate on (and, via import,
+ * overwrite) that project. That must never be a one-click action: the user has to
+ * both pick an existing project AND acknowledge the override warning. Once the
+ * requested project is created (`requestedExists` becomes true) this collapses to
+ * the ordinary "a selection is required" rule.
+ */
+export function deviceApprovalGate(input: {
+  requestedId: string | null
+  requestedExists: boolean
+  selectedCodebaseId: string
+  overrideAcknowledged: boolean
+  busy?: boolean
+}): { requestedNeedsCreate: boolean; canApprove: boolean } {
+  const requestedNeedsCreate = Boolean(input.requestedId?.trim()) && !input.requestedExists
+  const hasSelection = input.selectedCodebaseId.trim().length > 0
+  const canApprove = !input.busy
+    && hasSelection
+    && (!requestedNeedsCreate || input.overrideAcknowledged)
+  return { requestedNeedsCreate, canApprove }
+}
+
 export function normalizeDeviceCodebaseOptions(value: unknown): DeviceCodebaseOption[] {
   if (!Array.isArray(value)) return []
 

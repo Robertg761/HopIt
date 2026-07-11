@@ -98,11 +98,16 @@ export function attachSessionMethods(Backend) {
     const session = await this.requireMutableAgentSession(sessionId, options)
     if (session.status !== 'active') throw new Error('Only active agent sessions can be touched.')
     const now = new Date().toISOString()
+    // Constrain the mutation to the session's codebase so the scoped-session SQL
+    // policy on the D1 Worker accepts it (a codebase_id predicate is required).
     await this.query(
-      `update agent_sessions set last_seen_at = ?, updated_at = ? where session_id = ?`,
-      [now, now, sessionId],
+      `update agent_sessions set last_seen_at = ?, updated_at = ? where codebase_id = ? and session_id = ?`,
+      [now, now, session.codebase_id, sessionId],
     )
-    return summarizeAgentSession(await this.first(`select * from agent_sessions where session_id = ?`, [sessionId]))
+    return summarizeAgentSession(await this.first(
+      `select * from agent_sessions where codebase_id = ? and session_id = ? limit 1`,
+      [session.codebase_id, sessionId],
+    ))
   },
 
   async revokeAgentSession(options = {}) {
@@ -110,12 +115,17 @@ export function attachSessionMethods(Backend) {
     const session = await this.requireMutableAgentSession(sessionId, options)
     const now = new Date().toISOString()
     const revokedBy = await this.revokedByUserId(session, options)
+    // Constrain the mutation to the session's codebase so the scoped-session SQL
+    // policy on the D1 Worker accepts it (a codebase_id predicate is required).
     await this.query(
       `update agent_sessions set status = 'revoked', revoked_by_user_id = ?, revoked_at = ?, updated_at = ?
-       where session_id = ?`,
-      [revokedBy, now, now, sessionId],
+       where codebase_id = ? and session_id = ?`,
+      [revokedBy, now, now, session.codebase_id, sessionId],
     )
-    return summarizeAgentSession(await this.first(`select * from agent_sessions where session_id = ?`, [sessionId]))
+    return summarizeAgentSession(await this.first(
+      `select * from agent_sessions where codebase_id = ? and session_id = ? limit 1`,
+      [session.codebase_id, sessionId],
+    ))
   },
 
   async resolveAgentSessionRegistrationUser(codebaseId, options = {}) {
@@ -190,7 +200,16 @@ export function attachSessionMethods(Backend) {
   },
 
   async requireMutableAgentSession(sessionId, options = {}) {
-    const session = await this.first(`select * from agent_sessions where session_id = ? limit 1`, [sessionId])
+    // Scope the lookup to the acting codebase so the scoped-session SQL policy on
+    // the D1 Worker accepts it. A scoped session can only touch its own codebase,
+    // so a target in a different codebase reads as "not found" and is rejected.
+    const scopeCodebaseId = stringOrNull(options.codebaseId) ?? this.codebaseId ?? null
+    const session = scopeCodebaseId
+      ? await this.first(
+          `select * from agent_sessions where codebase_id = ? and session_id = ? limit 1`,
+          [scopeCodebaseId, sessionId],
+        )
+      : await this.first(`select * from agent_sessions where session_id = ? limit 1`, [sessionId])
     if (!session) throw new Error(`Agent session ${sessionId} was not found.`)
     const sessionToken = stringOrNull(options.sessionToken) ?? this.config.agentSessionToken
     if (sessionToken) {
