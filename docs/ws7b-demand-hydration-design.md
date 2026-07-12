@@ -133,3 +133,106 @@ Product acceptance:
 - The dashboard can attach a workspace, open it, and hydrate a useful first working set without a full repo download.
 - Status distinguishes `metadata-only`, `partial`, and `materialized`.
 - The docs explicitly state that true read-triggered hydration is deferred until a native filesystem provider is chosen.
+
+## Implementation Notes (2026-07-12)
+
+This addendum records the as-built engine/CLI implementation of the recommended
+design and the open choices it resolved. The engine/CLI slice was already built
+under commit `5629767` ("Add open-time and intent-driven workspace hydration",
+2026-07-08); this pass verified it against the design and recorded the resolved
+choices below rather than rebuilding it. No new engine behavior was added.
+
+### Scope status: built vs. verified
+
+All eight numbered items of "Recommended Design" and all eight items of the
+"Fixture-Testable Acceptance Plan" are implemented and covered by passing tests:
+
+- Open path (`hop workspace open`) records `workspace.opened`, gates on a clean
+  journal plus clean content manifest, computes a bounded plan from
+  visibility-filtered graph metadata, and emits/persists
+  `workspace.open_hydration.applied` / `.partial` / `.skipped`. Code:
+  `packages/agent/src/commands/hydrate.js` (`openWorkspace`),
+  `packages/agent/src/commands/hydration-plan.js` (`buildOpenHydrationPlan`).
+- Prefix heuristics: `hop workspace hydrate-file --with-siblings` (same-folder
+  siblings) and `hop workspace hydrate-path --recursive` (containing subtree).
+- Explicit controls retained: `hydrate-file`, `hydrate-path`, `pin`/`unpin`,
+  `prune` (dry-run by default), `dehydrate --force`.
+- Status surfaces the last open result (`workspace.openHydration`: planned,
+  hydrated, skipped, blocked paths, bytes, budget reason) and distinguishes
+  `metadata-only` / `partial` / `materialized`.
+- Native filesystem-provider demand hydration remains documented as future
+  research (Option 4), not v1.
+
+Verification battery green on 2026-07-12: `typecheck:agent` clean, `agent:test`
+262, `test:worker` 23, `test:web` 47.
+
+### Resolved open choices
+
+Where the design left a choice open, the implementation resolved it to the
+simplest option consistent with the design's constraints:
+
+1. **Default budgets.** `--open-max-files` default 64, `--open-max-bytes` default
+   1,048,576 (1 MiB), `--open-small-file-bytes` default 64,000. Sibling plans:
+   `--sibling-max-files` default 8, `--sibling-max-bytes` default 128,000. All
+   overridable per invocation. Source: `packages/agent/src/constants.js`.
+2. **Plan priority order.** root-metadata → recently-changed active-change-set
+   files → pinned paths → small common-source files. Recency ordering
+   (`updatedAt`, then `revision`, then path) is applied only when the selected
+   state is an active change set.
+3. **Root-metadata allowlist ("high-signal" files).** `README*`,
+   `package.json` + JS/TS lockfiles, `tsconfig.json`/`jsconfig.json`, Python
+   (`pyproject.toml`, `requirements.txt`), Rust (`Cargo.toml`/`Cargo.lock`), Go
+   (`go.mod`/`go.sum`), Ruby (`Gemfile`/`Gemfile.lock`), PHP
+   (`composer.json`/`composer.lock`), Java (`pom.xml`, `build.gradle`,
+   `settings.gradle`), `Dockerfile`, `Makefile`, `.editorconfig`, `.gitignore`,
+   the common `eslint|prettier|vite|next|tailwind|postcss|rollup|webpack` config
+   files, and `.vscode/{settings,extensions,launch,tasks}.json`. Root-level only
+   (except the `.vscode/` editor-config set).
+4. **"Common source roots"** for the small-file group and the prefix/sibling
+   heuristic: `src`, `app`, `lib`, `components`, `pages`, `server`, `packages`,
+   `test`, `tests`.
+5. **Prefix/sibling scope.** `--with-siblings` hydrates only same-folder siblings
+   (one directory level, non-recursive) and only when the requested path is under
+   a common source root; otherwise it degrades to the single requested file.
+   Recursive subtree hydration is the explicit `hydrate-path --recursive` path.
+6. **Skip-refetch definition.** A planned path is skipped as
+   `already_hydrated_clean` when it is present on disk *and* matches the last
+   acknowledged content-manifest entry (kind/hash/size/scope/zone/target). No R2
+   object is re-read for clean hydrated files.
+7. **Blocked-path handling.** A missing client-encryption key leaves the
+   secret-zone path cloud-only, records it under `blockedPaths` with reason
+   `client_encryption_key_missing`, and reports the per-file `blocked` state plus
+   key health through status. Other blocked paths (missing object, fetch failure)
+   are independent and do not fail the whole open.
+8. **Automatic-open trigger and its rate limit — deferred.** `hop workspace open`
+   is an explicit command invoked by the CLI, the dashboard, or a service action;
+   it is not auto-fired on every editor restart. Because no automatic per-restart
+   trigger exists in v1, the design's "rate-limit automatic open hydration per
+   workspace" cost guardrail has no trigger to rate-limit and is deferred together
+   with editor-signal and FS-level triggers. The existing budgets, the
+   clean-journal/clean-manifest gate, and the skip-refetch path already bound
+   per-open cost.
+
+### Cloud-only vs. deletion safety (catastrophic failure mode)
+
+A partially hydrated workspace must never let a sync scan read unmaterialized
+cloud-only files as deletions. This is enforced structurally, not heuristically:
+`deletableCloudPathsForWorkspace` (`packages/agent/src/workspace-index.js`)
+returns the full visible set only when the workspace is `materialized`; for a
+`metadata-only` or `partial` workspace it returns **only paths in
+`hydratedPaths`**. A cloud-only file that was never hydrated is therefore never a
+deletion candidate, so its absence on disk can never be journaled as a delete.
+Proven by `metadata-only workspaces do not treat unhydrated missing files as
+deletes on sync` and `hydrate-file with siblings keeps unhydrated cloud-only
+files out of delete candidates on sync` in
+`packages/agent/test/agent-cli.test.js`. The independent empty-graph and
+mass-delete fail-closed guards (`refresh-mass-delete-guard.test.js`) remain in
+force as a second line of defense.
+
+### Follow-up (out of scope for this slice)
+
+Editor-specific signals (Option 2), a service-side automatic open trigger with
+its rate limit, dashboard/desktop open-hydration surfacing, and native
+filesystem-provider research (Option 4) remain follow-up work, consistent with
+the design's "improve open-time + prefix heuristics now, defer FS-level triggers"
+conclusion.
