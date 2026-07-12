@@ -40,6 +40,7 @@ function scopedStatementPolicy(normalizedSql, params, session) {
   else if (table === 'review_threads' || table === 'review_thread_comments' || table === 'review_decisions') baseCapability = 'review'
   const requiredCapability = (touchesAdminTable(normalizedSql) && !isOwnAgentSessionRead(normalizedSql, params, session))
     || codebaseMutationRequiresAdmin(normalizedSql, params, operation, table)
+    || settingsMutationRequiresAdmin(operation, table)
     ? 'admin'
     : baseCapability
 
@@ -128,6 +129,15 @@ function isOwnAgentSessionRead(sql, params, session) {
     return params[0] === session?.session_id
   }
   return false
+}
+
+// Per-codebase settings (trail-summaries opt-in, metadata/diff mode) are
+// codebase-level configuration — a privacy-posture change, not routine work
+// data — so mutations require admin, matching how non-guarded codebases-row
+// mutations are treated. Reads stay at read capability so agents can honor the
+// opt-in. Episode rows in trail_episodes remain ordinary write-capability data.
+function settingsMutationRequiresAdmin(operation, table) {
+  return table === 'codebase_settings' && operation !== 'select'
 }
 
 function codebaseMutationRequiresAdmin(normalizedSql, params, operation, table) {
@@ -245,6 +255,8 @@ const codebaseScopedTables = new Set([
   'codebase_keyrings',
   'wrapped_keys',
   'key_audit_events',
+  'trail_episodes',
+  'codebase_settings',
 ])
 
 const allowedGuardSubqueryPattern = /\(\s*select 1 from codebases where codebase_id = \? and revision = \? and updated_at = \?\s*\)/g

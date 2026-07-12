@@ -80,6 +80,23 @@ later slice; this slice is engine + CLI only.
   episode's sample paths and hard-capped at `HOPIT_SUMMARY_DIFF_MAX_CHARS`
   (default 8000), bounded again in the payload layer.
 
+### Worker scoped-session policy (post-launch fix, 2026-07-12)
+- The deployed worker's scoped-session statement policy
+  (`cloudflare/d1/scoped-sql.js`) initially did not recognize the new tables, so
+  `hop trail episodes` through a scoped session failed with "must be constrained
+  to its codebase". Both tables are now in `codebaseScopedTables`; every
+  statement the store issues binds `codebase_id` (reads in WHERE, upserts as a
+  bound column with `codebase_id` in the conflict target), and cross-codebase or
+  unscoped shapes stay rejected.
+- Capabilities: **reads on both tables need `read`**; **`trail_episodes` writes
+  need `write`** (derived work data, like `agent_events`); **`codebase_settings`
+  writes need `admin`** — flipping summarization on or switching to diff mode is
+  a codebase-wide privacy-posture change, treated like the policy's other
+  codebase-level mutations. Consequence: `hop trail summaries on|off` through a
+  scoped session requires an admin-capable session (or the owner D1 API token);
+  the default `read,write,sync,watch` session can list and summarize but not
+  flip the opt-in.
+
 ### Reliability
 - Transient errors retried via the existing `cloud-retry.js`
   (`withCloudFetchRetry`); 4xx (auth/validation) fail fast, 429/5xx retry.

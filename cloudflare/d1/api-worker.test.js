@@ -292,6 +292,113 @@ test('write-only scoped session cannot revoke another agent session', () => {
   )
 })
 
+// The exact statement shapes @hopit/backend-d1 episodes-store.js issues for
+// trail summaries. Kept verbatim so a drive-by SQL change over there fails
+// here before it fails on the deployed worker (the trail_episodes launch bug).
+const trailEpisodeSelectSql = 'select * from trail_episodes where codebase_id = ? order by from_revision asc'
+const codebaseSettingsSelectSql = 'select * from codebase_settings where codebase_id = ? limit 1'
+const trailEpisodeUpsertSql = `insert into trail_episodes (
+  codebase_id, episode_id, from_revision, to_revision, device,
+  started_at, ended_at, step_count, changed_path_count, sample_paths_json,
+  label, label_model, label_mode, created_at, updated_at
+) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+on conflict(codebase_id, episode_id) do update set
+  from_revision = excluded.from_revision,
+  to_revision = excluded.to_revision,
+  device = excluded.device,
+  started_at = excluded.started_at,
+  ended_at = excluded.ended_at,
+  step_count = excluded.step_count,
+  changed_path_count = excluded.changed_path_count,
+  sample_paths_json = excluded.sample_paths_json,
+  label = excluded.label,
+  label_model = excluded.label_model,
+  label_mode = excluded.label_mode,
+  updated_at = excluded.updated_at`
+const codebaseSettingsUpsertSql = `insert into codebase_settings (
+  codebase_id, trail_summaries_enabled, trail_summaries_mode, created_at, updated_at
+) values (?, ?, ?, ?, ?)
+on conflict(codebase_id) do update set
+  trail_summaries_enabled = excluded.trail_summaries_enabled,
+  trail_summaries_mode = excluded.trail_summaries_mode,
+  updated_at = excluded.updated_at`
+
+function trailEpisodeUpsertParams(codebaseId) {
+  return [codebaseId, 'ep_1_3', 1, 3, 'Laptop', 'now', 'now', 3, 2, '["src/a.js"]', 'label', 'stub', 'metadata', 'now', 'now']
+}
+
+test('scoped SQL policy accepts codebase-scoped trail-episode reads and writes', () => {
+  const session = scopedSession()
+  const accepted = [
+    { sql: trailEpisodeSelectSql, params: ['codebase-1'] },
+    { sql: trailEpisodeUpsertSql, params: trailEpisodeUpsertParams('codebase-1') },
+    { sql: codebaseSettingsSelectSql, params: ['codebase-1'] },
+    { sql: codebaseSettingsUpsertSql, params: ['codebase-1', 1, 'metadata', 'now', 'now'] },
+  ]
+  for (const statement of accepted) {
+    assert.doesNotThrow(() => assertScopedSessionStatementAllowed(session, statement), statement.sql)
+  }
+
+  // The launch failure: `hop trail episodes` only needs read capability.
+  const readOnly = scopedSession({ capabilities_json: JSON.stringify(['read']) })
+  assert.doesNotThrow(() => assertScopedSessionStatementAllowed(readOnly, { sql: trailEpisodeSelectSql, params: ['codebase-1'] }))
+  assert.doesNotThrow(() => assertScopedSessionStatementAllowed(readOnly, { sql: codebaseSettingsSelectSql, params: ['codebase-1'] }))
+
+  // Episode labels are ordinary work data: write capability suffices.
+  const writer = scopedSession({ capabilities_json: JSON.stringify(['read', 'write']) })
+  assert.doesNotThrow(() => assertScopedSessionStatementAllowed(writer, { sql: trailEpisodeUpsertSql, params: trailEpisodeUpsertParams('codebase-1') }))
+})
+
+test('scoped SQL policy rejects cross-codebase and unscoped trail statements', () => {
+  const session = scopedSession()
+  const rejected = [
+    { name: 'cross-codebase episode read', sql: trailEpisodeSelectSql, params: ['codebase-2'] },
+    { name: 'cross-codebase episode upsert', sql: trailEpisodeUpsertSql, params: trailEpisodeUpsertParams('codebase-2') },
+    { name: 'cross-codebase settings read', sql: codebaseSettingsSelectSql, params: ['codebase-2'] },
+    { name: 'cross-codebase settings upsert', sql: codebaseSettingsUpsertSql, params: ['codebase-2', 1, 'diff', 'now', 'now'] },
+    { name: 'unscoped episode read', sql: 'select * from trail_episodes', params: [] },
+    { name: 'unscoped episode delete', sql: 'delete from trail_episodes where episode_id = ?', params: ['ep_1_3'] },
+    { name: 'unscoped settings read', sql: 'select * from codebase_settings', params: [] },
+    { name: 'unscoped settings update', sql: 'update codebase_settings set trail_summaries_enabled = ? where trail_summaries_mode = ?', params: [1, 'metadata'] },
+    {
+      name: 'settings conflict target without codebase scope',
+      sql: 'insert into codebase_settings (codebase_id, trail_summaries_enabled, trail_summaries_mode, created_at, updated_at) values (?, ?, ?, ?, ?) on conflict(trail_summaries_mode) do update set updated_at = excluded.updated_at',
+      params: ['codebase-1', 1, 'metadata', 'now', 'now'],
+    },
+  ]
+  for (const statement of rejected) {
+    assert.throws(
+      () => assertScopedSessionStatementAllowed(session, statement),
+      /Scoped agent session/,
+      statement.name,
+    )
+  }
+})
+
+test('codebase_settings writes require admin capability; write-only sessions are refused', () => {
+  const writer = scopedSession({ capabilities_json: JSON.stringify(['read', 'write']) })
+  assert.throws(
+    () => assertScopedSessionStatementAllowed(writer, {
+      sql: codebaseSettingsUpsertSql,
+      params: ['codebase-1', 1, 'diff', 'now', 'now'],
+    }),
+    /admin capability/,
+  )
+  assert.throws(
+    () => assertScopedSessionStatementAllowed(writer, {
+      sql: 'update codebase_settings set trail_summaries_enabled = ?, updated_at = ? where codebase_id = ?',
+      params: [1, 'now', 'codebase-1'],
+    }),
+    /admin capability/,
+  )
+
+  const admin = scopedSession({ capabilities_json: JSON.stringify(['read', 'write', 'admin']) })
+  assert.doesNotThrow(() => assertScopedSessionStatementAllowed(admin, {
+    sql: codebaseSettingsUpsertSql,
+    params: ['codebase-1', 1, 'diff', 'now', 'now'],
+  }))
+})
+
 test('guarded journal head policy preserves Main and selected-state security fields', () => {
   const session = scopedSession({ capabilities_json: JSON.stringify(['write']) })
   const previousSelected = { type: 'active-change-set', id: 'cs_1', revision: 1, effectiveVisibility: 'private', mergeState: 'unmerged' }
