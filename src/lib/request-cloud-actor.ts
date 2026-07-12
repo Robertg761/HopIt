@@ -1,5 +1,6 @@
 import { auth, currentUser } from '@clerk/nextjs/server'
 
+import { agentSessionTokenFromHeaders } from '@/lib/agent-session-token'
 import { hasValidBasicAuthFallbackCredentials } from '@/lib/basic-auth-fallback'
 import { configuredCloudBackend } from '@/lib/cloud-backend'
 import { createD1Backend } from '@hopit/backend-d1'
@@ -41,14 +42,4 @@ export async function cloudActorFromRequest(
     avatarUrl: user?.imageUrl ?? null,
     currentAuthEmailVerified: user?.primaryEmailAddress?.verification?.status === 'verified',
   }
-}
-
-function agentSessionTokenFromHeaders(headers: Headers) {
-  const explicit = headers.get('x-hopit-agent-session-token')?.trim()
-  if (explicit?.startsWith('hst_')) return explicit
-
-  const authorization = headers.get('authorization')?.trim()
-  const match = authorization?.match(/^Bearer\s+(.+)$/i)
-  const token = match?.[1]?.trim()
-  return token?.startsWith('hst_') ? token : null
 }

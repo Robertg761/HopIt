@@ -1,6 +1,7 @@
 import { clerkMiddleware, createRouteMatcher } from '@clerk/nextjs/server'
 import type { NextFetchEvent, NextRequest } from 'next/server'
 import { NextResponse } from 'next/server'
+import { shouldBypassClerkForAgentToken } from '@/lib/agent-session-token'
 import {
   isClerkServerConfigured,
   isHostedRuntime,
@@ -35,6 +36,18 @@ export function proxy(request: NextRequest, event: NextFetchEvent) {
     if (hasValidBasicAuthFallbackCredentials(request.headers)) {
       return NextResponse.next()
     }
+    // Agent session tokens ("hst_"-prefixed) are explicit credentials for the
+    // /api surface. Step aside so the request reaches its route handler, where
+    // cloudActorFromRequest performs the REAL validation (lookup / revocation /
+    // expiry / codebase scope) and returns a JSON 4xx envelope on failure —
+    // never a sign-in redirect. The middleware only recognizes the token shape;
+    // it does NOT validate it (no D1 access in the edge runtime). This is scoped
+    // to /api only, so pages keep full Clerk protection even with an hst_ header.
+    // Precedence: for /api, an agent token wins over an ambient Clerk cookie —
+    // explicit credentials beat ambient ones, and cloudActorFromRequest reads
+    // the agent token before falling back to the Clerk session, so the outcome
+    // is deterministic.
+    if (shouldBypassClerkForAgentToken(request)) return NextResponse.next()
     return clerkProxy(request, event)
   }
 
