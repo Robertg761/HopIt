@@ -196,6 +196,95 @@ At $7/mo this user is **gross-margin negative**, and note **D1 writes ($5.00) ex
 
 ---
 
+## Implementation notes — journal write coalescing (2026-07-12)
+
+Shipped the §4.c mitigation "batch/coalesce journal writes." Two changes in the
+local agent's watch/sync pipeline; no durability change, no worker/dashboard/schema
+change. Row counts below are counted from the D1 statement paths
+(`packages/backend-d1/src/graph.js` `commitJournalEntry` / `commitJournalEntryChunk`,
+plus one `agent_events` insert per emitted event in `packages/agent/src/io.js`) and
+corroborated by fixture-backed tests in `packages/agent/test/sync-coalescing.test.js`
+(observed cloud revisions, `sync.complete`, and `cloud.acknowledged` counts).
+
+**Measured D1 write amplification, end to end (rows *written*).** Reads
+(readGraph, push-notify head/changed-file lookups) are excluded — writes are the
+$1.00/M meter.
+
+*One save of one file* — `codebases` head update + `files` upsert + `file_versions`
+insert = **3 graph rows**, in one guarded batch (one HTTP round trip). Plus one
+`agent_events` row per emitted event — `sync.started`, `write.journaled`,
+`cloud.acknowledged`, `sync.complete` = **4 event rows**. **Total 7 rows / save**
+(4 event inserts are 4 separate round trips). Single-file cost is unchanged by
+this work — coalescing changes how *many* saves become a commit, not the per-commit
+cost.
+
+*Burst of N=10 saves of the same path within seconds* (spaced wider than the old
+250 ms micro-debounce, i.e. a normal human editing cadence):
+
+| | cloud revisions | D1 rows written |
+|---|---|---|
+| **Before** (250 ms debounce, no coalescing) | 10 | 10 × 7 = **70** |
+| **After** (2000 ms window, 5000 ms cap) | 1–2 | **7–14** |
+
+A same-path burst that settles inside the 5 s cap collapses to **one** revision =
+**7 rows** — a **10×** cut (test: `same-path save burst coalesces into one cloud
+revision with the final content` asserts exactly one revision bump, one
+`sync.complete`, one journal entry carrying the *final* content). A burst that runs
+longer than the cap flushes at most every 5 s, so a continuously-typed minute is a
+handful of revisions, not one per save. `HOPIT_SYNC_DEBOUNCE_MS=0` restores the
+old 70-row / 10-revision behavior exactly.
+
+*Burst of M=10 saves to distinct paths coalesced into one sync* — the second
+change batches a multi-file commit into a single guarded round trip:
+
+| | head-row writes | graph rows | event rows | round trips |
+|---|---|---|---|---|
+| **Before** (per-file commit loop) | 10 | 3×10 = 30 | 22 | 10 |
+| **After** (one batched commit) | **1** | 2×10+1 = 21 | 13 | **1** |
+
+~35% fewer rows and 10× fewer round trips for a 10-file coalesced sync; the win is
+the collapse of N `codebases` head-row writes into one (test: `distinct-path save
+burst still commits every file in one coalesced sync` asserts all files land, one
+`sync.bulk_commit`, one `sync.complete`).
+
+**What changed vs. what was already adequate.**
+- *Already adequate:* the watch scheduler already coalesced sub-250 ms filesystem
+  event storms into one sync pass, and the bulk-commit path already batched large
+  backlogs (>40 entries) into one round trip per 40-entry chunk with a guarded
+  compare-and-swap. Reads already fetch only codebase head metadata before a full
+  graph read.
+- *(a) Save coalescing:* `createWatchSyncScheduler` now uses an env-tunable quiet
+  window (default 2000 ms) with a hard delay cap (default 5000 ms from the first
+  unsynced change) so rapid same-path saves collapse into one journaled write
+  carrying the final content, while a never-idle editor still flushes within the
+  cap. Flushes immediately once saves stop (after the quiet window).
+- *(b) Multi-file batching:* lowered `bulkJournalCommitThreshold` from 20 to 1 so
+  any 2+ entry commit (sync or recovery) uses the existing guarded batch — one
+  `codebases` head-row write and one HTTP round trip instead of one per file.
+  Single-file commits stay on the direct path (identical row count, no bulk
+  summary event). The batch shape (exactly one guarded head + one guarded
+  file/version op per path) already satisfies the worker's scoped-session
+  statement policy (`assertScopedMutationBatch`), so no worker change was needed.
+
+**Durability is unchanged.** Nothing is journaled or sent to the cloud during the
+coalescing window — the edit lives only on disk until flush. A crash mid-window
+therefore loses at most the window's uncommitted keystrokes *from the cloud*; the
+file on disk is untouched and is journaled + committed by the next scan on restart
+(recovery runs first, then the sync pass picks up the on-disk change). Proven by
+`a crash mid-window loses nothing on disk: the edit is journaled on the next scan`.
+
+**Env knobs** (also `--sync-debounce-ms` / `--sync-max-delay-ms`; forwarded across
+service restart):
+- `HOPIT_SYNC_DEBOUNCE_MS` — coalescing quiet window in ms. Default `2000`. `0`
+  disables coalescing and the delay cap (legacy 250 ms micro-debounce).
+- `HOPIT_SYNC_MAX_DELAY_MS` — hard cap on how long the first unsynced change is
+  held. Default `5000`; clamped to be ≥ the debounce window.
+
+**Test/suite counts after this work:** agent `267` (was 262; +5 in
+`sync-coalescing.test.js`), worker `23`, web `47`, `typecheck:agent` clean.
+
+---
+
 ## Sources (accessed 2026-07-11)
 
 - Cloudflare R2 Pricing — https://developers.cloudflare.com/r2/pricing/

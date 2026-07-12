@@ -63,8 +63,26 @@ export const defaultOpenHydrationMaxBytes = 1_048_576
 export const defaultOpenHydrationSmallFileBytes = 64_000
 export const defaultSiblingHydrationMaxFiles = 8
 export const defaultSiblingHydrationMaxBytes = 128_000
-export const bulkJournalCommitThreshold = 20
+// Any commit of 2+ journal entries is batched into a single guarded D1 round
+// trip (one codebases head-row write + one files/file_versions row per path)
+// instead of one round trip and one head-row write per file. A coalesced
+// multi-file save therefore writes one head row, not N. Single-file commits stay
+// on the direct path (no bulk-commit summary event, identical row count).
+export const bulkJournalCommitThreshold = 1
 export const bulkJournalCommitChunkSize = 40
+// Watch-loop save coalescing. Rapid successive saves of the same path collapse
+// into a single journaled write carrying the final content, so a keystroke-heavy
+// editing session commits far fewer cloud revisions (each revision fans out into
+// codebases + files + file_versions + agent_events D1 row writes at $1.00/M).
+//   - defaultSyncDebounceMs: quiet-window before a coalesced sync flushes.
+//   - defaultSyncMaxDelayMs: hard cap on how long the first unsynced change may
+//     be held, so the invisible-sync promise (seconds, not minutes) still holds
+//     while someone types continuously.
+//   - legacySyncDebounceMs: the pre-coalescing micro-debounce; HOPIT_SYNC_DEBOUNCE_MS=0
+//     restores exactly this behavior (no coalescing, no delay cap).
+export const defaultSyncDebounceMs = 2000
+export const defaultSyncMaxDelayMs = 5000
+export const legacySyncDebounceMs = 250
 // Refresh deletion safety: refresh materialization deletes every workspace file
 // absent from the visible cloud graph. A visibility misconfiguration (session id
 // without a requester id reads the cloud as a guest and sees zero files) can turn

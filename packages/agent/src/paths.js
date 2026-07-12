@@ -1,7 +1,7 @@
 // @ts-check
 import os from 'node:os'
 import path from 'node:path'
-import { cloudServiceType } from './constants.js'
+import { cloudServiceType, defaultSyncDebounceMs, defaultSyncMaxDelayMs } from './constants.js'
 import { shouldUseD1Backend } from './io.js'
 import { defaultWorkspaceRoot } from './options.js'
 import { isPathInside, pathsOverlap } from './workspace-manifest.js'
@@ -40,6 +40,32 @@ export function remoteRefreshIntervalMs(options) {
     throw new Error(`Invalid ${optionName} value: ${rawValue}`)
   }
   return value
+}
+
+// Resolve the watch-loop coalescing window. 0 disables coalescing (restoring the
+// legacy micro-debounce). Invalid/negative values are rejected so a bad env var
+// can never silently change behavior.
+export function syncDebounceMs(options) {
+  const raw = options['sync-debounce-ms']
+  if (raw === undefined || raw === null || raw === '') return defaultSyncDebounceMs
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`Invalid --sync-debounce-ms value: ${raw}. Use an integer >= 0 (0 disables coalescing).`)
+  }
+  return value
+}
+
+// Resolve the hard delay cap for a coalesced burst. The cap can never be shorter
+// than the debounce window, or a change could be force-flushed before the quiet
+// window even elapses.
+export function syncMaxDelayMs(options, debounceMs = syncDebounceMs(options)) {
+  const raw = options['sync-max-delay-ms']
+  if (raw === undefined || raw === null || raw === '') return Math.max(defaultSyncMaxDelayMs, debounceMs)
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`Invalid --sync-max-delay-ms value: ${raw}. Use an integer >= 0.`)
+  }
+  return Math.max(value, debounceMs)
 }
 
 export function isTruthyEnv(value) {

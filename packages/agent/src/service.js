@@ -446,6 +446,12 @@ export function runtimeArgsFromOptions(options) {
   } else if (options['remote-refresh-interval-ms']) {
     args.push('--remote-refresh-interval-ms', options['remote-refresh-interval-ms'])
   }
+  if (options['sync-debounce-ms'] !== undefined && options['sync-debounce-ms'] !== '') {
+    args.push('--sync-debounce-ms', String(options['sync-debounce-ms']))
+  }
+  if (options['sync-max-delay-ms'] !== undefined && options['sync-max-delay-ms'] !== '') {
+    args.push('--sync-max-delay-ms', String(options['sync-max-delay-ms']))
+  }
   if (options['allow-local-cloud']) {
     args.push('--allow-local-cloud')
   }

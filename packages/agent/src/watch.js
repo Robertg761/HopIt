@@ -5,12 +5,12 @@ import { createCloudGraphService, visibilityRequestFromOptions } from './cloud/d
 import { hydrateWorkspace, pruneWorkspaceCache } from './commands/hydrate.js'
 import { initCloud } from './commands/import.js'
 import { recoverJournal, refreshWorkspace, syncOnce } from './commands/sync.js'
-import { workspaceMode } from './constants.js'
+import { legacySyncDebounceMs, workspaceMode } from './constants.js'
 import { emit, findLastEventOf, readNdjson } from './io.js'
 import { withCloudFetchRetry } from './cloud-retry.js'
 import { createRemotePushClient } from './remote-push.js'
 import { toCloudPath } from './journal.js'
-import { assertWorkspacePathSafe, remotePullEnabled, remotePushEnabled, remoteRefreshIntervalMs } from './paths.js'
+import { assertWorkspacePathSafe, remotePullEnabled, remotePushEnabled, remoteRefreshIntervalMs, syncDebounceMs, syncMaxDelayMs } from './paths.js'
 import { normalizeWatchFilename, readJournalSafety, visibleRevisionFromEvent } from './status-state.js'
 import { findIndexedCodebase, readWorkspaceIndex } from './workspace-index.js'
 import { exonerateWorkspaceChangesAgainstCloud, isLocalActivityMarkerPath, shouldSkipWorkspacePath, shouldTrackLocalActivityPath, workspaceLocalChanges } from './workspace-manifest.js'
@@ -124,6 +124,7 @@ export async function watchWorkspace(options) {
       } catch {
         // Watchers may already be closed by an error handler.
       }
+      scheduleSync.cancel?.()
       poller?.close()
       remotePuller?.close()
       remotePusher?.close()
@@ -229,13 +230,35 @@ export function parseAutoPruneMs(rawValue, fallback, optionName) {
 }
 
 export function createWatchSyncScheduler(options, schedulerOptions = {}) {
-  const debounceMs = schedulerOptions.debounceMs ?? 250
-  let timer = null
+  // Coalescing window. HOPIT_SYNC_DEBOUNCE_MS (or --sync-debounce-ms) tunes how
+  // long rapid successive saves are collapsed before a single journaled sync;
+  // 0 disables coalescing and restores the legacy micro-debounce with no cap.
+  const debounceMs = schedulerOptions.debounceMs ?? syncDebounceMs(options)
+  const coalescingEnabled = debounceMs > 0
+  const waitMs = coalescingEnabled ? debounceMs : legacySyncDebounceMs
+  // The delay cap bounds how long the first unsynced change is held so a user
+  // who never stops typing still syncs within seconds. Disabled when coalescing
+  // is off (legacy behavior never capped a change).
+  const maxDelayMs = coalescingEnabled
+    ? (schedulerOptions.maxDelayMs ?? syncMaxDelayMs(options, debounceMs))
+    : null
+  const runSync = schedulerOptions.syncOnce ?? syncOnce
+  const now = schedulerOptions.now ?? (() => Date.now())
+
+  let waitTimer = null
+  let capTimer = null
   let running = false
   let queued = false
   let queuedEvents = 0
   let queuedSyncEvents = 0
   let lastEvent = null
+  let windowStartedAt = null
+
+  const clearCap = () => {
+    if (capTimer) clearTimeout(capTimer)
+    capTimer = null
+    windowStartedAt = null
+  }
 
   const drain = async () => {
     if (running) return
@@ -250,10 +273,13 @@ export function createWatchSyncScheduler(options, schedulerOptions = {}) {
         queuedEvents = 0
         queuedSyncEvents = 0
         lastEvent = null
+        // A change that arrives during the drain starts a fresh coalescing
+        // window, so retire the current cap now that we are committing.
+        clearCap()
 
         if (syncableEvents > 0) {
           try {
-            await syncOnce(options, {
+            await runSync(options, {
               trigger: 'watch',
               coalescedEvents,
               eventType: triggeringEvent?.eventType ?? null,
@@ -282,6 +308,15 @@ export function createWatchSyncScheduler(options, schedulerOptions = {}) {
     }
   }
 
+  const flush = () => {
+    if (waitTimer) clearTimeout(waitTimer)
+    waitTimer = null
+    clearCap()
+    drain().catch((error) => {
+      console.error(error)
+    })
+  }
+
   const schedule = (eventType, filename) => {
     queued = true
     queuedEvents += 1
@@ -293,16 +328,38 @@ export function createWatchSyncScheduler(options, schedulerOptions = {}) {
       path: filename,
     }
 
-    clearTimeout(timer)
-    timer = setTimeout(() => {
-      timer = null
-      drain().catch((error) => {
-        console.error(error)
-      })
-    }, debounceMs)
+    // Reset the quiet-window timer on every save so a tight burst collapses into
+    // one flush once activity settles.
+    clearTimeout(waitTimer)
+    waitTimer = setTimeout(() => {
+      waitTimer = null
+      flush()
+    }, waitMs)
+
+    // Arm the hard delay cap from the first change in this window. It is not
+    // reset by later saves, so a continuous editing stream still flushes by the
+    // cap and never starves the invisible-sync promise.
+    if (coalescingEnabled) {
+      if (windowStartedAt === null) windowStartedAt = now()
+      if (capTimer === null) {
+        const capRemaining = Math.max(0, maxDelayMs - (now() - windowStartedAt))
+        capTimer = setTimeout(() => {
+          capTimer = null
+          windowStartedAt = null
+          flush()
+        }, capRemaining)
+      }
+    }
   }
 
-  schedule.isIdle = () => !running && !queued && timer === null
+  schedule.isIdle = () => !running && !queued && waitTimer === null && capTimer === null
+  // Drop any armed window without flushing. Used on shutdown so a pending
+  // coalescing window does not fire a stray sync after the watcher is closed.
+  schedule.cancel = () => {
+    if (waitTimer) clearTimeout(waitTimer)
+    waitTimer = null
+    clearCap()
+  }
   return schedule
 }
 

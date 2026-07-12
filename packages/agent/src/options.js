@@ -163,6 +163,12 @@ export function applyRuntimeDefaults(options, provided) {
   if (!providedRemotePullCooldown && !process.env.HOPIT_REMOTE_PULL_COOLDOWN_MS && process.env.HOPIT_REMOTE_REFRESH_INTERVAL_MS) {
     options['remote-refresh-interval-ms'] = process.env.HOPIT_REMOTE_REFRESH_INTERVAL_MS
   }
+  if (!provided.has('sync-debounce-ms') && process.env.HOPIT_SYNC_DEBOUNCE_MS) {
+    options['sync-debounce-ms'] = process.env.HOPIT_SYNC_DEBOUNCE_MS
+  }
+  if (!provided.has('sync-max-delay-ms') && process.env.HOPIT_SYNC_MAX_DELAY_MS) {
+    options['sync-max-delay-ms'] = process.env.HOPIT_SYNC_MAX_DELAY_MS
+  }
   if (!provided.has('session-id') && process.env.HOPIT_SESSION_ID) {
     options['session-id'] = process.env.HOPIT_SESSION_ID
   }
