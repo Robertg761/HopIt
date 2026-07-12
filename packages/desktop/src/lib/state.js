@@ -78,6 +78,30 @@ export function trayStateLabel(trayState) {
   }
 }
 
+/**
+ * Human phrase for the agent's sync-health state, for the "Last sync" card
+ * subtitle. The agent emits one of `idle | syncing | healthy | failed`
+ * (see buildSyncHealth in status-state.js). Returns null for an unknown or
+ * missing state so the caller can omit the subtitle rather than print a raw
+ * state word ("sync syncing").
+ * @param {string|null|undefined} syncState
+ * @returns {string|null}
+ */
+export function syncStateLabel(syncState) {
+  switch (syncState) {
+    case 'syncing':
+      return 'syncing now'
+    case 'healthy':
+      return 'up to date'
+    case 'idle':
+      return 'waiting for changes'
+    case 'failed':
+      return 'last sync failed'
+    default:
+      return null
+  }
+}
+
 /** One-line status label for a single project (tray submenu / list). */
 export function projectStateLabel(projectState) {
   switch (projectState) {
@@ -121,6 +145,32 @@ export function deriveViewModel(probes) {
   })
   const trayState = aggregateTrayState(projects.map((project) => project.state))
   return { trayState, label: trayStateLabel(trayState), projects }
+}
+
+/**
+ * Decide whether a freshly polled project list should clear the current
+ * selection. The workspace index file can be caught mid-rewrite, yielding a
+ * momentarily-empty (or incomplete) list; a single such poll must NOT deselect
+ * the user's project and drop them back to the empty view. The selection is only
+ * cleared once its project stays absent for `threshold` consecutive polls.
+ *
+ * Pure and self-contained so the sticky-selection behaviour is unit-tested
+ * rather than living implicitly in the renderer's poll handler.
+ *
+ * @param {Object} input
+ * @param {string|null} input.selectedId  currently selected codebase id
+ * @param {Array<{codebaseId: string}>} input.projects  projects from the new poll
+ * @param {number} input.missStreak  consecutive polls the selection has been absent
+ * @param {number} [input.threshold=2]  polls of absence tolerated before clearing
+ * @returns {{ selectedId: string|null, missStreak: number }}
+ */
+export function reconcileSelection({ selectedId, projects, missStreak, threshold = 2 }) {
+  if (!selectedId) return { selectedId: null, missStreak: 0 }
+  const present = (projects ?? []).some((project) => project.codebaseId === selectedId)
+  if (present) return { selectedId, missStreak: 0 }
+  const nextStreak = Number(missStreak ?? 0) + 1
+  if (nextStreak >= threshold) return { selectedId: null, missStreak: 0 }
+  return { selectedId, missStreak: nextStreak }
 }
 
 /** One-line summary text for a project, e.g. "HopIt — Synced · rev 4437". */

@@ -6,6 +6,8 @@
 /* global hopit */
 'use strict'
 
+import { reconcileSelection, syncStateLabel } from '../lib/state.js'
+
 const $ = (id) => document.getElementById(id)
 
 const state = {
@@ -15,6 +17,7 @@ const state = {
   workspaceRoot: null,
   hopAvailable: true,
   selectedId: null,
+  selectionMissStreak: 0, // consecutive polls the selection was absent (sticky-selection guard)
   view: 'empty', // empty | project | add
   tab: 'now',
   filesSubpath: '',
@@ -219,7 +222,7 @@ async function renderNow(codebaseId) {
   const pending = status.journal?.pendingCount ?? 0
   const failed = status.journal?.failedCount ?? 0
   grid.appendChild(statCard('Waiting to sync', String(pending), failed ? `${failed} failed — needs attention` : 'local changes not yet in cloud'))
-  grid.appendChild(statCard('Last sync', timeAgo(status.lastSyncAt), status.sync?.state ? `sync ${status.sync.state}` : undefined))
+  grid.appendChild(statCard('Last sync', timeAgo(status.lastSyncAt), syncStateLabel(status.sync?.state) ?? undefined))
   if (status.cache) {
     grid.appendChild(statCard('On this Mac', `${status.cache.hydratedFiles ?? '—'} files`, formatBytes(status.cache.bytesOnDisk)))
   }
@@ -334,8 +337,12 @@ async function renderActivity(codebaseId) {
 // ---------------------------------------------------------------------------
 
 async function renderFiles(codebaseId) {
-  const result = await hopit.projectFiles(codebaseId, state.filesSubpath)
-  if (codebaseId !== state.selectedId || state.tab !== 'files') return
+  // Capture the folder this request is for. Fast folder clicks can resolve out of
+  // order; without pinning the subpath, a stale listing could be painted under
+  // breadcrumbs built from a newer folder (listing for one folder, crumbs for another).
+  const subpath = state.filesSubpath
+  const result = await hopit.projectFiles(codebaseId, subpath)
+  if (codebaseId !== state.selectedId || state.tab !== 'files' || subpath !== state.filesSubpath) return
   const panel = $('panel-files')
   panel.textContent = ''
 
@@ -558,10 +565,20 @@ function applyState(payload) {
   state.workspaceRoot = payload.workspaceRoot ?? state.workspaceRoot
   state.hopAvailable = Boolean(payload.hopAvailable)
 
-  if (state.selectedId && !state.projects.some((p) => p.codebaseId === state.selectedId)) {
-    state.selectedId = null
-  }
-  if (state.projects.length === 0 && state.view === 'project') showView('empty')
+  // Keep the selection sticky across a transient empty/incomplete poll (the
+  // workspace index file caught mid-rewrite): only clear after the project stays
+  // absent for 2+ consecutive polls. This also avoids resetting filesSubpath on a
+  // blip, since selectProject() (which clears it) is not re-run while sticky.
+  const reconciled = reconcileSelection({
+    selectedId: state.selectedId,
+    projects: state.projects,
+    missStreak: state.selectionMissStreak,
+  })
+  state.selectedId = reconciled.selectedId
+  state.selectionMissStreak = reconciled.missStreak
+  // Only fall back to the empty view once the selection has actually been cleared,
+  // not on a momentary empty poll while a selection is still held.
+  if (state.projects.length === 0 && !state.selectedId && state.view === 'project') showView('empty')
 
   renderSidebar()
   if (state.view === 'project') renderProjectHeader()

@@ -170,6 +170,7 @@ export async function runAdd(options, inject = {}) {
     authBaseUrl: options['auth-base-url'] ?? process.env.HOPIT_AUTH_BASE_URL ?? defaultDeviceAuthorizationBaseUrl,
     requestedCodebaseId,
     requestedCodebaseName: codebaseName,
+    commandName: 'hop add',
   })
   const approvedCodebaseId = assertSafeConnectionCodebaseId(connection.codebaseId)
 

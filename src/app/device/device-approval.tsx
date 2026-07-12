@@ -142,8 +142,12 @@ export function DeviceApproval({
         <div className="flex items-start gap-3 rounded-xl border border-[#eed49b] bg-[#fffaf0] p-4 text-[#7d4e00]">
           <Clock3 className="mt-0.5 size-5 shrink-0" aria-hidden="true" />
           <div>
-            <p className="text-sm font-semibold">Authorization {status}</p>
-            <p className="mt-1 text-xs leading-5">Return to your terminal and run hop setup again.</p>
+            <p className="text-sm font-semibold">This authorization is {status}</p>
+            <p className="mt-1 text-xs leading-5">
+              Links are single-use and expire about 10 minutes after they are created. If you re-ran hop setup or hop add,
+              a newer tab was opened — close this one and use the most recent tab, or run the command again in your
+              terminal to get a fresh link.
+            </p>
           </div>
         </div>
       </div>

@@ -9,6 +9,8 @@ import {
   aggregateTrayState,
   deriveViewModel,
   projectSummaryLine,
+  syncStateLabel,
+  reconcileSelection,
 } from '../src/lib/state.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -103,6 +105,57 @@ test('deriveViewModel maps the real status into project rows', () => {
   assert.equal(hopit.hydrationState, 'materialized')
   assert.equal(lunarlog.state, 'stopped')
   assert.equal(lunarlog.error, 'connection refused')
+})
+
+test('syncStateLabel maps agent sync states to human phrases', () => {
+  assert.equal(syncStateLabel('syncing'), 'syncing now')
+  assert.equal(syncStateLabel('healthy'), 'up to date')
+  assert.equal(syncStateLabel('idle'), 'waiting for changes')
+  assert.equal(syncStateLabel('failed'), 'last sync failed')
+})
+
+test('syncStateLabel returns null for unknown or missing states', () => {
+  assert.equal(syncStateLabel(undefined), null)
+  assert.equal(syncStateLabel(null), null)
+  assert.equal(syncStateLabel('sync'), null)
+  assert.equal(syncStateLabel('running'), null)
+})
+
+test('reconcileSelection keeps a present selection and resets the streak', () => {
+  const out = reconcileSelection({
+    selectedId: 'hopit',
+    projects: [{ codebaseId: 'hopit' }, { codebaseId: 'lunarlog' }],
+    missStreak: 1,
+  })
+  assert.deepEqual(out, { selectedId: 'hopit', missStreak: 0 })
+})
+
+test('reconcileSelection is a no-op with no selection', () => {
+  assert.deepEqual(reconcileSelection({ selectedId: null, projects: [], missStreak: 3 }), {
+    selectedId: null,
+    missStreak: 0,
+  })
+})
+
+test('reconcileSelection holds selection through a single transient empty poll', () => {
+  const out = reconcileSelection({ selectedId: 'hopit', projects: [], missStreak: 0 })
+  assert.deepEqual(out, { selectedId: 'hopit', missStreak: 1 })
+})
+
+test('reconcileSelection clears selection after 2 consecutive absent polls', () => {
+  const first = reconcileSelection({ selectedId: 'hopit', projects: [], missStreak: 0 })
+  const second = reconcileSelection({ selectedId: 'hopit', projects: [], missStreak: first.missStreak })
+  assert.deepEqual(second, { selectedId: null, missStreak: 0 })
+})
+
+test('reconcileSelection recovers if the project reappears before the threshold', () => {
+  const first = reconcileSelection({ selectedId: 'hopit', projects: [], missStreak: 0 })
+  const recovered = reconcileSelection({
+    selectedId: 'hopit',
+    projects: [{ codebaseId: 'hopit' }],
+    missStreak: first.missStreak,
+  })
+  assert.deepEqual(recovered, { selectedId: 'hopit', missStreak: 0 })
 })
 
 test('projectSummaryLine renders a one-liner with revision', () => {

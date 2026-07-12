@@ -68,14 +68,14 @@ export default async function DeviceAuthorizationPage({
           {!code ? (
             <StatePanel
               icon={<Clock3 className="size-5" />}
-              title="Enter the link from your terminal"
-              detail="Run hop setup again and open the authorization link it gives you."
+              title="Open the link from your terminal"
+              detail={staleLinkGuidance}
             />
           ) : !authorization ? (
             <StatePanel
               icon={<Clock3 className="size-5" />}
-              title="This code is not available"
-              detail="It may have expired. Return to your terminal and run hop setup again."
+              title="This link has expired or was already used"
+              detail={staleLinkGuidance}
             />
           ) : (
             <DeviceApproval
@@ -99,13 +99,28 @@ export default async function DeviceAuthorizationPage({
   )
 }
 
-function StatePanel({ icon, title, detail }: { icon: React.ReactNode; title: string; detail: string }) {
+// Shared, friendly explanation for a link that can no longer be used — a stale
+// tab (expired/consumed code) or the bare /device page with no code. Codes are
+// single-use and short-lived, and every re-run of the command opens a fresh tab,
+// so the most common cause is an older tab left open.
+const staleLinkGuidance = (
+  <>
+    <p>Authorization links are single-use and expire about 10 minutes after they are created.</p>
+    <p className="mt-2">
+      Each time you run <span className="font-mono">hop setup</span> or <span className="font-mono">hop add</span> a fresh
+      link opens in a new tab. If you re-ran the command, this is likely an older tab — close it and use the newest one.
+    </p>
+    <p className="mt-2">Otherwise, return to your terminal and run the command again to get a new link.</p>
+  </>
+)
+
+function StatePanel({ icon, title, detail }: { icon: React.ReactNode; title: string; detail: React.ReactNode }) {
   return (
     <div className="flex gap-4 px-6 py-8 sm:px-8">
       <div className="flex size-10 shrink-0 items-center justify-center rounded-full bg-[#f0f4f1] text-[#506057]">{icon}</div>
-      <div>
-        <h2 className="text-sm font-semibold">{title}</h2>
-        <p className="mt-1 text-sm leading-6 text-[#66736b]">{detail}</p>
+      <div className="text-sm leading-6 text-[#66736b]">
+        <h2 className="text-sm font-semibold text-[#17211b]">{title}</h2>
+        <div className="mt-1">{detail}</div>
       </div>
     </div>
   )

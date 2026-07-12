@@ -302,6 +302,7 @@ export async function authorizeDeviceWithBrowser({
   openBrowser = true,
   requestedCodebaseId = null,
   requestedCodebaseName = null,
+  commandName = 'hop setup',
 }) {
   const baseUrl = String(authBaseUrl ?? defaultDeviceAuthorizationBaseUrl).replace(/\/+$/, '')
   // The create call gets bounded retry-with-backoff: a transient network fault or
@@ -355,7 +356,7 @@ export async function authorizeDeviceWithBrowser({
     }
     if (polled.status === 'pending') continue
     if (polled.status !== 'approved') {
-      throw new Error(`Device authorization is ${polled.status ?? 'unavailable'}. Run hop setup again.`)
+      throw new Error(`Device authorization is ${polled.status ?? 'unavailable'}. Run ${commandName} again.`)
     }
     const tokenContext = requireResponseText(polled.tokenContext, 'tokenContext')
     const wrappedSessionToken = recordValue(polled.wrappedSessionToken)
@@ -377,7 +378,7 @@ export async function authorizeDeviceWithBrowser({
       authorizationId: requireResponseText(polled.authorizationId, 'authorizationId'),
     }
   }
-  throw new Error('Device authorization expired. Run hop setup again.')
+  throw new Error(`Device authorization expired. Run ${commandName} again.`)
 }
 
 export function deriveRemotePushUrl(apiBaseUrl) {
