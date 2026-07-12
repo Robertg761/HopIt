@@ -11,7 +11,8 @@ import { attachMemberMethods } from './members.js'
 import { attachSchemaMethods } from './schema-methods.js'
 import { attachSessionMethods } from './sessions.js'
 
-export { d1CloudServiceType, d1ConfigFromOptions, isD1Configured } from './config.js'
+export { d1CloudServiceType, d1ConfigFromOptions, isD1Configured, usesServerActorAuth } from './config.js'
+export { mintServerActorToken } from './server-actor-token.js'
 export { d1SchemaStatements } from './schema.js'
 export {
   attachTextDiff,

@@ -486,6 +486,57 @@ under the isolation suite as a regression gate. Stripe/MoR customer ids and webh
 payloads live on the tenant row; never place tenant data in URLs; the webhook endpoint
 verifies signatures.
 
+#### Addendum — Front 1 mechanism, **implemented behind flag** (Stage 1a, 2026-07-13)
+
+The Front-1 **server-actor** principal is now implemented and gated by
+`HOPIT_MULTITENANT` (default **off**, so single-tenant production is byte-for-byte
+unchanged until the owner flips it). Mechanism chosen, of the options in this
+section:
+
+- **Per-request server-actor credential (chosen).** When the flag is on, the hosted
+  dashboard stops using the proxy super-token for authenticated tenant data. The
+  `@hopit/backend-d1` client instead mints a short-lived bearer token carrying the
+  authenticated Clerk user id, signed with a shared secret
+  `HOPIT_D1_SERVER_ACTOR_SECRET` (HMAC-SHA256): `hsa_<base64url(payload)>.<sig>`,
+  `payload = {u:userId, iat, exp}` (`packages/backend-d1/src/server-actor-token.js`).
+  The Worker re-derives the user id from the signature
+  (`cloudflare/d1/api-worker.js` `verifyServerActorToken`) — a forged/absent/expired
+  token fails closed.
+- **New policy tier BETWEEN `proxy` and `session`.** `authorizeRequest` returns a new
+  `{kind:'server-actor'}`. Each statement passes `assertServerActorStatementAllowed`
+  (`cloudflare/d1/scoped-sql.js`), a deny-by-default classifier: codebase-scoped
+  tables must name a `codebase_id = ?` (no `OR`/`IN`/`!=`/`LIKE`/subquery on
+  `codebase_id`); `codebases`/`codebase_members` may instead be **user-anchored**
+  (owner_id/user_id predicates that must equal the actor) so a user can list THEIR
+  OWN codebases; the `users` table is limited to the actor's own row plus a
+  read-only invitation email lookup; every other table is refused. The Worker then
+  **dynamically re-checks** that each referenced `codebase_id` is one the actor owns
+  or is an active member of (`assertServerActorEntitlement`, a
+  `codebases`⋈`codebase_members` lookup) before executing anything.
+- **What flips when the flag flips.** Flag **off**: an `hsa_` token is not accepted
+  at all (falls through to the auth error), and the client never mints one — proxy +
+  `hst_` paths are identical to today. Flag **on**: `cloud-backend.ts` threads the
+  authenticated actor into every tenant-data call so the client presents an `hsa_`
+  token; a statement touching a codebase the user neither owns nor belongs to is
+  rejected at the Worker (not merely filtered in app code). The `hst_` scoped-session
+  firewall is untouched. The dashboard runs with `assume-schema` so DDL never rides
+  the tenant path.
+- **Residual proxy usage (admin/capability-secret only, not user-enumerable tenant
+  data).** DDL/migrations, the owner-claim `bootstrapAccount`/`claimCodebaseOwner`
+  paths (`HOPIT_OWNER_EMAIL`, off the hot path), the public device-authorization
+  create/poll/read flow, invitation **accept-by-token**, and
+  `approveDeviceAuthorization` still use the proxy token — each is gated by an
+  unguessable secret (token/user-code) rather than by user id, so it is not a
+  cross-tenant enumeration surface. Migrating these secret-keyed lookups onto the
+  server-actor tier (e.g. by pinning a known `codebase_id`) is a documented Stage-1b
+  follow-up.
+
+Proven by tests (`cloudflare/d1/api-worker.test.js` server-actor block;
+`packages/agent/test/server-actor-dashboard.test.js` end-to-end against a real
+SQLite Worker): flag-off refuses `hsa_`; flag-on rejects a cross-tenant statement
+and allows a user reading their own multiple codebases; forged/expired tokens are
+refused; proxy and `hst_` behavior is unchanged with the flag on.
+
 ### (e) Signup-to-first-sync onboarding & the no-card experience
 
 Today's flow for the owner is: Clerk sign-in → (owner-only) bootstrap claims migrated

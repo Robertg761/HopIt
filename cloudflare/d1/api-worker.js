@@ -1,5 +1,9 @@
 import { CodebasePushHub, normalizeRemoteUpdateEnvelope } from './push-hub.js'
-import { assertScopedSessionStatementAllowed } from './scoped-sql.js'
+import { assertScopedSessionStatementAllowed, assertServerActorStatementAllowed } from './scoped-sql.js'
+
+function isMultiTenantEnabled(env) {
+  return /^(1|true|yes|on)$/i.test(String(env?.HOPIT_MULTITENANT ?? ''))
+}
 
 function json(payload, status = 200) {
   return new Response(JSON.stringify(payload), {
@@ -72,6 +76,12 @@ async function authorizeRequest(request, env, statements, options = {}) {
   const token = bearerTokenFromRequest(request)
   const expectedToken = env.HOPIT_D1_PROXY_TOKEN
   if (expectedToken && await constantTimeTokenEqual(token, expectedToken)) return { kind: 'proxy' }
+  // The server-actor tier is only reachable when multi-tenancy is switched on;
+  // with the flag off an `hsa_` token falls through to the auth error below, so
+  // single-tenant production keeps exactly its current proxy + hst_ behavior.
+  if (isMultiTenantEnabled(env) && token.startsWith('hsa_')) {
+    return await authorizeServerActorRequest(request, env, statements, token)
+  }
   if (!token.startsWith('hst_')) throw new Error('Authentication error')
 
   const session = await readAgentSessionForToken(env.HOPIT_D1_DB, token)
@@ -95,6 +105,101 @@ async function authorizeRequest(request, env, statements, options = {}) {
   assertScopedMutationAccess(statementPolicies, fileAccess)
 
   return { kind: 'session', session, statementPolicies, fileAccess }
+}
+
+async function authorizeServerActorRequest(request, env, statements, token) {
+  const actor = await verifyServerActorToken(token, env.HOPIT_D1_SERVER_ACTOR_SECRET)
+  if (!actor) throw new Error('Authentication error')
+
+  const statementPolicies = statements.map((statement) => assertServerActorStatementAllowed(actor, statement))
+  const referencedCodebaseIds = new Set()
+  for (const policy of statementPolicies) {
+    for (const codebaseId of policy.codebaseIds ?? []) referencedCodebaseIds.add(codebaseId)
+  }
+  // The dynamic half of the tenant check: every codebase named by the batch must
+  // be one this authenticated user owns or is an active member of. This is what
+  // makes a forged/absent predicate on the dashboard path fail closed AT THE
+  // WORKER rather than relying on application-level filtering.
+  await assertServerActorEntitlement(env.HOPIT_D1_DB, actor.userId, [...referencedCodebaseIds])
+
+  return { kind: 'server-actor', actor, statementPolicies }
+}
+
+async function assertServerActorEntitlement(db, userId, codebaseIds) {
+  if (codebaseIds.length === 0) return
+  const entitled = await readServerActorEntitledCodebases(db, userId, codebaseIds)
+  for (const codebaseId of codebaseIds) {
+    if (!entitled.has(codebaseId)) {
+      throw new Error('Server actor is not entitled to the requested codebase.')
+    }
+  }
+}
+
+async function readServerActorEntitledCodebases(db, userId, codebaseIds) {
+  const entitled = new Set()
+  for (const codebaseId of codebaseIds) {
+    const result = await db.prepare(
+      `select c.owner_id, m.user_id as member_user_id, m.status as member_status
+      from codebases c
+      left join codebase_members m on m.codebase_id = c.codebase_id and m.user_id = ?
+      where c.codebase_id = ?
+      limit 1`,
+    ).bind(userId, codebaseId).all()
+    const row = result.results?.[0]
+    if (!row) continue
+    const isOwner = Boolean(userId && userId === row.owner_id)
+    const isActiveMember = row.member_user_id === userId && row.member_status === 'active'
+    if (isOwner || isActiveMember) entitled.add(codebaseId)
+  }
+  return entitled
+}
+
+async function verifyServerActorToken(token, secret) {
+  if (!secret || typeof token !== 'string' || !token.startsWith('hsa_')) return null
+  const body = token.slice('hsa_'.length)
+  const separatorIndex = body.lastIndexOf('.')
+  if (separatorIndex <= 0) return null
+  const payloadPart = body.slice(0, separatorIndex)
+  const signaturePart = body.slice(separatorIndex + 1)
+  const expectedSignature = await hmacSha256Base64Url(secret, payloadPart)
+  if (!(await constantTimeTokenEqual(signaturePart, expectedSignature))) return null
+
+  let payload
+  try {
+    payload = JSON.parse(base64UrlToString(payloadPart))
+  } catch {
+    return null
+  }
+  if (!payload || typeof payload.u !== 'string' || !payload.u) return null
+  if (payload.exp != null && Date.now() > Number(payload.exp)) return null
+  return { userId: payload.u }
+}
+
+async function hmacSha256Base64Url(secret, message) {
+  const key = await crypto.subtle.importKey(
+    'raw',
+    new TextEncoder().encode(secret),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign'],
+  )
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message))
+  return base64UrlFromBytes(new Uint8Array(signature))
+}
+
+function base64UrlFromBytes(bytes) {
+  let binary = ''
+  for (const byte of bytes) binary += String.fromCharCode(byte)
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+function base64UrlToString(value) {
+  const base = value.replace(/-/g, '+').replace(/_/g, '/')
+  const padded = base + '='.repeat((4 - (base.length % 4)) % 4)
+  const binary = atob(padded)
+  const bytes = new Uint8Array(binary.length)
+  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
+  return new TextDecoder().decode(bytes)
 }
 
 async function readScopedFileAccess(db, session) {

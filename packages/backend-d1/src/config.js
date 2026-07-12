@@ -13,7 +13,19 @@ export function d1ConfigFromOptions(options = {}, env = process.env) {
     codebaseId: stringOrNull(options['codebase-id']) ?? stringOrNull(env.HOPIT_CODEBASE_ID) ?? defaultCodebaseId,
     agentSessionToken: stringOrNull(options['session-token']) ?? stringOrNull(options.agentSessionToken) ?? stringOrNull(env.HOPIT_AGENT_SESSION_TOKEN),
     assumeSchema: booleanOption(options['assume-schema']) ?? truthyEnv(env.HOPIT_D1_ASSUME_SCHEMA),
+    multiTenant: booleanOption(options['multi-tenant']) ?? truthyEnv(env.HOPIT_MULTITENANT),
+    serverActorUserId: stringOrNull(options['server-actor-user-id']),
+    serverActorSecret: stringOrNull(options['server-actor-secret']) ?? stringOrNull(env.HOPIT_D1_SERVER_ACTOR_SECRET),
   }
+}
+
+// When multi-tenancy is on and the caller carried an authenticated user id, the
+// dashboard presents a per-request server-actor credential the Worker re-checks
+// against codebase ownership/membership, instead of the omnipotent proxy token.
+// With the flag off this is always false, so the proxy path is byte-for-byte
+// unchanged.
+export function usesServerActorAuth(config) {
+  return Boolean(config.multiTenant && config.serverActorUserId && config.serverActorSecret)
 }
 
 export function isD1Configured(options = {}, env = process.env) {
@@ -21,7 +33,7 @@ export function isD1Configured(options = {}, env = process.env) {
   if (usesCloudflareD1Api(config)) {
     return Boolean(config.accountId && config.databaseId && config.apiToken)
   }
-  return Boolean(d1AuthorizationToken(config))
+  return Boolean(d1AuthorizationToken(config)) || usesServerActorAuth(config)
 }
 
 export function usesCloudflareD1Api(config) {

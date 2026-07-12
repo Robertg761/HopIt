@@ -27,6 +27,184 @@ export function assertScopedSessionStatementAllowed(session, statement) {
   return policy
 }
 
+// --- Server-actor policy tier (Phase 3 Stage 1a, HOPIT_MULTITENANT) ----------
+//
+// The hosted dashboard historically reached D1 with the omnipotent proxy token,
+// which skips every scope check (api-worker.js authorizeRequest -> {kind:'proxy'}).
+// The server-actor tier sits BETWEEN that all-powerful proxy token and the
+// single-codebase `hst_` session: it carries the authenticated Clerk user id and
+// lets a statement touch ONLY codebases that user owns or is an active member of
+// (a user listing THEIR OWN codebases is allowed; a statement touching a codebase
+// the user neither owns nor belongs to fails closed). This function is the static
+// half of the check — it validates statement shape and reports which codebase ids
+// the Worker must then confirm the actor is entitled to (dynamic half lives in
+// api-worker.js). Deny-by-default: anything it cannot classify as codebase-anchored
+// or actor-user-anchored is rejected.
+export function assertServerActorStatementAllowed(actor, statement) {
+  const sql = statement?.sql
+  if (typeof sql !== 'string') throw new Error('Expected a SQL statement.')
+  const userId = actor?.userId
+  if (!userId) throw new Error('Server actor requires an authenticated user id.')
+  const normalized = sql.trim().replace(/\s+/g, ' ').toLowerCase()
+  const params = Array.isArray(statement.params) ? statement.params : []
+  if (!/^(select|insert|update|delete)\b/.test(normalized)) {
+    throw new Error('Server actor cannot run schema or administrative SQL.')
+  }
+  assertServerActorSqlSyntax(normalized, params)
+
+  const operation = normalized.match(/^(select|insert|update|delete)\b/)?.[1] ?? null
+  const table = primaryTableForStatement(normalized, operation)
+  if (!table) throw new Error('Server actor SQL must target a known table.')
+
+  const codebaseIds = serverActorReferencedCodebaseIds(normalized, params, operation)
+
+  // codebases / codebase_members are the only tables the dashboard reaches
+  // across codebases (the "list my codebases" surface). Either they are pinned
+  // to specific codebase ids (entitlement-checked by the Worker) or they are
+  // anchored to the actor's own user id via owner_id/user_id predicates.
+  if (table === 'codebases' || table === 'codebase_members') {
+    if (codebaseIds.length > 0) return { operation, table, codebaseIds }
+    assertServerActorUserAnchored(normalized, params, userId)
+    return { operation, table, codebaseIds: [] }
+  }
+
+  // The user's own profile row (and the read-only email lookup invitations need).
+  if (table === 'users') {
+    assertServerActorUsersStatement(normalized, params, userId, operation)
+    return { operation, table, codebaseIds: [] }
+  }
+
+  // Every other tenant table must name the codebase it touches so the Worker can
+  // confirm the actor is entitled to it. Unknown tables fail closed.
+  if (!codebaseScopedTables.has(table)) {
+    throw new Error('Server actor cannot access this table.')
+  }
+  if (codebaseIds.length === 0) {
+    throw new Error('Server actor SQL must be constrained to a codebase.')
+  }
+  return { operation, table, codebaseIds }
+}
+
+function assertServerActorSqlSyntax(normalizedSql, params) {
+  const codeView = sqlCodeView(normalizedSql)
+  if (/;|--|\/\*|\*\//.test(codeView)) {
+    throw new Error('Server actor SQL cannot contain comments or multiple statements.')
+  }
+  if (/\?\d+/.test(codeView)) {
+    throw new Error('Server actor SQL must use anonymous parameters.')
+  }
+  if (countSqlPlaceholders(normalizedSql) !== params.length) {
+    throw new Error('Server actor SQL parameter count does not match its placeholders.')
+  }
+  if (/\b(union|intersect|except|pragma|attach|detach|vacuum|analyze|reindex)\b/.test(codeView)) {
+    throw new Error('Server actor SQL contains unsupported syntax.')
+  }
+  // A codebase_id compared with anything other than a bound equality could fan a
+  // single statement out to codebases the Worker cannot enumerate and therefore
+  // cannot entitlement-check. Force equality, exactly as the hst_ tier does.
+  if (/\bcodebase_id\s*(?:<>|!=|\bin\b|\bnot\s+in\b|\blike\b|\bglob\b)/.test(codeView)) {
+    throw new Error('Server actor SQL must use equality for codebase scope.')
+  }
+}
+
+function serverActorReferencedCodebaseIds(normalizedSql, params, operation) {
+  const ids = new Set()
+  for (const match of codebasePredicateMatches(normalizedSql)) {
+    const value = params[match.ordinal]
+    if (typeof value === 'string' && value) ids.add(value)
+  }
+  if (operation === 'insert') {
+    const inserted = serverActorInsertedCodebaseId(normalizedSql, params)
+    if (typeof inserted === 'string' && inserted) ids.add(inserted)
+  }
+  return [...ids]
+}
+
+function assertServerActorUserAnchored(normalizedSql, params, userId) {
+  const matches = userIdentityPredicateMatches(normalizedSql)
+  if (matches.length === 0) {
+    throw new Error('Server actor cross-codebase reads must be scoped to the actor user id.')
+  }
+  for (const match of matches) {
+    if (params[match.ordinal] !== userId) {
+      throw new Error('Server actor cross-codebase reads must be scoped to the actor user id.')
+    }
+  }
+}
+
+function assertServerActorUsersStatement(normalizedSql, params, userId, operation) {
+  if (operation === 'insert') {
+    if (serverActorInsertedColumnValue(normalizedSql, params, 'user_id') !== userId) {
+      throw new Error('Server actor can only upsert its own user row.')
+    }
+    return
+  }
+  if (operation === 'select') {
+    const matches = userIdentityPredicateMatches(normalizedSql)
+    if (matches.length > 0) {
+      for (const match of matches) {
+        if (params[match.ordinal] !== userId) {
+          throw new Error('Server actor can only read its own user row.')
+        }
+      }
+      return
+    }
+    // Invitations resolve an invitee by email; this exposes only a user id, never
+    // any codebase-scoped data, so it is a permitted actor-neutral read shape.
+    if (/^select (?:user_id|\*)(?:, [a-z_][a-z0-9_]*)* from users where primary_email = \? limit 1$/.test(normalizedSql)) {
+      return
+    }
+    throw new Error('Server actor users read shape is not allowed.')
+  }
+  throw new Error('Server actor cannot modify another user row.')
+}
+
+function userIdentityPredicateMatches(normalizedSql) {
+  const matches = []
+  const pattern = /\b(?:[a-z_][a-z0-9_]*\.)?(?:owner_id|user_id)\s*=\s*\?/g
+  for (const match of sqlCodeView(normalizedSql).matchAll(pattern)) {
+    const questionIndex = match.index + match[0].lastIndexOf('?')
+    matches.push({ ordinal: countSqlPlaceholders(normalizedSql.slice(0, questionIndex)) })
+  }
+  return matches
+}
+
+function serverActorInsertedCodebaseId(normalizedSql, params) {
+  return serverActorInsertedColumnValue(normalizedSql, params, 'codebase_id')
+}
+
+// Tolerant inserted-column extractor for the server-actor tier. Unlike
+// parseScopedInsert (which pins the hst_ guarded-journal grammar and rejects any
+// non-codebase ON CONFLICT target), this only needs the bound value of one column
+// so it accepts the dashboard's ordinary INSERT ... VALUES / guarded SELECT forms
+// and user upserts that conflict on user_id.
+function serverActorInsertedColumnValue(normalizedSql, params, column) {
+  const head = normalizedSql.match(/^insert\s+into\s+[a-z_][a-z0-9_]*\s*\(([^)]+)\)\s+(.+)$/)
+  if (!head) return null
+  const columns = head[1].split(',').map((name) => name.trim())
+  const columnIndex = columns.indexOf(column)
+  if (columnIndex < 0) return null
+  const rest = head[2]
+  let valueList
+  if (rest.startsWith('values')) {
+    const openingIndex = rest.indexOf('(')
+    const closingIndex = matchingParenthesisIndex(rest, openingIndex)
+    if (openingIndex < 0 || closingIndex < 0) return null
+    valueList = rest.slice(openingIndex + 1, closingIndex)
+  } else if (rest.startsWith('select ')) {
+    valueList = rest.slice('select '.length).split(/\bwhere\b/)[0]
+  } else {
+    return null
+  }
+  const values = splitSqlList(valueList)
+  if (values.length !== columns.length || values[columnIndex] !== '?') return null
+  let ordinal = 0
+  for (let index = 0; index < columnIndex; index += 1) {
+    ordinal += countSqlPlaceholders(values[index])
+  }
+  return params[ordinal] ?? null
+}
+
 function scopedStatementPolicy(normalizedSql, params, session) {
   const operation = normalizedSql.match(/^(select|insert|update|delete)\b/)?.[1] ?? null
   const table = primaryTableForStatement(normalizedSql, operation)

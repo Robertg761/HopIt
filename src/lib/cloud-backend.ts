@@ -90,7 +90,7 @@ function logMissingD1ConfigOnce() {
 
 export async function readCloudAgentDashboard(requester: CloudRequester = {}, codebaseId = process.env.HOPIT_CODEBASE_ID ?? 'hopit') {
   if (configuredCloudBackend() === 'd1') {
-    return d1Backend({ 'codebase-id': codebaseId }).readDashboard({
+    return d1Backend({ 'codebase-id': codebaseId }, requester).readDashboard({
       codebaseId,
       requesterUserId: requester.requesterUserId,
       requesterSessionId: requester.requesterSessionId,
@@ -100,7 +100,7 @@ export async function readCloudAgentDashboard(requester: CloudRequester = {}, co
 }
 
 export async function listCloudCodebases(actor: CloudActor) {
-  if (configuredCloudBackend() === 'd1') return d1Backend().listCodebases(actor)
+  if (configuredCloudBackend() === 'd1') return d1Backend({}, actor).listCodebases(actor)
   throw new Error('No HopIt cloud backend is configured for codebases.')
 }
 
@@ -110,7 +110,7 @@ export async function createCloudCodebase(input: {
   description?: string
   actor: CloudActor
 }) {
-  if (configuredCloudBackend() === 'd1') return d1Backend().createCodebase(input)
+  if (configuredCloudBackend() === 'd1') return d1Backend({}, input.actor).createCodebase(input)
   throw new Error('No HopIt cloud backend is configured for codebases.')
 }
 
@@ -120,17 +120,17 @@ export async function updateCloudCodebase(input: {
   visibility?: 'private' | 'team-visible' | 'review-visible'
   actor: CloudActor
 }) {
-  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).updateCodebase(input)
+  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }, input.actor).updateCodebase(input)
   throw new Error('No HopIt cloud backend is configured for codebases.')
 }
 
 export async function deleteCloudCodebase(input: { codebaseId: string; actor: CloudActor }) {
-  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).deleteCodebase(input)
+  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }, input.actor).deleteCodebase(input)
   throw new Error('No HopIt cloud backend is configured for codebases.')
 }
 
 export async function readCloudTextFile(input: { codebaseId: string; path: string; actor: CloudActor }) {
-  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).readTextFile(input)
+  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }, input.actor).readTextFile(input)
   throw new Error('No HopIt cloud backend is configured for file reads.')
 }
 
@@ -142,12 +142,12 @@ export async function mutateCloudTextFile(input: {
   selectedStateId?: string
   actor: CloudActor
 }) {
-  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).mutateTextFile(input)
+  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }, input.actor).mutateTextFile(input)
   throw new Error('No HopIt cloud backend is configured for file edits.')
 }
 
 export async function listCloudActionJobs(input: { codebaseId: string; limit?: number; actor: CloudActor }) {
-  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).listActionJobs(input)
+  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }, input.actor).listActionJobs(input)
   throw new Error('No HopIt cloud backend is configured for actions.')
 }
 
@@ -156,7 +156,7 @@ export async function createCloudActionJob(input: {
   kind: 'lint' | 'test' | 'build'
   actor: CloudActor
 }) {
-  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).createActionJob(input)
+  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }, input.actor).createActionJob(input)
   throw new Error('No HopIt cloud backend is configured for actions.')
 }
 
@@ -165,7 +165,7 @@ export async function listCloudMembers(input: {
   status?: 'active' | 'suspended'
   actor: CloudActor
 }) {
-  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).listMembers(input)
+  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }, input.actor).listMembers(input)
   throw new Error('No HopIt cloud backend is configured for members.')
 }
 
@@ -180,12 +180,12 @@ export async function bootstrapCloudAccount(actor: CloudActor) {
 }
 
 export async function suspendCloudMember(input: { codebaseId: string; userId: string; actor: CloudActor }) {
-  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).suspendMember(input)
+  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }, input.actor).suspendMember(input)
   throw new Error('No HopIt cloud backend is configured for members.')
 }
 
 export async function removeCloudMember(input: { codebaseId: string; userId: string; actor: CloudActor }) {
-  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).removeMember(input)
+  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }, input.actor).removeMember(input)
   throw new Error('No HopIt cloud backend is configured for members.')
 }
 
@@ -194,7 +194,7 @@ export async function listCloudInvitations(input: {
   status?: 'pending' | 'accepted' | 'revoked' | 'expired'
   actor: CloudActor
 }) {
-  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).listInvitations(input)
+  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }, input.actor).listInvitations(input)
   throw new Error('No HopIt cloud backend is configured for invitations.')
 }
 
@@ -205,7 +205,7 @@ export async function createCloudInvitation(input: {
   expiresAt?: string
   actor: CloudActor
 }) {
-  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).createInvitation(input)
+  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }, input.actor).createInvitation(input)
   throw new Error('No HopIt cloud backend is configured for invitations.')
 }
 
@@ -215,22 +215,22 @@ export async function acceptCloudInvitation(input: { token: string; actor: Cloud
 }
 
 export async function revokeCloudInvitation(input: { codebaseId: string; invitationId: string; actor: CloudActor }) {
-  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).revokeInvitation(input)
+  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }, input.actor).revokeInvitation(input)
   throw new Error('No HopIt cloud backend is configured for invitations.')
 }
 
 export async function listCloudWorkItems(input: { codebaseId: string; actor: CloudActor }) {
-  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).listWorkItems(input)
+  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }, input.actor).listWorkItems(input)
   throw new Error('No HopIt cloud backend is configured for collaboration.')
 }
 
 export async function createCloudWorkItem(input: Record<string, unknown> & { codebaseId: string; actor: CloudActor }) {
-  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).createWorkItem(input)
+  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }, input.actor).createWorkItem(input)
   throw new Error('No HopIt cloud backend is configured for collaboration.')
 }
 
 export async function updateCloudWorkItem(input: Record<string, unknown> & { codebaseId: string; actor: CloudActor }) {
-  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).updateWorkItem(input)
+  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }, input.actor).updateWorkItem(input)
   throw new Error('No HopIt cloud backend is configured for collaboration.')
 }
 
@@ -239,7 +239,7 @@ export async function upsertCloudUser(input: CloudActor & {
   emailVerified?: boolean
 }) {
   if (configuredCloudBackend() === 'd1') {
-    return d1Backend().upsertUser({
+    return d1Backend({}, input).upsertUser({
       userId: input.userId,
       primaryEmail: input.primaryEmail,
       displayName: input.displayName,
@@ -274,6 +274,25 @@ export async function approveCloudDeviceAuthorization(input: {
   throw new Error('No HopIt cloud backend is configured for device authorization.')
 }
 
-function d1Backend(options: Record<string, unknown> = {}): any {
-  return createD1Backend(options)
+// When HOPIT_MULTITENANT is on, tenant-data calls carry the authenticated user's
+// id so the backend client presents a per-request server-actor credential the
+// Worker re-checks against codebase ownership/membership (Phase 3 Stage 1a), in
+// place of the omnipotent proxy token. Actor-less/administrative flows (device
+// authorization, owner-claim bootstrap, invitation-by-token) intentionally omit
+// the actor and keep using the proxy token. With the flag off this option is
+// inert and the proxy path is unchanged.
+function d1Backend(options: Record<string, unknown> = {}, actor?: CloudActor | CloudRequester | null): any {
+  const merged: Record<string, unknown> = { ...options }
+  const userId = actorUserId(actor)
+  if (userId && merged['server-actor-user-id'] === undefined) {
+    merged['server-actor-user-id'] = userId
+  }
+  return createD1Backend(merged)
+}
+
+function actorUserId(actor?: CloudActor | CloudRequester | null): string | null {
+  if (!actor) return null
+  if ('userId' in actor && actor.userId) return actor.userId
+  if ('requesterUserId' in actor && actor.requesterUserId) return actor.requesterUserId
+  return null
 }

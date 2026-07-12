@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
+import { createHmac } from 'node:crypto'
 import test from 'node:test'
 
 import worker, { CodebasePushHub } from './api-worker.js'
-import { assertScopedSessionStatementAllowed } from './scoped-sql.js'
+import { assertScopedSessionStatementAllowed, assertServerActorStatementAllowed } from './scoped-sql.js'
 
 test('proxy token auth executes statements and logs structured request metadata', async () => {
   const logs = await captureLogs(async () => {
@@ -1239,6 +1240,257 @@ test('cross-tenant control: user-b session executes against its own codebase', a
   assert.equal(response.status, 200)
   assert.equal(db.executedStatements.length, 1)
   assert.deepEqual(db.executedStatements[0].params, ['codebase-b'])
+})
+
+// ---------------------------------------------------------------------------
+// Server-actor tier (Phase 3 Stage 1a — HOPIT_MULTITENANT / Front 1)
+//
+// The hosted dashboard historically reached D1 with the omnipotent proxy token,
+// which skips all scoping. Behind HOPIT_MULTITENANT, the dashboard instead
+// presents a per-request `hsa_` server-actor token carrying the authenticated
+// user id. The Worker re-derives that id (HMAC) and refuses any statement that
+// touches a codebase the user neither owns nor is an active member of — while
+// still allowing a user to list THEIR OWN multiple codebases. Proxy and hst_
+// behavior must be identical whether the flag is on or off.
+// ---------------------------------------------------------------------------
+
+const SERVER_ACTOR_SECRET = 'server-actor-secret'
+
+function mintTestServerActorToken({ userId, secret = SERVER_ACTOR_SECRET, ttlMs = 60_000, now = Date.now() }) {
+  const payload = { u: userId, iat: now, exp: now + ttlMs }
+  const payloadPart = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')
+  const signature = createHmac('sha256', secret).update(payloadPart).digest('base64url')
+  return `hsa_${payloadPart}.${signature}`
+}
+
+// A codebase-entitlement fixture: maps codebaseId -> { ownerId, members: {userId: status} }
+// and answers both the Worker's per-codebase entitlement lookup and the executed
+// statements. `member_user_id` in the projected columns marks the entitlement query.
+function createServerActorDb({ codebases = {} } = {}) {
+  const db = {
+    executedStatements: [],
+    prepare(sql) {
+      const normalized = sql.toLowerCase()
+      return {
+        bind(...params) {
+          return {
+            async all() {
+              if (normalized.includes('from codebases c') && normalized.includes('member_user_id')) {
+                const [userId, codebaseId] = params
+                const entry = codebases[codebaseId]
+                if (!entry) return { results: [] }
+                const memberStatus = entry.members?.[userId] ?? null
+                return {
+                  results: [{
+                    owner_id: entry.ownerId ?? null,
+                    member_user_id: memberStatus ? userId : null,
+                    member_status: memberStatus,
+                  }],
+                }
+              }
+              db.executedStatements.push({ sql, params })
+              return { results: [], meta: { duration: 1 } }
+            },
+          }
+        },
+      }
+    },
+  }
+  return db
+}
+
+function serverActorRequest({ token, body, ip, codebaseId = 'codebase-a' }) {
+  return new Request('https://worker.example/query', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+      'x-hopit-codebase-id': codebaseId,
+      'cf-connecting-ip': ip,
+    },
+    body: JSON.stringify(body),
+  })
+}
+
+const multiTenantEnv = (extra = {}) => ({
+  HOPIT_MULTITENANT: '1',
+  HOPIT_D1_SERVER_ACTOR_SECRET: SERVER_ACTOR_SECRET,
+  HOPIT_D1_PROXY_TOKEN: 'proxy-secret',
+  ...extra,
+})
+
+test('server-actor static policy: own vs cross-tenant, listing, and deny-by-default', () => {
+  const actor = { userId: 'user-a' }
+  // Codebase-anchored read the actor is (statically) allowed to name.
+  assert.doesNotThrow(() => assertServerActorStatementAllowed(actor, {
+    sql: 'select * from files where codebase_id = ?',
+    params: ['codebase-a'],
+  }))
+  // A cross-codebase LISTING scoped to the actor's own user id is allowed
+  // (user reading THEIR OWN codebases), even with no codebase_id predicate.
+  assert.doesNotThrow(() => assertServerActorStatementAllowed(actor, {
+    sql: `select distinct c.* from codebases c
+      left join codebase_members m on m.codebase_id = c.codebase_id
+      where c.owner_id = ? or (m.user_id = ? and m.status = ?)
+      order by c.updated_at desc`,
+    params: ['user-a', 'user-a', 'active'],
+  }))
+  // Its own user upsert / profile read are allowed.
+  assert.doesNotThrow(() => assertServerActorStatementAllowed(actor, {
+    sql: 'insert into users (user_id, primary_email, created_at, updated_at) values (?, ?, ?, ?) on conflict(user_id) do update set primary_email = excluded.primary_email',
+    params: ['user-a', 'a@example.com', 'now', 'now'],
+  }))
+
+  const rejected = [
+    { name: 'listing another user', sql: 'select * from codebases c left join codebase_members m on m.codebase_id = c.codebase_id where c.owner_id = ?', params: ['user-b'] },
+    { name: 'unscoped codebases list', sql: 'select * from codebases order by updated_at desc', params: [] },
+    { name: 'unscoped file read', sql: 'select * from files', params: [] },
+    { name: 'reading another user row', sql: 'select * from users where user_id = ?', params: ['user-b'] },
+    { name: 'upserting another user', sql: 'insert into users (user_id, created_at) values (?, ?)', params: ['user-b', 'now'] },
+    { name: 'codebase_id in-list', sql: 'select * from files where codebase_id in (?, ?)', params: ['codebase-a', 'codebase-b'] },
+    { name: 'not-equal codebase', sql: 'select * from files where codebase_id != ?', params: ['codebase-b'] },
+    { name: 'secret-keyed wrapped_keys', sql: 'select * from wrapped_keys where wrap_id = ? limit 1', params: ['wrap_1'] },
+    { name: 'unknown table', sql: 'select * from secrets where codebase_id = ?', params: ['codebase-a'] },
+    { name: 'stacked statement', sql: 'select * from files where codebase_id = ?; drop table files', params: ['codebase-a'] },
+    { name: 'schema sql', sql: 'drop table files', params: [] },
+  ]
+  for (const statement of rejected) {
+    assert.throws(() => assertServerActorStatementAllowed(actor, statement), /Server actor/, statement.name)
+  }
+  // Missing/empty user id fails closed regardless of shape.
+  assert.throws(() => assertServerActorStatementAllowed({ userId: '' }, {
+    sql: 'select * from files where codebase_id = ?', params: ['codebase-a'],
+  }), /authenticated user id/)
+})
+
+test('server-actor: flag OFF refuses the hsa_ token and executes nothing (single-tenant unchanged)', async () => {
+  const db = createServerActorDb({ codebases: { 'codebase-a': { ownerId: 'user-a' } } })
+  const response = await worker.fetch(serverActorRequest({
+    token: mintTestServerActorToken({ userId: 'user-a' }),
+    body: { sql: 'select * from files where codebase_id = ?', params: ['codebase-a'] },
+    ip: '203.0.113.70',
+  }), {
+    // No HOPIT_MULTITENANT: the flag is off.
+    HOPIT_D1_SERVER_ACTOR_SECRET: SERVER_ACTOR_SECRET,
+    HOPIT_D1_PROXY_TOKEN: 'proxy-secret',
+    HOPIT_D1_DB: db,
+  })
+  assert.equal(response.status, 403)
+  assert.match((await response.json()).errors[0].message, /Authentication error/)
+  assert.equal(db.executedStatements.length, 0)
+})
+
+test('server-actor: flag ON executes a statement against the user own codebase', async () => {
+  const db = createServerActorDb({ codebases: { 'codebase-a': { ownerId: 'user-a' } } })
+  const response = await worker.fetch(serverActorRequest({
+    token: mintTestServerActorToken({ userId: 'user-a' }),
+    body: { sql: 'select * from files where codebase_id = ?', params: ['codebase-a'] },
+    ip: '203.0.113.71',
+  }), multiTenantEnv({ HOPIT_D1_DB: db }))
+  assert.equal(response.status, 200)
+  assert.equal(db.executedStatements.length, 1)
+  assert.deepEqual(db.executedStatements[0].params, ['codebase-a'])
+})
+
+test('server-actor: flag ON rejects a statement against a codebase the user does not own or belong to', async () => {
+  // user-a is neither owner nor member of codebase-b.
+  const db = createServerActorDb({
+    codebases: {
+      'codebase-a': { ownerId: 'user-a' },
+      'codebase-b': { ownerId: 'user-b' },
+    },
+  })
+  const response = await worker.fetch(serverActorRequest({
+    token: mintTestServerActorToken({ userId: 'user-a' }),
+    body: { sql: 'select * from files where codebase_id = ?', params: ['codebase-b'] },
+    ip: '203.0.113.72',
+    codebaseId: 'codebase-b',
+  }), multiTenantEnv({ HOPIT_D1_DB: db }))
+  assert.equal(response.status, 403)
+  assert.match((await response.json()).errors[0].message, /not entitled/)
+  assert.equal(db.executedStatements.length, 0)
+})
+
+test('server-actor: flag ON lets a user list and read their own multiple codebases', async () => {
+  const db = createServerActorDb({
+    codebases: {
+      'codebase-a': { ownerId: 'user-a' },
+      'codebase-c': { ownerId: 'other', members: { 'user-a': 'active' } },
+    },
+  })
+  // Cross-codebase listing anchored to the actor's own id: no per-codebase check.
+  const listing = await worker.fetch(serverActorRequest({
+    token: mintTestServerActorToken({ userId: 'user-a' }),
+    body: {
+      sql: 'select distinct c.* from codebases c left join codebase_members m on m.codebase_id = c.codebase_id where c.owner_id = ? or (m.user_id = ? and m.status = ?) order by c.updated_at desc',
+      params: ['user-a', 'user-a', 'active'],
+    },
+    ip: '203.0.113.73',
+  }), multiTenantEnv({ HOPIT_D1_DB: db }))
+  assert.equal(listing.status, 200)
+
+  // An owned codebase and a codebase the user is an active member of both pass.
+  for (const codebaseId of ['codebase-a', 'codebase-c']) {
+    const response = await worker.fetch(serverActorRequest({
+      token: mintTestServerActorToken({ userId: 'user-a' }),
+      body: { sql: `select * from issues where codebase_id = ?`, params: [codebaseId] },
+      ip: '203.0.113.74',
+      codebaseId,
+    }), multiTenantEnv({ HOPIT_D1_DB: db }))
+    assert.equal(response.status, 200, codebaseId)
+  }
+})
+
+test('server-actor: flag ON rejects forged and expired tokens before execution', async () => {
+  const db = createServerActorDb({ codebases: { 'codebase-a': { ownerId: 'user-a' } } })
+  const forged = mintTestServerActorToken({ userId: 'user-a', secret: 'wrong-secret' })
+  const forgedResponse = await worker.fetch(serverActorRequest({
+    token: forged,
+    body: { sql: 'select * from files where codebase_id = ?', params: ['codebase-a'] },
+    ip: '203.0.113.75',
+  }), multiTenantEnv({ HOPIT_D1_DB: db }))
+  assert.equal(forgedResponse.status, 403)
+  assert.equal(db.executedStatements.length, 0)
+
+  const expired = mintTestServerActorToken({ userId: 'user-a', ttlMs: -1000 })
+  const expiredResponse = await worker.fetch(serverActorRequest({
+    token: expired,
+    body: { sql: 'select * from files where codebase_id = ?', params: ['codebase-a'] },
+    ip: '203.0.113.76',
+  }), multiTenantEnv({ HOPIT_D1_DB: db }))
+  assert.equal(expiredResponse.status, 403)
+  assert.equal(db.executedStatements.length, 0)
+})
+
+test('server-actor: enabling the flag leaves the proxy token and hst_ session paths unchanged', async () => {
+  // Proxy token still short-circuits all scoping with the flag on.
+  const proxyResponse = await worker.fetch(new Request('https://worker.example/query', {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer proxy-secret',
+      'content-type': 'application/json',
+      'x-hopit-codebase-id': 'codebase-1',
+      'cf-connecting-ip': '203.0.113.77',
+    },
+    body: JSON.stringify({ sql: 'select * from files where codebase_id = ?', params: ['codebase-1'] }),
+  }), multiTenantEnv({ HOPIT_D1_DB: createMockDb() }))
+  assert.equal(proxyResponse.status, 200)
+
+  // hst_ scoped session still enforces its single-codebase firewall with the flag on.
+  const hstDb = createMockDb({ session: crossTenantSession() })
+  const hstResponse = await worker.fetch(new Request('https://worker.example/query', {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer hst_session_token',
+      'content-type': 'application/json',
+      'x-hopit-codebase-id': 'codebase-b',
+      'cf-connecting-ip': '203.0.113.78',
+    },
+    body: JSON.stringify({ sql: 'select * from files where codebase_id = ?', params: ['codebase-a'] }),
+  }), multiTenantEnv({ HOPIT_D1_DB: hstDb }))
+  assert.equal(hstResponse.status, 403)
+  assert.match((await hstResponse.json()).errors[0].message, /must be constrained to its codebase/)
+  assert.equal(hstDb.executedStatements.length, 0)
 })
 
 async function captureLogs(callback) {
