@@ -5,6 +5,15 @@ import test from 'node:test'
 import worker, { CodebasePushHub } from './api-worker.js'
 import { assertScopedSessionStatementAllowed, assertServerActorStatementAllowed } from './scoped-sql.js'
 import { assertBrokerKeyForCodebase, isBrokerKeyForCodebase, presignBlobUrl } from './blob-broker.js'
+import {
+  buildMeterUpsertStatement,
+  computeUsageStatus,
+  evaluateWriteQuota,
+  meterState,
+  resolvePlanLimits,
+  rowsUsedToday,
+  utcDay,
+} from './quota.js'
 
 test('proxy token auth executes statements and logs structured request metadata', async () => {
   const logs = await captureLogs(async () => {
@@ -2039,4 +2048,314 @@ test('broker: unconfigured R2 answers 503 without signing', async () => {
     HOPIT_D1_DB: createMockDb({ session: scopedSession() }),
   })
   assert.equal(response.status, 503)
+})
+
+// ===========================================================================
+// Per-tenant usage metering + quota enforcement (Phase 3 Stage 2-3)
+//
+// HOPIT_MULTITENANT off  => zero metering, byte-for-byte behavior (no meter row
+//                           appended; existing suites above are the flag-off
+//                           regression proof).
+// HOPIT_MULTITENANT on   => one meter upsert folded into each mutating batch.
+// + HOPIT_ENFORCE_QUOTA  => a write past the hard cap is rejected at the Worker
+//                           (429) BEFORE any statement runs (no data loss); the
+//                           agent holds the change on disk. Reads/exports are
+//                           never routed through the gate.
+// ===========================================================================
+
+const TODAY = utcDay()
+
+// --- quota.js pure helpers ---------------------------------------------------
+
+test('quota: resolvePlanLimits returns free/paid defaults and honors env knobs', () => {
+  const free = resolvePlanLimits({}, 'free')
+  assert.deepEqual(
+    { s: free.storageBytes, w: free.dailyWrites, c: free.codebases },
+    { s: 2_000_000_000, w: 2_000, c: 1 },
+  )
+  const paid = resolvePlanLimits({}, 'paid')
+  assert.deepEqual(
+    { s: paid.storageBytes, w: paid.dailyWrites, c: paid.codebases },
+    { s: 30_000_000_000, w: 50_000, c: 1_000_000 },
+  )
+  // Absent/unknown plan defaults to free.
+  assert.equal(resolvePlanLimits({}, undefined).plan, 'free')
+  assert.equal(resolvePlanLimits({}, 'enterprise').plan, 'free')
+  // Owner-tunable env knobs override the defaults.
+  const tuned = resolvePlanLimits({ HOPIT_QUOTA_FREE_STORAGE_BYTES: '500', HOPIT_QUOTA_FREE_DAILY_WRITES: '9' }, 'free')
+  assert.equal(tuned.storageBytes, 500)
+  assert.equal(tuned.dailyWrites, 9)
+})
+
+test('quota: the daily counter resets on a UTC day roll', () => {
+  assert.equal(rowsUsedToday({ write_day: TODAY, rows_written_today: 42 }, TODAY), 42)
+  assert.equal(rowsUsedToday({ write_day: '2000-01-01', rows_written_today: 42 }, TODAY), 0)
+  assert.equal(rowsUsedToday(null, TODAY), 0)
+})
+
+test('quota: meterState crosses ok -> warn (80%) -> block (100%)', () => {
+  assert.equal(meterState({ used: 799, limit: 1000, warnRatio: 0.8 }), 'ok')
+  assert.equal(meterState({ used: 800, limit: 1000, warnRatio: 0.8 }), 'warn')
+  assert.equal(meterState({ used: 1000, limit: 1000, warnRatio: 0.8 }), 'block')
+  assert.equal(meterState({ used: 5, limit: 0, warnRatio: 0.8 }), 'ok') // unlimited
+})
+
+test('quota: evaluateWriteQuota rejects over-daily and over-storage, allows under-cap', () => {
+  const limits = resolvePlanLimits({}, 'free')
+  // Under cap => allowed.
+  assert.equal(evaluateWriteQuota({ usage: null, limits, day: TODAY, rowsDelta: 3, storageDelta: 7 }), null)
+  // Daily over cap => typed rejection.
+  const daily = evaluateWriteQuota({
+    usage: { write_day: TODAY, rows_written_today: 1999 }, limits, day: TODAY, rowsDelta: 3, storageDelta: 0,
+  })
+  assert.equal(daily.code, 'quota_exceeded_daily')
+  assert.equal(daily.limit, 2_000)
+  // Storage over cap => typed rejection (daily under cap).
+  const storage = evaluateWriteQuota({
+    usage: { storage_bytes: 1_999_999_999 }, limits, day: TODAY, rowsDelta: 1, storageDelta: 7,
+  })
+  assert.equal(storage.code, 'quota_exceeded_storage')
+  // A read (rowsDelta 0, storageDelta 0) is never rejected.
+  assert.equal(evaluateWriteQuota({
+    usage: { write_day: TODAY, rows_written_today: 999_999, storage_bytes: 9_999_999_999 }, limits, day: TODAY, rowsDelta: 0, storageDelta: 0,
+  }), null)
+})
+
+test('quota: buildMeterUpsertStatement folds a single tenant-keyed upsert', () => {
+  const statement = buildMeterUpsertStatement({ tenantId: 'user-owner', day: TODAY, rowsDelta: 3, storageDelta: 7, now: 'now' })
+  assert.match(statement.sql, /insert into tenant_usage/)
+  assert.match(statement.sql, /on conflict\(tenant_id\) do update set/)
+  assert.equal(statement.params[0], 'user-owner')
+  assert.ok(statement.params.includes(7)) // storage delta
+  assert.ok(statement.params.includes(3)) // rows delta
+})
+
+test('quota: computeUsageStatus reports per-line used/limit/ratio/state', () => {
+  const status = computeUsageStatus({
+    usage: { plan: 'free', storage_bytes: 1_600_000_000, write_day: TODAY, rows_written_today: 100 },
+    limits: resolvePlanLimits({}, 'free'),
+    warnRatio: 0.8,
+    day: TODAY,
+    codebaseCount: 1,
+  })
+  assert.equal(status.plan, 'free')
+  assert.equal(status.storage.state, 'warn') // 80% of 2 GB
+  assert.equal(status.dailyWrites.limit, 2_000)
+  assert.equal(status.codebases.used, 1)
+  assert.equal(status.codebases.limit, 1)
+})
+
+// --- Worker mutation path: metering + enforcement ----------------------------
+
+// A mutation-capable mock that also answers the tenant meter read and records
+// the folded meter upsert. Owner = user-owner (the tenant), writer = an active
+// team-member collaborator on a team-visible change set.
+function createQuotaMutationDb({ usage = null } = {}) {
+  const selected = { type: 'active-change-set', id: 'cs_1', revision: 1, effectiveVisibility: 'team-visible', mergeState: 'unmerged' }
+  const db = {
+    executedStatements: [],
+    prepare(sql) {
+      const normalized = sql.toLowerCase()
+      return {
+        bind(...params) {
+          return {
+            async all() {
+              if (normalized.includes('from agent_sessions')) {
+                return { results: [scopedSession({ user_id: 'user-member', capabilities_json: JSON.stringify(['read', 'write']) })] }
+              }
+              if (normalized.includes('from codebases c') && normalized.includes('left join codebase_members')) {
+                return {
+                  results: [{
+                    owner_id: 'user-owner',
+                    selected_state_json: JSON.stringify(selected),
+                    visibility_json: JSON.stringify({ effective: 'team-visible' }),
+                    member_role: 'member',
+                    member_status: 'active',
+                  }],
+                }
+              }
+              if (normalized.startsWith('select owner_id from codebases')) {
+                return { results: [{ owner_id: 'user-owner' }] }
+              }
+              if (normalized.includes('from tenant_usage where tenant_id')) {
+                return { results: usage ? [usage] : [] }
+              }
+              if (normalized.includes('select count(*) as n from codebases')) {
+                return { results: [{ n: 1 }] }
+              }
+              if (normalized.includes('select codebase_id, revision, selected_state_json from codebases')) {
+                return { results: [{ codebase_id: 'codebase-1', revision: 2, selected_state_json: JSON.stringify(selected) }] }
+              }
+              if (normalized.includes('select path, scope from files')) {
+                return { results: [] }
+              }
+              db.executedStatements.push({ sql, params })
+              return { results: [], meta: { duration: 1 } }
+            },
+          }
+        },
+      }
+    },
+  }
+  return db
+}
+
+function guardedCommitBatch() {
+  const states = journalSelectedStates('team-visible')
+  return guardedJournalBatch({ path: 'README.md', previousSelectedState: states.previous, nextSelectedState: states.next })
+}
+
+const meterStatementsOf = (db) => db.executedStatements.filter((entry) => /insert into tenant_usage/i.test(entry.sql))
+
+test('meter: flag OFF appends no meter upsert and leaves the batch byte-for-byte (flag-off proof)', async () => {
+  const db = createQuotaMutationDb()
+  const response = await worker.fetch(scopedQueryRequest(guardedCommitBatch(), '203.0.113.90'), {
+    HOPIT_D1_DB: db,
+    // No HOPIT_MULTITENANT: metering is entirely off.
+  })
+  assert.equal(response.status, 200)
+  assert.equal(db.executedStatements.length, 3) // exactly the tenant's own 3 statements
+  assert.equal(meterStatementsOf(db).length, 0)
+})
+
+test('meter: flag ON folds exactly one tenant-keyed meter upsert into the batch (+1 row/save)', async () => {
+  const db = createQuotaMutationDb()
+  const response = await worker.fetch(scopedQueryRequest(guardedCommitBatch(), '203.0.113.91'), {
+    HOPIT_D1_DB: db,
+    HOPIT_MULTITENANT: '1',
+  })
+  assert.equal(response.status, 200)
+  const meters = meterStatementsOf(db)
+  assert.equal(meters.length, 1) // exactly one extra row written per save
+  assert.equal(meters[0].params[0], 'user-owner') // accrues to the OWNER tenant
+  assert.ok(meters[0].params.includes(3)) // rowsDelta = 3 mutating statements
+  assert.ok(meters[0].params.includes(7)) // storageDelta = guarded file size
+  // The appended meter result is trimmed from the tenant-visible response.
+  const body = await response.json()
+  assert.equal(body.result.length, 3)
+})
+
+test('meter: flag ON with enforce ON under cap still writes + meters', async () => {
+  const db = createQuotaMutationDb({ usage: { plan: 'free', write_day: TODAY, rows_written_today: 10, storage_bytes: 100 } })
+  const response = await worker.fetch(scopedQueryRequest(guardedCommitBatch(), '203.0.113.92'), {
+    HOPIT_D1_DB: db,
+    HOPIT_MULTITENANT: '1',
+    HOPIT_ENFORCE_QUOTA: '1',
+  })
+  assert.equal(response.status, 200)
+  assert.equal(meterStatementsOf(db).length, 1)
+})
+
+test('enforce: an over-daily-cap write is rejected at the Worker with nothing written (no data loss)', async () => {
+  const db = createQuotaMutationDb({ usage: { plan: 'free', write_day: TODAY, rows_written_today: 1999, storage_bytes: 0 } })
+  const response = await worker.fetch(scopedQueryRequest(guardedCommitBatch(), '203.0.113.93'), {
+    HOPIT_D1_DB: db,
+    HOPIT_MULTITENANT: '1',
+    HOPIT_ENFORCE_QUOTA: '1',
+  })
+  assert.equal(response.status, 429)
+  const body = await response.json()
+  assert.equal(body.errors[0].quota.code, 'quota_exceeded_daily')
+  // Nothing was written: not the tenant's statements, not the meter row.
+  assert.equal(db.executedStatements.length, 0)
+})
+
+test('enforce: reads for the SAME over-quota tenant still succeed', async () => {
+  const db = createQuotaMutationDb({ usage: { plan: 'free', write_day: TODAY, rows_written_today: 999_999, storage_bytes: 9_999_999_999 } })
+  const response = await worker.fetch(scopedQueryRequest(
+    { sql: 'select * from files where codebase_id = ? order by path asc', params: ['codebase-1'] },
+    '203.0.113.94',
+  ), {
+    HOPIT_D1_DB: db,
+    HOPIT_MULTITENANT: '1',
+    HOPIT_ENFORCE_QUOTA: '1',
+  })
+  assert.equal(response.status, 200) // reads are never routed through the quota gate
+})
+
+test('enforce: an over-storage-cap write is rejected with a typed storage error', async () => {
+  const db = createQuotaMutationDb({ usage: { plan: 'free', write_day: TODAY, rows_written_today: 0, storage_bytes: 1_999_999_999 } })
+  const response = await worker.fetch(scopedQueryRequest(guardedCommitBatch(), '203.0.113.95'), {
+    HOPIT_D1_DB: db,
+    HOPIT_MULTITENANT: '1',
+    HOPIT_ENFORCE_QUOTA: '1',
+  })
+  assert.equal(response.status, 429)
+  assert.equal((await response.json()).errors[0].quota.code, 'quota_exceeded_storage')
+  assert.equal(db.executedStatements.length, 0)
+})
+
+test('enforce: the paid plan clears a write the free cap would reject (free vs paid)', async () => {
+  const db = createQuotaMutationDb({ usage: { plan: 'paid', write_day: TODAY, rows_written_today: 1999, storage_bytes: 0 } })
+  const response = await worker.fetch(scopedQueryRequest(guardedCommitBatch(), '203.0.113.96'), {
+    HOPIT_D1_DB: db,
+    HOPIT_MULTITENANT: '1',
+    HOPIT_ENFORCE_QUOTA: '1',
+  })
+  assert.equal(response.status, 200) // 1999 + 3 is under the 50k paid daily cap
+  assert.equal(meterStatementsOf(db).length, 1)
+})
+
+// --- Usage status surface (/usage) ------------------------------------------
+
+function createUsageDb({ usage = null, ownerId = 'user-owner', codebaseCount = 1 } = {}) {
+  return {
+    prepare(sql) {
+      const normalized = sql.toLowerCase()
+      return {
+        bind() {
+          return {
+            async all() {
+              if (normalized.includes('from agent_sessions')) {
+                return { results: [scopedSession({ user_id: 'user-member' })] }
+              }
+              if (normalized.startsWith('select owner_id from codebases')) {
+                return { results: [{ owner_id: ownerId }] }
+              }
+              if (normalized.includes('from tenant_usage where tenant_id')) {
+                return { results: usage ? [usage] : [] }
+              }
+              if (normalized.includes('select count(*) as n from codebases')) {
+                return { results: [{ n: codebaseCount }] }
+              }
+              return { results: [] }
+            },
+          }
+        },
+      }
+    },
+  }
+}
+
+function usageRequest(ip) {
+  return new Request('https://worker.example/usage', {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer hst_session_token',
+      'content-type': 'application/json',
+      'cf-connecting-ip': ip,
+    },
+    body: JSON.stringify({}),
+  })
+}
+
+test('usage: the /usage surface is 404 with the flag off (single-tenant unchanged)', async () => {
+  const response = await worker.fetch(usageRequest('203.0.113.97'), { HOPIT_D1_DB: createUsageDb() })
+  assert.equal(response.status, 404)
+})
+
+test('usage: a session sees its own tenant plan, limits, and warn state', async () => {
+  const db = createUsageDb({ usage: { plan: 'free', storage_bytes: 1_600_000_000, write_day: TODAY, rows_written_today: 50 } })
+  const response = await worker.fetch(usageRequest('203.0.113.98'), {
+    HOPIT_D1_DB: db,
+    HOPIT_MULTITENANT: '1',
+  })
+  assert.equal(response.status, 200)
+  const { result } = await response.json()
+  assert.equal(result.plan, 'free')
+  assert.equal(result.storage.limit, 2_000_000_000)
+  assert.equal(result.storage.state, 'warn') // 80% of storage
+  assert.equal(result.dailyWrites.limit, 2_000)
+  assert.equal(result.codebases.used, 1)
+  assert.equal(result.enforced, false)
 })

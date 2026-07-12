@@ -74,6 +74,22 @@ export function assertServerActorStatementAllowed(actor, statement) {
     return { operation, table, codebaseIds: [] }
   }
 
+  // The user's own per-tenant usage meter (tenant == user in v1). Read-only and
+  // anchored to the actor's own tenant_id, so the dashboard can surface "X% of
+  // storage / Y% of today's writes" on Plane A without reaching another tenant's
+  // meter. Writes to tenant_usage stay on the Worker's folded meter path / the
+  // admin proxy, never the dashboard.
+  if (table === 'tenant_usage') {
+    if (operation !== 'select') throw new Error('Server actor cannot mutate tenant usage.')
+    if (!/\btenant_id\s*=\s*\?/.test(normalized)) {
+      throw new Error('Server actor tenant usage reads must be anchored to the actor tenant id.')
+    }
+    if (!params.includes(userId)) {
+      throw new Error('Server actor can only read its own tenant usage.')
+    }
+    return { operation, table, codebaseIds: [] }
+  }
+
   // Every other tenant table must name the codebase it touches so the Worker can
   // confirm the actor is entitled to it. Unknown tables fail closed.
   if (!codebaseScopedTables.has(table)) {
@@ -258,6 +274,11 @@ function scopedFileMutationPolicy(sql, params, operation, table, session) {
       operation,
       path: insertedBoundColumnValue(parsed, params, 'path'),
       knownGuarded,
+      // Storage-tally contribution for the per-tenant usage meter (Phase 3): the
+      // file's byte size, from the guarded upsert's `size` column, falling back to
+      // `blob_size` for R2-backed content. All guarded columns bind a single
+      // anonymous param in order, so the column index is the param ordinal.
+      storageBytes: knownGuarded ? guardedFileInsertStorageBytes(params) : 0,
     }
   }
   if (table === 'files' && operation === 'delete') {
@@ -644,6 +665,19 @@ const guardedFileVersionColumns = [
   'device_name',
   'created_at',
 ]
+
+// Index of a column within the guarded files upsert = its bound-param ordinal,
+// because every guarded expression is a single anonymous `?` in column order.
+const guardedFileSizeParamIndex = guardedFileColumns.indexOf('size')
+const guardedFileBlobSizeParamIndex = guardedFileColumns.indexOf('blob_size')
+
+function guardedFileInsertStorageBytes(params) {
+  const size = Number(params[guardedFileSizeParamIndex])
+  if (Number.isFinite(size) && size > 0) return size
+  const blobSize = Number(params[guardedFileBlobSizeParamIndex])
+  if (Number.isFinite(blobSize) && blobSize > 0) return blobSize
+  return 0
+}
 
 function isKnownGuardedFileUpsert(parsed) {
   if (parsed.table !== 'files' || !parsed.guarded || !sameValues(parsed.columns, guardedFileColumns)) return false

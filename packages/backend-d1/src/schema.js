@@ -506,4 +506,22 @@ export const d1SchemaStatements = [
     primary key (codebase_id, episode_id)
   )`,
   `create index if not exists idx_trail_episodes_codebase_from on trail_episodes(codebase_id, from_revision)`,
+  // Phase 3 Stage 2-3 (HOPIT_MULTITENANT) — per-tenant usage meter + plan. One
+  // indexed row per tenant (tenant == user in v1; tenant_id == owner_id). Holds a
+  // maintained storage-bytes tally and a rolling daily D1-rows-written counter
+  // (reset when write_day rolls to a new UTC day), plus the tenant's plan so a
+  // single indexed read resolves both usage AND the plan. New table (not an
+  // alter), so it applies cleanly to databases created before the feature and is
+  // absent/zero-cost until the flag is switched on. Codebase count is computed on
+  // read (create is a cold path) rather than maintained here, so the hot write
+  // path folds exactly one meter upsert into the tenant's existing batch.
+  `create table if not exists tenant_usage (
+    tenant_id text primary key,
+    plan text not null default 'free',
+    storage_bytes integer not null default 0,
+    write_day text,
+    rows_written_today integer not null default 0,
+    created_at text not null,
+    updated_at text not null
+  )`,
 ]

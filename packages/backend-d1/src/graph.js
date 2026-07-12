@@ -3,6 +3,7 @@ import { privacyZoneForPath, privacyZoneIdForPath, scopeForPath } from '@hopit/c
 import { defineBackendMethods } from './method-support.js'
 import { d1CloudServiceType, d1AuthorizationToken, schemaCacheKey, usesCloudflareD1Api, usesScopedD1SessionAuth } from './config.js'
 import { d1SchemaStatements } from './schema.js'
+import { QuotaExceededError, assertSeatAvailable, assertSubscriptionActive, computeUsageStatus, normalizePlan, resolveCodebaseLimit, resolvePlanLimits, utcDay, warnRatioFromEnv } from './quota.js'
 import { attachTextDiff, buildFileVersionRowForEntry, buildFileVersionRows, compareVersionRows, createCompareBlobReader, retainedBlobKeysForVersions } from './history.js'
 import { summarizeAccessContext, normalizeEmail, normalizeCodebaseName, normalizeNewCodebaseId, backendErrorMessage, normalizeFutureTimestamp, normalizePositiveInteger, nullablePositiveInteger, nullableNonNegativeInteger, actorAuditId, requireTextValue, uniqueStrings, parseStringArray, normalizeRole, graphMemberCount, countPathScopes, assertSafeGraphPath, hashText, byteLength, parseJson, stringifyJson, stringOrNull, integerOrNull, integerValue, boundedLimit, requireAuthenticatedActor, requireVerifiedEmailActor, requireOwnerClaimActor, isBootstrapOwnerMember, claimedOwnerValue, graphFromRows, codebaseRowToRecord, codebaseRecordFromGraph, fileRowToEntry, normalizeGraph, normalizeFileEntry, normalizeVisibilityContract, normalizeOptionalVisibility, normalizeVisibilityValue, summarizeCodebaseHead, summarizeCodebaseRemoteUpdate, buildStatus, buildSyncHealth, buildRefreshHealth, mapD1AgentEvent, latestEventOf, applyJournalEntryToCloud, slugifyCodebaseId, hasCapability, visibilityContextForGraph, filterVisibleGraphForRequester, filterVisibleGraphForAccess, canRequesterSeePath, canRead, canWrite, permissionsForRole, accessContextForCodebaseHead, memberSelectSql, mapD1Member, mapD1Invitation, invitationRole, invitationStatusOrNull, isInvitationExpired, invitationStatusForRead, hashInvitationToken, createAgentSessionId, createAgentSessionToken, hashAgentSessionToken, normalizeAgentSessionId, assertReusableAgentSession, normalizeAgentSessionCapabilities, agentSessionStatusOrNull, agentSessionHasCapability, codebaseCapabilityForAgentCapability, agentCapabilityForCodebaseCapability, isExpiredTimestamp, summarizeAgentSession, normalizeKeyEntityId, assertDevicePublicKeyDescriptor, looksLikePem, assertSameDevicePublicKeys, assertSameCodebaseKeyring, wrappedKeyType, wrappedKeyRecipientType, capabilityForWrappedKey, isPrivateZoneId, assertWrappedKeyEnvelope, assertSameWrappedKey, effectiveWrappedKeyStatus, canActorReadWrappedKey, createWrappedKeyId, summarizeDeviceKey, summarizeUserKeyring, summarizeCodebaseKeyring, summarizeWrappedKey, deviceKeyStatusOrNull, keyRotationState, mapD1Issue, mapD1IssueComment, mapD1Discussion, mapD1DiscussionComment, mapD1Release, mapD1ReleaseAsset, mapD1ReviewThread, mapD1ReviewThreadComment, mapD1ReviewDecision, mapD1Notification, mapD1Project, mapD1ProjectItem, issuePriorityOrNull, issueStatus, discussionCategory, discussionStatus, releaseStatus, releaseAssetKind, reviewDecision, notificationKind, reviewDecisionTitle, reviewDecisionBody, reviewHref, workItemHref, projectStatus, normalizeProjectColumns, normalizeProjectColumnId, normalizeProjectPosition, projectItemType, normalizeReleaseTarget, collaborationScope, actionCommandForKind, summarizeActionJob, actionSummary, capOutput } from './helpers/index.js'
 
@@ -601,6 +602,63 @@ export function attachGraphMethods(Backend) {
     }
   },
 
+  // Resolve the tenant's plan (v1 tenant == owner user). A single indexed read;
+  // absence of a row means the free plan (the no-card default).
+  async readTenantPlan(tenantId) {
+    if (!stringOrNull(tenantId)) return 'free'
+    const row = await this.first('select plan from tenant_usage where tenant_id = ? limit 1', [tenantId])
+    return normalizePlan(row?.plan)
+  },
+
+  async countCodebasesForOwner(ownerId) {
+    if (!stringOrNull(ownerId)) return 0
+    const row = await this.first('select count(*) as n from codebases where owner_id = ? limit 1', [ownerId])
+    return Number(row?.n ?? 0)
+  },
+
+  async assertCodebaseCreationWithinQuota(ownerId) {
+    // Flag off, or the single-operator local-owner sentinel => no gate (byte-for-
+    // byte legacy behavior). Only real, authenticated tenants are metered.
+    if (!this.config.multiTenant || !stringOrNull(ownerId) || ownerId === 'local-owner') return
+    const env = typeof process !== 'undefined' && process.env ? process.env : {}
+    const plan = await this.readTenantPlan(ownerId)
+    // Subscription/seat gates are always-allow stubs for this stage.
+    assertSubscriptionActive({ plan })
+    assertSeatAvailable({ plan })
+    const limit = resolveCodebaseLimit(env, plan)
+    if (!(limit > 0)) return
+    const count = await this.countCodebasesForOwner(ownerId)
+    if (count >= limit) {
+      throw new QuotaExceededError(
+        `Codebase limit reached for the ${plan} plan (${count}/${limit}). Upgrade to add more codebases.`,
+        { code: 'quota_exceeded_codebases', kind: 'codebases', limit, used: count, plan },
+      )
+    }
+  },
+
+  // Per-tenant usage + limits + warn/block state for the dashboard status surface
+  // (Plane A). Read-only; display-only. The Worker is the authoritative
+  // enforcement point. Returns the free-tier shape even before a meter row exists.
+  async readTenantUsage({ tenantId, actor = {} } = {}) {
+    await this.ensureSchema()
+    const resolvedTenantId = stringOrNull(tenantId) ?? stringOrNull(actor.userId)
+    if (!resolvedTenantId) return null
+    const env = typeof process !== 'undefined' && process.env ? process.env : {}
+    const usage = await this.first(
+      'select tenant_id, plan, storage_bytes, write_day, rows_written_today from tenant_usage where tenant_id = ? limit 1',
+      [resolvedTenantId],
+    )
+    const limits = resolvePlanLimits(env, usage?.plan ?? 'free')
+    const codebaseCount = await this.countCodebasesForOwner(resolvedTenantId)
+    return computeUsageStatus({
+      usage,
+      limits,
+      warnRatio: warnRatioFromEnv(env),
+      day: utcDay(),
+      codebaseCount,
+    })
+  },
+
   async createCodebase({ name, codebaseId, description, actor = {} }) {
     await this.ensureSchema()
     const now = new Date().toISOString()
@@ -610,6 +668,13 @@ export function attachGraphMethods(Backend) {
       : normalizeNewCodebaseId(codebaseId)
     if (await this.readOptionalGraph(id)) throw new Error(`Codebase ${id} already exists.`)
     const ownerId = stringOrNull(actor.userId) ?? 'local-owner'
+    // Plane-A quota gate (Phase 3 Stage 3): with multi-tenancy on, enforce the
+    // plan's codebase-count cap (free = 1) at create time. Codebase count is
+    // computed on read here (a cold path), not maintained. Seat/subscription
+    // gates are stubbed to always-allow until billing lands (Stage 5) but are
+    // structured so that stage fills them in without touching this call site.
+    // Reads/exports are never routed through this gate.
+    await this.assertCodebaseCreationWithinQuota(ownerId)
     const ownerEmail = stringOrNull(actor.primaryEmail)
     const ownerName = stringOrNull(actor.displayName) ?? ownerEmail ?? ownerId
     const graph = normalizeGraph({

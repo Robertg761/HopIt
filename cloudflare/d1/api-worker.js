@@ -1,6 +1,15 @@
 import { CodebasePushHub, normalizeRemoteUpdateEnvelope } from './push-hub.js'
 import { assertScopedSessionStatementAllowed, assertServerActorStatementAllowed } from './scoped-sql.js'
 import { assertBrokerKeyForCodebase, brokerR2ConfigFromEnv, isBrokerPresignPath, normalizeBrokerMethod, presignBlobUrl } from './blob-broker.js'
+import {
+  buildMeterUpsertStatement,
+  computeUsageStatus,
+  evaluateWriteQuota,
+  isQuotaEnforced,
+  resolvePlanLimits,
+  utcDay,
+  warnRatioFromEnv,
+} from './quota.js'
 
 function isMultiTenantEnabled(env) {
   return /^(1|true|yes|on)$/i.test(String(env?.HOPIT_MULTITENANT ?? ''))
@@ -339,6 +348,10 @@ async function readScopedFileAccess(db, session) {
   const visibility = parseJson(row.visibility_json, {})
   return {
     codebaseId: session.codebase_id,
+    // The tenant that owns this codebase — quota accrues to the OWNER, not the
+    // writing session user (a collaborator's writes count against the owner's
+    // tenant budget).
+    ownerId: row.owner_id ?? null,
     isOwner: Boolean(session.user_id && session.user_id === row.owner_id),
     isActiveMember: row.member_status === 'active' && ['owner', 'maintainer', 'member', 'viewer'].includes(row.member_role),
     selectedStateType: selectedState?.type ?? null,
@@ -346,6 +359,212 @@ async function readScopedFileAccess(db, session) {
     selectedStateMergeState: selectedState?.mergeState ?? null,
     effectiveVisibility: selectedState?.effectiveVisibility ?? visibility?.effective ?? 'private',
   }
+}
+
+// --- Per-tenant usage metering + quota enforcement (Phase 3 Stage 2-3) --------
+//
+// Runs ONLY when HOPIT_MULTITENANT is on (flag off => this path is never reached,
+// so single-tenant production keeps zero metering overhead and byte-for-byte
+// behavior). For a tenant (hst_ session OR hsa_ server-actor) mutating batch it:
+//   1. counts the mutating statements it is about to run (rows delta) and sums
+//      guarded file sizes (storage delta),
+//   2. when HOPIT_ENFORCE_QUOTA is also on, reads the tenant's single meter row +
+//      plan and rejects the batch CLEANLY if it would cross a hard cap (no
+//      partial write, no data loss — the agent holds the change on disk),
+//   3. returns a single meter upsert to be folded into the SAME batch, so the
+//      write and its meter increment commit or roll back together (+1 row/batch).
+// Reads, exports, and deletes (which reduce storage) are never routed here.
+function mutatingStatementCount(policies) {
+  let count = 0
+  for (const policy of policies ?? []) {
+    if (policy?.operation === 'insert' || policy?.operation === 'update' || policy?.operation === 'delete') count += 1
+  }
+  return count
+}
+
+function guardedStorageDelta(policies) {
+  let bytes = 0
+  for (const policy of policies ?? []) {
+    const contribution = Number(policy?.fileMutation?.storageBytes)
+    if (Number.isFinite(contribution) && contribution > 0) bytes += contribution
+  }
+  return bytes
+}
+
+async function readCodebaseOwnerId(db, codebaseId) {
+  if (!codebaseId) return null
+  const result = await db.prepare('select owner_id from codebases where codebase_id = ? limit 1').bind(codebaseId).all()
+  return result.results?.[0]?.owner_id ?? null
+}
+
+async function readTenantUsageRow(db, tenantId) {
+  if (!tenantId) return null
+  const result = await db.prepare(
+    'select tenant_id, plan, storage_bytes, write_day, rows_written_today from tenant_usage where tenant_id = ? limit 1',
+  ).bind(tenantId).all()
+  return result.results?.[0] ?? null
+}
+
+async function resolveTenantIdForAuthorization(db, authorization) {
+  if (authorization.kind === 'server-actor') return authorization.actor?.userId ?? null
+  if (authorization.kind === 'session') {
+    return authorization.fileAccess?.ownerId
+      ?? await readCodebaseOwnerId(db, authorization.session?.codebase_id)
+      ?? authorization.session?.user_id
+      ?? null
+  }
+  return null
+}
+
+// Metering/enforcement must never crash a legitimate write: infrastructure
+// errors here fail OPEN (write proceeds, unmetered) so a transient meter fault
+// cannot lock a tenant out. A quota *rejection* is a deliberate decision, not an
+// error, and is returned (not thrown) so it does not count as a failed auth.
+async function prepareTenantMetering({ env, db, authorization }) {
+  if (!isMultiTenantEnabled(env)) return null
+  if (authorization.kind !== 'session' && authorization.kind !== 'server-actor') return null
+
+  const policies = authorization.statementPolicies ?? []
+  const rowsDelta = mutatingStatementCount(policies)
+  if (rowsDelta === 0) return null // read-only batch — never metered.
+
+  const tenantId = await resolveTenantIdForAuthorization(db, authorization)
+  if (!tenantId) return null
+
+  const storageDelta = guardedStorageDelta(policies)
+  const day = utcDay()
+
+  if (isQuotaEnforced(env)) {
+    const usage = await readTenantUsageRow(db, tenantId)
+    const limits = resolvePlanLimits(env, usage?.plan ?? 'free')
+    const rejection = evaluateWriteQuota({ usage, limits, day, rowsDelta, storageDelta })
+    if (rejection) return { tenantId, rowsDelta, storageDelta, rejection }
+  }
+
+  const meterStatement = buildMeterUpsertStatement({
+    tenantId,
+    day,
+    rowsDelta,
+    storageDelta,
+    now: new Date().toISOString(),
+  })
+  return { tenantId, rowsDelta, storageDelta, meterStatement }
+}
+
+function quotaError(rejection) {
+  return json({
+    success: false,
+    errors: [{ code: 1008, message: rejection.message, quota: rejection }],
+    messages: [],
+    result: [],
+  }, 429)
+}
+
+// --- Usage status surface (Phase 3 Stage 2-3) --------------------------------
+//
+// A read-only endpoint the desktop agent (or dashboard) can poll to render
+// "X% of storage, Y% of today's writes" and the warn/block state. Authenticated
+// by the SAME principals the query/broker paths trust; a caller only ever sees
+// its own tenant's meter. Exists only with the flag on (falls through to 404
+// otherwise, so single-tenant is unchanged).
+function isUsageStatusPath(pathname) {
+  return pathname === '/usage' || pathname.endsWith('/usage')
+}
+
+async function handleUsageStatus(request, env) {
+  if (request.method !== 'GET' && request.method !== 'POST') {
+    const response = cloudflareError('Method not allowed.', 1004, 405)
+    logRequest({ request, env, status: response.status, rejectedReason: 'method-not-allowed' })
+    return response
+  }
+  if (failedAuthRateLimited(request)) {
+    const response = rateLimitError()
+    logRequest({ request, env, status: response.status, rejectedReason: 'failed-auth-rate-limit' })
+    return response
+  }
+
+  let body = {}
+  if (request.method === 'POST') {
+    try {
+      body = await request.json()
+    } catch {
+      body = {}
+    }
+  }
+
+  let principal
+  try {
+    principal = await resolveUsagePrincipal(request, env, body)
+    clearFailedAuth(request)
+  } catch (error) {
+    const rateLimited = recordFailedAuth(request)
+    const response = rateLimited ? rateLimitError() : authenticationError(error instanceof Error ? error.message : undefined)
+    logRequest({ request, env, status: response.status, rejectedReason: rateLimited ? 'failed-auth-rate-limit' : 'Authentication error' })
+    return response
+  }
+
+  const tenantId = await tenantIdForUsagePrincipal(env.HOPIT_D1_DB, principal)
+  const usage = await readTenantUsageRow(env.HOPIT_D1_DB, tenantId)
+  const limits = resolvePlanLimits(env, usage?.plan ?? 'free')
+  const codebaseCount = await countCodebasesForOwner(env.HOPIT_D1_DB, tenantId)
+  const status = computeUsageStatus({
+    usage,
+    limits,
+    warnRatio: warnRatioFromEnv(env),
+    day: utcDay(),
+    codebaseCount,
+  })
+  status.enforced = isQuotaEnforced(env)
+  const response = json({ success: true, errors: [], messages: [], result: status })
+  logRequest({ request, env, authMode: principal.kind, codebaseId: principal.codebaseId ?? null, status: response.status })
+  return response
+}
+
+// Read-only principal resolution for /usage. Unlike the broker, a server-actor
+// here names no codebase (it wants its OWN tenant meter); a session maps to its
+// bound codebase's owner; proxy (admin) may name a tenant/codebase explicitly.
+async function resolveUsagePrincipal(request, env, body) {
+  const token = bearerTokenFromRequest(request)
+
+  const expectedToken = env.HOPIT_D1_PROXY_TOKEN
+  if (expectedToken && await constantTimeTokenEqual(token, expectedToken)) {
+    const tenantId = typeof body?.tenantId === 'string' ? body.tenantId.trim() : ''
+    const codebaseId = typeof body?.codebaseId === 'string' ? body.codebaseId.trim() : ''
+    if (!tenantId && !codebaseId) throw new Error('Usage proxy requests must name a tenant id or codebase id.')
+    return { kind: 'proxy', userId: tenantId || null, codebaseId: codebaseId || null }
+  }
+
+  if (token.startsWith('hsa_')) {
+    const actor = await verifyServerActorToken(token, env.HOPIT_D1_SERVER_ACTOR_SECRET)
+    if (!actor) throw new Error('Authentication error')
+    return { kind: 'server-actor', userId: actor.userId, codebaseId: null }
+  }
+
+  if (token.startsWith('hst_')) {
+    const session = await readAgentSessionForToken(env.HOPIT_D1_DB, token)
+    if (!session) throw new Error('Agent session token was not found.')
+    if (session.status !== 'active') throw new Error('Agent session is not active.')
+    if (session.expires_at && Date.parse(session.expires_at) <= Date.now()) {
+      throw new Error('Agent session token has expired.')
+    }
+    return { kind: 'session', userId: null, codebaseId: session.codebase_id }
+  }
+
+  throw new Error('Authentication error')
+}
+
+// The tenant is the codebase's owner (v1 tenant == user). A server-actor/proxy
+// principal already carries the user/tenant id.
+async function tenantIdForUsagePrincipal(db, principal) {
+  if (principal.userId) return principal.userId
+  if (principal.codebaseId) return await readCodebaseOwnerId(db, principal.codebaseId)
+  return null
+}
+
+async function countCodebasesForOwner(db, ownerId) {
+  if (!ownerId) return null
+  const result = await db.prepare('select count(*) as n from codebases where owner_id = ? limit 1').bind(ownerId).all()
+  return Number(result.results?.[0]?.n ?? 0)
 }
 
 function assertScopedMutationBatch(policies) {
@@ -609,6 +828,12 @@ const worker = {
       return await handleBlobPresign(request, env)
     }
 
+    // The per-tenant usage status surface (Front-3 metering) also only exists
+    // with the flag on; otherwise it falls through to the 404 below.
+    if (isMultiTenantEnabled(env) && isUsageStatusPath(url.pathname)) {
+      return await handleUsageStatus(request, env)
+    }
+
     if (!url.pathname.endsWith('/query')) {
       const response = cloudflareError('Not found.', 1003, 404)
       logRequest({
@@ -679,9 +904,36 @@ const worker = {
       return response
     }
 
+    // Per-tenant metering + quota enforcement (no-op unless HOPIT_MULTITENANT).
+    // A quota rejection fails the write cleanly (429) BEFORE any statement runs,
+    // so no data is written and the agent keeps the change on local disk. The
+    // meter upsert is folded into the same batch (+1 row) so it commits with the
+    // write. Infra faults in metering fail open (write proceeds, unmetered).
+    let metering = null
     try {
-      const executed = await executeStatements(env.HOPIT_D1_DB, statements)
-      const result = await enforceScopedResultVisibility(env.HOPIT_D1_DB, executed, authorization)
+      metering = await prepareTenantMetering({ env, db: env.HOPIT_D1_DB, authorization })
+    } catch {
+      metering = null
+    }
+    if (metering?.rejection) {
+      const response = quotaError(metering.rejection)
+      logRequest({
+        request,
+        env,
+        authMode: authorization.kind,
+        codebaseId: requestCodebaseId(request, authorization.session),
+        statementCount: statementCountForBody(body),
+        status: response.status,
+        rejectedReason: metering.rejection.code,
+      })
+      return response
+    }
+    const statementsToRun = metering?.meterStatement ? [...statements, metering.meterStatement] : statements
+
+    try {
+      const executed = await executeStatements(env.HOPIT_D1_DB, statementsToRun)
+      const tenantExecuted = metering?.meterStatement ? executed.slice(0, statements.length) : executed
+      const result = await enforceScopedResultVisibility(env.HOPIT_D1_DB, tenantExecuted, authorization)
       await notifyPushHubAfterMutation({ request, env, statements, authorization })
       const response = json({
         success: true,
