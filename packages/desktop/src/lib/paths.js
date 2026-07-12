@@ -103,6 +103,29 @@ export function assertSafeAbsolutePath(candidate) {
 }
 
 /**
+ * Validate an absolute path that must stay *inside* a trusted root directory.
+ * Used when the target is built by joining a trusted root (a project's workspace
+ * folder) with an untrusted, disk/cloud-derived subpath (a file path from the
+ * agent's status map): a hostile subpath like `../../../../etc/passwd` normalizes
+ * to an absolute path outside the root, so a plain absolute-path check would still
+ * let it through. Returns the normalized absolute target or throws.
+ * @param {unknown} root
+ * @param {unknown} candidate
+ */
+export function assertPathWithin(root, candidate) {
+  if (typeof root !== 'string' || !path.isAbsolute(root)) {
+    throw new Error('A valid root directory is required.')
+  }
+  const target = assertSafeAbsolutePath(candidate)
+  const normalizedRoot = path.normalize(root)
+  const rootWithSep = normalizedRoot.endsWith(path.sep) ? normalizedRoot : normalizedRoot + path.sep
+  if (target !== normalizedRoot && !target.startsWith(rootWithSep)) {
+    throw new Error(`Path escapes its project folder: ${target}`)
+  }
+  return target
+}
+
+/**
  * A codebase id must be a single safe path segment (matches the agent's
  * assertSafeConnectionCodebaseId contract).
  * @param {unknown} candidate

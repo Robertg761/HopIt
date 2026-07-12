@@ -13,7 +13,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { deriveServicePort, eventsUrlForCodebase, statusUrlForCodebase } from './lib/ports.js'
-import { defaultAgentStateRoot, defaultWorkspaceRoot, resolveHopBinary, assertSafeAbsolutePath } from './lib/paths.js'
+import { defaultAgentStateRoot, defaultWorkspaceRoot, resolveHopBinary, assertSafeAbsolutePath, assertPathWithin } from './lib/paths.js'
 import { readProjects } from './lib/projects.js'
 import { fetchStatus, fetchEvents } from './lib/status-client.js'
 import { deriveViewModel } from './lib/state.js'
@@ -176,7 +176,8 @@ function updateTray() {
       label: 'Sync now',
       enabled: lastView.projects.length > 0 && Boolean(hopBinary),
       click: () => {
-        for (const project of lastView.projects) void runSync(project.codebaseId)
+        // Never let a spawn failure become an unhandled rejection in main.
+        for (const project of lastView.projects) runSync(project.codebaseId).catch(() => {})
       },
     },
     { type: 'separator' },
@@ -370,8 +371,12 @@ function registerIpc() {
     return { ok: true }
   })
 
-  ipcMain.handle('revealPath', async (_event, targetPath) => {
-    const safe = assertSafeAbsolutePath(targetPath)
+  ipcMain.handle('revealPath', async (_event, targetPath, options = {}) => {
+    // A file reveal joins a trusted workspace root with an agent-supplied file
+    // path; confine it so a hostile `..` path cannot escape into the filesystem.
+    // Whole-folder reveals (workspace root, project folder) pass no `within`.
+    const within = options && typeof options.within === 'string' ? options.within : null
+    const safe = within ? assertPathWithin(within, targetPath) : assertSafeAbsolutePath(targetPath)
     if (!fs.existsSync(safe)) return { ok: false, error: 'That location does not exist on this Mac yet.' }
     const error = await shell.openPath(safe)
     return { ok: !error, error: error || null }

@@ -33,7 +33,7 @@ contextBridge.exposeInMainWorld('hopit', {
   pinPath: (codebaseId, cloudPath, pinned) => ipcRenderer.invoke('pinPath', codebaseId, cloudPath, pinned),
 
   // Filesystem-friendly helpers.
-  revealPath: (targetPath) => ipcRenderer.invoke('revealPath', targetPath),
+  revealPath: (targetPath, options) => ipcRenderer.invoke('revealPath', targetPath, options ?? {}),
   openDashboard: (codebaseId) => ipcRenderer.invoke('openDashboard', codebaseId),
 
   // Add-a-project flow.

@@ -8,6 +8,7 @@ import {
   hopBinaryCandidates,
   defaultAgentStateRoot,
   assertSafeAbsolutePath,
+  assertPathWithin,
   assertSafeCodebaseId,
 } from '../src/lib/paths.js'
 
@@ -68,6 +69,25 @@ test('assertSafeAbsolutePath accepts absolute paths and rejects bad input', () =
   assert.throws(() => assertSafeAbsolutePath(''), /required/)
   assert.throws(() => assertSafeAbsolutePath(42), /required/)
   assert.throws(() => assertSafeAbsolutePath('/a/b\0c'), /null byte/)
+})
+
+test('assertPathWithin confines a workspace-joined reveal to the project folder', () => {
+  const root = '/Users/me/HopIt Workspaces/proj'
+  // Legit files inside the workspace resolve unchanged.
+  assert.equal(assertPathWithin(root, `${root}/src/app.js`), `${root}/src/app.js`)
+  assert.equal(assertPathWithin(root, root), root)
+  // A hostile agent/cloud-supplied file path that traverses upward is rejected,
+  // where a plain absolute-path check (assertSafeAbsolutePath) would let it out.
+  const hostile = `${root}/../../../../../../etc/passwd`
+  assert.equal(assertSafeAbsolutePath(hostile), '/etc/passwd') // demonstrates the gap the confinement closes
+  assert.throws(() => assertPathWithin(root, hostile), /escapes/)
+  // A hostile filename with traversal embedded in the last segment.
+  assert.throws(() => assertPathWithin(root, `${root}/a/../../../../tmp/evil`), /escapes/)
+  // A sibling directory sharing a name prefix must not be treated as inside.
+  assert.throws(() => assertPathWithin(root, '/Users/me/HopIt Workspaces/proj-evil/x'), /escapes/)
+  // Bad roots and bad targets are rejected too.
+  assert.throws(() => assertPathWithin('relative/root', `${root}/x`), /root/)
+  assert.throws(() => assertPathWithin(root, 'relative/x'), /absolute/)
 })
 
 test('assertSafeCodebaseId matches the agent single-segment contract', () => {

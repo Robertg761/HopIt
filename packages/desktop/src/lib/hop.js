@@ -50,6 +50,11 @@ export function streamHop(hopBin, args, opts = {}) {
     }
     child.stdout.on('data', pump)
     child.stderr.on('data', pump)
+    // A broken pipe (hop dies mid-stream) can surface as an 'error' on the stdio
+    // streams; without a listener Node would throw an uncaught exception. Fold it
+    // into the child 'error'/'close' path instead.
+    child.stdout.on('error', reject)
+    child.stderr.on('error', reject)
     child.on('error', reject)
     child.on('close', (code) => {
       if (buffer.length && onLine) onLine(stripAnsi(buffer))

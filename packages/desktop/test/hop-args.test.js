@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
+import process from 'node:process'
 
 import {
   hopSpawnEnv,
+  streamHop,
   syncArgs,
   refreshArgs,
   serviceArgs,
@@ -67,4 +69,24 @@ test('cloud paths must be workspace-relative and traversal-free', () => {
   assert.throws(() => assertSafeCloudPath('../outside'), /traverse/)
   assert.throws(() => assertSafeCloudPath('a/../../b'), /traverse/)
   assert.throws(() => assertSafeCloudPath(''), /required/)
+})
+
+test('streamHop rejects (not hangs) when the hop binary is missing', async () => {
+  await assert.rejects(
+    () => streamHop('/nonexistent/hop-binary-xyz', ['status'], { env: process.env }),
+    /ENOENT/,
+  )
+})
+
+test('streamHop survives a child dying mid-stream without throwing or hanging', async () => {
+  // Emit a large chunk then hard-kill self: exercises the buffer/close path and
+  // the stdio 'error' listeners added for broken-pipe safety.
+  const script = "process.stdout.write('x'.repeat(500000)); setTimeout(() => process.kill(process.pid, 'SIGKILL'), 1)"
+  const lines = []
+  const result = await streamHop(process.execPath, ['-e', script], {
+    env: process.env,
+    onLine: (line) => lines.push(line),
+  })
+  // Killed by signal -> code is null; the promise still resolves cleanly.
+  assert.equal(result.code, null)
 })

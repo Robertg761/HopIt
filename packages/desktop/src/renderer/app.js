@@ -406,7 +406,8 @@ async function renderFiles(codebaseId) {
       }))
     } else if (project?.workspacePath) {
       actions.appendChild(miniBtn('Show in Finder', () => {
-        void hopit.revealPath(`${project.workspacePath}/${file.path}`)
+        // Confine to the project folder: file.path is agent/cloud-derived data.
+        void hopit.revealPath(`${project.workspacePath}/${file.path}`, { within: project.workspacePath })
       }))
     }
     actions.appendChild(miniBtn(file.pinned ? 'Unpin' : 'Pin', async () => {
