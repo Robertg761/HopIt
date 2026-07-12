@@ -266,6 +266,18 @@ This one needs no design doc; it can run in parallel with 7a–7c and will press
 `node --test --test-name-pattern "adversarial|crash-left|skewed|racing refresh|storage budget failure" packages/agent/test/agent-cli.test.js`.
 Implementation of WS7a-WS7c remains gated on owner approval of those design docs.
 
+**Status update (2026-07-12):** the completion note above is stale for WS7c and
+partially for WS7a; the design docs were approved and implementation landed.
+WS7a push-based remote-update delivery has been live in production since
+2026-07-11 (a live `push-applied` proof: a second device synced revision
+4436 → 4437 and the production service applied it over the Durable Object hub
+~8s later; see `docs/progress.md`). WS7c is now closed end to end: the
+object-backed compare engine is built and verified (`d681765`), and both the
+dashboard compare page (`7c7f787`) and the desktop app's Trail (`c4603dc`)
+render real object-backed directory and per-file diffs from it. WS7b (demand
+hydration) remains at the "improve open-time heuristics now, defer FS-level
+triggers" conclusion documented in its design doc.
+
 **Size:** each sub-workstream is 1 design session + 1–3 implementation sessions.
 
 ---

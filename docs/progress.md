@@ -1,6 +1,6 @@
 # HopIt Progress Tracker
 
-Last updated: 2026-07-11
+Last updated: 2026-07-12
 
 This tracker is the working view of what is done, what is in progress, what is next, and what is still deliberately out of scope. The roadmap source remains [MVP Plan](mvp-plan.md), and the agent contract source remains [Local Agent Architecture](agent-architecture.md). This file turns those plans into a practical implementation ledger.
 
@@ -109,6 +109,39 @@ Current verified result:
 - `curl -I https://hopit.dev/`: returns `HTTP/2 307` to `/sign-in` for signed-out users, confirming Clerk protects the dashboard.
 - Production Clerk sign-in and D1 owner claim were smoke-tested on `https://hopit.dev`; Basic Auth fallback is no longer needed for the owner handoff.
 - Google Auth Platform Audience for project `hopit-auth-prod-rg`: shows `1 user (1 test, 0 other) / 100 user cap` and the test-user row `robertgordon761@gmail.com`.
+
+## 2026-07-12 WS7c Closed: Trail Diffs In The Desktop App And Dashboard, Plus A Reliability Sweep
+
+WS7c is now closed end to end: the object-backed compare engine was verified as already built and passing, and both the desktop app and the dashboard grew real trail-step diffs on top of it — the compare/history surfaces are no longer dashboard-pending. A reliability sweep landed alongside: merged CI, human-readable sync copy, an events-journal rotation, connection-fault resilience, and scheduled nightly backups. All work is live — commits pushed, dashboard deployed to `hopit.dev`, desktop app relaunched.
+
+Reliability sweep (`25247aa`, `04d6ae7`, `ccbc883`, `d4823df`):
+
+- Merged CI: `verify` and `desktop` jobs were added to the pre-existing passing workflow, the macOS/packaging matrix was retained, and a status badge landed in the README.
+- Copy/UX: human sync-state labels via `syncStateLabel`; `hop add` error strings now name `hop add`; friendly expired-approval guidance on the device page; two renderer races fixed. The desktop renderer is now an ES module importing the tested lib modules.
+- Events journal rotation: the events journal rotates at 16 MB via atomic rename, keeping one prior generation (`HOPIT_EVENTS_MAX_BYTES`); backups capture both generations, and `readEventsWithHistory` serves deep readers.
+- Connection resilience: remote-pull and head-reconciliation cloud reads retry transient faults through `cloud-retry.js`, emitting `cloud.fetch_recovered`. A new `remote-push.resumed` event makes `/status` report push-connected when the socket is alive after a reconnect catch-up poll, so push-fallback-polling now means genuinely socketless. `remote-push.disconnected` carries `closeCode`/`closeReason`/`wasClean`/`errorDetail`, and the initial push cursor read survives rotation.
+- Nightly backups scheduled via launchd (`com.hopit.backup`, 3:30 AM, every connected codebase plus the device keyring, 14-day retention), with a validated first run.
+
+WS7c engine verification (`d681765`):
+
+- The engine implementation (`file_versions` rows, blob-lazy `compareRevisions` with a request-scoped cache, honest `missing_blob`/`integrity_failure`/`requiresLocalKey`/`binary_changed` states, dry-run-default storage GC, and the three-revision `hop demo` chain) was found already committed and passing every design-doc acceptance item.
+- A dated implementation-notes addendum on [WS7c Object-Backed Diff And History Reconstruction Design](ws7c-object-backed-diff-history-design.md) records the resolved choices.
+
+Desktop Trail consumer (`c4603dc`):
+
+- Trail steps remain event-derived (real revisions/timestamps/triggers — no revision-list surface exists in the engine), but expanding a step now runs a real metadata-only directory compare for the step's revision span (`fromRevision` → `revision` when present), filtered of unchanged files.
+- Each file row opens a real unified line diff via `hop compare --path`; failure states read in plain language; a fetch-once-per-pair session cache avoids re-fetching; revision args are validated as safe integers before spawn.
+- Desktop suite grew 90 → 112.
+
+Dashboard compare consumer (`7c7f787`):
+
+- `/api/codebases/compare` exposes three modes: revision enumeration (distinct `file_versions` revisions after a fail-closed authorization probe — revision numbers only), metadata-only directory compare, and single-file line diff.
+- The compare page has step pickers with swap, summary chips, a per-file change list, expandable unified diffs, and client caches (directory per revision-pair, file per pair+path) so nothing re-fetches. Trail vocabulary is used throughout, and the status-snapshot shell (`compare-view.tsx`) is deleted.
+- Web suite grew 20 → 47 (a new `vitest.config.ts` supplies the `@/` alias). Deployed to `hopit.dev`.
+
+Suite totals after all of the above: agent 262, worker 23, web 47, desktop 112 — all green locally and in CI.
+
+Honest ops note: an intermediate commit (`c4603dc`) accidentally swept a staged deletion from concurrent in-progress work, briefly breaking HEAD's web build; it was healed by `f201e8e` (restore) and the deletion re-landed properly in `7c7f787`. Process lesson recorded: stage explicitly when multiple work streams share a tree.
 
 ## 2026-07-11 hop add Onboarding, Wrong-Codebase Incident, And First Real Migration
 
@@ -585,7 +618,7 @@ Still open:
 | Git compatibility | In progress | Safe export/publish now creates clean Git repos while omitting `.private/` from publish, but ancestry preservation and remote publishing are still not started. |
 | Real accounts/auth | In progress | The repo now has Clerk sign-in routes, middleware, `/api/me`, provider-token forwarding, owner email config, and D1-backed account sync. The production Clerk instance, DNS, SSL, Vercel live env, `HOPIT_AUTH_PROVIDER=clerk`, production Google OAuth, owner sign-in, and D1 owner claim are active for `hopit.dev`; Basic Auth fallback is no longer needed for production owner access. |
 | Permissions and invitations | In progress | Durable memberships, invitation tables, requester-aware dashboard filtering, owner claim, member management, invite create/accept/revoke UI, and scoped agent-session token groundwork are in place; complete permission coverage remains. |
-| Code browsing/reviews/issues/releases | In progress | The dashboard now has a read-only code-review browser slice, review-linked follow-up issue comments, D1-backed issue/discussion/release/project-board UI, durable issue/discussion comments, project card movement, and an object-backed compare/history API foundation. Web diff UI wiring, snapshot-anchored inline review comments, richer routeable history, and immutable release publishing remain. |
+| Code browsing/reviews/issues/releases | In progress | The dashboard now has a read-only code-review browser slice, review-linked follow-up issue comments, D1-backed issue/discussion/release/project-board UI, durable issue/discussion comments, project card movement, and object-backed compare/history wired through to real UI. As of 2026-07-12 the compare page renders live trail-step directory compares and unified per-file diffs from the WS7c engine (via `/api/codebases/compare`), and the desktop app's Trail expands the same real diffs — so diff UI is no longer pending. Snapshot-anchored inline review comments, richer routeable history, and immutable release publishing remain. |
 | Native mount/FUSE/RAM-only cache | Later | Explicitly not the first v1 implementation path. Revisit only after the managed-folder Workspace Root proves core value. |
 
 ## Milestone Tracker
@@ -1331,7 +1364,7 @@ Definition of done:
 Current foundation:
 
 - The UI now surfaces current review, merge, conflict, file, and event state together.
-- Durable review/comment/merge-history records and a real diff API are still pending.
+- A real diff API now exists and is wired to UI: `/api/codebases/compare` and `hop compare` reconstruct object-backed directory and per-file line diffs, the dashboard compare page and the desktop Trail render them (2026-07-12). Durable review/comment/merge-history records are still pending.
 
 ### 5. Issues, Projects, And Discussions
 
@@ -1502,7 +1535,7 @@ Deferred:
 - Per-file revision-guarded mutation now covers D1 agent journal commits and browser text edits. Browser edits require a writable active change set, preserve Main, retain concurrent different-path changes, and reject stale/object-backed cases; the remaining non-agent product write surface has not moved to the same model yet.
 - Graph contract validators exist for the agent/D1 graph path, but product-level validation is not yet comprehensive across every future object type.
 - Requester-aware dashboard filtering exists, but the auth-backed collaborator permission model is not enforced across every user-facing write yet.
-- A first read-only code-review browser slice exists, now with routeable codebase review/compare/history pages, durable review-linked follow-up issues/comments, D1-backed snapshot-anchored inline review threads, durable review decisions, and object-backed revision compare support. Web UI wiring for the compare API and richer tree/diff interactions are still pending.
+- A first read-only code-review browser slice exists, now with routeable codebase review/compare/history pages, durable review-linked follow-up issues/comments, D1-backed snapshot-anchored inline review threads, durable review decisions, and object-backed revision compare support. The compare API is now wired to real UI (2026-07-12): the dashboard compare page renders live trail-step directory compares and unified per-file diffs, and the desktop Trail expands the same diffs. Richer tree/diff interactions and snapshot-anchored inline comments on those diffs are still pending.
 - Issue, discussion, release, durable comments, release-asset attachment, project-board UI, routeable work-item detail pages, and first codebase notification feed exist for the first slice; richer linked-object cards and complete permission coverage are still pending.
 - Cloudflare push/subscription remote-update delivery is deployed and enabled in personal production. The long-standing push skip was diagnosed on 2026-07-10 as a stale content manifest rather than real drift and healed, so the workspace is scan-clean, and a clean-workspace live apply was proven on 2026-07-11 (a second isolated device synced revision 4436 → 4437 and the production service applied it over the hub via trigger `remote-push`, ~8s later). Explicit refresh, per-workspace cursor state, reconnect fallback, and periodic graph-head reconciliation remain the safety layers.
 - Service mode syncs local edits and serves status. Local two-service simulation proves device A edits sync through the watcher, while device B pulls them through explicit safe refresh before switching devices.
