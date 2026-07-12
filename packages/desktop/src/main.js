@@ -24,12 +24,14 @@ import { buildDirectoryListing } from './lib/file-tree.js'
 import { inspectFolder } from './lib/add-inspect.js'
 import {
   streamHop,
+  runHopJson,
   syncArgs,
   refreshArgs,
   serviceArgs,
   addArgs,
   hydratePathArgs,
   pinArgs,
+  compareArgs,
 } from './lib/hop.js'
 import { loadWindowState, saveWindowState, resolveInitialBounds } from './lib/window-state.js'
 
@@ -307,6 +309,43 @@ function registerIpc() {
       rows: deriveHistory(events?.recent ?? []),
       totalEntries: events?.totalEntries ?? null,
       windowed: true,
+    }
+  })
+
+  // Trail compare surfaces. These spawn `hop compare ... --json` on demand (a step
+  // expand or a file click), never on the 5s poll. Directory compare is metadata-
+  // only (zero blob bodies); a --path compare opens exactly one file's line diff.
+  // The renderer caches results per revision-pair per session, so a repeat expand
+  // never re-spawns.
+  ipcMain.handle('trailCompare', async (_event, codebaseId, fromRevision, toRevision) => {
+    try {
+      const args = compareArgs({ codebaseId, fromRevision, toRevision })
+      const { json, code, stderr } = await runHopJson(requireHop(), args, { env: process.env })
+      return {
+        ok: true,
+        reachable: true,
+        compare: json,
+        code,
+        error: json ? null : (stderr?.trim() || 'The compare engine returned no data.'),
+      }
+    } catch (error) {
+      return { ok: false, reachable: false, compare: null, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  ipcMain.handle('trailFileDiff', async (_event, codebaseId, fromRevision, toRevision, cloudPath) => {
+    try {
+      const args = compareArgs({ codebaseId, fromRevision, toRevision, cloudPath })
+      const { json, code, stderr } = await runHopJson(requireHop(), args, { env: process.env })
+      return {
+        ok: true,
+        reachable: true,
+        compare: json,
+        code,
+        error: json ? null : (stderr?.trim() || 'The compare engine returned no data.'),
+      }
+    } catch (error) {
+      return { ok: false, reachable: false, compare: null, error: error instanceof Error ? error.message : String(error) }
     }
   })
 

@@ -25,6 +25,12 @@ contextBridge.exposeInMainWorld('hopit', {
   projectActivity: (codebaseId) => ipcRenderer.invoke('projectActivity', codebaseId),
   projectFiles: (codebaseId, subpath) => ipcRenderer.invoke('projectFiles', codebaseId, subpath ?? ''),
 
+  // Trail compare (WS7c object-backed history): on-demand, spawn `hop compare`.
+  trailCompare: (codebaseId, fromRevision, toRevision) =>
+    ipcRenderer.invoke('trailCompare', codebaseId, fromRevision, toRevision),
+  trailFileDiff: (codebaseId, fromRevision, toRevision, cloudPath) =>
+    ipcRenderer.invoke('trailFileDiff', codebaseId, fromRevision, toRevision, cloudPath),
+
   // Actions (spawn hop).
   syncNow: (codebaseId) => ipcRenderer.invoke('syncNow', codebaseId),
   refreshNow: (codebaseId) => ipcRenderer.invoke('refreshNow', codebaseId),

@@ -11,6 +11,8 @@ import {
   addArgs,
   hydratePathArgs,
   pinArgs,
+  compareArgs,
+  assertSafeRevision,
   assertSafeCloudPath,
 } from '../src/lib/hop.js'
 
@@ -69,6 +71,46 @@ test('cloud paths must be workspace-relative and traversal-free', () => {
   assert.throws(() => assertSafeCloudPath('../outside'), /traverse/)
   assert.throws(() => assertSafeCloudPath('a/../../b'), /traverse/)
   assert.throws(() => assertSafeCloudPath(''), /required/)
+})
+
+test('compareArgs builds a directory compare targeting the codebase', () => {
+  assert.deepEqual(compareArgs({ codebaseId: 'hopit', fromRevision: 4436, toRevision: 4437 }), [
+    'compare', '--from', '4436', '--to', '4437', '--codebase-id', 'hopit',
+  ])
+})
+
+test('compareArgs adds --path only for a single-file diff', () => {
+  assert.deepEqual(compareArgs({ codebaseId: 'hopit', fromRevision: 1, toRevision: 3, cloudPath: 'src/a.ts' }), [
+    'compare', '--from', '1', '--to', '3', '--codebase-id', 'hopit', '--path', 'src/a.ts',
+  ])
+  // An empty path is treated as a directory compare, not an empty --path token.
+  assert.deepEqual(compareArgs({ codebaseId: 'hopit', fromRevision: 1, toRevision: 3, cloudPath: '' }), [
+    'compare', '--from', '1', '--to', '3', '--codebase-id', 'hopit',
+  ])
+})
+
+test('compareArgs coerces string revisions and normalizes the path', () => {
+  assert.deepEqual(compareArgs({ codebaseId: 'hopit', fromRevision: '10', toRevision: '12', cloudPath: 'win\\path' }), [
+    'compare', '--from', '10', '--to', '12', '--codebase-id', 'hopit', '--path', 'win/path',
+  ])
+})
+
+test('compareArgs rejects injection and malformed revisions before spawn', () => {
+  assert.throws(() => compareArgs({ codebaseId: 'a/b', fromRevision: 1, toRevision: 2 }), /Unsafe/)
+  assert.throws(() => compareArgs({ codebaseId: 'hopit', fromRevision: '1 --exec', toRevision: 2 }), /Invalid --from/)
+  assert.throws(() => compareArgs({ codebaseId: 'hopit', fromRevision: 1, toRevision: 'NaN' }), /Invalid --to/)
+  assert.throws(() => compareArgs({ codebaseId: 'hopit', fromRevision: -1, toRevision: 2 }), /Invalid --from/)
+  assert.throws(() => compareArgs({ codebaseId: 'hopit', fromRevision: 1.5, toRevision: 2 }), /Invalid --from/)
+  assert.throws(() => compareArgs({ codebaseId: 'hopit', fromRevision: 1, toRevision: 2, cloudPath: '../escape' }), /traverse/)
+  assert.throws(() => compareArgs({ codebaseId: 'hopit', fromRevision: 1, toRevision: 2, cloudPath: '/abs' }), /relative/)
+})
+
+test('assertSafeRevision accepts non-negative safe integers only', () => {
+  assert.equal(assertSafeRevision(0), 0)
+  assert.equal(assertSafeRevision('4437'), 4437)
+  assert.throws(() => assertSafeRevision('', 'from'), /Invalid from/)
+  assert.throws(() => assertSafeRevision(-5), /Invalid/)
+  assert.throws(() => assertSafeRevision(Number.MAX_SAFE_INTEGER + 2), /Invalid/)
 })
 
 test('streamHop rejects (not hangs) when the hop binary is missing', async () => {

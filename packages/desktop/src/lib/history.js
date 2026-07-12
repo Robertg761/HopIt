@@ -52,6 +52,8 @@ export function revisionFromEvent(entry) {
         revision,
         at,
         trigger,
+        // Bulk commits carry their own span; the Trail compares exactly it.
+        fromRevision: typeof detail.fromRevision === 'number' ? detail.fromRevision : null,
         changedCount: typeof detail.count === 'number' ? detail.count : Array.isArray(detail.paths) ? detail.paths.length : null,
         samplePaths: sample(detail.paths),
         event: name,
@@ -77,7 +79,9 @@ export function revisionFromEvent(entry) {
     case 'remote-push.applied': {
       const revision = detail.toRevision ?? detail.pushedRevision ?? detail.revision ?? null
       if (revision == null) return null
-      return { revision, at, trigger, changedCount: null, samplePaths: [], event: name }
+      // A push carries the span it applied; use it as the compare's left edge.
+      const fromRevision = typeof detail.fromRevision === 'number' ? detail.fromRevision : null
+      return { revision, at, trigger, fromRevision, changedCount: null, samplePaths: [], event: name }
     }
     case 'remote-pull.applied': {
       const revision = detail.toRevision ?? detail.revision ?? null

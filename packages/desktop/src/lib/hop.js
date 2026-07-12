@@ -137,6 +137,44 @@ export function pinArgs({ codebaseId, cloudPath, pinned }) {
 }
 
 /**
+ * Build `hop compare --from <rev> --to <rev> [--path <file>] --codebase-id <id>`.
+ * Directory compare (no cloudPath) is metadata-only and fetches zero blob bodies;
+ * a cloudPath opens exactly one file's line diff. Revisions are coerced to safe
+ * integers so no IPC-supplied string can inject extra tokens; the codebase id and
+ * path go through the same validators as every other spawn.
+ * @param {{ codebaseId: string, fromRevision: unknown, toRevision: unknown, cloudPath?: string|null }} params
+ */
+export function compareArgs({ codebaseId, fromRevision, toRevision, cloudPath }) {
+  const id = assertSafeCodebaseId(codebaseId)
+  const from = assertSafeRevision(fromRevision, '--from')
+  const to = assertSafeRevision(toRevision, '--to')
+  const args = ['compare', '--from', String(from), '--to', String(to), '--codebase-id', id]
+  if (cloudPath != null && cloudPath !== '') {
+    args.push('--path', assertSafeCloudPath(cloudPath))
+  }
+  return args
+}
+
+/**
+ * A revision is a non-negative safe integer. Coerce+validate so a hostile string
+ * (e.g. "1 --exec") can never survive to the argv.
+ * @param {unknown} candidate
+ * @param {string} [name]
+ */
+export function assertSafeRevision(candidate, name = 'revision') {
+  const value =
+    typeof candidate === 'number'
+      ? candidate
+      : typeof candidate === 'string' && candidate.trim() !== ''
+        ? Number(candidate)
+        : Number.NaN
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`Invalid ${name} revision: ${candidate}`)
+  }
+  return value
+}
+
+/**
  * A cloud path is a workspace-relative POSIX path. Reject absolute paths,
  * traversal, and null bytes before it reaches the CLI.
  * @param {unknown} candidate

@@ -217,6 +217,59 @@ body {
 .tag-refresh { background: var(--bg-hover); color: var(--text-muted); }
 .tag-other { background: var(--bg-hover); color: var(--text-muted); }
 
+/* Trail steps (expandable, object-backed compare) */
+.trail-step { border-bottom: 1px solid var(--border); }
+.trail-head {
+  display: flex; align-items: baseline; gap: 10px; width: 100%;
+  padding: 10px 4px; border: 0; background: transparent; color: inherit;
+  font: inherit; text-align: left; cursor: pointer; border-radius: 7px;
+}
+.trail-head:hover { background: var(--bg-hover); }
+.trail-caret { color: var(--text-muted); font-size: 10px; transition: transform 0.12s ease; align-self: center; }
+.trail-head.open .trail-caret { transform: rotate(90deg); }
+.trail-detail { padding: 2px 4px 10px 26px; }
+.trail-detail.hidden, .trail-diff.hidden { display: none; }
+.trail-loading { color: var(--text-muted); font-size: 12px; padding: 6px 2px; }
+
+.trail-file { border-top: 1px solid var(--border); }
+.trail-file:first-child { border-top: 0; }
+.trail-file-head {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 6px 4px; border: 0; background: transparent; color: inherit;
+  font: inherit; text-align: left; border-radius: 6px;
+}
+.trail-file-head.diffable { cursor: pointer; }
+.trail-file-head.diffable:hover { background: var(--bg-hover); }
+.trail-file-path { font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.trail-file-note { color: var(--text-muted); font-size: 11px; padding: 0 4px 6px 4px; }
+.trail-state {
+  display: inline-block; padding: 1px 7px; border-radius: 5px;
+  font-size: 10px; font-weight: 700; white-space: nowrap; flex: none;
+}
+.trail-state-added { background: rgba(52, 199, 89, 0.16); color: var(--ok); }
+.trail-state-modified { background: rgba(10, 132, 255, 0.16); color: var(--accent); }
+.trail-state-deleted { background: rgba(255, 69, 58, 0.16); color: var(--danger, #ff453a); }
+.trail-state-binary { background: var(--bg-hover); color: var(--text-muted); }
+.trail-state-locked { background: rgba(255, 159, 10, 0.16); color: var(--warn); }
+.trail-state-missing { background: var(--bg-hover); color: var(--text-muted); }
+.trail-state-error { background: rgba(255, 69, 58, 0.16); color: var(--danger, #ff453a); }
+
+.trail-diff { margin: 2px 0 8px 4px; }
+.trail-diff-stat { color: var(--text-muted); font-size: 11px; margin: 2px 0 4px 2px; }
+.trail-diff-body {
+  border: 1px solid var(--border); border-radius: 7px; overflow: auto;
+  max-height: 320px; background: var(--bg-panel);
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 12px;
+}
+.dl { display: flex; gap: 8px; padding: 0 8px; white-space: pre; }
+.dl-gutter { color: var(--text-muted); user-select: none; flex: none; width: 10px; text-align: center; }
+.dl-text { min-width: 0; }
+.dl-added { background: rgba(52, 199, 89, 0.12); }
+.dl-added .dl-gutter { color: var(--ok); }
+.dl-removed { background: rgba(255, 69, 58, 0.12); }
+.dl-removed .dl-gutter { color: var(--danger, #ff453a); }
+.dl-context { color: var(--text-muted); }
+
 /* Activity panel */
 .activity-row { display: flex; gap: 12px; padding: 7px 4px; border-bottom: 1px solid var(--border); }
 .activity-when { color: var(--text-muted); font-size: 11px; min-width: 34px; text-align: right; }
