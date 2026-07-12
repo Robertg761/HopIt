@@ -443,6 +443,227 @@ test('guarded journal head policy preserves Main and selected-state security fie
   )
 })
 
+// --- Adversarial cross-tenant isolation matrix -------------------------------
+// Threat model: an agent session scoped to codebase A ("codebase-1") must never
+// be able to read or write ANY codebase-scoped table for codebase B
+// ("codebase-2") through the raw-SQL proxy policy. The session below carries the
+// FULL capability set (including admin) so that every rejection below is proven
+// to come from the cross-tenant scope guard, not from a missing capability.
+
+// Every entry of `codebaseScopedTables` in scoped-sql.js. Kept as a literal list
+// so a new scoped table added there without a cross-tenant test here shows up as
+// a coverage gap.
+const crossTenantScopedTables = [
+  'codebases',
+  'files',
+  'file_versions',
+  'file_blobs',
+  'agent_events',
+  'action_jobs',
+  'collaboration_counters',
+  'issues',
+  'issue_comments',
+  'projects',
+  'project_items',
+  'discussions',
+  'discussion_comments',
+  'releases',
+  'release_assets',
+  'review_threads',
+  'review_thread_comments',
+  'review_decisions',
+  'notifications',
+  'codebase_members',
+  'codebase_invitations',
+  'agent_sessions',
+  'codebase_keyrings',
+  'wrapped_keys',
+  'key_audit_events',
+  'trail_episodes',
+  'codebase_settings',
+]
+
+// A read shape that is VALID when scoped to the session's own codebase, so the
+// only thing that changes between the "own" and "cross-tenant" params is the
+// codebase id. This isolates the scope guard as the cause of rejection.
+function crossTenantReadStatement(table, codebaseId) {
+  if (table === 'files') {
+    return { sql: 'select * from files where codebase_id = ?', params: [codebaseId] }
+  }
+  if (table === 'file_versions') {
+    return {
+      sql: 'select * from file_versions where codebase_id = ? order by graph_revision asc, version_id asc',
+      params: [codebaseId],
+    }
+  }
+  if (table === 'file_blobs') {
+    return {
+      sql: 'select content, encoding, size from file_blobs where codebase_id = ? and hash = ? limit 1',
+      params: [codebaseId, 'a'.repeat(64)],
+    }
+  }
+  return { sql: `select * from ${table} where codebase_id = ?`, params: [codebaseId] }
+}
+
+// A destructive write shape (DELETE) that is likewise valid for the own codebase
+// under an admin session, so cross-tenant rejection is proven to be the scope
+// guard rather than a capability or shape failure.
+function crossTenantDeleteStatement(table, codebaseId) {
+  return { sql: `delete from ${table} where codebase_id = ?`, params: [codebaseId] }
+}
+
+test('scoped SQL policy accepts every codebase-scoped read/delete for the session own codebase (baseline)', () => {
+  const session = scopedSession()
+  for (const table of crossTenantScopedTables) {
+    assert.doesNotThrow(
+      () => assertScopedSessionStatementAllowed(session, crossTenantReadStatement(table, 'codebase-1')),
+      `own-codebase read of ${table} should be allowed`,
+    )
+    assert.doesNotThrow(
+      () => assertScopedSessionStatementAllowed(session, crossTenantDeleteStatement(table, 'codebase-1')),
+      `own-codebase delete of ${table} should be allowed`,
+    )
+  }
+})
+
+test('scoped SQL policy rejects cross-tenant READS of every codebase-scoped table', () => {
+  const session = scopedSession()
+  for (const table of crossTenantScopedTables) {
+    assert.throws(
+      () => assertScopedSessionStatementAllowed(session, crossTenantReadStatement(table, 'codebase-2')),
+      /Scoped agent session/,
+      `cross-tenant read of ${table} must be rejected`,
+    )
+  }
+})
+
+test('scoped SQL policy rejects cross-tenant WRITES (delete) of every codebase-scoped table', () => {
+  const session = scopedSession()
+  for (const table of crossTenantScopedTables) {
+    assert.throws(
+      () => assertScopedSessionStatementAllowed(session, crossTenantDeleteStatement(table, 'codebase-2')),
+      /Scoped agent session/,
+      `cross-tenant delete of ${table} must be rejected`,
+    )
+  }
+})
+
+test('scoped SQL policy rejects cross-tenant INSERT and UPDATE targeting another codebase', () => {
+  const session = scopedSession()
+  const rejected = [
+    {
+      name: 'insert into another codebase',
+      sql: 'insert into issues (codebase_id, issue_id, number, title) values (?, ?, ?, ?)',
+      params: ['codebase-2', 'issue_1', 1, 'smuggled'],
+    },
+    {
+      name: 'update another codebase row',
+      sql: 'update issues set title = ? where codebase_id = ?',
+      params: ['pwned', 'codebase-2'],
+    },
+    {
+      name: 'insert agent_events for another codebase',
+      sql: 'insert into agent_events (codebase_id, event, detail_json) values (?, ?, ?)',
+      params: ['codebase-2', 'file.mutated', '{}'],
+    },
+    {
+      name: 'update notifications for another codebase',
+      sql: 'update notifications set read_at = ? where codebase_id = ?',
+      params: ['now', 'codebase-2'],
+    },
+  ]
+  for (const statement of rejected) {
+    assert.throws(
+      () => assertScopedSessionStatementAllowed(session, statement),
+      /Scoped agent session/,
+      statement.name,
+    )
+  }
+
+  // The matching own-codebase writes are accepted, proving the rejection above is
+  // the cross-tenant scope guard and not the shape or capability policy.
+  assert.doesNotThrow(() => assertScopedSessionStatementAllowed(session, {
+    sql: 'insert into issues (codebase_id, issue_id, number, title) values (?, ?, ?, ?)',
+    params: ['codebase-1', 'issue_1', 1, 'legit'],
+  }))
+  assert.doesNotThrow(() => assertScopedSessionStatementAllowed(session, {
+    sql: 'update issues set title = ? where codebase_id = ?',
+    params: ['legit', 'codebase-1'],
+  }))
+})
+
+test('scoped SQL policy rejects codebase-id smuggling with a second predicate clause', () => {
+  const session = scopedSession()
+  // Statement scoped to codebase-1 in one predicate but reading codebase-2 in a
+  // second predicate clause (and the reverse ordering). Every codebase_id = ?
+  // predicate must equal the session codebase, so neither ordering leaks.
+  const smuggles = [
+    { name: 'own-then-other', params: ['codebase-1', 'codebase-2'] },
+    { name: 'other-then-own', params: ['codebase-2', 'codebase-1'] },
+  ]
+  for (const { name, params } of smuggles) {
+    assert.throws(
+      () => assertScopedSessionStatementAllowed(session, {
+        sql: 'select * from issues where codebase_id = ? and codebase_id = ?',
+        params,
+      }),
+      /constrained to its codebase/,
+      name,
+    )
+  }
+})
+
+test('scoped SQL policy rejects statements with no codebase constraint at all', () => {
+  const session = scopedSession()
+  const unconstrained = [
+    { name: 'select without where', sql: 'select * from issues', params: [] },
+    { name: 'select on non-codebase predicate', sql: 'select * from issues where issue_id = ?', params: ['issue_1'] },
+    { name: 'delete without codebase predicate', sql: 'delete from notifications where read_at = ?', params: ['now'] },
+    { name: 'update without codebase predicate', sql: 'update issues set title = ? where issue_id = ?', params: ['x', 'issue_1'] },
+    { name: 'unknown table with codebase predicate', sql: 'select * from secrets where codebase_id = ?', params: ['codebase-1'] },
+  ]
+  for (const statement of unconstrained) {
+    assert.throws(
+      () => assertScopedSessionStatementAllowed(session, statement),
+      /Scoped agent session/,
+      statement.name,
+    )
+  }
+})
+
+test('scoped SQL policy rejects cross-tenant JOIN, UNION, and subquery escapes', () => {
+  const session = scopedSession()
+  const escapes = [
+    {
+      name: 'cross-tenant union',
+      sql: 'select * from issues where codebase_id = ? union select * from issues where codebase_id = ?',
+      params: ['codebase-1', 'codebase-2'],
+    },
+    {
+      name: 'cross-tenant subquery',
+      sql: 'select * from issues where codebase_id = ? and issue_id in (select issue_id from issues where codebase_id = ?)',
+      params: ['codebase-1', 'codebase-2'],
+    },
+    {
+      name: 'cross-tenant join',
+      sql: 'select other.* from issues own join issues other on own.number = other.number where own.codebase_id = ?',
+      params: ['codebase-1'],
+    },
+    {
+      name: 'cross-tenant table list',
+      sql: 'select a.* from issues a, issues b where a.codebase_id = ? and b.codebase_id = ?',
+      params: ['codebase-1', 'codebase-2'],
+    },
+  ]
+  for (const statement of escapes) {
+    assert.throws(
+      () => assertScopedSessionStatementAllowed(session, statement),
+      /Scoped agent session/,
+      statement.name,
+    )
+  }
+})
+
 test('failed auth attempts are rate limited per client ip', async () => {
   const logs = []
   const originalLog = console.log
@@ -829,6 +1050,195 @@ test('failed D1 batches roll back earlier mutation statements', async () => {
   assert.equal(db.batchCalls, 1)
   assert.deepEqual(db.state, { codebaseRevision: 1, fileRevision: 1 })
   assert.match((await response.json()).errors[0].message, /synthetic batch failure/)
+})
+
+// ---------------------------------------------------------------------------
+// Adversarial cross-tenant isolation (Phase 3 Stage-0)
+//
+// Two distinct owners: user-a owns codebase-a, user-b owns codebase-b. Every
+// case below acts under user-b's scoped session (scoped to codebase-b) and
+// targets user-a's codebase-a across every scoped table. The property under
+// test: a scoped session can NEVER read, write, upsert, or delete another
+// tenant's rows, even when the SQL is a byte-for-byte copy of the victim's own
+// legitimate statement. "Their data is provably isolated" as a tested property.
+// ---------------------------------------------------------------------------
+
+function crossTenantSession(overrides = {}) {
+  // user-b, scoped to codebase-b, with every capability. Full capabilities
+  // ensure a rejection is the tenant boundary talking, not a missing grant.
+  return scopedSession({
+    session_id: 'session-b',
+    user_id: 'user-b',
+    codebase_id: 'codebase-b',
+    ...overrides,
+  })
+}
+
+// The victim's own legitimate statements, parametrized by codebase. Passing
+// 'codebase-a' makes each one a cross-tenant attack under user-b's session;
+// passing 'codebase-b' makes it a same-tenant control that must be accepted.
+function victimStatements(codebaseId) {
+  return [
+    { table: 'files read', sql: 'select * from files where codebase_id = ?', params: [codebaseId] },
+    {
+      table: 'files guarded delete',
+      sql: `delete from files where codebase_id = ? and path = ? and exists (
+        select 1 from codebases where codebase_id = ? and revision = ? and updated_at = ?
+      )`,
+      params: [codebaseId, 'README.md', codebaseId, 2, '2026-07-10T00:00:00.000Z'],
+    },
+    {
+      table: 'file_versions read',
+      sql: 'select * from file_versions where codebase_id = ? order by graph_revision asc, version_id asc',
+      params: [codebaseId],
+    },
+    { table: 'agent_events read', sql: 'select * from agent_events where codebase_id = ?', params: [codebaseId] },
+    {
+      table: 'agent_events insert',
+      sql: 'insert into agent_events (codebase_id, event, detail_json, at) values (?, ?, ?, ?)',
+      params: [codebaseId, 'exfiltrate', '{}', 'now'],
+    },
+    { table: 'trail_episodes read', sql: trailEpisodeSelectSql, params: [codebaseId] },
+    { table: 'trail_episodes upsert', sql: trailEpisodeUpsertSql, params: trailEpisodeUpsertParams(codebaseId) },
+    { table: 'codebase_settings read', sql: codebaseSettingsSelectSql, params: [codebaseId] },
+    {
+      table: 'codebase_settings upsert',
+      sql: codebaseSettingsUpsertSql,
+      params: [codebaseId, 1, 'diff', 'now', 'now'],
+    },
+    {
+      table: 'agent_sessions read',
+      sql: 'select * from agent_sessions where codebase_id = ? and session_id = ? limit 1',
+      params: [codebaseId, 'session-a'],
+    },
+    {
+      table: 'agent_sessions revoke',
+      sql: `update agent_sessions set status = 'revoked', revoked_by_user_id = ?, revoked_at = ?, updated_at = ?
+        where codebase_id = ? and session_id = ?`,
+      params: ['user-b', 'now', 'now', codebaseId, 'session-a'],
+    },
+    { table: 'codebase_members read', sql: 'select * from codebase_members where codebase_id = ?', params: [codebaseId] },
+    {
+      table: 'codebase_members insert',
+      sql: 'insert into codebase_members (codebase_id, user_id, role, status, created_at, updated_at) values (?, ?, ?, ?, ?, ?)',
+      params: [codebaseId, 'user-b', 'owner', 'active', 'now', 'now'],
+    },
+    { table: 'issues read', sql: 'select * from issues where codebase_id = ?', params: [codebaseId] },
+    {
+      table: 'issues insert',
+      sql: 'insert into issues (codebase_id, issue_id, number, title, status, created_by, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)',
+      params: [codebaseId, 'iss_1', 1, 'planted', 'open', 'user-b', 'now', 'now'],
+    },
+    { table: 'discussions read', sql: 'select * from discussions where codebase_id = ?', params: [codebaseId] },
+    { table: 'releases read', sql: 'select * from releases where codebase_id = ?', params: [codebaseId] },
+    {
+      table: 'releases insert',
+      sql: 'insert into releases (codebase_id, release_id, number, version, title, notes, status, target_json, created_by, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      params: [codebaseId, 'rel_1', 1, '1.0.0', 'planted', 'notes', 'draft', '{}', 'user-b', 'now', 'now'],
+    },
+  ]
+}
+
+test('cross-tenant: user-b session cannot touch user-a rows on any scoped table', () => {
+  const session = crossTenantSession()
+  for (const statement of victimStatements('codebase-a')) {
+    assert.throws(
+      () => assertScopedSessionStatementAllowed(session, statement),
+      /Scoped agent session SQL must be constrained to its codebase/,
+      statement.table,
+    )
+  }
+})
+
+test('cross-tenant control: the identical statements are accepted for the session own codebase', () => {
+  // Proves the matrix above rejects on tenant boundary, not on SQL shape: the
+  // very same statement shapes pass when re-scoped to codebase-b.
+  const session = crossTenantSession()
+  for (const statement of victimStatements('codebase-b')) {
+    assert.doesNotThrow(() => assertScopedSessionStatementAllowed(session, statement), statement.table)
+  }
+})
+
+test('cross-tenant: sneaky SQL shapes reaching user-a rows are all rejected', () => {
+  const session = crossTenantSession()
+  const hostile = [
+    { name: 'or clause across tenants', sql: 'select * from files where codebase_id = ? or codebase_id = ?', params: ['codebase-b', 'codebase-a'] },
+    { name: 'in list across tenants', sql: 'select * from agent_events where codebase_id in (?, ?)', params: ['codebase-b', 'codebase-a'] },
+    { name: 'subquery touching victim rows', sql: 'delete from agent_events where codebase_id = ? and id in (select id from agent_events where codebase_id = ?)', params: ['codebase-b', 'codebase-a'] },
+    { name: 'union to victim rows', sql: 'select * from files where codebase_id = ? union select * from files where codebase_id = ?', params: ['codebase-b', 'codebase-a'] },
+    { name: 'missing codebase constraint (unscoped read)', sql: 'select * from agent_events', params: [] },
+    { name: 'unscoped delete (no where)', sql: 'delete from agent_events', params: [] },
+    { name: 'unscoped update (no where)', sql: 'update trail_episodes set label = ?', params: ['pwned'] },
+    { name: 'victim predicate with own-tenant decoy param', sql: 'delete from agent_events where codebase_id = ? and source = ?', params: ['codebase-a', 'codebase-b'] },
+    { name: 'insert planting a victim row', sql: 'insert into agent_events (codebase_id, event, detail_json, at) values (?, ?, ?, ?)', params: ['codebase-a', 'x', '{}', 'now'] },
+    { name: 'cross-tenant conflict target', sql: 'insert into files (codebase_id, path, content) values (?, ?, ?) on conflict(path) do update set content = excluded.content', params: ['codebase-a', 'README.md', 'body'] },
+    { name: 'line comment hiding victim scope', sql: 'select * from files where codebase_id = ? -- codebase-b', params: ['codebase-a'] },
+    { name: 'stacked statement targeting victim', sql: 'select * from files where codebase_id = ?; delete from files where codebase_id = ?', params: ['codebase-b', 'codebase-a'] },
+    { name: 'not-equal codebase predicate', sql: 'select * from agent_events where codebase_id <> ?', params: ['codebase-b'] },
+  ]
+  for (const statement of hostile) {
+    assert.throws(
+      () => assertScopedSessionStatementAllowed(session, statement),
+      /Scoped agent session/,
+      statement.name,
+    )
+  }
+})
+
+test('cross-tenant: Worker refuses a victim-scoped statement under user-b session before execution', async () => {
+  const db = createMockDb({ session: crossTenantSession() })
+  const response = await worker.fetch(new Request('https://worker.example/query', {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer hst_session_token',
+      'content-type': 'application/json',
+      // Header matches the session codebase, so this passes the codebase-scope
+      // header check and the rejection can only come from the statement policy.
+      'x-hopit-codebase-id': 'codebase-b',
+      'cf-connecting-ip': '203.0.113.60',
+    },
+    body: JSON.stringify({ sql: 'select * from files where codebase_id = ?', params: ['codebase-a'] }),
+  }), { HOPIT_D1_DB: db })
+
+  assert.equal(response.status, 403)
+  assert.match((await response.json()).errors[0].message, /must be constrained to its codebase/)
+  assert.equal(db.executedStatements.length, 0)
+})
+
+test('cross-tenant: Worker rejects a session whose header claims another tenant codebase', async () => {
+  const db = createMockDb({ session: crossTenantSession() })
+  const response = await worker.fetch(new Request('https://worker.example/query', {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer hst_session_token',
+      'content-type': 'application/json',
+      'x-hopit-codebase-id': 'codebase-a',
+      'cf-connecting-ip': '203.0.113.61',
+    },
+    body: JSON.stringify({ sql: 'select * from files where codebase_id = ?', params: ['codebase-a'] }),
+  }), { HOPIT_D1_DB: db })
+
+  assert.equal(response.status, 403)
+  assert.match((await response.json()).errors[0].message, /not scoped to the requested codebase/)
+  assert.equal(db.executedStatements.length, 0)
+})
+
+test('cross-tenant control: user-b session executes against its own codebase', async () => {
+  const db = createMockDb({ session: crossTenantSession() })
+  const response = await worker.fetch(new Request('https://worker.example/query', {
+    method: 'POST',
+    headers: {
+      authorization: 'Bearer hst_session_token',
+      'content-type': 'application/json',
+      'x-hopit-codebase-id': 'codebase-b',
+      'cf-connecting-ip': '203.0.113.62',
+    },
+    body: JSON.stringify({ sql: 'select * from agent_events where codebase_id = ?', params: ['codebase-b'] }),
+  }), { HOPIT_D1_DB: db })
+
+  assert.equal(response.status, 200)
+  assert.equal(db.executedStatements.length, 1)
+  assert.deepEqual(db.executedStatements[0].params, ['codebase-b'])
 })
 
 async function captureLogs(callback) {
