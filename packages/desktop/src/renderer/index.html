@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self' data:;" />
+  <title>HopIt</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div id="app">
+    <aside id="sidebar">
+      <div id="sidebar-drag"></div>
+      <header id="sidebar-header">
+        <div id="brand">
+          <span id="brand-mark">⌃</span>
+          <span id="brand-name">HopIt</span>
+        </div>
+        <div id="agg-pill" class="pill pill-muted" title="Overall sync state">…</div>
+      </header>
+      <nav id="project-list" aria-label="Projects"></nav>
+      <button id="add-project-btn" class="btn btn-primary" type="button">＋ Add a project</button>
+      <footer id="sidebar-footer">
+        <button id="workspace-root-btn" class="link-btn" type="button" title="Open the HopIt Workspaces folder in Finder">
+          <span class="muted">Workspace Root</span>
+          <span id="workspace-root-path" class="path-text">…</span>
+        </button>
+        <button id="dashboard-btn" class="link-btn" type="button" title="Open hopit.dev in your browser">
+          <span class="muted">Dashboard</span>
+          <span class="path-text">hopit.dev ↗</span>
+        </button>
+        <div id="hop-missing" class="warn hidden">The hop command was not found on this Mac. Install it, then reopen HopIt.</div>
+      </footer>
+    </aside>
+
+    <main id="main">
+      <!-- Empty / no projects -->
+      <section id="view-empty" class="view">
+        <div class="empty-card">
+          <div class="empty-mark">⌃</div>
+          <h1>Welcome to HopIt</h1>
+          <p>No projects are connected on this Mac yet. Add a folder and it becomes a synced HopIt project — no git, no setup.</p>
+          <button id="empty-add-btn" class="btn btn-primary" type="button">Add your first project</button>
+        </div>
+      </section>
+
+      <!-- Project detail -->
+      <section id="view-project" class="view hidden">
+        <header id="project-header">
+          <div id="project-title-row">
+            <h1 id="project-name">Project</h1>
+            <span id="project-state-pill" class="pill pill-muted">…</span>
+          </div>
+          <button id="project-path-btn" class="link-btn path-btn" type="button" title="Show in Finder">
+            <span id="project-path" class="path-text"></span>
+          </button>
+          <div id="project-actions">
+            <button id="sync-btn" class="btn" type="button" title="Journal and upload local changes now">Sync now</button>
+            <button id="refresh-btn" class="btn" type="button" title="Apply the latest cloud state to this folder">Refresh from cloud</button>
+            <button id="service-btn" class="btn" type="button">Start service</button>
+            <button id="project-dashboard-btn" class="btn" type="button" title="Open this project on hopit.dev">Dashboard ↗</button>
+          </div>
+        </header>
+
+        <nav id="tabs" role="tablist">
+          <button class="tab active" data-tab="now" role="tab">Now</button>
+          <button class="tab" data-tab="history" role="tab">History</button>
+          <button class="tab" data-tab="activity" role="tab">Activity</button>
+          <button class="tab" data-tab="files" role="tab">Files</button>
+        </nav>
+
+        <div id="tab-panels">
+          <div id="panel-now" class="panel"></div>
+          <div id="panel-history" class="panel hidden"></div>
+          <div id="panel-activity" class="panel hidden"></div>
+          <div id="panel-files" class="panel hidden"></div>
+        </div>
+      </section>
+
+      <!-- Add project -->
+      <section id="view-add" class="view hidden">
+        <header class="add-header">
+          <button id="add-back-btn" class="link-btn" type="button">← Back</button>
+          <h1>Add a project</h1>
+          <p class="muted">Pick any folder on this Mac. HopIt copies it to your cloud and keeps it in sync from then on. The original folder is not modified.</p>
+        </header>
+
+        <div id="add-step-pick" class="add-card">
+          <button id="pick-folder-btn" class="btn btn-primary" type="button">Choose a folder…</button>
+          <span id="picked-none" class="muted">No folder chosen yet.</span>
+        </div>
+
+        <div id="add-step-confirm" class="add-card hidden">
+          <div id="inspect-headline" class="inspect-headline"></div>
+          <div id="inspect-desc" class="muted"></div>
+          <div id="inspect-stats" class="inspect-stats"></div>
+          <details id="advanced-details">
+            <summary class="muted">Advanced</summary>
+            <label for="codebase-id-input">Project id (optional — derived from the folder name if empty)</label>
+            <input id="codebase-id-input" type="text" spellcheck="false" autocomplete="off" placeholder="e.g. lunarlog" />
+          </details>
+          <div class="add-actions">
+            <button id="add-confirm-btn" class="btn btn-primary" type="button">Add to HopIt</button>
+            <button id="add-open-existing-btn" class="btn hidden" type="button">Open the existing project</button>
+            <button id="add-cancel-btn" class="btn" type="button">Choose a different folder</button>
+          </div>
+          <p class="muted small">Adding opens your browser once to approve this Mac for the new project. Approval codes expire after about 10 minutes.</p>
+        </div>
+
+        <div id="add-step-run" class="add-card hidden">
+          <div id="add-run-state" class="inspect-headline">Adding…</div>
+          <pre id="add-log" class="log-pane" aria-live="polite"></pre>
+          <div class="add-actions">
+            <button id="add-done-btn" class="btn btn-primary hidden" type="button">Open the project</button>
+            <button id="add-retry-btn" class="btn hidden" type="button">Try again</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

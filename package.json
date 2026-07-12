@@ -61,7 +61,10 @@
     "agent:status-server": "node packages/agent/src/cli.js serve",
     "preagent:test": "npm run build:core",
     "agent:test": "HOPIT_NO_ENV_FILE=1 HOPIT_JSON=1 node --test --test-concurrency=1 packages/agent/test/*.test.js",
-    "prepackage:hop": "npm run build:core"
+    "prepackage:hop": "npm run build:core",
+    "desktop:dev": "npm run start --workspace @hopit/desktop",
+    "desktop:package": "npm run package --workspace @hopit/desktop",
+    "test:desktop": "npm run test --workspace @hopit/desktop"
   },
   "dependencies": {
     "@clerk/nextjs": "^7.5.7",

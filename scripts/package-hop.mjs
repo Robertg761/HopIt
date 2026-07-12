@@ -688,9 +688,13 @@ async function verifyRelease(ctx) {
 
 async function verifyHostRelease(ctx) {
   const launcherPath = path.join(ctx.binRoot, ctx.target.launcherName)
+  // The packaged CLI autoloads ~/.config/hopit/production.env; these smoke
+  // checks must stay hermetic on machines with a live config, so opt out.
+  const smokeEnv = { ...process.env, HOPIT_NO_ENV_FILE: '1' }
   const helpResult = spawnSync(launcherPath, ['help'], {
     cwd: repoRoot,
     encoding: 'utf8',
+    env: smokeEnv,
   })
 
   if (helpResult.status !== 0 || !helpResult.stdout.includes('hop - HopIt local workspace agent')) {
@@ -715,6 +719,7 @@ async function verifyHostRelease(ctx) {
     {
       cwd: smokeRoot,
       encoding: 'utf8',
+      env: smokeEnv,
     },
   )
 

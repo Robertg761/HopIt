@@ -1,0 +1,2045 @@
+{
+  "ok": true,
+  "generatedAt": "2026-07-12T00:33:44.343Z",
+  "readiness": "ready",
+  "mode": {
+    "adapter": "managed-folder",
+    "cacheMode": "local-cache",
+    "sourceOfTruth": "cloud",
+    "materializationPolicy": "metadata-first",
+    "hydrationPolicy": "explicit-refresh-or-file",
+    "remoteUpdatePolicy": "materialized-clean-only"
+  },
+  "codebaseId": "hopit",
+  "codebaseName": "HopIt",
+  "selectedStateType": "active-change-set",
+  "activeChangeSetId": "cs_hopit_local",
+  "mainId": "main",
+  "ownerId": null,
+  "sessionId": "session_robert_primary_mac",
+  "requesterId": null,
+  "requesterSessionId": "session_robert_primary_mac",
+  "requesterRole": null,
+  "visibleFileCount": 4491,
+  "hiddenFileCount": 0,
+  "hiddenScopeCounts": null,
+  "effectiveChangeSetVisibility": null,
+  "review": {
+    "state": "not-open",
+    "detail": null
+  },
+  "merge": {
+    "state": "unmerged",
+    "detail": null,
+    "mainRevision": 4437
+  },
+  "conflict": {
+    "state": "none",
+    "detail": null
+  },
+  "workspace": {
+    "root": "/Users/robert/HopIt Workspaces",
+    "path": "/Users/robert/HopIt Workspaces/hopit",
+    "exists": true,
+    "adapter": "managed-folder",
+    "cacheMode": "local-cache",
+    "hydration": {
+      "state": "materialized",
+      "lastMaterializedAt": "2026-07-12T00:12:27.851Z",
+      "lastMaterializedRevision": 4437,
+      "selectedStateRevision": 4437,
+      "graphRevision": 4437,
+      "sourceEvent": "workspace.ready",
+      "hydratedPathCount": 4491
+    },
+    "localChanges": {
+      "safe": true,
+      "state": "not_scanned",
+      "reason": "status_endpoint_avoids_workspace_scan",
+      "addedCount": null,
+      "modifiedCount": null,
+      "deletedCount": null,
+      "samplePaths": []
+    },
+    "contentManifest": {
+      "exists": true,
+      "schemaVersion": 1,
+      "fileCount": 4491,
+      "source": "cloud-visible-graph"
+    },
+    "cache": {
+      "fileCount": 4491,
+      "hydratedFiles": 4491,
+      "pinnedFiles": 0,
+      "prunableFiles": 4491,
+      "bytesOnDisk": 16640300,
+      "states": {
+        "hydrated": 4491
+      }
+    },
+    "openHydration": null,
+    "files": {
+      ".gitignore": {
+        "exists": true,
+        "hydrated": true,
+        "state": "hydrated",
+        "pinned": false,
+        "dirty": false,
+        "pending": false,
+        "blocked": false,
+        "prunable": true,
+        "bytesOnDisk": 176,
+        "lastHydratedAt": "2026-07-12T00:12:27.851Z",
+        "lastEditedAt": null,
+        "lastSyncedAt": "2026-07-11T02:41:39.848Z",
+        "lastPrunedAt": null
+      },
+      ".vercelignore": {
+        "exists": true,
+        "hydrated": true,
+        "state": "hydrated",
+        "pinned": false,
+        "dirty": false,
+        "pending": false,
+        "blocked": false,
+        "prunable": true,
+        "bytesOnDisk": 194,
+        "lastHydratedAt": "2026-07-12T00:12:27.851Z",
+        "lastEditedAt": null,
+        "lastSyncedAt": "2026-07-11T02:41:39.848Z",
+        "lastPrunedAt": null
+      },
+      "README.md": {
+        "exists": true,
+        "hydrated": true,
+        "state": "hydrated",
+        "pinned": false,
+        "dirty": false,
+        "pending": false,
+        "blocked": false,
+        "prunable": true,
+        "bytesOnDisk": 8912,
+        "lastHydratedAt": "2026-07-12T00:12:27.851Z",
+        "lastEditedAt": null,
+        "lastSyncedAt": "2026-07-11T02:41:39.848Z",
+        "lastPrunedAt": null
+      },
+      "components.json": {
+        "exists": true,
+        "hydrated": true,
+        "state": "hydrated",
+        "pinned": false,
+        "dirty": false,
+        "pending": false,
+        "blocked": false,
+        "prunable": true,
+        "bytesOnDisk": 430,
+        "lastHydratedAt": "2026-07-12T00:12:27.851Z",
+        "lastEditedAt": null,
+        "lastSyncedAt": "2026-07-11T02:41:39.848Z",
+        "lastPrunedAt": null
+      },
+      "convex/_generated/api.d.ts": {
+        "exists": true,
+        "hydrated": true,
+        "state": "hydrated",
+        "pinned": false,
+        "dirty": false,
+        "pending": false,
+        "blocked": false,
+        "prunable": true,
+        "bytesOnDisk": 928,
+        "lastHydratedAt": "2026-07-12T00:12:27.851Z",
+        "lastEditedAt": null,
+        "lastSyncedAt": "2026-07-11T02:41:39.848Z",
+        "lastPrunedAt": null
+      },
+      "convex/_generated/api.js": {
+        "exists": true,
+        "hydrated": true,
+        "state": "hydrated",
+        "pinned": false,
+        "dirty": false,
+        "pending": false,
+        "blocked": false,
+        "prunable": true,
+        "bytesOnDisk": 480,
+        "lastHydratedAt": "2026-07-12T00:12:27.851Z",
+        "lastEditedAt": null,
+        "lastSyncedAt": "2026-07-11T02:41:39.848Z",
+        "lastPrunedAt": null
+      },
+      "docs/agent-architecture.md": {
+        "exists": true,
+        "hydrated": true,
+        "state": "hydrated",
+        "pinned": false,
+        "dirty": false,
+        "pending": false,
+        "blocked": false,
+        "prunable": true,
+        "bytesOnDisk": 17202,
+        "lastHydratedAt": "2026-07-12T00:12:27.851Z",
+        "lastEditedAt": null,
+        "lastSyncedAt": "2026-07-11T02:41:39.848Z",
+        "lastPrunedAt": null
+      },
+      "docs/mvp-plan.md": {
+        "exists": true,
+        "hydrated": true,
+        "state": "hydrated",
+        "pinned": false,
+        "dirty": false,
+        "pending": false,
+        "blocked": false,
+        "prunable": true,
+        "bytesOnDisk": 15526,
+        "lastHydratedAt": "2026-07-12T00:12:27.851Z",
+        "lastEditedAt": null,
+        "lastSyncedAt": "2026-07-11T02:41:39.848Z",
+        "lastPrunedAt": null
+      },
+      "docs/personal-production.md": {
+        "exists": true,
+        "hydrated": true,
+        "state": "hydrated",
+        "pinned": false,
+        "dirty": false,
+        "pending": false,
+        "blocked": false,
+        "prunable": true,
+        "bytesOnDisk": 4274,
+        "lastHydratedAt": "2026-07-12T00:12:27.851Z",
+        "lastEditedAt": null,
+        "lastSyncedAt": "2026-07-11T02:41:39.848Z",
+        "lastPrunedAt": null
+      },
+      "docs/progress.md": {
+        "exists": true,
+        "hydrated": true,
+        "state": "hydrated",
+        "pinned": false,
+        "dirty": false,
+        "pending": false,
+        "blocked": false,
+        "prunable": true,
+        "bytesOnDisk": 33668,
+        "lastHydratedAt": "2026-07-12T00:12:27.851Z",
+        "lastEditedAt": null,
+        "lastSyncedAt": "2026-07-11T02:41:39.848Z",
+        "lastPrunedAt": null
+      },
+      "src/app/api/agent/command/route.ts": {
+        "exists": true,
+        "hydrated": true,
+        "state": "hydrated",
+        "pinned": false,
+        "dirty": false,
+        "pending": false,
+        "blocked": false,
+        "prunable": true,
+        "bytesOnDisk": 5905,
+        "lastHydratedAt": "2026-07-12T00:12:27.851Z",
+        "lastEditedAt": null,
+        "lastSyncedAt": "2026-07-11T02:41:39.848Z",
+        "lastPrunedAt": null
+      },
+      "src/app/api/agent/status/route.ts": {
+        "exists": true,
+        "hydrated": true,
+        "state": "hydrated",
+        "pinned": false,
+        "dirty": false,
+        "pending": false,
+        "blocked": false,
+        "prunable": true,
+        "bytesOnDisk": 3514,
+        "lastHydratedAt": "2026-07-12T00:12:27.851Z",
+        "lastEditedAt": null,
+        "lastSyncedAt": "2026-07-11T02:41:39.848Z",
+        "lastPrunedAt": null
+      },
+      "src/app/globals.css": {
+        "exists": true,
+        "hydrated": true,
+        "state": "hydrated",
+        "pinned": false,
+        "dirty": false,
+        "pending": false,
+        "blocked": false,
+        "prunable": true,
+        "bytesOnDisk": 8022,
+        "lastHydratedAt": "2026-07-12T00:12:27.851Z",
+        "lastEditedAt": null,
+        "lastSyncedAt": "2026-07-11T02:41:39.848Z",
+        "lastPrunedAt": null
+      },
+      "src/app/layout.tsx": {
+        "exists": true,
+        "hydrated": true,
+        "state": "hydrated",
+        "pinned": false,
+        "dirty": false,
+        "pending": false,
+        "blocked": false,
+        "prunable": true,
+        "bytesOnDisk": 1291,
+        "lastHydratedAt": "2026-07-12T00:12:27.851Z",
+        "lastEditedAt": null,
+        "lastSyncedAt": "2026-07-11T02:41:39.848Z",
+        "lastPrunedAt": null
+      }
+    },
+    "index": {
+      "path": "/Users/robert/Library/Application Support/HopIt/Agent/workspaces.json",
+      "exists": true,
+      "schemaVersion": 1,
+      "updatedAt": "2026-07-12T00:12:27.870Z",
+      "codebaseCount": 2
+    },
+    "virtualized": false
+  },
+  "cloud": {
+    "path": "d1:hopit",
+    "service": "cloudflare-d1-graph",
+    "exists": true,
+    "schemaVersion": null,
+    "codebase": {
+      "id": "hopit",
+      "name": "HopIt",
+      "ownerId": null
+    },
+    "main": {
+      "id": "main",
+      "revision": 4437
+    },
+    "selectedState": {
+      "type": "active-change-set",
+      "id": "cs_hopit_local",
+      "ownerId": null,
+      "baseMainId": "main",
+      "baseRevision": null,
+      "revision": 4437,
+      "visibility": null,
+      "effectiveVisibility": null,
+      "reviewState": "not-open",
+      "mergeState": "unmerged",
+      "conflictState": "none",
+      "conflict": null,
+      "review": null,
+      "merge": null
+    },
+    "owner": null,
+    "session": {
+      "id": "session_robert_primary_mac",
+      "deviceName": "MacBookAir"
+    },
+    "requester": null,
+    "hiddenFileCount": 0,
+    "hiddenScopeCounts": null,
+    "visibility": null,
+    "revision": 4437,
+    "fileCount": 4491,
+    "scopeCounts": null
+  },
+  "journal": {
+    "path": "/Users/robert/Library/Application Support/HopIt/Agent/journal/hopit.ndjson",
+    "exists": false,
+    "totalEntries": 0,
+    "pendingCount": 0,
+    "failedCount": 0,
+    "acknowledgedCount": 0,
+    "scopeCounts": {
+      "shared": 0,
+      "private": 0
+    },
+    "pendingScopeCounts": {
+      "shared": 0,
+      "private": 0
+    },
+    "failedScopeCounts": {
+      "shared": 0,
+      "private": 0
+    },
+    "acknowledgedScopeCounts": {
+      "shared": 0,
+      "private": 0
+    }
+  },
+  "sync": {
+    "state": "syncing",
+    "lastStartedSync": {
+      "event": "sync.started",
+      "detail": {
+        "trigger": "literal-mirror"
+      },
+      "at": "2026-07-11T21:06:00.411Z"
+    },
+    "lastFailedSync": {
+      "event": "sync.failed",
+      "detail": {
+        "trigger": "watch",
+        "coalescedEvents": 1,
+        "eventType": "rename",
+        "path": ".private/push-e2e-test.md",
+        "reason": "D1 query failed: D1_ERROR: too many SQL variables at offset 354: SQLITE_ERROR"
+      },
+      "at": "2026-07-08T23:50:00.678Z"
+    },
+    "lastRecoveredSync": {
+      "event": "sync.recovered",
+      "detail": {
+        "trigger": "manual",
+        "lastFailedSync": {
+          "at": "2026-07-08T23:50:00.678Z",
+          "reason": "D1 query failed: D1_ERROR: too many SQL variables at offset 354: SQLITE_ERROR"
+        },
+        "lastSuccessfulSync": {
+          "trigger": "manual",
+          "writes": 24,
+          "revision": 4436,
+          "service": "cloudflare-d1-graph",
+          "contract": {
+            "schemaVersion": 2,
+            "codebaseId": "hopit",
+            "mainId": "main",
+            "selectedStateType": "active-change-set",
+            "selectedStateId": "cs_hopit_local",
+            "selectedStateRevision": 4436,
+            "ownerId": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+            "sessionId": "session_local",
+            "effectiveChangeSetVisibility": "private"
+          },
+          "scopeCounts": {
+            "shared": 140,
+            "private": 4351
+          },
+          "journaledScopeCounts": {
+            "shared": 23,
+            "private": 1
+          }
+        }
+      },
+      "at": "2026-07-09T19:44:43.393Z"
+    },
+    "lastError": "D1 query failed: D1_ERROR: too many SQL variables at offset 354: SQLITE_ERROR"
+  },
+  "refresh": {
+    "state": "healthy",
+    "lastStarted": {
+      "event": "refresh.started",
+      "detail": {
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "revision": 4437,
+        "service": "cloudflare-d1-graph",
+        "contract": {
+          "schemaVersion": 2,
+          "codebaseId": "hopit",
+          "mainId": "main",
+          "selectedStateType": "active-change-set",
+          "selectedStateId": "cs_hopit_local",
+          "selectedStateRevision": 4437,
+          "ownerId": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+          "sessionId": "session_local",
+          "effectiveChangeSetVisibility": "private"
+        },
+        "requester": {
+          "id": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+          "sessionId": "session_robert_primary_mac",
+          "role": "owner",
+          "isOwner": true,
+          "isCollaborator": false,
+          "selectedStateId": "cs_hopit_local",
+          "effectiveChangeSetVisibility": "private",
+          "visibleFileCount": 4491,
+          "hiddenFileCount": 0,
+          "hiddenScopeCounts": {
+            "shared": 0,
+            "private": 0
+          }
+        },
+        "adapter": "managed-folder",
+        "cacheMode": "local-cache",
+        "scopeCounts": {
+          "shared": 140,
+          "private": 4351
+        },
+        "hiddenScopeCounts": {
+          "shared": 0,
+          "private": 0
+        },
+        "journal": {
+          "totalEntries": 4433,
+          "pendingCount": 0,
+          "failedCount": 0,
+          "pendingScopeCounts": {
+            "shared": 0,
+            "private": 0
+          },
+          "failedScopeCounts": {
+            "shared": 0,
+            "private": 0
+          }
+        }
+      },
+      "at": "2026-07-11T02:41:36.493Z"
+    },
+    "lastBlocked": {
+      "event": "refresh.blocked",
+      "detail": {
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "revision": 4436,
+        "service": "cloudflare-d1-graph",
+        "contract": {
+          "schemaVersion": 2,
+          "codebaseId": "hopit",
+          "mainId": "main",
+          "selectedStateType": "active-change-set",
+          "selectedStateId": "cs_hopit_local",
+          "selectedStateRevision": 4436,
+          "ownerId": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+          "sessionId": "session_local",
+          "effectiveChangeSetVisibility": "private"
+        },
+        "requester": {
+          "id": null,
+          "sessionId": "session_robert_primary_mac",
+          "role": "guest",
+          "isOwner": false,
+          "isCollaborator": false,
+          "selectedStateId": "cs_hopit_local",
+          "effectiveChangeSetVisibility": "private",
+          "visibleFileCount": 0,
+          "hiddenFileCount": 4491,
+          "hiddenScopeCounts": {
+            "shared": 140,
+            "private": 4351
+          }
+        },
+        "adapter": "managed-folder",
+        "cacheMode": "local-cache",
+        "scopeCounts": {
+          "shared": 0,
+          "private": 0
+        },
+        "hiddenScopeCounts": {
+          "shared": 140,
+          "private": 4351
+        },
+        "journal": {
+          "totalEntries": 4433,
+          "pendingCount": 0,
+          "failedCount": 0,
+          "pendingScopeCounts": {
+            "shared": 0,
+            "private": 0
+          },
+          "failedScopeCounts": {
+            "shared": 0,
+            "private": 0
+          }
+        },
+        "state": "blocked",
+        "reason": "workspace_has_unjournaled_changes",
+        "localChanges": {
+          "safe": false,
+          "state": "dirty",
+          "reason": "workspace_has_unjournaled_changes",
+          "addedCount": 24,
+          "modifiedCount": 0,
+          "deletedCount": 0,
+          "samplePaths": [
+            ".private/env/repo-root/.env.local",
+            "convex/access.ts",
+            "convex/auth.config.ts",
+            "convex/collaboration.ts",
+            "docs/auth-collaboration-plan.md",
+            "docs/github-lite-collaboration-plan.md",
+            "docs/review-code-browser-plan.md",
+            "docs/work-items-releases-plan.md",
+            "src/app/api/collaboration/invitations/route.ts",
+            "src/app/api/collaboration/members/route.ts"
+          ],
+          "exoneratedCount": 0,
+          "exoneratedSamplePaths": [],
+          "manifestStale": false
+        }
+      },
+      "at": "2026-07-10T23:38:30.840Z"
+    },
+    "lastComplete": {
+      "event": "refresh.complete",
+      "detail": {
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "revision": 4437,
+        "service": "cloudflare-d1-graph",
+        "contract": {
+          "schemaVersion": 2,
+          "codebaseId": "hopit",
+          "mainId": "main",
+          "selectedStateType": "active-change-set",
+          "selectedStateId": "cs_hopit_local",
+          "selectedStateRevision": 4437,
+          "ownerId": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+          "sessionId": "session_local",
+          "effectiveChangeSetVisibility": "private"
+        },
+        "requester": {
+          "id": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+          "sessionId": "session_robert_primary_mac",
+          "role": "owner",
+          "isOwner": true,
+          "isCollaborator": false,
+          "selectedStateId": "cs_hopit_local",
+          "effectiveChangeSetVisibility": "private",
+          "visibleFileCount": 4491,
+          "hiddenFileCount": 0,
+          "hiddenScopeCounts": {
+            "shared": 0,
+            "private": 0
+          }
+        },
+        "adapter": "managed-folder",
+        "cacheMode": "local-cache",
+        "scopeCounts": {
+          "shared": 140,
+          "private": 4351
+        },
+        "hiddenScopeCounts": {
+          "shared": 0,
+          "private": 0
+        },
+        "journal": {
+          "totalEntries": 4433,
+          "pendingCount": 0,
+          "failedCount": 0,
+          "pendingScopeCounts": {
+            "shared": 0,
+            "private": 0
+          },
+          "failedScopeCounts": {
+            "shared": 0,
+            "private": 0
+          }
+        },
+        "written": 1,
+        "deleted": 0,
+        "unchanged": 4490,
+        "changedPaths": [
+          "docs/progress.md"
+        ],
+        "deletedPaths": [],
+        "fileCount": 4491
+      },
+      "at": "2026-07-11T02:41:38.265Z"
+    },
+    "lastError": null
+  },
+  "remoteUpdate": {
+    "state": "updated",
+    "lastUpdate": {
+      "event": "remote-update",
+      "detail": {
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "service": "cloudflare-d1-graph",
+        "contract": {
+          "schemaVersion": 2,
+          "codebaseId": "hopit",
+          "mainId": "main",
+          "selectedStateType": "active-change-set",
+          "selectedStateId": "cs_hopit_local",
+          "selectedStateRevision": 4437,
+          "ownerId": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+          "sessionId": "session_local",
+          "effectiveChangeSetVisibility": "private"
+        },
+        "requester": {
+          "id": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+          "sessionId": "session_robert_primary_mac",
+          "role": "owner",
+          "isOwner": true,
+          "isCollaborator": false,
+          "selectedStateId": "cs_hopit_local",
+          "effectiveChangeSetVisibility": "private",
+          "visibleFileCount": 4491,
+          "hiddenFileCount": 0,
+          "hiddenScopeCounts": {
+            "shared": 0,
+            "private": 0
+          }
+        },
+        "selectedStateId": "cs_hopit_local",
+        "selectedStateType": "active-change-set",
+        "fromRevision": 4436,
+        "toRevision": 4437,
+        "changedPaths": [
+          "docs/progress.md"
+        ],
+        "deletedPaths": [],
+        "changedScopeCounts": {
+          "shared": 1,
+          "private": 0
+        },
+        "deletedScopeCounts": {
+          "shared": 0,
+          "private": 0
+        },
+        "scopeCounts": {
+          "shared": 1,
+          "private": 0
+        },
+        "hiddenScopeCounts": {
+          "shared": 0,
+          "private": 0
+        }
+      },
+      "at": "2026-07-11T02:41:38.163Z"
+    }
+  },
+  "remotePull": {
+    "enabled": true,
+    "state": "enabled",
+    "intervalMs": 300000,
+    "reconciliationIntervalMs": 300000,
+    "activityTriggersEnabled": true,
+    "pushReconciliationEnabled": true,
+    "safeRefreshOnly": true,
+    "lastStarted": {
+      "event": "remote-pull.started",
+      "detail": {
+        "state": "enabled",
+        "mode": "periodic-head-reconciliation-with-activity",
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "intervalMs": 300000,
+        "cooldownMs": 300000,
+        "reconciliationIntervalMs": 300000,
+        "activityTriggersEnabled": true,
+        "pushReconciliationEnabled": true,
+        "adapter": "managed-folder",
+        "cacheMode": "local-cache",
+        "safeRefreshOnly": true
+      },
+      "at": "2026-07-12T00:12:28.013Z"
+    },
+    "lastApplied": null,
+    "lastSkipped": null,
+    "lastFailed": null,
+    "latestEvent": {
+      "event": "remote-pull.started",
+      "detail": {
+        "state": "enabled",
+        "mode": "periodic-head-reconciliation-with-activity",
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "intervalMs": 300000,
+        "cooldownMs": 300000,
+        "reconciliationIntervalMs": 300000,
+        "activityTriggersEnabled": true,
+        "pushReconciliationEnabled": true,
+        "adapter": "managed-folder",
+        "cacheMode": "local-cache",
+        "safeRefreshOnly": true
+      },
+      "at": "2026-07-12T00:12:28.013Z"
+    },
+    "lastError": null,
+    "cursor": {
+      "graphRevision": 4437,
+      "selectedStateId": "cs_hopit_local",
+      "selectedStateType": "active-change-set",
+      "selectedStateRevision": 4437,
+      "materializedRevision": 4437,
+      "lastMaterializedAt": "2026-07-12T00:12:27.851Z",
+      "lastRemoteUpdateRevision": 4437,
+      "latestEventRevision": 4437,
+      "latestEvent": "workspace.ready",
+      "eventCount": 118450,
+      "behindByRevisions": 0
+    }
+  },
+  "remotePush": {
+    "enabled": true,
+    "state": "push-connected",
+    "connectionState": "connected",
+    "fallbackState": "available",
+    "hubUrl": "wss://hopit-d1-api.hopit-robert.workers.dev/events",
+    "reconciliationIntervalMs": 300000,
+    "safeRefreshOnly": true,
+    "lastStarted": {
+      "event": "remote-push.started",
+      "detail": {
+        "state": "push-disconnected",
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "hubUrl": "wss://hopit-d1-api.hopit-robert.workers.dev/events",
+        "adapter": "managed-folder",
+        "cacheMode": "local-cache",
+        "safeRefreshOnly": true
+      },
+      "at": "2026-07-12T00:12:28.344Z"
+    },
+    "lastConnected": {
+      "event": "remote-push.connected",
+      "detail": {
+        "state": "push-connected",
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "hubUrl": "wss://hopit-d1-api.hopit-robert.workers.dev/events",
+        "codebaseId": "hopit",
+        "selectedStateId": "cs_hopit_local",
+        "sessionId": "session_robert_primary_mac",
+        "deviceName": "MacBookAir",
+        "lastEventId": null,
+        "lastPushedRevision": 4437,
+        "transport": "websocket",
+        "safeRefreshOnly": true
+      },
+      "at": "2026-07-12T00:12:28.618Z"
+    },
+    "lastDisconnected": {
+      "event": "remote-push.disconnected",
+      "detail": {
+        "state": "push-disconnected",
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "hubUrl": "wss://hopit-d1-api.hopit-robert.workers.dev/events",
+        "reason": "remote_push_websocket_error",
+        "lastEventId": null,
+        "lastPushedRevision": 4437,
+        "safeRefreshOnly": true
+      },
+      "at": "2026-07-12T00:06:09.442Z"
+    },
+    "lastFallbackPolling": {
+      "event": "remote-push.fallback_polling",
+      "detail": {
+        "state": "push-fallback-polling",
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "lastEventId": null,
+        "lastPushedRevision": 4437,
+        "safeRefreshOnly": true
+      },
+      "at": "2026-07-12T00:06:10.992Z"
+    },
+    "lastApplied": {
+      "event": "remote-push.applied",
+      "detail": {
+        "state": "push-applied",
+        "trigger": "remote-push",
+        "eventId": "evt_hopit_4437_913f1166-a104-49b8-8bf9-16607751d1b3",
+        "pushedRevision": 4437,
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "fromRevision": 4436,
+        "toRevision": 4437,
+        "lastPushedRevision": 4437,
+        "safeRefreshOnly": true
+      },
+      "at": "2026-07-11T02:41:38.442Z"
+    },
+    "lastSkipped": {
+      "event": "remote-pull.skipped",
+      "detail": {
+        "state": "skipped",
+        "trigger": "periodic-head-reconciliation",
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "reason": "local_sync_pending"
+      },
+      "at": "2026-07-11T21:14:53.408Z"
+    },
+    "lastFailed": {
+      "event": "remote-pull.failed",
+      "detail": {
+        "state": "failed",
+        "trigger": "periodic-head-reconciliation",
+        "activity": {
+          "trigger": "periodic-head-reconciliation",
+          "eventType": null,
+          "path": null,
+          "coalescedEvents": null
+        },
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "reason": "fetch failed"
+      },
+      "at": "2026-07-11T22:39:23.430Z"
+    },
+    "latestEvent": {
+      "event": "remote-push.connected",
+      "detail": {
+        "state": "push-connected",
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "hubUrl": "wss://hopit-d1-api.hopit-robert.workers.dev/events",
+        "codebaseId": "hopit",
+        "selectedStateId": "cs_hopit_local",
+        "sessionId": "session_robert_primary_mac",
+        "deviceName": "MacBookAir",
+        "lastEventId": null,
+        "lastPushedRevision": 4437,
+        "transport": "websocket",
+        "safeRefreshOnly": true
+      },
+      "at": "2026-07-12T00:12:28.618Z"
+    },
+    "lastEventId": "evt_hopit_4437_913f1166-a104-49b8-8bf9-16607751d1b3",
+    "lastPushedRevision": 4437,
+    "lastAppliedRevision": 4437,
+    "lastSkippedReason": "local_sync_pending",
+    "lastError": null
+  },
+  "watch": {
+    "state": "watching",
+    "lastStarted": {
+      "event": "watch.started",
+      "detail": {
+        "state": "watching",
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "adapter": "managed-folder",
+        "cacheMode": "local-cache",
+        "hydrationState": "materialized"
+      },
+      "at": "2026-07-12T00:12:27.904Z"
+    },
+    "lastDegraded": null,
+    "lastRecoveryBlocked": {
+      "event": "watch.recovery_blocked",
+      "detail": {
+        "state": "blocked",
+        "failed": 2,
+        "attempted": 2,
+        "reason": "pending journal entries could not be recovered"
+      },
+      "at": "2026-07-09T00:15:10.227Z"
+    },
+    "lastError": "pending journal entries could not be recovered"
+  },
+  "events": {
+    "path": "/Users/robert/Library/Application Support/HopIt/Agent/events/hopit.ndjson",
+    "exists": true,
+    "totalEntries": 118450,
+    "recent": [
+      {
+        "event": "remote-push.started",
+        "detail": {
+          "state": "push-disconnected",
+          "workspace": "/Users/robert/HopIt Workspaces/hopit",
+          "hubUrl": "wss://hopit-d1-api.hopit-robert.workers.dev/events",
+          "adapter": "managed-folder",
+          "cacheMode": "local-cache",
+          "safeRefreshOnly": true
+        },
+        "at": "2026-07-11T23:14:46.712Z"
+      },
+      {
+        "event": "remote-push.connected",
+        "detail": {
+          "state": "push-connected",
+          "workspace": "/Users/robert/HopIt Workspaces/hopit",
+          "hubUrl": "wss://hopit-d1-api.hopit-robert.workers.dev/events",
+          "codebaseId": "hopit",
+          "selectedStateId": "cs_hopit_local",
+          "sessionId": "session_robert_primary_mac",
+          "deviceName": "MacBookAir",
+          "lastEventId": null,
+          "lastPushedRevision": 4437,
+          "transport": "websocket",
+          "safeRefreshOnly": true
+        },
+        "at": "2026-07-11T23:14:47.006Z"
+      },
+      {
+        "event": "journal.recovery_complete",
+        "detail": {
+          "totalJournalEntries": 0,
+          "attempted": 0,
+          "acknowledged": 0,
+          "failed": 0,
+          "skipped": 0,
+          "revision": 4437,
+          "service": "cloudflare-d1-graph",
+          "contract": {
+            "schemaVersion": 2,
+            "codebaseId": "hopit",
+            "mainId": "main",
+            "selectedStateType": "active-change-set",
+            "selectedStateId": "cs_hopit_local",
+            "selectedStateRevision": 4437,
+            "ownerId": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+            "sessionId": "session_local",
+            "effectiveChangeSetVisibility": "private"
+          },
+          "scopeCounts": {
+            "shared": 140,
+            "private": 4351
+          }
+        },
+        "at": "2026-07-11T23:51:07.442Z"
+      },
+      {
+        "event": "workspace.ready",
+        "detail": {
+          "workspace": "/Users/robert/HopIt Workspaces/hopit",
+          "revision": 4437,
+          "service": "cloudflare-d1-graph",
+          "contract": {
+            "schemaVersion": 2,
+            "codebaseId": "hopit",
+            "mainId": "main",
+            "selectedStateType": "active-change-set",
+            "selectedStateId": "cs_hopit_local",
+            "selectedStateRevision": 4437,
+            "ownerId": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+            "sessionId": "session_local",
+            "effectiveChangeSetVisibility": "private"
+          },
+          "requester": {
+            "id": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+            "sessionId": "session_robert_primary_mac",
+            "role": "owner",
+            "isOwner": true,
+            "isCollaborator": false,
+            "selectedStateId": "cs_hopit_local",
+            "effectiveChangeSetVisibility": "private",
+            "visibleFileCount": 4491,
+            "hiddenFileCount": 0,
+            "hiddenScopeCounts": {
+              "shared": 0,
+              "private": 0
+            }
+          },
+          "adapter": "managed-folder",
+          "cacheMode": "local-cache",
+          "scopeCounts": {
+            "shared": 140,
+            "private": 4351
+          },
+          "hiddenScopeCounts": {
+            "shared": 0,
+            "private": 0
+          },
+          "materializedFileCount": 0,
+          "verifiedFileCount": 4491
+        },
+        "at": "2026-07-11T23:51:09.437Z"
+      },
+      {
+        "event": "watch.started",
+        "detail": {
+          "state": "watching",
+          "workspace": "/Users/robert/HopIt Workspaces/hopit",
+          "adapter": "managed-folder",
+          "cacheMode": "local-cache",
+          "hydrationState": "materialized"
+        },
+        "at": "2026-07-11T23:51:09.593Z"
+      },
+      {
+        "event": "remote-pull.started",
+        "detail": {
+          "state": "enabled",
+          "mode": "periodic-head-reconciliation-with-activity",
+          "workspace": "/Users/robert/HopIt Workspaces/hopit",
+          "intervalMs": 300000,
+          "cooldownMs": 300000,
+          "reconciliationIntervalMs": 300000,
+          "activityTriggersEnabled": true,
+          "pushReconciliationEnabled": true,
+          "adapter": "managed-folder",
+          "cacheMode": "local-cache",
+          "safeRefreshOnly": true
+        },
+        "at": "2026-07-11T23:51:09.697Z"
+      },
+      {
+        "event": "remote-push.started",
+        "detail": {
+          "state": "push-disconnected",
+          "workspace": "/Users/robert/HopIt Workspaces/hopit",
+          "hubUrl": "wss://hopit-d1-api.hopit-robert.workers.dev/events",
+          "adapter": "managed-folder",
+          "cacheMode": "local-cache",
+          "safeRefreshOnly": true
+        },
+        "at": "2026-07-11T23:51:10.016Z"
+      },
+      {
+        "event": "remote-push.connected",
+        "detail": {
+          "state": "push-connected",
+          "workspace": "/Users/robert/HopIt Workspaces/hopit",
+          "hubUrl": "wss://hopit-d1-api.hopit-robert.workers.dev/events",
+          "codebaseId": "hopit",
+          "selectedStateId": "cs_hopit_local",
+          "sessionId": "session_robert_primary_mac",
+          "deviceName": "MacBookAir",
+          "lastEventId": null,
+          "lastPushedRevision": 4437,
+          "transport": "websocket",
+          "safeRefreshOnly": true
+        },
+        "at": "2026-07-11T23:51:10.303Z"
+      },
+      {
+        "event": "remote-push.disconnected",
+        "detail": {
+          "state": "push-disconnected",
+          "workspace": "/Users/robert/HopIt Workspaces/hopit",
+          "hubUrl": "wss://hopit-d1-api.hopit-robert.workers.dev/events",
+          "reason": "remote_push_websocket_error",
+          "lastEventId": null,
+          "lastPushedRevision": 4437,
+          "safeRefreshOnly": true
+        },
+        "at": "2026-07-12T00:02:03.902Z"
+      },
+      {
+        "event": "remote-push.connected",
+        "detail": {
+          "state": "push-connected",
+          "workspace": "/Users/robert/HopIt Workspaces/hopit",
+          "hubUrl": "wss://hopit-d1-api.hopit-robert.workers.dev/events",
+          "codebaseId": "hopit",
+          "selectedStateId": "cs_hopit_local",
+          "sessionId": "session_robert_primary_mac",
+          "deviceName": "MacBookAir",
+          "lastEventId": null,
+          "lastPushedRevision": 4437,
+          "transport": "websocket",
+          "safeRefreshOnly": true
+        },
+        "at": "2026-07-12T00:02:04.574Z"
+      },
+      {
+        "event": "remote-push.fallback_polling",
+        "detail": {
+          "state": "push-fallback-polling",
+          "workspace": "/Users/robert/HopIt Workspaces/hopit",
+          "lastEventId": null,
+          "lastPushedRevision": 4437,
+          "safeRefreshOnly": true
+        },
+        "at": "2026-07-12T00:02:04.808Z"
+      },
+      {
+        "event": "remote-push.disconnected",
+        "detail": {
+          "state": "push-disconnected",
+          "workspace": "/Users/robert/HopIt Workspaces/hopit",
+          "hubUrl": "wss://hopit-d1-api.hopit-robert.workers.dev/events",
+          "reason": "remote_push_websocket_error",
+          "lastEventId": null,
+          "lastPushedRevision": 4437,
+          "safeRefreshOnly": true
+        },
+        "at": "2026-07-12T00:06:09.442Z"
+      },
+      {
+        "event": "remote-push.connected",
+        "detail": {
+          "state": "push-connected",
+          "workspace": "/Users/robert/HopIt Workspaces/hopit",
+          "hubUrl": "wss://hopit-d1-api.hopit-robert.workers.dev/events",
+          "codebaseId": "hopit",
+          "selectedStateId": "cs_hopit_local",
+          "sessionId": "session_robert_primary_mac",
+          "deviceName": "MacBookAir",
+          "lastEventId": null,
+          "lastPushedRevision": 4437,
+          "transport": "websocket",
+          "safeRefreshOnly": true
+        },
+        "at": "2026-07-12T00:06:10.771Z"
+      },
+      {
+        "event": "remote-push.fallback_polling",
+        "detail": {
+          "state": "push-fallback-polling",
+          "workspace": "/Users/robert/HopIt Workspaces/hopit",
+          "lastEventId": null,
+          "lastPushedRevision": 4437,
+          "safeRefreshOnly": true
+        },
+        "at": "2026-07-12T00:06:10.992Z"
+      },
+      {
+        "event": "journal.recovery_complete",
+        "detail": {
+          "totalJournalEntries": 0,
+          "attempted": 0,
+          "acknowledged": 0,
+          "failed": 0,
+          "skipped": 0,
+          "revision": 4437,
+          "service": "cloudflare-d1-graph",
+          "contract": {
+            "schemaVersion": 2,
+            "codebaseId": "hopit",
+            "mainId": "main",
+            "selectedStateType": "active-change-set",
+            "selectedStateId": "cs_hopit_local",
+            "selectedStateRevision": 4437,
+            "ownerId": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+            "sessionId": "session_local",
+            "effectiveChangeSetVisibility": "private"
+          },
+          "scopeCounts": {
+            "shared": 140,
+            "private": 4351
+          }
+        },
+        "at": "2026-07-12T00:12:26.530Z"
+      },
+      {
+        "event": "workspace.ready",
+        "detail": {
+          "workspace": "/Users/robert/HopIt Workspaces/hopit",
+          "revision": 4437,
+          "service": "cloudflare-d1-graph",
+          "contract": {
+            "schemaVersion": 2,
+            "codebaseId": "hopit",
+            "mainId": "main",
+            "selectedStateType": "active-change-set",
+            "selectedStateId": "cs_hopit_local",
+            "selectedStateRevision": 4437,
+            "ownerId": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+            "sessionId": "session_local",
+            "effectiveChangeSetVisibility": "private"
+          },
+          "requester": {
+            "id": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+            "sessionId": "session_robert_primary_mac",
+            "role": "owner",
+            "isOwner": true,
+            "isCollaborator": false,
+            "selectedStateId": "cs_hopit_local",
+            "effectiveChangeSetVisibility": "private",
+            "visibleFileCount": 4491,
+            "hiddenFileCount": 0,
+            "hiddenScopeCounts": {
+              "shared": 0,
+              "private": 0
+            }
+          },
+          "adapter": "managed-folder",
+          "cacheMode": "local-cache",
+          "scopeCounts": {
+            "shared": 140,
+            "private": 4351
+          },
+          "hiddenScopeCounts": {
+            "shared": 0,
+            "private": 0
+          },
+          "materializedFileCount": 0,
+          "verifiedFileCount": 4491
+        },
+        "at": "2026-07-12T00:12:27.738Z"
+      },
+      {
+        "event": "watch.started",
+        "detail": {
+          "state": "watching",
+          "workspace": "/Users/robert/HopIt Workspaces/hopit",
+          "adapter": "managed-folder",
+          "cacheMode": "local-cache",
+          "hydrationState": "materialized"
+        },
+        "at": "2026-07-12T00:12:27.904Z"
+      },
+      {
+        "event": "remote-pull.started",
+        "detail": {
+          "state": "enabled",
+          "mode": "periodic-head-reconciliation-with-activity",
+          "workspace": "/Users/robert/HopIt Workspaces/hopit",
+          "intervalMs": 300000,
+          "cooldownMs": 300000,
+          "reconciliationIntervalMs": 300000,
+          "activityTriggersEnabled": true,
+          "pushReconciliationEnabled": true,
+          "adapter": "managed-folder",
+          "cacheMode": "local-cache",
+          "safeRefreshOnly": true
+        },
+        "at": "2026-07-12T00:12:28.013Z"
+      },
+      {
+        "event": "remote-push.started",
+        "detail": {
+          "state": "push-disconnected",
+          "workspace": "/Users/robert/HopIt Workspaces/hopit",
+          "hubUrl": "wss://hopit-d1-api.hopit-robert.workers.dev/events",
+          "adapter": "managed-folder",
+          "cacheMode": "local-cache",
+          "safeRefreshOnly": true
+        },
+        "at": "2026-07-12T00:12:28.344Z"
+      },
+      {
+        "event": "remote-push.connected",
+        "detail": {
+          "state": "push-connected",
+          "workspace": "/Users/robert/HopIt Workspaces/hopit",
+          "hubUrl": "wss://hopit-d1-api.hopit-robert.workers.dev/events",
+          "codebaseId": "hopit",
+          "selectedStateId": "cs_hopit_local",
+          "sessionId": "session_robert_primary_mac",
+          "deviceName": "MacBookAir",
+          "lastEventId": null,
+          "lastPushedRevision": 4437,
+          "transport": "websocket",
+          "safeRefreshOnly": true
+        },
+        "at": "2026-07-12T00:12:28.618Z"
+      }
+    ],
+    "lastAcknowledgement": {
+      "event": "cloud.acknowledged",
+      "detail": {
+        "id": "34756472-42cd-4c28-bf0c-9e45af472769",
+        "type": "create",
+        "path": "tsconfig.tsbuildinfo",
+        "kind": "file",
+        "scope": "shared",
+        "privacyZone": "repo-content",
+        "revision": 4436,
+        "selectedStateType": "active-change-set",
+        "selectedStateId": "cs_hopit_local",
+        "selectedStateRevision": 4436,
+        "storageMode": "d1-bulk-mutation"
+      },
+      "at": "2026-07-09T19:44:43.096Z"
+    },
+    "lastSync": {
+      "event": "sync.complete",
+      "detail": {
+        "trigger": "watch",
+        "coalescedEvents": 1,
+        "eventType": "change",
+        "path": "docs/progress.md",
+        "writes": 0,
+        "revision": 4437,
+        "service": "cloudflare-d1-graph",
+        "contract": {
+          "schemaVersion": 2,
+          "codebaseId": "hopit",
+          "mainId": "main",
+          "selectedStateType": "active-change-set",
+          "selectedStateId": "cs_hopit_local",
+          "selectedStateRevision": 4437,
+          "ownerId": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+          "sessionId": "session_local",
+          "effectiveChangeSetVisibility": "private"
+        },
+        "scopeCounts": {
+          "shared": 140,
+          "private": 4351
+        },
+        "journaledScopeCounts": {
+          "shared": 0,
+          "private": 0
+        }
+      },
+      "at": "2026-07-11T02:41:39.729Z"
+    },
+    "lastStartedSync": {
+      "event": "sync.started",
+      "detail": {
+        "trigger": "literal-mirror"
+      },
+      "at": "2026-07-11T21:06:00.411Z"
+    },
+    "lastFailedSync": {
+      "event": "sync.failed",
+      "detail": {
+        "trigger": "watch",
+        "coalescedEvents": 1,
+        "eventType": "rename",
+        "path": ".private/push-e2e-test.md",
+        "reason": "D1 query failed: D1_ERROR: too many SQL variables at offset 354: SQLITE_ERROR"
+      },
+      "at": "2026-07-08T23:50:00.678Z"
+    },
+    "lastRecoveredSync": {
+      "event": "sync.recovered",
+      "detail": {
+        "trigger": "manual",
+        "lastFailedSync": {
+          "at": "2026-07-08T23:50:00.678Z",
+          "reason": "D1 query failed: D1_ERROR: too many SQL variables at offset 354: SQLITE_ERROR"
+        },
+        "lastSuccessfulSync": {
+          "trigger": "manual",
+          "writes": 24,
+          "revision": 4436,
+          "service": "cloudflare-d1-graph",
+          "contract": {
+            "schemaVersion": 2,
+            "codebaseId": "hopit",
+            "mainId": "main",
+            "selectedStateType": "active-change-set",
+            "selectedStateId": "cs_hopit_local",
+            "selectedStateRevision": 4436,
+            "ownerId": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+            "sessionId": "session_local",
+            "effectiveChangeSetVisibility": "private"
+          },
+          "scopeCounts": {
+            "shared": 140,
+            "private": 4351
+          },
+          "journaledScopeCounts": {
+            "shared": 23,
+            "private": 1
+          }
+        }
+      },
+      "at": "2026-07-09T19:44:43.393Z"
+    },
+    "latestSyncEvent": {
+      "event": "sync.started",
+      "detail": {
+        "trigger": "literal-mirror"
+      },
+      "at": "2026-07-11T21:06:00.411Z"
+    },
+    "lastWorkspaceReady": {
+      "event": "workspace.ready",
+      "detail": {
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "revision": 4437,
+        "service": "cloudflare-d1-graph",
+        "contract": {
+          "schemaVersion": 2,
+          "codebaseId": "hopit",
+          "mainId": "main",
+          "selectedStateType": "active-change-set",
+          "selectedStateId": "cs_hopit_local",
+          "selectedStateRevision": 4437,
+          "ownerId": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+          "sessionId": "session_local",
+          "effectiveChangeSetVisibility": "private"
+        },
+        "requester": {
+          "id": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+          "sessionId": "session_robert_primary_mac",
+          "role": "owner",
+          "isOwner": true,
+          "isCollaborator": false,
+          "selectedStateId": "cs_hopit_local",
+          "effectiveChangeSetVisibility": "private",
+          "visibleFileCount": 4491,
+          "hiddenFileCount": 0,
+          "hiddenScopeCounts": {
+            "shared": 0,
+            "private": 0
+          }
+        },
+        "adapter": "managed-folder",
+        "cacheMode": "local-cache",
+        "scopeCounts": {
+          "shared": 140,
+          "private": 4351
+        },
+        "hiddenScopeCounts": {
+          "shared": 0,
+          "private": 0
+        },
+        "materializedFileCount": 0,
+        "verifiedFileCount": 4491
+      },
+      "at": "2026-07-12T00:12:27.738Z"
+    },
+    "lastWorkspaceOpened": null,
+    "lastWorkspaceOpenHydration": null,
+    "lastRefreshStarted": {
+      "event": "refresh.started",
+      "detail": {
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "revision": 4437,
+        "service": "cloudflare-d1-graph",
+        "contract": {
+          "schemaVersion": 2,
+          "codebaseId": "hopit",
+          "mainId": "main",
+          "selectedStateType": "active-change-set",
+          "selectedStateId": "cs_hopit_local",
+          "selectedStateRevision": 4437,
+          "ownerId": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+          "sessionId": "session_local",
+          "effectiveChangeSetVisibility": "private"
+        },
+        "requester": {
+          "id": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+          "sessionId": "session_robert_primary_mac",
+          "role": "owner",
+          "isOwner": true,
+          "isCollaborator": false,
+          "selectedStateId": "cs_hopit_local",
+          "effectiveChangeSetVisibility": "private",
+          "visibleFileCount": 4491,
+          "hiddenFileCount": 0,
+          "hiddenScopeCounts": {
+            "shared": 0,
+            "private": 0
+          }
+        },
+        "adapter": "managed-folder",
+        "cacheMode": "local-cache",
+        "scopeCounts": {
+          "shared": 140,
+          "private": 4351
+        },
+        "hiddenScopeCounts": {
+          "shared": 0,
+          "private": 0
+        },
+        "journal": {
+          "totalEntries": 4433,
+          "pendingCount": 0,
+          "failedCount": 0,
+          "pendingScopeCounts": {
+            "shared": 0,
+            "private": 0
+          },
+          "failedScopeCounts": {
+            "shared": 0,
+            "private": 0
+          }
+        }
+      },
+      "at": "2026-07-11T02:41:36.493Z"
+    },
+    "lastRefreshBlocked": {
+      "event": "refresh.blocked",
+      "detail": {
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "revision": 4436,
+        "service": "cloudflare-d1-graph",
+        "contract": {
+          "schemaVersion": 2,
+          "codebaseId": "hopit",
+          "mainId": "main",
+          "selectedStateType": "active-change-set",
+          "selectedStateId": "cs_hopit_local",
+          "selectedStateRevision": 4436,
+          "ownerId": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+          "sessionId": "session_local",
+          "effectiveChangeSetVisibility": "private"
+        },
+        "requester": {
+          "id": null,
+          "sessionId": "session_robert_primary_mac",
+          "role": "guest",
+          "isOwner": false,
+          "isCollaborator": false,
+          "selectedStateId": "cs_hopit_local",
+          "effectiveChangeSetVisibility": "private",
+          "visibleFileCount": 0,
+          "hiddenFileCount": 4491,
+          "hiddenScopeCounts": {
+            "shared": 140,
+            "private": 4351
+          }
+        },
+        "adapter": "managed-folder",
+        "cacheMode": "local-cache",
+        "scopeCounts": {
+          "shared": 0,
+          "private": 0
+        },
+        "hiddenScopeCounts": {
+          "shared": 140,
+          "private": 4351
+        },
+        "journal": {
+          "totalEntries": 4433,
+          "pendingCount": 0,
+          "failedCount": 0,
+          "pendingScopeCounts": {
+            "shared": 0,
+            "private": 0
+          },
+          "failedScopeCounts": {
+            "shared": 0,
+            "private": 0
+          }
+        },
+        "state": "blocked",
+        "reason": "workspace_has_unjournaled_changes",
+        "localChanges": {
+          "safe": false,
+          "state": "dirty",
+          "reason": "workspace_has_unjournaled_changes",
+          "addedCount": 24,
+          "modifiedCount": 0,
+          "deletedCount": 0,
+          "samplePaths": [
+            ".private/env/repo-root/.env.local",
+            "convex/access.ts",
+            "convex/auth.config.ts",
+            "convex/collaboration.ts",
+            "docs/auth-collaboration-plan.md",
+            "docs/github-lite-collaboration-plan.md",
+            "docs/review-code-browser-plan.md",
+            "docs/work-items-releases-plan.md",
+            "src/app/api/collaboration/invitations/route.ts",
+            "src/app/api/collaboration/members/route.ts"
+          ],
+          "exoneratedCount": 0,
+          "exoneratedSamplePaths": [],
+          "manifestStale": false
+        }
+      },
+      "at": "2026-07-10T23:38:30.840Z"
+    },
+    "lastRefreshComplete": {
+      "event": "refresh.complete",
+      "detail": {
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "revision": 4437,
+        "service": "cloudflare-d1-graph",
+        "contract": {
+          "schemaVersion": 2,
+          "codebaseId": "hopit",
+          "mainId": "main",
+          "selectedStateType": "active-change-set",
+          "selectedStateId": "cs_hopit_local",
+          "selectedStateRevision": 4437,
+          "ownerId": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+          "sessionId": "session_local",
+          "effectiveChangeSetVisibility": "private"
+        },
+        "requester": {
+          "id": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+          "sessionId": "session_robert_primary_mac",
+          "role": "owner",
+          "isOwner": true,
+          "isCollaborator": false,
+          "selectedStateId": "cs_hopit_local",
+          "effectiveChangeSetVisibility": "private",
+          "visibleFileCount": 4491,
+          "hiddenFileCount": 0,
+          "hiddenScopeCounts": {
+            "shared": 0,
+            "private": 0
+          }
+        },
+        "adapter": "managed-folder",
+        "cacheMode": "local-cache",
+        "scopeCounts": {
+          "shared": 140,
+          "private": 4351
+        },
+        "hiddenScopeCounts": {
+          "shared": 0,
+          "private": 0
+        },
+        "journal": {
+          "totalEntries": 4433,
+          "pendingCount": 0,
+          "failedCount": 0,
+          "pendingScopeCounts": {
+            "shared": 0,
+            "private": 0
+          },
+          "failedScopeCounts": {
+            "shared": 0,
+            "private": 0
+          }
+        },
+        "written": 1,
+        "deleted": 0,
+        "unchanged": 4490,
+        "changedPaths": [
+          "docs/progress.md"
+        ],
+        "deletedPaths": [],
+        "fileCount": 4491
+      },
+      "at": "2026-07-11T02:41:38.265Z"
+    },
+    "lastRemoteUpdate": {
+      "event": "remote-update",
+      "detail": {
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "service": "cloudflare-d1-graph",
+        "contract": {
+          "schemaVersion": 2,
+          "codebaseId": "hopit",
+          "mainId": "main",
+          "selectedStateType": "active-change-set",
+          "selectedStateId": "cs_hopit_local",
+          "selectedStateRevision": 4437,
+          "ownerId": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+          "sessionId": "session_local",
+          "effectiveChangeSetVisibility": "private"
+        },
+        "requester": {
+          "id": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+          "sessionId": "session_robert_primary_mac",
+          "role": "owner",
+          "isOwner": true,
+          "isCollaborator": false,
+          "selectedStateId": "cs_hopit_local",
+          "effectiveChangeSetVisibility": "private",
+          "visibleFileCount": 4491,
+          "hiddenFileCount": 0,
+          "hiddenScopeCounts": {
+            "shared": 0,
+            "private": 0
+          }
+        },
+        "selectedStateId": "cs_hopit_local",
+        "selectedStateType": "active-change-set",
+        "fromRevision": 4436,
+        "toRevision": 4437,
+        "changedPaths": [
+          "docs/progress.md"
+        ],
+        "deletedPaths": [],
+        "changedScopeCounts": {
+          "shared": 1,
+          "private": 0
+        },
+        "deletedScopeCounts": {
+          "shared": 0,
+          "private": 0
+        },
+        "scopeCounts": {
+          "shared": 1,
+          "private": 0
+        },
+        "hiddenScopeCounts": {
+          "shared": 0,
+          "private": 0
+        }
+      },
+      "at": "2026-07-11T02:41:38.163Z"
+    },
+    "lastRemotePullStarted": {
+      "event": "remote-pull.started",
+      "detail": {
+        "state": "enabled",
+        "mode": "periodic-head-reconciliation-with-activity",
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "intervalMs": 300000,
+        "cooldownMs": 300000,
+        "reconciliationIntervalMs": 300000,
+        "activityTriggersEnabled": true,
+        "pushReconciliationEnabled": true,
+        "adapter": "managed-folder",
+        "cacheMode": "local-cache",
+        "safeRefreshOnly": true
+      },
+      "at": "2026-07-12T00:12:28.013Z"
+    },
+    "lastRemotePullApplied": null,
+    "lastRemotePullSkipped": {
+      "event": "remote-pull.skipped",
+      "detail": {
+        "state": "skipped",
+        "trigger": "periodic-head-reconciliation",
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "reason": "local_sync_pending"
+      },
+      "at": "2026-07-11T21:14:53.408Z"
+    },
+    "lastRemotePullFailed": {
+      "event": "remote-pull.failed",
+      "detail": {
+        "state": "failed",
+        "trigger": "periodic-head-reconciliation",
+        "activity": {
+          "trigger": "periodic-head-reconciliation",
+          "eventType": null,
+          "path": null,
+          "coalescedEvents": null
+        },
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "reason": "fetch failed"
+      },
+      "at": "2026-07-11T22:39:23.430Z"
+    },
+    "latestRemotePullEvent": {
+      "event": "remote-pull.started",
+      "detail": {
+        "state": "enabled",
+        "mode": "periodic-head-reconciliation-with-activity",
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "intervalMs": 300000,
+        "cooldownMs": 300000,
+        "reconciliationIntervalMs": 300000,
+        "activityTriggersEnabled": true,
+        "pushReconciliationEnabled": true,
+        "adapter": "managed-folder",
+        "cacheMode": "local-cache",
+        "safeRefreshOnly": true
+      },
+      "at": "2026-07-12T00:12:28.013Z"
+    },
+    "lastRemotePushStarted": {
+      "event": "remote-push.started",
+      "detail": {
+        "state": "push-disconnected",
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "hubUrl": "wss://hopit-d1-api.hopit-robert.workers.dev/events",
+        "adapter": "managed-folder",
+        "cacheMode": "local-cache",
+        "safeRefreshOnly": true
+      },
+      "at": "2026-07-12T00:12:28.344Z"
+    },
+    "lastRemotePushConnected": {
+      "event": "remote-push.connected",
+      "detail": {
+        "state": "push-connected",
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "hubUrl": "wss://hopit-d1-api.hopit-robert.workers.dev/events",
+        "codebaseId": "hopit",
+        "selectedStateId": "cs_hopit_local",
+        "sessionId": "session_robert_primary_mac",
+        "deviceName": "MacBookAir",
+        "lastEventId": null,
+        "lastPushedRevision": 4437,
+        "transport": "websocket",
+        "safeRefreshOnly": true
+      },
+      "at": "2026-07-12T00:12:28.618Z"
+    },
+    "lastRemotePushDisconnected": {
+      "event": "remote-push.disconnected",
+      "detail": {
+        "state": "push-disconnected",
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "hubUrl": "wss://hopit-d1-api.hopit-robert.workers.dev/events",
+        "reason": "remote_push_websocket_error",
+        "lastEventId": null,
+        "lastPushedRevision": 4437,
+        "safeRefreshOnly": true
+      },
+      "at": "2026-07-12T00:06:09.442Z"
+    },
+    "lastRemotePushFallbackPolling": {
+      "event": "remote-push.fallback_polling",
+      "detail": {
+        "state": "push-fallback-polling",
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "lastEventId": null,
+        "lastPushedRevision": 4437,
+        "safeRefreshOnly": true
+      },
+      "at": "2026-07-12T00:06:10.992Z"
+    },
+    "lastRemotePushApplied": {
+      "event": "remote-push.applied",
+      "detail": {
+        "state": "push-applied",
+        "trigger": "remote-push",
+        "eventId": "evt_hopit_4437_913f1166-a104-49b8-8bf9-16607751d1b3",
+        "pushedRevision": 4437,
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "fromRevision": 4436,
+        "toRevision": 4437,
+        "lastPushedRevision": 4437,
+        "safeRefreshOnly": true
+      },
+      "at": "2026-07-11T02:41:38.442Z"
+    },
+    "lastRemotePushSkipped": {
+      "event": "remote-push.skipped",
+      "detail": {
+        "state": "push-skipped",
+        "trigger": "remote-push-fallback",
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "reason": "workspace_has_unjournaled_changes",
+        "localChanges": {
+          "safe": false,
+          "state": "dirty",
+          "reason": "workspace_has_unjournaled_changes",
+          "addedCount": 24,
+          "modifiedCount": 0,
+          "deletedCount": 0,
+          "samplePaths": [
+            ".private/env/repo-root/.env.local",
+            "convex/access.ts",
+            "convex/auth.config.ts",
+            "convex/collaboration.ts",
+            "docs/auth-collaboration-plan.md",
+            "docs/github-lite-collaboration-plan.md",
+            "docs/review-code-browser-plan.md",
+            "docs/work-items-releases-plan.md",
+            "src/app/api/collaboration/invitations/route.ts",
+            "src/app/api/collaboration/members/route.ts"
+          ]
+        },
+        "eventId": "evt_hopit_1759_f5342a5a-5670-4498-9383-c00c6f0b8b16",
+        "pushedRevision": 1759,
+        "envelope": null,
+        "safeRefreshOnly": true
+      },
+      "at": "2026-07-11T00:10:01.476Z"
+    },
+    "lastRemotePushFailed": null,
+    "latestRemotePushEvent": {
+      "event": "remote-push.connected",
+      "detail": {
+        "state": "push-connected",
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "hubUrl": "wss://hopit-d1-api.hopit-robert.workers.dev/events",
+        "codebaseId": "hopit",
+        "selectedStateId": "cs_hopit_local",
+        "sessionId": "session_robert_primary_mac",
+        "deviceName": "MacBookAir",
+        "lastEventId": null,
+        "lastPushedRevision": 4437,
+        "transport": "websocket",
+        "safeRefreshOnly": true
+      },
+      "at": "2026-07-12T00:12:28.618Z"
+    },
+    "lastReviewOpened": null,
+    "lastChangeSetMerged": null,
+    "lastConflictDetected": {
+      "event": "change_set.conflict_detected",
+      "detail": {
+        "state": "conflicted",
+        "selectedStateId": "cs_hopit_local",
+        "selectedStateRevision": 4412,
+        "mainId": "main",
+        "mainRevision": 2,
+        "reason": "selected_state_revision_mismatch",
+        "id": "7ca9cc26-ae23-457e-ada4-0c9d2727d703",
+        "type": "create",
+        "path": ".vercel/project.json",
+        "scope": "shared",
+        "expectedRevision": 6044,
+        "actualRevision": 4412,
+        "detectedAt": "2026-07-09T19:30:01.977Z"
+      },
+      "at": "2026-07-09T19:41:00.856Z"
+    },
+    "latestRefreshEvent": {
+      "event": "refresh.complete",
+      "detail": {
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "revision": 4437,
+        "service": "cloudflare-d1-graph",
+        "contract": {
+          "schemaVersion": 2,
+          "codebaseId": "hopit",
+          "mainId": "main",
+          "selectedStateType": "active-change-set",
+          "selectedStateId": "cs_hopit_local",
+          "selectedStateRevision": 4437,
+          "ownerId": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+          "sessionId": "session_local",
+          "effectiveChangeSetVisibility": "private"
+        },
+        "requester": {
+          "id": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+          "sessionId": "session_robert_primary_mac",
+          "role": "owner",
+          "isOwner": true,
+          "isCollaborator": false,
+          "selectedStateId": "cs_hopit_local",
+          "effectiveChangeSetVisibility": "private",
+          "visibleFileCount": 4491,
+          "hiddenFileCount": 0,
+          "hiddenScopeCounts": {
+            "shared": 0,
+            "private": 0
+          }
+        },
+        "adapter": "managed-folder",
+        "cacheMode": "local-cache",
+        "scopeCounts": {
+          "shared": 140,
+          "private": 4351
+        },
+        "hiddenScopeCounts": {
+          "shared": 0,
+          "private": 0
+        },
+        "journal": {
+          "totalEntries": 4433,
+          "pendingCount": 0,
+          "failedCount": 0,
+          "pendingScopeCounts": {
+            "shared": 0,
+            "private": 0
+          },
+          "failedScopeCounts": {
+            "shared": 0,
+            "private": 0
+          }
+        },
+        "written": 1,
+        "deleted": 0,
+        "unchanged": 4490,
+        "changedPaths": [
+          "docs/progress.md"
+        ],
+        "deletedPaths": [],
+        "fileCount": 4491
+      },
+      "at": "2026-07-11T02:41:38.265Z"
+    },
+    "lastRecovery": {
+      "event": "journal.recovery_complete",
+      "detail": {
+        "totalJournalEntries": 0,
+        "attempted": 0,
+        "acknowledged": 0,
+        "failed": 0,
+        "skipped": 0,
+        "revision": 4437,
+        "service": "cloudflare-d1-graph",
+        "contract": {
+          "schemaVersion": 2,
+          "codebaseId": "hopit",
+          "mainId": "main",
+          "selectedStateType": "active-change-set",
+          "selectedStateId": "cs_hopit_local",
+          "selectedStateRevision": 4437,
+          "ownerId": "user_3FYz5MbBMHBXQ5JXlD02HVy9ePj",
+          "sessionId": "session_local",
+          "effectiveChangeSetVisibility": "private"
+        },
+        "scopeCounts": {
+          "shared": 140,
+          "private": 4351
+        }
+      },
+      "at": "2026-07-12T00:12:26.530Z"
+    },
+    "lastWatchStarted": {
+      "event": "watch.started",
+      "detail": {
+        "state": "watching",
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "adapter": "managed-folder",
+        "cacheMode": "local-cache",
+        "hydrationState": "materialized"
+      },
+      "at": "2026-07-12T00:12:27.904Z"
+    },
+    "lastWatchDegraded": null,
+    "lastWatchRecoveryBlocked": {
+      "event": "watch.recovery_blocked",
+      "detail": {
+        "state": "blocked",
+        "failed": 2,
+        "attempted": 2,
+        "reason": "pending journal entries could not be recovered"
+      },
+      "at": "2026-07-09T00:15:10.227Z"
+    },
+    "latestWatchEvent": {
+      "event": "watch.started",
+      "detail": {
+        "state": "watching",
+        "workspace": "/Users/robert/HopIt Workspaces/hopit",
+        "adapter": "managed-folder",
+        "cacheMode": "local-cache",
+        "hydrationState": "materialized"
+      },
+      "at": "2026-07-12T00:12:27.904Z"
+    }
+  }
+}

@@ -873,6 +873,45 @@ If you are using the manual pid-file debug service instead of LaunchAgent, use
 `npm run hop:service:status -- --codebase-id "$HOPIT_CODEBASE_ID"` instead.
 
 
+## Desktop App (dogfood)
+
+`packages/desktop` is a menu-bar-first Electron app that is a THIN shell over the
+existing local engine: it reads live state from each codebase's loopback
+`/status` and `/events` endpoints (default port 4785 for `hopit`, derived
+per-codebase ports for everything else, matching the agent's FNV-1a derivation)
+and performs every action by spawning the installed `hop` CLI. It contains no
+agent logic; if the desktop app and the CLI ever disagree, the CLI is right and
+the shell has a bug.
+
+What it shows: a project sidebar (from the workspace index plus the per-codebase
+connection store), a per-project view with Now/History/Activity/Files tabs, an
+"Add a project" flow that wraps `hop add --source <folder>` with a native folder
+picker and a streamed human-output log pane (browser device approval opens
+exactly as it does from the terminal), and a tray icon reflecting the aggregate
+state (all synced / syncing / attention / service stopped). Closing the window
+keeps it in the tray. hopit.dev always opens in the external browser; the window
+never loads remote content (context isolation on, sandbox on, no node in the
+renderer).
+
+Run and test:
+
+```bash
+npm run desktop:dev        # launch from the repo (electron .)
+npm run test:desktop       # node:test suite for the pure logic modules
+npm run desktop:package    # unsigned .app under artifacts/desktop/ (local dogfood only)
+```
+
+The packaged app is unsigned and deliberately NOT wired into any release
+publication (that stays blocked pending signing, same as the CLI). Electron and
+@electron/packager are devDependencies of `packages/desktop` only, so
+`npm run package:hop` and the agent runtime artifact are unaffected.
+`HOPIT_DESKTOP_SMOKE=1 electron . --no-window` boots to tray creation, prints a
+one-line readiness marker, and exits 0 after ~2.5 s (used as a headless smoke
+check). `HOPIT_HOP_BIN` overrides hop binary discovery (default order:
+`~/.local/bin/hop`, `/opt/homebrew/bin/hop`, `/usr/local/bin/hop`, the packaged
+Application Support runtime).
+
+
 ## Current Limits
 
 - Hosted workspace commands are intentionally disabled; local workspace commands run through the local agent. Hosted collaboration/member/work-item APIs exist behind Clerk product auth.
