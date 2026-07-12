@@ -257,11 +257,11 @@ async function renderHistory(codebaseId) {
   panel.textContent = ''
 
   if (!history.reachable && history.rows.length === 0) {
-    panel.appendChild(note('The background service is not running, so recent history is unavailable.', true))
+    panel.appendChild(note('The background service is not running, so the recent trail is unavailable.', true))
     return
   }
   if (history.rows.length === 0) {
-    panel.appendChild(note('No recent revisions in the current event window. New saves will appear here.'))
+    panel.appendChild(note('No recent trail steps in the current event window. New saves appear here.'))
     return
   }
   for (const row of history.rows) {
@@ -295,7 +295,7 @@ async function renderHistory(codebaseId) {
   }
   panel.appendChild(Object.assign(document.createElement('p'), {
     className: 'files-note',
-    textContent: 'Showing revisions from the recent event window on this Mac. Full history lives on the dashboard.',
+    textContent: 'Showing trail steps from the recent event window on this Mac. The full trail lives on the dashboard.',
   }))
 }
 

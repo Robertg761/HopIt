@@ -1,4 +1,6 @@
 // @ts-check
+// User-facing name for this view is "Trail"; the internal identifiers
+// (projectHistory, deriveHistory, history.js) stay as-is on purpose.
 // Derive a per-project revision history from the agent's event journal (the
 // /events endpoint `recent` array). We only surface what the events actually
 // carry — the endpoint returns a bounded recent window, so this is an honest

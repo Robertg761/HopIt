@@ -884,7 +884,8 @@ agent logic; if the desktop app and the CLI ever disagree, the CLI is right and
 the shell has a bug.
 
 What it shows: a project sidebar (from the workspace index plus the per-codebase
-connection store), a per-project view with Now/History/Activity/Files tabs, an
+connection store), a per-project view with Now/Trail/Activity/Files tabs (the
+Trail tab is backed by the unchanged `projectHistory` IPC path), an
 "Add a project" flow that wraps `hop add --source <folder>` with a native folder
 picker and a streamed human-output log pane (browser device approval opens
 exactly as it does from the terminal), and a tray icon reflecting the aggregate

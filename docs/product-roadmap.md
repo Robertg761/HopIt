@@ -86,7 +86,10 @@ ceremony.
 7. **Vocabulary is PR-familiar but branch-free.** propose → review → merge, with
    reviewers. No branch, fork, rebase, or worktree concepts appear anywhere. For
    public codebases, outsiders get a **remix** — their own linked copy — and can
-   propose changes back.
+   propose changes back. A project's automatically recorded revision history is
+   its **trail**: every save leaves a step on the trail (timestamp, device,
+   changed paths). Users never author history — they leave it by walking, so
+   there is nothing to write, squash, or amend.
 
 8. **Live-shared change sets** (a Google-Docs-style mode for real-time pairing)
    are an explicit later-phase opt-in, added only after the review flow is solid.
@@ -119,8 +122,31 @@ Deliver WS7b demand hydration and WS7c object-backed diffs/history from the
 remediation plan (designs approved in `docs/ws7b-*` and `docs/ws7c-*`), plus a
 dashboard where "what changed while I was away" is instantly legible.
 
-Exit criterion: the invisible-sync demo, plus a legible history/compare view, both
-working on real projects.
+**Trail summaries** (consumes WS7c's diff reconstruction). Raw trail steps are
+too fine-grained to browse one by one, so they are clustered into **episodes** by
+a time-gap-plus-device heuristic: a run of steps from the same device with no long
+pause becomes one episode. A cheap AI model then writes a one-line label per
+episode — the commit message nobody had to write. Episodes, not individual steps,
+become the primary browsing and rollback unit in both the dashboard and the
+desktop app, and nightly backups reference the nearest episode label so a restore
+point reads as a sentence rather than a revision number.
+
+The summarization is bounded by hard privacy rules:
+
+- **Opt-in per codebase.** No trail is summarized unless its codebase has
+  explicitly turned summarization on. Off is the default.
+- **Metadata-only by default.** The default mode sends the model only metadata —
+  changed paths, per-step counts, timestamps. File contents never leave the box
+  in this mode.
+- **Full-diff summaries are a separate, explicit opt-in.** Feeding actual diff
+  text to the model is a second switch a codebase must deliberately flip; turning
+  on summarization does not turn it on.
+- **Model choice is deferred to implementation.** Whether labels come from a
+  mini/haiku-class API model or, later, a local model is a cost decision made when
+  this ships, not now.
+
+Exit criterion: the invisible-sync demo, plus a legible history/compare view and a
+trail view showing labeled episodes, all working on real projects.
 
 ### Phase 3 — Real tenants
 
