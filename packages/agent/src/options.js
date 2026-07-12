@@ -49,6 +49,7 @@ export function parseOptions(args) {
     'skip-service-control',
     'production-safe',
     'execute',
+    'dry-run',
     'recursive',
     'with-siblings',
     'skip-cloud-registration',

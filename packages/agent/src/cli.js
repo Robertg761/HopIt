@@ -14,6 +14,7 @@ import { runSessionCommand } from './commands/keys.js'
 import { mergeChangeSet, openChangeSetReview, recoverJournal, refreshWorkspace, syncOnce } from './commands/sync.js'
 import { manageStorage } from './commands/storage.js'
 import { runWorkspaceCommand } from './commands/workspace.js'
+import { runTrailCommand } from './commands/trail.js'
 import { runDemo } from './commands/demo.js'
 import { normalizeCommand, parseOptions } from './options.js'
 import { autoloadEnvFile } from './env-file.js'
@@ -37,6 +38,7 @@ const HUMAN_OUTPUT_COMMANDS = new Set([
   'refresh',
   'sync-once',
   'recover',
+  'trail',
 ])
 
 async function main() {
@@ -70,6 +72,12 @@ async function main() {
     command === 'session' && args[0] && !args[0].startsWith('--') ? args.shift() : 'status'
   const keysAction =
     command === 'keys' && args[0] && !args[0].startsWith('--') ? args.shift() : 'status'
+  const trailAction =
+    command === 'trail' && args[0] && !args[0].startsWith('--') ? args.shift() : 'episodes'
+  const trailState =
+    command === 'trail' && trailAction === 'summaries' && args[0] && !args[0].startsWith('--')
+      ? args.shift()
+      : null
   const parsedOptions = parseOptions(args)
   const options =
     command === 'keys' || command === 'setup' || command === 'add'
@@ -104,6 +112,7 @@ async function main() {
   if (command === 'setup') return runSetup(options)
   if (command === 'add') return runAdd(options)
   if (command === 'workspace') return runWorkspaceCommand(workspaceAction, options)
+  if (command === 'trail') return runTrailCommand(trailAction, trailState, options)
   if (command === 'session') return runSessionCommand(sessionAction, options)
   if (command === 'keys') return runKeysCommand(keysAction, options)
   if (command === 'service') return runServiceCommand(serviceAction, options)

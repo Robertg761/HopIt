@@ -210,6 +210,14 @@ export async function backupAgentState(options) {
 
   await writeBackupFile(output, files, 'cloud.json', cloud)
   await writeBackupFile(output, files, 'status.json', state.status)
+
+  // Trail episodes + their labels, so a restore point can read as a sentence
+  // ("Reworked the auth flow") rather than a bare revision number. Best-effort:
+  // absent/unsupported backends simply record an empty list.
+  const trailEpisodes = await readTrailEpisodesForBackup(cloudService, manifestCodebaseId(cloud, options))
+  if (trailEpisodes.length > 0) {
+    await writeBackupFile(output, files, 'trail-episodes.json', trailEpisodes)
+  }
   await copyBackupFileIfExists(output, files, 'events.ndjson', options.events)
   // Include the rotated events generation so a backup captures the full retained
   // history, not just the (possibly freshly rotated, near-empty) current file.
@@ -232,6 +240,11 @@ export async function backupAgentState(options) {
       path: path.resolve(options.workspace),
       hydration: state.status.workspace.hydration,
     },
+    trailEpisodes: {
+      count: trailEpisodes.length,
+      labeled: trailEpisodes.filter((episode) => episode.label != null && episode.label !== '').length,
+      latestLabel: trailEpisodes.length > 0 ? trailEpisodes[trailEpisodes.length - 1].label ?? null : null,
+    },
     files,
   }
   await writeBackupFile(output, files, 'manifest.json', manifest)
@@ -244,6 +257,19 @@ export async function backupAgentState(options) {
     files: files.length,
     manifest: path.join(output, 'manifest.json'),
   }, null, 2))
+}
+
+function manifestCodebaseId(cloud, options) {
+  return cloud.codebase?.id ?? options['codebase-id'] ?? null
+}
+
+async function readTrailEpisodesForBackup(cloudService, codebaseId) {
+  if (typeof cloudService.listTrailEpisodes !== 'function') return []
+  try {
+    return await cloudService.listTrailEpisodes(codebaseId)
+  } catch {
+    return []
+  }
 }
 
 export async function assertExportOutputSafe(output, options) {

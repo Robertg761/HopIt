@@ -10,6 +10,7 @@ import { applyJournalEntryToCloud } from '../status-state.js'
 import { assertSafeCloudPath } from '../workspace-manifest.js'
 import { CloudflareD1HopBackend, d1CloudServiceType, d1ConfigFromOptions } from '@hopit/backend-d1'
 import { attachTextDiff, buildFileVersionRowForEntry, buildFileVersionRows, compareVersionRows, createCompareBlobReader, retainedBlobKeysForVersions } from '@hopit/backend-d1'
+import { clusterEpisodes, normalizeSummaryMode } from '@hopit/backend-d1'
 import { scopeForPath } from '@hopit/core/privacy-zone'
 import { existsSync } from 'node:fs'
 
@@ -229,6 +230,75 @@ export class FixtureJsonCloudGraphService {
       result.blobCacheHits = blobReader.stats.cacheHits
     }
     return result
+  }
+
+  // Trail-summary storage for the local/dev JSON backend. State is kept under
+  // extra top-level keys on the cloud graph file (`codebaseSettings`,
+  // `trailEpisodes`), which survive the read → mutate → write cycle exactly as
+  // `fileVersions` already does.
+  async readCodebaseSettings() {
+    const cloud = (await this.exists()) ? await readJson(this.path) : null
+    const stored = cloud?.codebaseSettings ?? null
+    return {
+      codebaseId: cloud?.codebase?.id ?? null,
+      trailSummariesEnabled: Boolean(stored?.trailSummariesEnabled),
+      trailSummariesMode: normalizeSummaryMode(stored?.trailSummariesMode),
+      updatedAt: stored?.updatedAt ?? null,
+    }
+  }
+
+  async setTrailSummaries(codebaseId, { enabled, mode } = {}) {
+    const cloud = await readJson(this.path)
+    const current = cloud.codebaseSettings ?? {}
+    const now = new Date().toISOString()
+    const next = {
+      trailSummariesEnabled: enabled === undefined ? Boolean(current.trailSummariesEnabled) : Boolean(enabled),
+      trailSummariesMode: mode === undefined ? normalizeSummaryMode(current.trailSummariesMode) : normalizeSummaryMode(mode),
+      updatedAt: now,
+    }
+    cloud.codebaseSettings = next
+    await writeJson(this.path, cloud)
+    return { codebaseId: cloud?.codebase?.id ?? codebaseId ?? null, ...next }
+  }
+
+  async listTrailEpisodes(codebaseId, { limit } = {}) {
+    const cloud = (await this.exists()) ? await readJson(this.path) : null
+    const stored = Array.isArray(cloud?.trailEpisodes) ? cloud.trailEpisodes : []
+    const sorted = [...stored].sort((a, b) => (a.fromRevision ?? 0) - (b.fromRevision ?? 0))
+    const bounded = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Number(limit) : null
+    return bounded ? sorted.slice(-bounded) : sorted
+  }
+
+  async upsertTrailEpisode(codebaseId, episode = {}) {
+    const cloud = await readJson(this.path)
+    const stored = Array.isArray(cloud.trailEpisodes) ? cloud.trailEpisodes : []
+    const now = new Date().toISOString()
+    const index = stored.findIndex((row) => row.episodeId === episode.episodeId)
+    const record = {
+      episodeId: episode.episodeId,
+      fromRevision: episode.fromRevision ?? null,
+      toRevision: episode.toRevision ?? null,
+      deviceName: episode.deviceName ?? null,
+      startedAt: episode.startedAt ?? null,
+      endedAt: episode.endedAt ?? null,
+      stepCount: episode.stepCount ?? 0,
+      changedPathCount: episode.changedPathCount ?? 0,
+      samplePaths: Array.isArray(episode.samplePaths) ? episode.samplePaths : [],
+      label: episode.label ?? null,
+      labelModel: episode.labelModel ?? null,
+      labelMode: episode.labelMode ?? null,
+      createdAt: index >= 0 ? stored[index].createdAt ?? now : now,
+      updatedAt: now,
+    }
+    if (index >= 0) stored[index] = record
+    else stored.push(record)
+    cloud.trailEpisodes = stored
+    await writeJson(this.path, cloud)
+    return { ok: true, codebaseId: cloud?.codebase?.id ?? codebaseId ?? null, episodeId: episode.episodeId }
+  }
+
+  async computeTrailEpisodes(codebaseId, options = {}) {
+    return clusterEpisodes(await this.listFileVersions(), options)
   }
 }
 

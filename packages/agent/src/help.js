@@ -24,6 +24,7 @@ Commands:
   doctor      Run a production-oriented local health check
   backup      Write a restorable cloud/status/event backup folder
   install     Prepare production state, workspace, env, and optional launch agent
+  trail       Browse labeled trail episodes and manage summarization (episodes, summarize, summaries on|off)
   workspace   Manage/list/discover/attach the configured HopIt workspace root and codebase
   session     Manage this device/session registration (alias: device)
   keys        Manage local encryption device keys and recovery exports
@@ -59,6 +60,14 @@ Options:
   --path <cloud-path> Cloud file/folder path for workspace hydrate-file, hydrate-path, prune, pin, or unpin
   --from <revision>   compare: left retained graph revision
   --to <revision>     compare: right retained graph revision
+  --limit <n>         trail episodes/summarize: only the most recent N episodes
+  --gap-minutes <n>   trail: episode clustering gap threshold in minutes (default 30)
+  --gap-ms <n>        trail: episode clustering gap threshold in milliseconds
+  --mode <metadata|diff> trail summaries: metadata-only (default) or opt-in full-diff
+  --dry-run           trail summarize: print the exact payload that WOULD be sent, send nothing
+  --summary-provider <openai|gemini|stub> Override HOPIT_SUMMARY_PROVIDER
+  --summary-model <id> Override HOPIT_SUMMARY_MODEL
+  --summary-api-key <key> Override HOPIT_SUMMARY_API_KEY
   --recursive        workspace hydrate-path/pin/unpin/prune: include visible files under a folder prefix
   --with-siblings    workspace hydrate-file: also hydrate nearby source-root siblings within budget
   --open-max-files <n> workspace open: maximum files for open-time hydration, default 64

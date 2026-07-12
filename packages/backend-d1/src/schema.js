@@ -471,4 +471,39 @@ export const d1SchemaStatements = [
   )`,
   `create index if not exists idx_notifications_codebase_created on notifications(codebase_id, created_at)`,
   `create index if not exists idx_notifications_recipient_created on notifications(recipient_user_id, created_at)`,
+  // Per-codebase agent settings. Trail summarization is opt-in and OFF by
+  // default: absence of a row means disabled. `trail_summaries_mode` carries the
+  // separate metadata/diff opt-in. New table (not an alter), so it applies
+  // cleanly to databases created before the feature.
+  `create table if not exists codebase_settings (
+    codebase_id text primary key,
+    trail_summaries_enabled integer not null default 0,
+    trail_summaries_mode text not null default 'metadata',
+    created_at text not null,
+    updated_at text not null
+  )`,
+  // Clustered trail episodes and their model-written labels. from/to_revision,
+  // device, and timestamps come from clustering; label/label_model/label_mode
+  // are filled in by `hop trail summarize`. step_count, changed_path_count, and
+  // sample_paths_json are stored so the dashboard and backup manifest can render
+  // an episode without re-reading the full file-version history.
+  `create table if not exists trail_episodes (
+    codebase_id text not null,
+    episode_id text not null,
+    from_revision integer not null,
+    to_revision integer not null,
+    device text,
+    started_at text,
+    ended_at text,
+    step_count integer not null default 0,
+    changed_path_count integer not null default 0,
+    sample_paths_json text not null default '[]',
+    label text,
+    label_model text,
+    label_mode text,
+    created_at text not null,
+    updated_at text not null,
+    primary key (codebase_id, episode_id)
+  )`,
+  `create index if not exists idx_trail_episodes_codebase_from on trail_episodes(codebase_id, from_revision)`,
 ]
