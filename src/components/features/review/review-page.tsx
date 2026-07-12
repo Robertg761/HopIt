@@ -12,8 +12,8 @@ import { createCollaborationItem } from '@/lib/collaboration'
 import { useWorkspace, type AgentCommand } from '@/components/workspace/workspace-provider'
 import { cn } from '@/lib/utils'
 import { repoPath } from '@/components/shell/repo-nav'
+import { CompareExplorer } from '@/components/features/compare/compare-explorer'
 import { ChangedFilesCard } from './changed-files'
-import { CompareView } from './compare-view'
 import { DecisionsCard } from './decisions-card'
 import { FileInspector } from './file-inspector'
 import { filterReviewHistory, HistoryTimelineCard } from './history-timeline'
@@ -193,7 +193,7 @@ export function ReviewPage({ mode, codebaseId }: { mode: ReviewPageMode; codebas
       ) : mode === 'history' ? (
         <HistoryTimelineCard events={filterReviewHistory(status.events)} />
       ) : mode === 'compare' ? (
-        <CompareView status={status} changedFiles={changedFiles} loading={loading} />
+        <CompareExplorer codebaseId={status.codebaseId} />
       ) : (
         <>
           <ReviewMetaRow status={status} />
