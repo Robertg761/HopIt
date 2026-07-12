@@ -32,6 +32,9 @@ import {
   hydratePathArgs,
   pinArgs,
   compareArgs,
+  trailEpisodesArgs,
+  trailSummariesProbeArgs,
+  trailSummarizeArgs,
 } from './lib/hop.js'
 import { loadWindowState, saveWindowState, resolveInitialBounds } from './lib/window-state.js'
 
@@ -346,6 +349,61 @@ function registerIpc() {
       }
     } catch (error) {
       return { ok: false, reachable: false, compare: null, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  // Trail episodes: the top-level browse unit. Read-only spawn of `hop trail
+  // episodes --json`, on tab open only (the renderer caches per session; the 5s
+  // poll never touches it). Returns the raw engine result for the view-model
+  // mapper in lib/trail.js — no logic is duplicated here.
+  ipcMain.handle('trailEpisodes', async (_event, codebaseId) => {
+    try {
+      const { json, code, stderr } = await runHopJson(requireHop(), trailEpisodesArgs(codebaseId), { env: process.env })
+      return {
+        ok: true,
+        reachable: true,
+        result: json,
+        code,
+        error: json ? null : (stderr?.trim() || 'The trail engine returned no episode data.'),
+      }
+    } catch (error) {
+      return { ok: false, reachable: false, result: null, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  // Read-only probe of the per-codebase summaries setting (on/off + mode) via a
+  // dry-run summarize: it enforces the opt-in gate and reports the mode without
+  // contacting the provider or needing a key. Never flips the setting.
+  ipcMain.handle('trailSummariesState', async (_event, codebaseId) => {
+    try {
+      const { json, code, stderr } = await runHopJson(requireHop(), trailSummariesProbeArgs(codebaseId), { env: process.env })
+      return {
+        ok: true,
+        reachable: true,
+        result: json,
+        code,
+        error: json ? null : (stderr?.trim() || null),
+      }
+    } catch (error) {
+      return { ok: false, reachable: false, result: null, error: error instanceof Error ? error.message : String(error) }
+    }
+  })
+
+  // The "Summarize now" action: a real `hop trail summarize --json`. Server-gated
+  // and honest — when summaries are off or a key is missing, the CLI fails closed
+  // and we surface its message (stderr when it threw, or the JSON reason).
+  ipcMain.handle('trailSummarize', async (_event, codebaseId) => {
+    try {
+      const { json, code, stderr } = await runHopJson(requireHop(), trailSummarizeArgs(codebaseId), { env: process.env })
+      return {
+        ok: true,
+        reachable: true,
+        result: json,
+        code,
+        error: json ? null : (stderr?.trim() || 'The summarizer returned no result.'),
+      }
+    } catch (error) {
+      return { ok: false, reachable: false, result: null, error: error instanceof Error ? error.message : String(error) }
     }
   })
 

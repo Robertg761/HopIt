@@ -85,6 +85,163 @@ export function buildStepCompareRange(row) {
   return { fromRevision: Math.max(0, from), toRevision: to }
 }
 
+/**
+ * Choose the {from,to} revision pair for an episode's net directory compare.
+ * An episode's `fromRevision` is the FIRST revision *inside* the cluster (see
+ * clusterEpisodes/finalizeEpisode in @hopit/backend-d1), so to show everything
+ * the episode changed we compare the state just BEFORE it (fromRevision-1) against
+ * its last revision. This mirrors buildStepCompareRange's exclusive-left-edge
+ * convention and lets an episode reuse the exact directory-compare machinery a
+ * single step uses. Returns null when the episode carries no usable revisions.
+ * @param {{ fromRevision?: unknown, toRevision?: unknown }} episode
+ */
+export function buildEpisodeCompareRange(episode) {
+  const to = toSafeInt(episode?.toRevision)
+  const first = toSafeInt(episode?.fromRevision)
+  if (to == null || first == null) return null
+  const base = Math.min(first - 1, to)
+  return { fromRevision: Math.max(0, base), toRevision: to }
+}
+
+/** Copy used for an episode the summarizer has not labeled yet. */
+export const EPISODE_UNLABELED_TEXT = '(not yet labeled)'
+
+/**
+ * Normalize one raw episode object (from `hop trail episodes --json`) into the
+ * Trail card view model. `label` is null until the summarizer runs; we surface an
+ * honest placeholder rather than inventing text.
+ * @param {any} raw
+ */
+export function mapEpisode(raw) {
+  const fromRevision = toSafeInt(raw?.fromRevision)
+  const toRevision = toSafeInt(raw?.toRevision)
+  const label = typeof raw?.label === 'string' && raw.label.trim() !== '' ? raw.label.trim() : null
+  const samplePaths = Array.isArray(raw?.samplePaths) ? raw.samplePaths.filter((p) => typeof p === 'string') : []
+  return {
+    episodeId: typeof raw?.episodeId === 'string' && raw.episodeId ? raw.episodeId : `ep_${fromRevision}_${toRevision}`,
+    fromRevision,
+    toRevision,
+    labeled: label != null,
+    label,
+    labelText: label ?? EPISODE_UNLABELED_TEXT,
+    labelModel: typeof raw?.labelModel === 'string' ? raw.labelModel : null,
+    labelMode: typeof raw?.labelMode === 'string' ? raw.labelMode : null,
+    deviceName: typeof raw?.deviceName === 'string' && raw.deviceName ? raw.deviceName : null,
+    startedAt: raw?.startedAt ?? null,
+    endedAt: raw?.endedAt ?? null,
+    stepCount: toSafeInt(raw?.stepCount) ?? 0,
+    changedPathCount: toSafeInt(raw?.changedPathCount) ?? 0,
+    samplePaths,
+    range: buildEpisodeCompareRange(raw),
+  }
+}
+
+/**
+ * Turn `hop trail episodes --json` output into the Trail episode view model:
+ * episodes newest-first, an honest empty/error status, and the highest episodized
+ * revision so the renderer can show newer, not-yet-clustered steps separately.
+ * @param {any} json
+ */
+export function mapEpisodesResult(json) {
+  if (!json || typeof json !== 'object') {
+    return { ok: false, status: 'error', message: 'The trail engine returned no episode data.', episodes: [], episodeCount: 0, maxToRevision: null }
+  }
+  if (json.ok === false) {
+    return {
+      ok: false,
+      status: 'error',
+      message: json.error?.message ?? json.reason ?? 'Trail episodes could not be loaded.',
+      episodes: [],
+      episodeCount: 0,
+      maxToRevision: null,
+    }
+  }
+  const rawList = Array.isArray(json.episodes) ? json.episodes : []
+  const episodes = rawList.map(mapEpisode).sort((a, b) => (b.toRevision ?? -1) - (a.toRevision ?? -1))
+  let maxToRevision = null
+  for (const episode of episodes) {
+    if (episode.toRevision != null && (maxToRevision == null || episode.toRevision > maxToRevision)) {
+      maxToRevision = episode.toRevision
+    }
+  }
+  return {
+    ok: true,
+    status: episodes.length ? 'ready' : 'empty',
+    codebaseId: typeof json.codebaseId === 'string' ? json.codebaseId : null,
+    episodes,
+    episodeCount: toSafeInt(json.episodeCount) ?? episodes.length,
+    maxToRevision,
+  }
+}
+
+/**
+ * Interpret a `hop trail summarize --dry-run --json` probe as the per-codebase
+ * summaries setting. A dry run never touches the provider (no API key needed and
+ * nothing is sent), so it is a safe read of on/off + mode:
+ *   off  -> { ok:false, state:'disabled', reason }
+ *   on   -> { ok:true, mode:'metadata'|'diff', ... }
+ * A missing/garbled result is reported as unknown so the UI stays honest.
+ * @param {any} json
+ */
+export function mapSummariesState(json) {
+  if (!json || typeof json !== 'object') {
+    return { known: false, enabled: false, mode: null, reason: 'Summaries state is unavailable right now.' }
+  }
+  if (json.ok === false && json.state === 'disabled') {
+    return { known: true, enabled: false, mode: null, reason: json.reason ?? 'Trail summaries are off for this project.' }
+  }
+  if (json.ok === false) {
+    return { known: false, enabled: false, mode: null, reason: json.error?.message ?? json.reason ?? 'Summaries state is unavailable right now.' }
+  }
+  return { known: true, enabled: true, mode: json.mode === 'diff' ? 'diff' : 'metadata', reason: null }
+}
+
+/**
+ * Interpret the result of a real `hop trail summarize --json` run (the "Summarize
+ * now" action) for the UI. Honest about the off state and any provider error.
+ * @param {any} json
+ * @param {string|null} [errorText] stderr surfaced when the CLI threw (e.g. missing key)
+ */
+export function mapSummarizeResult(json, errorText = null) {
+  if (!json || typeof json !== 'object') {
+    return { ok: false, message: errorText?.trim() || 'The summarizer returned no result.' }
+  }
+  if (json.ok === false) {
+    if (json.state === 'disabled') {
+      return { ok: false, disabled: true, message: json.reason ?? 'Trail summaries are off for this project.' }
+    }
+    return { ok: false, message: json.error?.message ?? json.reason ?? (errorText?.trim() || 'Summarizing failed.') }
+  }
+  const labeled = toSafeInt(json.labeled) ?? 0
+  const skippedByCap = toSafeInt(json.skippedByCap) ?? 0
+  return {
+    ok: true,
+    labeled,
+    mode: typeof json.mode === 'string' ? json.mode : null,
+    skippedByCap,
+    message: labeled > 0
+      ? `Labeled ${labeled} episode${labeled === 1 ? '' : 's'}${skippedByCap > 0 ? ` (${skippedByCap} more remain — run again)` : ''}.`
+      : 'Every episode is already labeled.',
+  }
+}
+
+/**
+ * Split event-derived recent steps (history.js rows) into those newer than the
+ * newest episodized revision — episodes are clustered from cloud history and can
+ * lag the local event window — so they can be shown in a "recent, not yet
+ * episodized" section. With no episodes (or no max), every recent step qualifies.
+ * @param {Array<{ revision?: unknown }>} rows
+ * @param {number|null} maxEpisodizedRevision
+ */
+export function recentStepsBeyondEpisodes(rows, maxEpisodizedRevision) {
+  const list = Array.isArray(rows) ? rows : []
+  if (maxEpisodizedRevision == null) return [...list]
+  return list.filter((row) => {
+    const rev = toSafeInt(row?.revision)
+    return rev != null && rev > maxEpisodizedRevision
+  })
+}
+
 const EMPTY_SUMMARY = Object.freeze({
   added: 0,
   modified: 0,

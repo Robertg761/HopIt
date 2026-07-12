@@ -31,6 +31,12 @@ contextBridge.exposeInMainWorld('hopit', {
   trailFileDiff: (codebaseId, fromRevision, toRevision, cloudPath) =>
     ipcRenderer.invoke('trailFileDiff', codebaseId, fromRevision, toRevision, cloudPath),
 
+  // Trail episodes (Phase 2 summaries): the top-level browse/rollback unit, their
+  // AI labels, the read-only summaries setting, and the opt-in "Summarize now".
+  trailEpisodes: (codebaseId) => ipcRenderer.invoke('trailEpisodes', codebaseId),
+  trailSummariesState: (codebaseId) => ipcRenderer.invoke('trailSummariesState', codebaseId),
+  trailSummarize: (codebaseId) => ipcRenderer.invoke('trailSummarize', codebaseId),
+
   // Actions (spawn hop).
   syncNow: (codebaseId) => ipcRenderer.invoke('syncNow', codebaseId),
   refreshNow: (codebaseId) => ipcRenderer.invoke('refreshNow', codebaseId),

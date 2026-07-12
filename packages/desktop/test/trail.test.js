@@ -9,6 +9,13 @@ import {
   buildFileDiffView,
   unifiedDiffRows,
   createTrailCache,
+  buildEpisodeCompareRange,
+  mapEpisode,
+  mapEpisodesResult,
+  mapSummariesState,
+  mapSummarizeResult,
+  recentStepsBeyondEpisodes,
+  EPISODE_UNLABELED_TEXT,
 } from '../src/lib/trail.js'
 
 // A directory-compare result shaped exactly like `hop compare --from --to --json`.
@@ -213,6 +220,145 @@ test('fileStateMeta falls back safely for unknown states', () => {
   const unknown = fileStateMeta('who_knows')
   assert.equal(unknown.label, 'Changed')
   assert.equal(unknown.diffable, true)
+})
+
+// ---------------------------------------------------------------------------
+// Episode view model (hop trail episodes --json)
+// ---------------------------------------------------------------------------
+
+function rawEpisode(overrides = {}) {
+  return {
+    episodeId: 'ep_10_14',
+    fromRevision: 10,
+    toRevision: 14,
+    deviceName: 'Robert’s MacBook',
+    startedAt: '2026-07-11T10:00:00.000Z',
+    endedAt: '2026-07-11T10:20:00.000Z',
+    stepCount: 3,
+    changedPathCount: 5,
+    samplePaths: ['src/a.ts', 'src/b.ts'],
+    label: null,
+    labelModel: null,
+    labelMode: null,
+    ...overrides,
+  }
+}
+
+test('buildEpisodeCompareRange compares the state just before the episode through its last revision', () => {
+  // fromRevision is the FIRST revision inside the cluster, so the net diff starts at from-1.
+  assert.deepEqual(buildEpisodeCompareRange({ fromRevision: 10, toRevision: 14 }), { fromRevision: 9, toRevision: 14 })
+  // A single-revision episode still yields a usable pair (rev-1 -> rev).
+  assert.deepEqual(buildEpisodeCompareRange({ fromRevision: 1, toRevision: 1 }), { fromRevision: 0, toRevision: 1 })
+  // Never goes negative.
+  assert.deepEqual(buildEpisodeCompareRange({ fromRevision: 0, toRevision: 0 }), { fromRevision: 0, toRevision: 0 })
+  assert.equal(buildEpisodeCompareRange({ fromRevision: null, toRevision: 5 }), null)
+  assert.equal(buildEpisodeCompareRange({}), null)
+})
+
+test('mapEpisode surfaces an honest placeholder for an unlabeled episode', () => {
+  const ep = mapEpisode(rawEpisode())
+  assert.equal(ep.labeled, false)
+  assert.equal(ep.label, null)
+  assert.equal(ep.labelText, EPISODE_UNLABELED_TEXT)
+  assert.deepEqual(ep.range, { fromRevision: 9, toRevision: 14 })
+  assert.equal(ep.deviceName, 'Robert’s MacBook')
+  assert.equal(ep.stepCount, 3)
+  assert.equal(ep.changedPathCount, 5)
+})
+
+test('mapEpisode keeps a real label and its model/mode when present', () => {
+  const ep = mapEpisode(rawEpisode({ label: '  Refine the trail view  ', labelModel: 'claude-x', labelMode: 'metadata' }))
+  assert.equal(ep.labeled, true)
+  assert.equal(ep.label, 'Refine the trail view')
+  assert.equal(ep.labelText, 'Refine the trail view')
+  assert.equal(ep.labelModel, 'claude-x')
+  assert.equal(ep.labelMode, 'metadata')
+})
+
+test('mapEpisodesResult orders newest-first and reports the max episodized revision', () => {
+  const view = mapEpisodesResult({
+    ok: true,
+    codebaseId: 'hopit',
+    episodeCount: 2,
+    episodes: [rawEpisode({ episodeId: 'ep_1_4', fromRevision: 1, toRevision: 4 }), rawEpisode({ episodeId: 'ep_10_14', fromRevision: 10, toRevision: 14, label: 'Ship it' })],
+  })
+  assert.equal(view.ok, true)
+  assert.equal(view.status, 'ready')
+  assert.equal(view.episodes.length, 2)
+  assert.equal(view.episodes[0].toRevision, 14) // newest first
+  assert.equal(view.episodes[1].toRevision, 4)
+  assert.equal(view.maxToRevision, 14)
+  assert.equal(view.codebaseId, 'hopit')
+})
+
+test('mapEpisodesResult reports an empty state distinctly from an error', () => {
+  const empty = mapEpisodesResult({ ok: true, codebaseId: 'hopit', episodeCount: 0, episodes: [] })
+  assert.equal(empty.ok, true)
+  assert.equal(empty.status, 'empty')
+  assert.equal(empty.episodes.length, 0)
+  assert.equal(empty.maxToRevision, null)
+})
+
+test('mapEpisodesResult reports engine errors honestly (not-ok and no-data)', () => {
+  const notOk = mapEpisodesResult({ ok: false, error: { message: 'engine offline' } })
+  assert.equal(notOk.ok, false)
+  assert.equal(notOk.status, 'error')
+  assert.match(notOk.message, /engine offline/)
+
+  const noData = mapEpisodesResult(null)
+  assert.equal(noData.ok, false)
+  assert.equal(noData.status, 'error')
+  assert.equal(noData.episodes.length, 0)
+})
+
+// ---------------------------------------------------------------------------
+// Summaries state + summarize result
+// ---------------------------------------------------------------------------
+
+test('mapSummariesState reads on/off + mode from a dry-run probe', () => {
+  assert.deepEqual(mapSummariesState({ ok: true, state: 'dry-run', mode: 'diff' }), { known: true, enabled: true, mode: 'diff', reason: null })
+  assert.deepEqual(mapSummariesState({ ok: true, state: 'dry-run', mode: 'metadata' }), { known: true, enabled: true, mode: 'metadata', reason: null })
+  // Unknown mode is coerced to metadata (the safe default).
+  assert.equal(mapSummariesState({ ok: true, mode: 'weird' }).mode, 'metadata')
+
+  const off = mapSummariesState({ ok: false, state: 'disabled', reason: 'Trail summaries are off for this codebase. Enable with: hop trail summaries on' })
+  assert.equal(off.known, true)
+  assert.equal(off.enabled, false)
+  assert.match(off.reason, /off/)
+
+  const unknown = mapSummariesState(null)
+  assert.equal(unknown.known, false)
+  assert.equal(unknown.enabled, false)
+})
+
+test('mapSummarizeResult is honest about labeled counts, the off state, and errors', () => {
+  const ok = mapSummarizeResult({ ok: true, labeled: 2, mode: 'metadata', skippedByCap: 0 })
+  assert.equal(ok.ok, true)
+  assert.equal(ok.labeled, 2)
+  assert.match(ok.message, /Labeled 2 episodes/)
+
+  const capped = mapSummarizeResult({ ok: true, labeled: 1, mode: 'metadata', skippedByCap: 3 })
+  assert.match(capped.message, /3 more remain/)
+
+  const none = mapSummarizeResult({ ok: true, labeled: 0 })
+  assert.match(none.message, /already labeled/)
+
+  const disabled = mapSummarizeResult({ ok: false, state: 'disabled', reason: 'Trail summaries are off for this codebase.' })
+  assert.equal(disabled.ok, false)
+  assert.equal(disabled.disabled, true)
+
+  // A thrown CLI error (e.g. missing key) arrives as stderr text with no JSON.
+  const keyErr = mapSummarizeResult(null, 'MissingSummaryKeyError: set HOPIT_SUMMARY_API_KEY')
+  assert.equal(keyErr.ok, false)
+  assert.match(keyErr.message, /MissingSummaryKeyError/)
+})
+
+test('recentStepsBeyondEpisodes keeps only steps newer than the last episodized revision', () => {
+  const rows = [{ revision: 16 }, { revision: 15 }, { revision: 14 }, { revision: 9 }]
+  assert.deepEqual(recentStepsBeyondEpisodes(rows, 14), [{ revision: 16 }, { revision: 15 }])
+  // With no episodes, every recent step qualifies.
+  assert.deepEqual(recentStepsBeyondEpisodes(rows, null), rows)
+  assert.deepEqual(recentStepsBeyondEpisodes([], 14), [])
 })
 
 // ---------------------------------------------------------------------------

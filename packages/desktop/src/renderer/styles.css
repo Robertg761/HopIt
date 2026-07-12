@@ -217,8 +217,37 @@ body {
 .tag-refresh { background: var(--bg-hover); color: var(--text-muted); }
 .tag-other { background: var(--bg-hover); color: var(--text-muted); }
 
+/* Trail header: summaries state + Summarize now */
+.trail-header {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 2px 4px 10px; border-bottom: 1px solid var(--border); margin-bottom: 6px;
+}
+.trail-sum-state { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.trail-sum-dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; background: var(--text-muted); }
+.trail-sum-dot.on { background: var(--ok); }
+.trail-sum-dot.off { background: var(--text-muted); }
+.trail-sum-dot.unknown { background: var(--warn); }
+.trail-sum-label { font-size: 12px; font-weight: 600; color: var(--text); }
+.trail-sum-btn {
+  padding: 5px 12px; border-radius: 7px; border: 1px solid var(--accent);
+  background: var(--accent); color: #fff; font: inherit; font-size: 12px; font-weight: 600;
+  cursor: pointer; flex: 0 0 auto;
+}
+.trail-sum-btn:hover:not(:disabled) { filter: brightness(1.08); }
+.trail-sum-btn:disabled { opacity: 0.45; cursor: not-allowed; background: var(--bg-panel); color: var(--text-muted); border-color: var(--border); }
+.trail-sum-hint { font-size: 11px; color: var(--text-muted); padding: 0 4px 8px; }
+.trail-sum-status { font-size: 11px; color: var(--text-muted); padding: 0 4px 8px; }
+.trail-sum-status.attention { color: var(--warn); }
+.trail-sum-status.hidden { display: none; }
+.trail-section-head {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+  color: var(--text-muted); padding: 12px 4px 4px; margin-top: 6px; border-top: 1px solid var(--border);
+}
+
 /* Trail steps (expandable, object-backed compare) */
 .trail-step { border-bottom: 1px solid var(--border); }
+.trail-episode .ep-label { display: block; font-weight: 600; color: var(--text); font-size: 13px; }
+.trail-episode .ep-label.ep-unlabeled { font-weight: 500; color: var(--text-muted); font-style: italic; }
 .trail-head {
   display: flex; align-items: baseline; gap: 10px; width: 100%;
   padding: 10px 4px; border: 0; background: transparent; color: inherit;

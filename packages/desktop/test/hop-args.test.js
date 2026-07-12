@@ -12,6 +12,9 @@ import {
   hydratePathArgs,
   pinArgs,
   compareArgs,
+  trailEpisodesArgs,
+  trailSummariesProbeArgs,
+  trailSummarizeArgs,
   assertSafeRevision,
   assertSafeCloudPath,
 } from '../src/lib/hop.js'
@@ -103,6 +106,24 @@ test('compareArgs rejects injection and malformed revisions before spawn', () =>
   assert.throws(() => compareArgs({ codebaseId: 'hopit', fromRevision: 1.5, toRevision: 2 }), /Invalid --from/)
   assert.throws(() => compareArgs({ codebaseId: 'hopit', fromRevision: 1, toRevision: 2, cloudPath: '../escape' }), /traverse/)
   assert.throws(() => compareArgs({ codebaseId: 'hopit', fromRevision: 1, toRevision: 2, cloudPath: '/abs' }), /relative/)
+})
+
+test('trailEpisodesArgs targets the episodes subcommand with a validated codebase id', () => {
+  assert.deepEqual(trailEpisodesArgs('hopit'), ['trail', 'episodes', '--codebase-id', 'hopit'])
+  assert.throws(() => trailEpisodesArgs('../evil'), /codebase/i)
+})
+
+test('trailSummariesProbeArgs reads the setting via a bounded dry-run summarize', () => {
+  assert.deepEqual(
+    trailSummariesProbeArgs('hopit'),
+    ['trail', 'summarize', '--dry-run', '--limit', '1', '--codebase-id', 'hopit'],
+  )
+  assert.throws(() => trailSummariesProbeArgs('a/b'), /codebase/i)
+})
+
+test('trailSummarizeArgs builds the real summarize run with a validated codebase id', () => {
+  assert.deepEqual(trailSummarizeArgs('hopit'), ['trail', 'summarize', '--codebase-id', 'hopit'])
+  assert.throws(() => trailSummarizeArgs('..'), /codebase/i)
 })
 
 test('assertSafeRevision accepts non-negative safe integers only', () => {
