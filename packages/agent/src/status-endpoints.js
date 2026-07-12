@@ -275,6 +275,7 @@ export function summarizeAgentEvents(eventEntries) {
   ])
   const lastRemotePushStarted = findLastEvent(eventEntries, 'remote-push.started')
   const lastRemotePushConnected = findLastEvent(eventEntries, 'remote-push.connected')
+  const lastRemotePushResumed = findLastEvent(eventEntries, 'remote-push.resumed')
   const lastRemotePushDisconnected = findLastEvent(eventEntries, 'remote-push.disconnected')
   const lastRemotePushFallbackPolling = findLastEvent(eventEntries, 'remote-push.fallback_polling')
   const lastRemotePushApplied = findLastEvent(eventEntries, 'remote-push.applied')
@@ -283,6 +284,7 @@ export function summarizeAgentEvents(eventEntries) {
   const latestRemotePushEvent = findLastEventOf(eventEntries, [
     'remote-push.started',
     'remote-push.connected',
+    'remote-push.resumed',
     'remote-push.disconnected',
     'remote-push.fallback_polling',
     'remote-push.applied',
@@ -329,6 +331,7 @@ export function summarizeAgentEvents(eventEntries) {
     latestRemotePullEvent,
     lastRemotePushStarted,
     lastRemotePushConnected,
+    lastRemotePushResumed,
     lastRemotePushDisconnected,
     lastRemotePushFallbackPolling,
     lastRemotePushApplied,

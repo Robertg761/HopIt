@@ -10,7 +10,10 @@ import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { refreshWorkspace } from '../src/commands/sync.js'
 import { createRemotePushClient } from '../src/remote-push.js'
-import { remoteRefreshDecision } from '../src/watch.js'
+import { remotePullOnce, remoteRefreshDecision } from '../src/watch.js'
+import { buildRemotePushHealth } from '../src/status-state.js'
+import { createCloudGraphService } from '../src/cloud/d1-graph-service.js'
+import { rotatedNdjsonPath } from '../src/io.js'
 
 const execFileAsync = promisify(execFile)
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -792,4 +795,188 @@ test('remote-push applies same-owner private updates and keeps them hidden from 
   assert.equal(collaboratorStatus.requesterRole, 'member')
   assert.deepEqual(collaboratorStatus.hiddenScopeCounts, { shared: 0, private: 1 })
   assert.equal(collaboratorStatus.remotePush.state, 'push-applied')
+})
+
+function transientFetchError() {
+  const error = new Error('fetch failed')
+  error.code = 'UND_ERR_SOCKET'
+  return error
+}
+
+// Wraps a real cloud service so `readGraphHead` throws a transient network
+// fault the first `failures` times before delegating to the real read. With
+// `failures` larger than the retry budget the head read never recovers.
+function flakyHeadCloudService(realService, failures) {
+  let remaining = failures
+  return {
+    type: realService?.type ?? 'fixture-json',
+    async readGraphHead() {
+      if (remaining > 0) {
+        remaining -= 1
+        throw transientFetchError()
+      }
+      return realService.readGraphHead()
+    },
+    async readVisibleGraph(request) {
+      return realService.readVisibleGraph(request)
+    },
+  }
+}
+
+test('periodic head reconciliation survives a transient fetch fault without failing', async (t) => {
+  const { deviceA, deviceB } = await makeRemotePushState()
+  await initAndHydratePair(deviceA, deviceB)
+  const options = { ...optionsFromArgs(stateArgs(deviceB)), trigger: 'periodic-head-reconciliation' }
+  const realService = createCloudGraphService(options)
+
+  await remotePullOnce(options, {
+    cloudService: flakyHeadCloudService(realService, 2),
+    retryOptions: { attempts: 5, baseDelayMs: 1, maxDelayMs: 5 },
+  })
+
+  const events = await readNdjson(deviceB.events)
+  const recovered = events.findLast((event) => event.event === 'cloud.fetch_recovered')
+  assert.ok(recovered, 'a recovered transient fault should journal cloud.fetch_recovered')
+  assert.equal(recovered.detail.phase, 'head-reconciliation')
+  assert.equal(recovered.detail.trigger, 'periodic-head-reconciliation')
+  assert.equal(recovered.detail.failures, 2)
+  assert.equal(
+    events.some((event) => event.event === 'remote-pull.failed'),
+    false,
+    'a recovered transient fault must not emit remote-pull.failed',
+  )
+})
+
+test('periodic head reconciliation still fails after the retry budget is exhausted', async (t) => {
+  const { deviceA, deviceB } = await makeRemotePushState()
+  await initAndHydratePair(deviceA, deviceB)
+  const options = { ...optionsFromArgs(stateArgs(deviceB)), trigger: 'periodic-head-reconciliation' }
+
+  await assert.rejects(
+    () =>
+      remotePullOnce(options, {
+        cloudService: flakyHeadCloudService(null, 99),
+        retryOptions: { attempts: 3, baseDelayMs: 1, maxDelayMs: 5 },
+      }),
+    /fetch failed/,
+  )
+
+  const events = await readNdjson(deviceB.events)
+  const failed = events.findLast((event) => event.event === 'remote-pull.failed')
+  assert.ok(failed, 'exhausted retries must still emit remote-pull.failed')
+  assert.match(failed.detail.reason, /fetch failed/)
+  assert.equal(failed.detail.trigger, 'periodic-head-reconciliation')
+  assert.equal(
+    events.some((event) => event.event === 'cloud.fetch_recovered'),
+    false,
+    'an exhausted retry must not claim recovery',
+  )
+})
+
+test('reconnect fallback poll with an open socket derives push-connected, not polling', async (t) => {
+  const hub = await startFakePushHub(t)
+  if (!hub) return
+  const { deviceA, deviceB } = await makeRemotePushState()
+  await initAndHydratePair(deviceA, deviceB)
+  await startPushClient(deviceB, t, hub)
+  await hub.waitForConnections(1)
+
+  // Drop the socket and reconnect WITHOUT any new remote revision. The
+  // post-reconnect catch-up poll finds nothing to apply and would otherwise
+  // leave `remote-push.fallback_polling` as the journal's latest event even
+  // though the socket is healthily reconnected.
+  hub.setAccepting(false)
+  hub.disconnectAll()
+  hub.setAccepting(true)
+  await hub.waitForConnections(2)
+
+  const resumed = await waitFor(async () => {
+    const events = await readNdjson(deviceB.events)
+    return events.findLast((event) => event.event === 'remote-push.resumed')
+  })
+  assert.equal(resumed.detail.state, 'push-connected')
+  assert.equal(resumed.detail.trigger, 'remote-push-fallback')
+
+  const events = await readNdjson(deviceB.events)
+  const fallbackIndex = events.findLastIndex((event) => event.event === 'remote-push.fallback_polling')
+  const resumedIndex = events.findLastIndex((event) => event.event === 'remote-push.resumed')
+  assert.ok(fallbackIndex >= 0, 'the reconnect should run a fallback poll')
+  assert.ok(resumedIndex > fallbackIndex, 'resumed must follow the fallback poll')
+
+  const status = JSON.parse((await runCli('status', [...stateArgs(deviceB), '--remote-push'])).stdout)
+  assert.equal(status.remotePush.state, 'push-connected')
+  assert.equal(status.remotePush.connectionState, 'connected')
+})
+
+test('initial push state recovers the cursor from a rotated events generation', async (t) => {
+  const hub = await startFakePushHub(t)
+  if (!hub) return
+  const { deviceA, deviceB } = await makeRemotePushState()
+  await runCli('init', [...stateArgs(deviceA), '--force'])
+
+  // Simulate a size-based rotation: the last remote-push cursor lives in the
+  // rotated generation while the current events file carries no push cursor.
+  // Reading current-only would reset the cursor; readEventsWithHistory recovers
+  // it, and the recovered lastEventId/lastPushedRevision flow into the hub
+  // connect query.
+  await fs.writeFile(rotatedNdjsonPath(deviceB.events), `${JSON.stringify({
+    event: 'remote-push.applied',
+    at: '2026-01-01T00:00:00.000Z',
+    detail: { eventId: 'evt_rotated_cursor', pushedRevision: 7, toRevision: 7, lastPushedRevision: 7 },
+  })}\n`, 'utf8')
+
+  await startPushClient(deviceB, t, hub)
+  await hub.waitForConnections(1)
+
+  const query = hub.latestQuery()
+  assert.equal(query.lastEventId, 'evt_rotated_cursor')
+  assert.equal(query.lastRevision, '7')
+})
+
+test('a genuine no-socket fallback poll still derives push-fallback-polling', () => {
+  const options = { 'remote-push': true, 'remote-push-url': 'ws://127.0.0.1/events' }
+  const connected = { event: 'remote-push.connected', at: '2026-01-01T00:00:00.000Z', detail: { lastPushedRevision: 4 } }
+  const fallbackPolling = {
+    event: 'remote-push.fallback_polling',
+    at: '2026-01-01T00:00:05.000Z',
+    detail: { lastPushedRevision: 4 },
+  }
+
+  // Only a lingering fallback_polling (no resumed/applied afterwards) means we
+  // are genuinely operating without a live socket.
+  const polling = buildRemotePushHealth(options, {
+    lastRemotePushStarted: null,
+    lastRemotePushConnected: connected,
+    lastRemotePushResumed: null,
+    lastRemotePushDisconnected: null,
+    lastRemotePushFallbackPolling: fallbackPolling,
+    lastRemotePushApplied: null,
+    lastRemotePushSkipped: null,
+    lastRemotePushFailed: null,
+    latestRemotePushEvent: fallbackPolling,
+    lastRemotePullApplied: null,
+    lastRemotePullSkipped: null,
+    lastRemotePullFailed: null,
+  })
+  assert.equal(polling.state, 'push-fallback-polling')
+
+  // Once a resumed event follows the poll while the socket is up, the derived
+  // state flips to connected.
+  const resumed = { event: 'remote-push.resumed', at: '2026-01-01T00:00:06.000Z', detail: { lastPushedRevision: 4 } }
+  const reconnected = buildRemotePushHealth(options, {
+    lastRemotePushStarted: null,
+    lastRemotePushConnected: connected,
+    lastRemotePushResumed: resumed,
+    lastRemotePushDisconnected: null,
+    lastRemotePushFallbackPolling: fallbackPolling,
+    lastRemotePushApplied: null,
+    lastRemotePushSkipped: null,
+    lastRemotePushFailed: null,
+    latestRemotePushEvent: resumed,
+    lastRemotePullApplied: null,
+    lastRemotePullSkipped: null,
+    lastRemotePullFailed: null,
+  })
+  assert.equal(reconnected.state, 'push-connected')
+  assert.equal(reconnected.connectionState, 'connected')
 })

@@ -7,6 +7,7 @@ import { initCloud } from './commands/import.js'
 import { recoverJournal, refreshWorkspace, syncOnce } from './commands/sync.js'
 import { workspaceMode } from './constants.js'
 import { emit, findLastEventOf, readNdjson } from './io.js'
+import { withCloudFetchRetry } from './cloud-retry.js'
 import { createRemotePushClient } from './remote-push.js'
 import { toCloudPath } from './journal.js'
 import { assertWorkspacePathSafe, remotePullEnabled, remotePushEnabled, remoteRefreshIntervalMs } from './paths.js'
@@ -553,7 +554,7 @@ export function remotePullActivitySummary(detail) {
   }
 }
 
-export async function remotePullOnce(options) {
+export async function remotePullOnce(options, inject = {}) {
   const trigger = options.trigger ?? 'manual'
   const intervalMs = remoteRefreshIntervalMs(options)
   await emit(options, 'remote-pull.started', {
@@ -571,6 +572,8 @@ export async function remotePullOnce(options) {
     const decision = await remoteRefreshDecision(options, {
       trigger,
       localSyncIdle: () => true,
+      cloudService: inject.cloudService,
+      retryOptions: inject.retryOptions,
     })
 
     if (decision.state === 'skip') {
@@ -621,6 +624,31 @@ export async function remotePullOnce(options) {
   }
 }
 
+// Wraps a single cloud read (graph head / visible graph) performed by the
+// remote-pull decision in the same bounded transient-retry used by hydration.
+// A dropped socket mid-reconciliation (observed live as bare `fetch failed`
+// during periodic-head-reconciliation) is retried instead of immediately
+// surfacing as `remote-pull.failed`. On recovery we journal `cloud.fetch_recovered`
+// (same convention as hydrate) so the flakiness stays observable; exhausted
+// retries re-throw so the caller still emits `remote-pull.failed`.
+function withRemotePullFetchRetry(options, context, phase, fn) {
+  return withCloudFetchRetry(fn, {
+    ...(context.retryOptions ?? {}),
+    onRetrySuccess: async ({ attempt, failures, error }) => {
+      await emit(options, 'cloud.fetch_recovered', {
+        phase,
+        trigger: context.trigger,
+        attempts: attempt,
+        failures,
+        reason: error instanceof Error ? error.message : error != null ? String(error) : null,
+        code: error?.code ?? error?.cause?.code ?? null,
+        workspace: options.workspace,
+        safeRefreshOnly: true,
+      })
+    },
+  })
+}
+
 export async function remoteRefreshDecision(options, context) {
   if (!context.localSyncIdle()) {
     return {
@@ -650,8 +678,10 @@ export async function remoteRefreshDecision(options, context) {
     }
   }
 
-  const cloudService = createCloudGraphService(options)
-  const cloudHead = await cloudService.readGraphHead()
+  const cloudService = context.cloudService ?? createCloudGraphService(options)
+  const cloudHead = await withRemotePullFetchRetry(options, context, 'head-reconciliation', () =>
+    cloudService.readGraphHead(),
+  )
   if (!cloudHead?.exists) {
     return {
       state: 'skip',
@@ -721,7 +751,9 @@ export async function remoteRefreshDecision(options, context) {
     // to do that anyway) and exonerate changes that already match cloud. The
     // exonerated result is compact (counts + ≤10-path samples), so the skip
     // detail embedded below stays bounded even for huge dirty workspaces.
-    const visibleCloud = await cloudService.readVisibleGraph(visibilityRequestFromOptions(options))
+    const visibleCloud = await withRemotePullFetchRetry(options, context, 'exoneration-visible-graph', () =>
+      cloudService.readVisibleGraph(visibilityRequestFromOptions(options)),
+    )
     localChanges = await exonerateWorkspaceChangesAgainstCloud(options, rawLocalChanges, visibleCloud)
   }
   if (!localChanges.safe) {

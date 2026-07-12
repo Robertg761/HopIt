@@ -1,12 +1,13 @@
 // @ts-check
 import { createCloudGraphService } from './cloud/d1-graph-service.js'
 import { workspaceMode } from './constants.js'
-import { emit, findLastEventOf, readNdjson } from './io.js'
+import { emit, findLastEventOf, readEventsWithHistory } from './io.js'
 import { remotePushEnabled, remotePushUrl } from './paths.js'
 
 const remotePushEventTypes = [
   'remote-push.started',
   'remote-push.connected',
+  'remote-push.resumed',
   'remote-push.disconnected',
   'remote-push.fallback_polling',
   'remote-push.applied',
@@ -78,6 +79,10 @@ export async function createRemotePushClient(options, clientOptions) {
           workspace: options.workspace,
           hubUrl: redactUrl(hubUrl),
           reason: error instanceof Error ? error.message : 'remote_push_disconnected',
+          closeCode: error?.wsCloseCode ?? null,
+          closeReason: error?.wsCloseReason ?? null,
+          wasClean: error?.wsWasClean ?? null,
+          errorDetail: error?.wsErrorDetail ?? null,
           lastEventId: state.lastEventId,
           lastPushedRevision: state.lastPushedRevision,
           safeRefreshOnly: true,
@@ -212,6 +217,7 @@ async function connectAndReadRemotePushWebSocket(options, hubUrl, state, streamO
       safeRefreshOnly: true,
     })
 
+    streamOptions.transport = 'websocket'
     if (streamOptions.runFallbackAfterConnect) {
       await runRemotePushFallbackPoll(options, state, streamOptions)
     }
@@ -231,12 +237,12 @@ async function connectAndReadRemotePushWebSocket(options, hubUrl, state, streamO
           await handleRemotePushEnvelope(options, message, state, streamOptions)
         }).catch(fail)
       }
-      const onError = () => {
-        fail(new Error('remote_push_websocket_error'))
+      const onError = (event) => {
+        fail(decorateWebSocketError(new Error('remote_push_websocket_error'), event))
       }
-      const onClose = () => {
+      const onClose = (event) => {
         messageChain.finally(() => {
-          fail(new Error('remote_push_websocket_closed'))
+          fail(decorateWebSocketError(new Error('remote_push_websocket_closed'), event))
         })
       }
       const cleanup = () => {
@@ -296,14 +302,45 @@ async function runRemotePushFallbackPoll(options, state, streamOptions) {
     safeRefreshOnly: true,
   })
 
-  await runRemotePushDecision(options, state, streamOptions, {
+  const outcome = await runRemotePushDecision(options, state, streamOptions, {
     trigger: 'remote-push-fallback',
     eventId: state.lastEventId,
     pushedRevision: state.lastPushedRevision,
     envelope: null,
   })
+
+  // The catch-up poll runs right after a (re)connect while the socket is open.
+  // When it applies/skips/fails it emits a terminal event that truthfully
+  // becomes the latest state. But when the poll finds nothing to do it emits
+  // NOTHING, leaving `remote-push.fallback_polling` as the journal's latest
+  // remote-push event — so /status would report `push-fallback-polling` (and
+  // the desktop app "Polling") even though the socket is healthily connected.
+  // Emit `remote-push.resumed` so the latest event reflects the live socket.
+  // `push-fallback-polling` then only lingers as latest when we are genuinely
+  // polling without an active socket.
+  if (outcome.emitted === 'none' && isConnectionAlive(streamOptions)) {
+    await emit(options, 'remote-push.resumed', {
+      state: 'push-connected',
+      workspace: options.workspace,
+      lastEventId: state.lastEventId,
+      lastPushedRevision: state.lastPushedRevision,
+      trigger: 'remote-push-fallback',
+      transport: streamOptions.transport ?? null,
+      safeRefreshOnly: true,
+    })
+  }
 }
 
+function isConnectionAlive(streamOptions) {
+  // The abort signal fires when the client is closing or the socket dropped.
+  // Absent a signal (older callers) treat the just-connected session as alive.
+  return streamOptions.signal ? !streamOptions.signal.aborted : true
+}
+
+// Returns `{ emitted }` describing which terminal event (if any) the poll
+// wrote: 'applied' | 'skipped' | 'failed' | 'none'. The fallback-poll caller
+// uses 'none' (an up-to-date poll that emitted nothing) to decide whether it
+// must emit `remote-push.resumed` so the journal's latest event stays truthful.
 async function runRemotePushDecision(options, state, streamOptions, detail) {
   try {
     const decision = await streamOptions.remoteRefreshDecision(options, {
@@ -322,8 +359,9 @@ async function runRemotePushDecision(options, state, streamOptions, detail) {
           envelope: detail.envelope,
           safeRefreshOnly: true,
         })
+        return { emitted: 'skipped' }
       }
-      return
+      return { emitted: 'none' }
     }
 
     await streamOptions.refreshWorkspace(options)
@@ -342,6 +380,7 @@ async function runRemotePushDecision(options, state, streamOptions, detail) {
       lastPushedRevision: state.lastPushedRevision,
       safeRefreshOnly: true,
     })
+    return { emitted: 'applied' }
   } catch (error) {
     await emit(options, 'remote-push.failed', {
       state: 'push-disconnected',
@@ -352,6 +391,7 @@ async function runRemotePushDecision(options, state, streamOptions, detail) {
       reason: error instanceof Error ? error.message : 'remote_push_failed',
       safeRefreshOnly: true,
     })
+    return { emitted: 'failed' }
   }
 }
 
@@ -379,7 +419,11 @@ async function remotePushConnectUrl(options, hubUrl, state, connectOptions = {})
 }
 
 async function readInitialPushState(options) {
-  const events = await readNdjson(options.events)
+  // Read the rotated generation as well as the current file: right after a
+  // size-based events rotation the last remote-push cursor events can sit in
+  // the rotated <name>.1.ndjson, and reading current-only would needlessly
+  // reset lastEventId/lastAppliedRevision.
+  const events = await readEventsWithHistory(options.events)
   const lastPushEvent = findLastEventOf(events, remotePushEventTypes)
   const lastApplied = findLastEventOf(events, ['remote-push.applied'])
   return {
@@ -464,6 +508,23 @@ function remotePushAuthToken(options) {
     ?? process.env.HOPIT_D1_API_TOKEN
     ?? process.env.CLOUDFLARE_API_TOKEN
     ?? null
+}
+
+// A WebSocket `close` event carries a numeric `code` and text `reason`; an
+// `error` event may carry an underlying `error`/`message`. Attach whatever the
+// event exposes to the thrown Error so the disconnected journal entry records
+// concrete close diagnostics instead of a bare `remote_push_websocket_error`.
+function decorateWebSocketError(error, event) {
+  if (event && typeof event === 'object') {
+    if (Number.isInteger(event.code)) error.wsCloseCode = event.code
+    if (typeof event.reason === 'string' && event.reason.length > 0) error.wsCloseReason = event.reason
+    if (typeof event.wasClean === 'boolean') error.wsWasClean = event.wasClean
+    const underlying = event.error ?? event.message ?? null
+    if (underlying != null) {
+      error.wsErrorDetail = underlying instanceof Error ? underlying.message : String(underlying)
+    }
+  }
+  return error
 }
 
 async function textFromWebSocketData(data) {

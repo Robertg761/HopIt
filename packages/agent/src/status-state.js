@@ -67,6 +67,7 @@ export async function readAgentState(options) {
   })
   const lastRemotePushStarted = findLastEvent(eventEntries, 'remote-push.started')
   const lastRemotePushConnected = findLastEvent(eventEntries, 'remote-push.connected')
+  const lastRemotePushResumed = findLastEvent(eventEntries, 'remote-push.resumed')
   const lastRemotePushDisconnected = findLastEvent(eventEntries, 'remote-push.disconnected')
   const lastRemotePushFallbackPolling = findLastEvent(eventEntries, 'remote-push.fallback_polling')
   const lastRemotePushApplied = findLastEvent(eventEntries, 'remote-push.applied')
@@ -75,6 +76,7 @@ export async function readAgentState(options) {
   const latestRemotePushEvent = findLastEventOf(eventEntries, [
     'remote-push.started',
     'remote-push.connected',
+    'remote-push.resumed',
     'remote-push.disconnected',
     'remote-push.fallback_polling',
     'remote-push.applied',
@@ -84,6 +86,7 @@ export async function readAgentState(options) {
   const remotePushHealth = buildRemotePushHealth(options, {
     lastRemotePushStarted,
     lastRemotePushConnected,
+    lastRemotePushResumed,
     lastRemotePushDisconnected,
     lastRemotePushFallbackPolling,
     lastRemotePushApplied,
@@ -241,6 +244,7 @@ export async function readAgentState(options) {
     latestRemotePullEvent,
     lastRemotePushStarted,
     lastRemotePushConnected,
+    lastRemotePushResumed,
     lastRemotePushDisconnected,
     lastRemotePushFallbackPolling,
     lastRemotePushApplied,
@@ -383,6 +387,7 @@ export async function readAgentState(options) {
         latestRemotePullEvent,
         lastRemotePushStarted,
         lastRemotePushConnected,
+        lastRemotePushResumed,
         lastRemotePushDisconnected,
         lastRemotePushFallbackPolling,
         lastRemotePushApplied,
@@ -814,6 +819,7 @@ export function buildRemotePushHealth(options, remotePushEvents) {
   const latestConnectionEvent = latestEvent([
     remotePushEvents.lastRemotePushStarted,
     remotePushEvents.lastRemotePushConnected,
+    remotePushEvents.lastRemotePushResumed,
     remotePushEvents.lastRemotePushDisconnected,
   ])
   const latestProblem = latestEvent([
@@ -824,6 +830,7 @@ export function buildRemotePushHealth(options, remotePushEvents) {
   const latestProblemIsCurrent = latestProblem && latestProblem === latestRemotePushEvent
   const latestPushedRevisionEvent = latestEvent([
     remotePushEvents.lastRemotePushConnected,
+    remotePushEvents.lastRemotePushResumed,
     remotePushEvents.lastRemotePushDisconnected,
     remotePushEvents.lastRemotePushFallbackPolling,
     remotePushEvents.lastRemotePushApplied,
@@ -836,7 +843,7 @@ export function buildRemotePushHealth(options, remotePushEvents) {
   let connectionState = enabled ? 'disconnected' : 'disabled'
   let fallbackState = enabled ? 'standby' : 'disabled'
 
-  if (enabled && latestConnectionEvent?.event === 'remote-push.connected') {
+  if (enabled && (latestConnectionEvent?.event === 'remote-push.connected' || latestConnectionEvent?.event === 'remote-push.resumed')) {
     connectionState = 'connected'
   }
   if (enabled && latestRemotePushEvent?.event === 'remote-push.fallback_polling') {
@@ -845,7 +852,7 @@ export function buildRemotePushHealth(options, remotePushEvents) {
     fallbackState = 'available'
   }
 
-  if (enabled && latestRemotePushEvent?.event === 'remote-push.connected') {
+  if (enabled && (latestRemotePushEvent?.event === 'remote-push.connected' || latestRemotePushEvent?.event === 'remote-push.resumed')) {
     state = 'push-connected'
   } else if (enabled && latestRemotePushEvent?.event === 'remote-push.disconnected') {
     state = 'push-disconnected'
@@ -869,6 +876,7 @@ export function buildRemotePushHealth(options, remotePushEvents) {
     safeRefreshOnly: enabled,
     lastStarted: remotePushEvents.lastRemotePushStarted ?? null,
     lastConnected: remotePushEvents.lastRemotePushConnected ?? null,
+    lastResumed: remotePushEvents.lastRemotePushResumed ?? null,
     lastDisconnected: remotePushEvents.lastRemotePushDisconnected ?? null,
     lastFallbackPolling: remotePushEvents.lastRemotePushFallbackPolling ?? null,
     lastApplied,
