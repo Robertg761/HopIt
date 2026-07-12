@@ -4,6 +4,7 @@ import test from 'node:test'
 
 import worker, { CodebasePushHub } from './api-worker.js'
 import { assertScopedSessionStatementAllowed, assertServerActorStatementAllowed } from './scoped-sql.js'
+import { assertBrokerKeyForCodebase, isBrokerKeyForCodebase, presignBlobUrl } from './blob-broker.js'
 
 test('proxy token auth executes statements and logs structured request metadata', async () => {
   const logs = await captureLogs(async () => {
@@ -1848,3 +1849,194 @@ function createMockSocket() {
     },
   }
 }
+
+// ---------------------------------------------------------------------------
+// Blob broker (Phase 3 Stage 1b — HOPIT_MULTITENANT / Front 2)
+//
+// The agent no longer holds account-level R2 credentials. It asks the Worker
+// broker (authed by its existing hst_ session or the hsa_ server-actor) for a
+// short-lived per-object presigned URL scoped to ONLY its codebase's key prefix.
+// A caller entitled to codebase A must never obtain a working URL for codebase B:
+// a request naming B is refused at entitlement, and a B-key under an A entitlement
+// fails the prefix check before anything is signed. Flag OFF: the endpoint does
+// not exist (404), so the direct-credential blob path is unchanged.
+// ---------------------------------------------------------------------------
+
+const BROKER_R2_ENV = {
+  HOPIT_R2_ENDPOINT: 'https://accountid.r2.cloudflarestorage.com',
+  HOPIT_R2_BUCKET: 'hopit-blobs',
+  HOPIT_R2_ACCESS_KEY_ID: 'AKIAEXAMPLE',
+  HOPIT_R2_SECRET_ACCESS_KEY: 'secret-example',
+  HOPIT_R2_REGION: 'auto',
+}
+const HEX64 = 'b'.repeat(64)
+
+function managedKey(codebaseId, hash = HEX64, prefix = '') {
+  const enc = encodeURIComponent(codebaseId)
+  const parts = [prefix, 'codebases', enc, 'blobs', 'sha256', hash.slice(0, 2), hash].filter(Boolean)
+  return parts.join('/')
+}
+
+function brokerRequest({ token, body, ip = '203.0.113.90' }) {
+  return new Request('https://worker.example/blob-presign', {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${token}`,
+      'content-type': 'application/json',
+      'cf-connecting-ip': ip,
+    },
+    body: JSON.stringify(body),
+  })
+}
+
+const brokerEnv = (extra = {}) => ({
+  HOPIT_MULTITENANT: '1',
+  HOPIT_D1_SERVER_ACTOR_SECRET: SERVER_ACTOR_SECRET,
+  HOPIT_D1_PROXY_TOKEN: 'proxy-secret',
+  ...BROKER_R2_ENV,
+  ...extra,
+})
+
+test('broker key-scope: own-codebase managed keys pass, foreign/traversal/widen keys fail', () => {
+  const prefix = 'hopit-prod'
+  assert.equal(isBrokerKeyForCodebase(managedKey('codebase-a', HEX64, prefix), 'codebase-a', prefix), true)
+  // A key that belongs to codebase-b can never validate under a codebase-a entitlement.
+  assert.equal(isBrokerKeyForCodebase(managedKey('codebase-b', HEX64, prefix), 'codebase-a', prefix), false)
+  // Prefix mismatch (agent/worker prefixes must agree) fails closed.
+  assert.equal(isBrokerKeyForCodebase(managedKey('codebase-a', HEX64, ''), 'codebase-a', prefix), false)
+  // Path traversal / doubled separators are rejected outright.
+  assert.equal(isBrokerKeyForCodebase(`${prefix}/codebases/codebase-a/blobs/sha256/../${HEX64}`, 'codebase-a', prefix), false)
+  assert.throws(() => assertBrokerKeyForCodebase(managedKey('codebase-b', HEX64, prefix), 'codebase-a', prefix), /outside the entitled codebase prefix/)
+  assert.doesNotThrow(() => assertBrokerKeyForCodebase(managedKey('codebase-a', HEX64, prefix), 'codebase-a', prefix))
+})
+
+test('broker presign: produces a method-scoped SigV4 query URL for the exact object', async () => {
+  const key = managedKey('codebase-a')
+  const put = await presignBlobUrl({
+    method: 'PUT',
+    key,
+    endpoint: 'https://accountid.r2.cloudflarestorage.com',
+    bucket: 'hopit-blobs',
+    accessKeyId: 'AKIAEXAMPLE',
+    secretAccessKey: 'secret-example',
+    now: new Date('2026-07-13T00:00:00.000Z'),
+  })
+  assert.match(put.url, /^https:\/\/accountid\.r2\.cloudflarestorage\.com\/hopit-blobs\/codebases\/codebase-a\/blobs\/sha256\//)
+  assert.match(put.url, /X-Amz-Algorithm=AWS4-HMAC-SHA256/)
+  assert.match(put.url, /X-Amz-Expires=120/)
+  assert.match(put.url, /X-Amz-SignedHeaders=host/)
+  assert.match(put.url, /X-Amz-Signature=[0-9a-f]{64}$/)
+  assert.equal(put.method, 'PUT')
+  // A GET presign for the same object signs to a different signature (method is signed).
+  const get = await presignBlobUrl({
+    method: 'GET',
+    key,
+    endpoint: 'https://accountid.r2.cloudflarestorage.com',
+    bucket: 'hopit-blobs',
+    accessKeyId: 'AKIAEXAMPLE',
+    secretAccessKey: 'secret-example',
+    now: new Date('2026-07-13T00:00:00.000Z'),
+  })
+  assert.notEqual(get.url, put.url)
+})
+
+test('broker: flag OFF makes the endpoint 404 (single-tenant blob path unchanged)', async () => {
+  const response = await worker.fetch(brokerRequest({
+    token: 'hst_session_token',
+    body: { method: 'GET', key: managedKey('codebase-1') },
+  }), {
+    // No HOPIT_MULTITENANT.
+    HOPIT_D1_PROXY_TOKEN: 'proxy-secret',
+    ...BROKER_R2_ENV,
+    HOPIT_D1_DB: createMockDb({ session: scopedSession() }),
+  })
+  assert.equal(response.status, 404)
+})
+
+test('broker: hst_ session gets a presigned URL scoped to its own codebase', async () => {
+  const db = createMockDb({ session: scopedSession() }) // codebase_id: codebase-1
+  const response = await worker.fetch(brokerRequest({
+    token: 'hst_session_token',
+    body: { method: 'PUT', key: managedKey('codebase-1') },
+  }), brokerEnv({ HOPIT_D1_DB: db }))
+  assert.equal(response.status, 200)
+  const result = (await response.json()).result
+  assert.match(result.url, /\/codebases\/codebase-1\/blobs\/sha256\//)
+  assert.equal(result.method, 'PUT')
+})
+
+test('broker: hst_ session cannot presign a key for another codebase (prefix refused)', async () => {
+  const db = createMockDb({ session: scopedSession() }) // scoped to codebase-1
+  const response = await worker.fetch(brokerRequest({
+    token: 'hst_session_token',
+    body: { method: 'GET', key: managedKey('codebase-2') },
+  }), brokerEnv({ HOPIT_D1_DB: db }))
+  assert.equal(response.status, 400)
+  assert.match((await response.json()).errors[0].message, /outside the entitled codebase prefix/)
+})
+
+test('broker: hst_ session naming a foreign codebaseId is refused at auth', async () => {
+  const db = createMockDb({ session: scopedSession() }) // scoped to codebase-1
+  const response = await worker.fetch(brokerRequest({
+    token: 'hst_session_token',
+    body: { method: 'GET', key: managedKey('codebase-2'), codebaseId: 'codebase-2' },
+  }), brokerEnv({ HOPIT_D1_DB: db }))
+  assert.equal(response.status, 403)
+  assert.match((await response.json()).errors[0].message, /not scoped to the requested codebase/)
+})
+
+test('broker: hsa_ server-actor gets a URL for an entitled codebase and is refused for others', async () => {
+  const db = createServerActorDb({
+    codebases: {
+      'codebase-a': { ownerId: 'user-a' },
+      'codebase-b': { ownerId: 'user-b' },
+    },
+  })
+  const entitled = await worker.fetch(brokerRequest({
+    token: mintTestServerActorToken({ userId: 'user-a' }),
+    body: { method: 'PUT', key: managedKey('codebase-a'), codebaseId: 'codebase-a' },
+  }), brokerEnv({ HOPIT_D1_DB: db }))
+  assert.equal(entitled.status, 200)
+  assert.match((await entitled.json()).result.url, /\/codebases\/codebase-a\/blobs\//)
+
+  const refused = await worker.fetch(brokerRequest({
+    token: mintTestServerActorToken({ userId: 'user-a' }),
+    body: { method: 'GET', key: managedKey('codebase-b'), codebaseId: 'codebase-b' },
+  }), brokerEnv({ HOPIT_D1_DB: db }))
+  assert.equal(refused.status, 403)
+  assert.match((await refused.json()).errors[0].message, /not entitled/)
+})
+
+test('broker: forged, unscoped, and unknown principals are all refused before signing', async () => {
+  const db = createServerActorDb({ codebases: { 'codebase-a': { ownerId: 'user-a' } } })
+  // Forged server-actor signature.
+  const forged = await worker.fetch(brokerRequest({
+    token: mintTestServerActorToken({ userId: 'user-a', secret: 'wrong-secret' }),
+    body: { method: 'GET', key: managedKey('codebase-a'), codebaseId: 'codebase-a' },
+  }), brokerEnv({ HOPIT_D1_DB: db }))
+  assert.equal(forged.status, 403)
+  // A non-hst_/non-hsa_/non-proxy token.
+  const unknown = await worker.fetch(brokerRequest({
+    token: 'garbage-token',
+    body: { method: 'GET', key: managedKey('codebase-a') },
+  }), brokerEnv({ HOPIT_D1_DB: createMockDb({ session: null }) }))
+  assert.equal(unknown.status, 403)
+  // A missing session.
+  const missing = await worker.fetch(brokerRequest({
+    token: 'hst_unknown',
+    body: { method: 'GET', key: managedKey('codebase-1') },
+  }), brokerEnv({ HOPIT_D1_DB: createMockDb({ session: null }) }))
+  assert.equal(missing.status, 403)
+})
+
+test('broker: unconfigured R2 answers 503 without signing', async () => {
+  const response = await worker.fetch(brokerRequest({
+    token: 'hst_session_token',
+    body: { method: 'GET', key: managedKey('codebase-1') },
+  }), {
+    HOPIT_MULTITENANT: '1',
+    HOPIT_D1_PROXY_TOKEN: 'proxy-secret',
+    HOPIT_D1_DB: createMockDb({ session: scopedSession() }),
+  })
+  assert.equal(response.status, 503)
+})

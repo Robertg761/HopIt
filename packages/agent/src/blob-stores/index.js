@@ -15,6 +15,22 @@ export function createObjectBlobStore(options) {
   const budget = blobBudgetOptions(options, provider)
   const encryptionConfig = clientEncryptionConfigFromOptions(options)
 
+  // Broker mode (Phase 3 Stage 1b, HOPIT_BLOB_BROKER): the agent stops holding
+  // account-level R2/S3 credentials entirely. Instead it asks the Worker broker
+  // for a short-lived per-object presigned URL (authed by its existing hst_ session
+  // token) and does a single raw GET/PUT. With the flag off this branch is never
+  // taken, so the direct-credential provider paths below are byte-for-byte
+  // unchanged. Only object providers (not the local filesystem store) broker.
+  if (brokerBlobStoreEnabled(options) && provider !== objectBlobProvider.filesystem) {
+    return new BrokerBlobStore({
+      brokerUrl: brokerPresignUrl(options),
+      authToken: brokerAuthToken(options),
+      prefix,
+      budget,
+      encryptionConfig,
+    })
+  }
+
   if (provider === objectBlobProvider.filesystem) {
     const root = options['blob-root'] ?? process.env.HOPIT_BLOB_ROOT ?? path.join(path.dirname(options.cloud ?? defaultOptions.cloud), 'blobs')
     return new FilesystemBlobStore({ root, prefix, budget, encryptionConfig })
@@ -539,6 +555,173 @@ export class S3CompatibleBlobStore {
     const signature = createHmac('sha256', signingKey).update(stringToSign).digest('hex')
 
     return `AWS4-HMAC-SHA256 Credential=${this.accessKeyId}/${credentialScope}, SignedHeaders=${signedHeaders}, Signature=${signature}`
+  }
+}
+
+export function brokerBlobStoreEnabled(options) {
+  const flag = options['blob-broker'] ?? process.env.HOPIT_BLOB_BROKER
+  return truthyEnv(flag)
+}
+
+export function brokerPresignUrl(options) {
+  const explicit = options['blob-broker-url'] ?? process.env.HOPIT_BLOB_BROKER_URL
+  if (explicit) return String(explicit).replace(/\/+$/, '')
+  const base = options['d1-api-base-url'] ?? process.env.HOPIT_D1_API_BASE_URL
+  if (base) return `${String(base).replace(/\/+$/, '')}/blob-presign`
+  throw new Error('Blob broker mode requires --blob-broker-url or HOPIT_BLOB_BROKER_URL (or HOPIT_D1_API_BASE_URL).')
+}
+
+export function brokerAuthToken(options) {
+  const token = options['session-token']
+    ?? options.agentSessionToken
+    ?? options['blob-broker-token']
+    ?? process.env.HOPIT_AGENT_SESSION_TOKEN
+  if (!token) {
+    throw new Error('Blob broker mode requires an agent session token (--session-token or HOPIT_AGENT_SESSION_TOKEN).')
+  }
+  return String(token)
+}
+
+// Recover the codebase id embedded in a managed blob key so broker requests can
+// name it for the server-actor/proxy principals (the hst_ session already implies
+// its codebase, but sending it keeps the request self-describing).
+export function codebaseIdFromBlobKey(key, prefix) {
+  const normalizedPrefix = normalizeBlobPrefix(prefix)
+  const rest = normalizedPrefix && key.startsWith(`${normalizedPrefix}/`)
+    ? key.slice(normalizedPrefix.length + 1)
+    : key
+  const match = rest.match(/^codebases\/([^/]+)\/blobs\/sha256\//)
+  if (!match) return null
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    return match[1]
+  }
+}
+
+function brokerUnsupported(operation) {
+  return `broker_mode_unsupported: ${operation} needs account-level credentials and is an admin/server-side operation off the tenant client path.`
+}
+
+function brokerHost(url) {
+  try {
+    return new URL(url).host
+  } catch {
+    return 'broker'
+  }
+}
+
+// Client half of Front 2: never holds account R2 credentials. Every read/write
+// goes: ask the broker for a presigned URL (authed by the hst_ session token) →
+// raw GET/PUT to that URL. The broker refuses any key outside the session's
+// codebase prefix, so this store structurally cannot reach another tenant's blobs.
+export class BrokerBlobStore {
+  constructor(options) {
+    this.provider = objectBlobProvider.r2
+    this.mode = 'broker'
+    this.brokerUrl = options.brokerUrl
+    this.authToken = options.authToken
+    this.prefix = options.prefix ?? ''
+    this.budget = options.budget ?? { freeOnly: false, budgetBytes: null }
+    this.encryptionConfig = options.encryptionConfig ?? null
+    this.location = `broker:${brokerHost(options.brokerUrl)}`
+    this.fetchImpl = options.fetchImpl ?? fetch
+  }
+
+  shouldEncrypt(relativePath) {
+    return shouldEncryptWithConfig(relativePath, this.encryptionConfig)
+  }
+
+  async putBlob({ codebaseId, relativePath, hash, buffer, encrypt = false }) {
+    const prepared = prepareBlobPayload({
+      codebaseId,
+      relativePath,
+      plaintextHash: hash,
+      buffer,
+      encrypt,
+      encryptionConfig: this.encryptionConfig,
+    })
+    const key = blobKeyForHash(this.prefix, codebaseId, prepared.blobHash)
+    const descriptor = {
+      provider: this.provider,
+      key,
+      hash,
+      size: buffer.byteLength,
+      blobHash: prepared.blobHash,
+      blobSize: prepared.buffer.byteLength,
+      clientEncryption: prepared.clientEncryption,
+      contentStorage: contentStorageMode.objectBlob,
+    }
+    if (await this.exists({ codebaseId, key })) return descriptor
+    // Budget/quota is enforced server-side in broker mode (the tenant client can no
+    // longer LIST the bucket), so there is no client-side assertWithinBudget here.
+    const presigned = await this.presign({ method: 'PUT', codebaseId, key })
+    const response = await this.fetchImpl(presigned.url, {
+      method: 'PUT',
+      body: prepared.buffer,
+      headers: { 'content-type': 'application/octet-stream' },
+    })
+    if (!response.ok) {
+      throw new Error(`broker_blob_put_failed: PUT ${key} returned ${response.status}`)
+    }
+    return descriptor
+  }
+
+  async getBlob(file, context = {}) {
+    if (!file.blobKey) throw new Error('Object-backed file is missing blobKey.')
+    const codebaseId = context.codebaseId ?? codebaseIdFromBlobKey(file.blobKey, this.prefix)
+    const presigned = await this.presign({ method: 'GET', codebaseId, key: file.blobKey })
+    const response = await this.fetchImpl(presigned.url, { method: 'GET' })
+    if (!response.ok) {
+      throw new Error(`broker_blob_get_failed: GET ${file.blobKey} returned ${response.status}`)
+    }
+    const buffer = Buffer.from(await response.arrayBuffer())
+    return unwrapBlobPayload(buffer, file, context, this.encryptionConfig)
+  }
+
+  async exists({ codebaseId, key }) {
+    const presigned = await this.presign({ method: 'HEAD', codebaseId, key })
+    const response = await this.fetchImpl(presigned.url, { method: 'HEAD' })
+    if (response.status === 404) return false
+    if (!response.ok) {
+      throw new Error(`broker_blob_head_failed: HEAD ${key} returned ${response.status}`)
+    }
+    return true
+  }
+
+  async presign({ method, codebaseId, key }) {
+    const payload = { method, key }
+    if (codebaseId) payload.codebaseId = codebaseId
+    const response = await this.fetchImpl(this.brokerUrl, {
+      method: 'POST',
+      headers: {
+        authorization: `Bearer ${this.authToken}`,
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+    })
+    const body = await response.json().catch(() => null)
+    if (!response.ok || body?.success === false) {
+      const reason = body?.errors?.map((error) => error.message).join('; ') || response.statusText
+      throw new Error(`broker_presign_failed: ${reason}`)
+    }
+    const result = body?.result
+    if (!result || typeof result.url !== 'string') {
+      throw new Error('broker_presign_failed: broker did not return a url.')
+    }
+    return result
+  }
+
+  async readUsage() {
+    throw new Error(brokerUnsupported('readUsage'))
+  }
+
+  async listBlobs() {
+    throw new Error(brokerUnsupported('listBlobs'))
+  }
+
+  async deleteBlob() {
+    throw new Error(brokerUnsupported('deleteBlob'))
   }
 }
 

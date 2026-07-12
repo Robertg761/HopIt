@@ -537,6 +537,73 @@ SQLite Worker): flag-off refuses `hsa_`; flag-on rejects a cross-tenant statemen
 and allows a user reading their own multiple codebases; forged/expired tokens are
 refused; proxy and `hst_` behavior is unchanged with the flag on.
 
+#### Addendum — Front 2 mechanism (R2 blob broker), **implemented behind flag** (Stage 1b, 2026-07-13)
+
+The Front-2 **R2 blob broker** is now implemented and gated by `HOPIT_MULTITENANT`
+(default **off**, so the direct-S3-credential blob path is byte-for-byte unchanged
+until the owner flips it). Mechanism chosen, of the options in §2d Front 2:
+**(d-i) per-codebase presigned URLs from a broker Worker (recommended).**
+
+- **Broker endpoint on the existing D1 Worker (not a sibling).** A new
+  `POST /blob-presign` route on `cloudflare/d1/api-worker.js` (logic in
+  `cloudflare/d1/blob-broker.js`). The Worker already has no R2 binding; the broker
+  **holds the R2 S3 credentials as Worker secrets** and mints SigV4 **query-string
+  presigned URLs** (WebCrypto HMAC, `UNSIGNED-PAYLOAD`, path-style, short TTL
+  default 120 s). Presign — not byte-proxying — keeps R2 egress on-Cloudflare
+  (research §4.c risk 2). The route only exists when the flag is on; with the flag
+  off it falls through to the Worker's 404, so nothing about single-tenant changes.
+- **Same principals as the D1 firewall.** The broker authenticates the caller with
+  the SAME auth the query path trusts: an `hst_` scoped session (entitled to exactly
+  its bound `codebase_id`), the `hsa_` server-actor (entitlement re-checked via the
+  Stage-1a `assertServerActorEntitlement` codebases⋈codebase_members lookup), or the
+  admin proxy token (migration/GC tooling; key-scoped but not membership-checked). A
+  forged/expired/absent principal fails closed before anything is signed.
+- **Prefix-scoping is the isolation invariant.** The broker refuses any key that is
+  not the managed blob key of the caller's entitled codebase —
+  `assertBrokerKeyForCodebase` requires an exact match of
+  `{HOPIT_BLOB_PREFIX}/codebases/{encoded-id}/blobs/sha256/{hh}/{hash}` (mirrors the
+  agent's `isManagedBlobKey`; rejects `..`/`//`/`\`). A caller entitled to codebase A
+  therefore (a) cannot name codebase B (refused at entitlement) and (b) cannot pass a
+  B-key under an A entitlement (refused at the prefix check) — and because the
+  signature covers the exact object path + method, a **returned URL cannot be widened**
+  to another key or a different verb.
+- **Agent gains a `broker` blob-store mode** (`BrokerBlobStore`,
+  `packages/agent/src/blob-stores/index.js`), selected by `HOPIT_BLOB_BROKER` (flag
+  on). It **never holds account R2 credentials**: for each read/write it asks the
+  broker for a presigned URL (authed by its existing `hst_` session token from
+  `HOPIT_AGENT_SESSION_TOKEN`) then does a single raw GET/PUT. Flag off keeps the
+  existing `r2`/`s3`/`b2` direct providers unchanged.
+- **GC / usage-enumeration stay an admin/server-side operation off the tenant client
+  path.** They need a bucket-wide LIST that only the account credentials can do, so
+  `BrokerBlobStore.readUsage/listBlobs/deleteBlob` throw a typed
+  `broker_mode_unsupported` error. Storage-budget enforcement moves server-side
+  (Stage 3, `HOPIT_ENFORCE_QUOTA`); GC continues to run as an admin job using the
+  direct-credential path (flag off, or a dedicated admin config), never on the tenant
+  request path.
+
+**Owner secrets/bindings to set before flipping the flag** (parallel to Stage 1a's
+`HOPIT_D1_SERVER_ACTOR_SECRET` note): the Worker needs the R2 S3 signing
+credentials as **Wrangler secrets** — `HOPIT_R2_ACCESS_KEY_ID`,
+`HOPIT_R2_SECRET_ACCESS_KEY`, `HOPIT_R2_BUCKET`, and either `HOPIT_R2_ACCOUNT_ID`
+(endpoint derived as `https://<account>.r2.cloudflarestorage.com`) or an explicit
+`HOPIT_R2_ENDPOINT`; optional `HOPIT_R2_REGION` (default `auto`),
+`HOPIT_BLOB_BROKER_TTL_SECONDS` (default 120), and **`HOPIT_BLOB_PREFIX` which MUST
+equal the agent's `HOPIT_BLOB_PREFIX`** (the two ends compute the same namespace).
+The agent gets `HOPIT_BLOB_BROKER=1` plus a broker URL
+(`HOPIT_BLOB_BROKER_URL`, or derived from `HOPIT_D1_API_BASE_URL` as
+`<base>/blob-presign`) and **must have its account R2 keys removed** so it can only
+reach blobs through the broker. These are set as Vercel + Cloudflare secrets, never
+in repo/docs (matching `docs/personal-production.md:39`).
+
+Proven by tests (`cloudflare/d1/api-worker.test.js` broker block —
+key-scope/presign/entitlement; `packages/agent/test/blob-broker-store.test.js`
+end-to-end against a real SQLite Worker broker + a fake R2): flag-off makes the
+endpoint 404 and `createObjectBlobStore` returns the direct S3 store unchanged;
+flag-on issues an own-codebase URL and round-trips a blob with no account creds on
+the client; a codebase-A client cannot presign/read/write a codebase-B blob
+(entitlement + prefix both refuse); forged/unscoped/unknown principals are refused
+before signing; the `hst_` firewall and proxy path are unchanged with the flag on.
+
 ### (e) Signup-to-first-sync onboarding & the no-card experience
 
 Today's flow for the owner is: Clerk sign-in → (owner-only) bootstrap claims migrated

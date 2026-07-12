@@ -1,5 +1,6 @@
 import { CodebasePushHub, normalizeRemoteUpdateEnvelope } from './push-hub.js'
 import { assertScopedSessionStatementAllowed, assertServerActorStatementAllowed } from './scoped-sql.js'
+import { assertBrokerKeyForCodebase, brokerR2ConfigFromEnv, isBrokerPresignPath, normalizeBrokerMethod, presignBlobUrl } from './blob-broker.js'
 
 function isMultiTenantEnabled(env) {
   return /^(1|true|yes|on)$/i.test(String(env?.HOPIT_MULTITENANT ?? ''))
@@ -152,6 +153,127 @@ async function readServerActorEntitledCodebases(db, userId, codebaseIds) {
     if (isOwner || isActiveMember) entitled.add(codebaseId)
   }
   return entitled
+}
+
+// --- Blob broker (Phase 3 Stage 1b — HOPIT_MULTITENANT / Front 2) ------------
+//
+// Authenticate the caller by the SAME principals the query path trusts (an hst_
+// scoped session, the hsa_ server-actor, or the admin proxy token), resolve the
+// single codebase that caller is entitled to, refuse any key outside that
+// codebase's prefix, then mint a short-lived per-object presigned URL. A caller
+// entitled to codebase A can never obtain a working URL for codebase B: a request
+// naming B is rejected at entitlement, and a B-key under an A entitlement fails
+// the prefix check before anything is signed.
+async function handleBlobPresign(request, env) {
+  if (request.method !== 'POST') {
+    const response = cloudflareError('Method not allowed.', 1004, 405)
+    logRequest({ request, env, status: response.status, rejectedReason: 'method-not-allowed' })
+    return response
+  }
+  if (failedAuthRateLimited(request)) {
+    const response = rateLimitError()
+    logRequest({ request, env, status: response.status, rejectedReason: 'failed-auth-rate-limit' })
+    return response
+  }
+
+  let body
+  try {
+    body = await request.json()
+  } catch {
+    const response = cloudflareError('Request body must be JSON.', 1001, 400)
+    logRequest({ request, env, status: response.status, rejectedReason: 'invalid-json' })
+    return response
+  }
+
+  const r2 = brokerR2ConfigFromEnv(env)
+  if (!r2) {
+    const response = cloudflareError('Blob broker R2 binding is not configured.', 1007, 503)
+    logRequest({ request, env, status: response.status, rejectedReason: 'blob-broker-r2-missing' })
+    return response
+  }
+
+  let principal
+  try {
+    principal = await resolveBrokerPrincipal(request, env, body)
+    clearFailedAuth(request)
+  } catch (error) {
+    const rateLimited = recordFailedAuth(request)
+    const response = rateLimited ? rateLimitError() : authenticationError(error instanceof Error ? error.message : undefined)
+    logRequest({
+      request,
+      env,
+      codebaseId: principal?.codebaseId ?? null,
+      status: response.status,
+      rejectedReason: rateLimited ? 'failed-auth-rate-limit' : (error instanceof Error ? error.message : 'Authentication error'),
+    })
+    return response
+  }
+
+  try {
+    const method = normalizeBrokerMethod(body?.method)
+    const key = typeof body?.key === 'string' ? body.key : ''
+    assertBrokerKeyForCodebase(key, principal.codebaseId, r2.prefix)
+    const presigned = await presignBlobUrl({
+      method,
+      key,
+      endpoint: r2.endpoint,
+      bucket: r2.bucket,
+      region: r2.region,
+      accessKeyId: r2.accessKeyId,
+      secretAccessKey: r2.secretAccessKey,
+      expiresSeconds: r2.expiresSeconds,
+    })
+    const response = json({ success: true, errors: [], messages: [], result: presigned })
+    logRequest({ request, env, authMode: principal.kind, codebaseId: principal.codebaseId, status: response.status })
+    return response
+  } catch (error) {
+    const response = cloudflareError(error instanceof Error ? error.message : 'Blob broker request failed.', 1002, 400)
+    logRequest({
+      request,
+      env,
+      authMode: principal.kind,
+      codebaseId: principal.codebaseId,
+      status: response.status,
+      rejectedReason: error instanceof Error ? error.message : 'blob-broker-failed',
+    })
+    return response
+  }
+}
+
+async function resolveBrokerPrincipal(request, env, body) {
+  const token = bearerTokenFromRequest(request)
+  const requestedCodebaseId = typeof body?.codebaseId === 'string' ? body.codebaseId.trim() : ''
+
+  const expectedToken = env.HOPIT_D1_PROXY_TOKEN
+  if (expectedToken && await constantTimeTokenEqual(token, expectedToken)) {
+    // Admin/proxy path (migration/GC tooling): still key-scoped to whatever
+    // codebase it names, but not entitlement-checked against membership.
+    if (!requestedCodebaseId) throw new Error('Broker proxy requests must name a codebase id.')
+    return { kind: 'proxy', codebaseId: requestedCodebaseId }
+  }
+
+  if (token.startsWith('hsa_')) {
+    const actor = await verifyServerActorToken(token, env.HOPIT_D1_SERVER_ACTOR_SECRET)
+    if (!actor) throw new Error('Authentication error')
+    if (!requestedCodebaseId) throw new Error('Broker server-actor requests must name a codebase id.')
+    await assertServerActorEntitlement(env.HOPIT_D1_DB, actor.userId, [requestedCodebaseId])
+    return { kind: 'server-actor', codebaseId: requestedCodebaseId }
+  }
+
+  if (token.startsWith('hst_')) {
+    const session = await readAgentSessionForToken(env.HOPIT_D1_DB, token)
+    if (!session) throw new Error('Agent session token was not found.')
+    if (session.status !== 'active') throw new Error('Agent session is not active.')
+    if (session.expires_at && Date.parse(session.expires_at) <= Date.now()) {
+      throw new Error('Agent session token has expired.')
+    }
+    if (requestedCodebaseId && requestedCodebaseId !== session.codebase_id) {
+      throw new Error('Agent session is not scoped to the requested codebase.')
+    }
+    return { kind: 'session', codebaseId: session.codebase_id }
+  }
+
+  throw new Error('Authentication error')
 }
 
 async function verifyServerActorToken(token, secret) {
@@ -478,6 +600,13 @@ const worker = {
     const url = new URL(request.url)
     if (isWebSocketUpgrade(request) && webSocketPathAllowed(url.pathname)) {
       return await handleWebSocketUpgrade(request, env)
+    }
+
+    // The blob broker (Front 2) only exists when multi-tenancy is switched on.
+    // With the flag off this path falls through to the 404 below, so the
+    // single-tenant direct-S3-credential blob path is byte-for-byte unchanged.
+    if (isMultiTenantEnabled(env) && isBrokerPresignPath(url.pathname)) {
+      return await handleBlobPresign(request, env)
     }
 
     if (!url.pathname.endsWith('/query')) {
