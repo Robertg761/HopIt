@@ -135,3 +135,105 @@ Product acceptance:
 - Review and compare pages can request revision diffs from D1/R2-backed history.
 - Export and publish can reconstruct the selected merged revision from retained object-backed versions.
 - Storage GC is retention-aware and cannot delete live history.
+
+## Implementation Notes Addendum (2026-07-12)
+
+This addendum records the concrete choices made where the design above left an
+option open, following the rule "pick the simplest option consistent with the
+doc's stated constraints." It reflects the implementation as landed, not new
+design. Where the doc offered a spectrum, the narrowest choice that satisfies the
+free-tier cost math and failure-mode contract was taken.
+
+### Reconstruction model
+
+- **Chose Option 2 (per-file version rows)**, as recommended. Persisted as a D1
+  `file_versions` table (`packages/backend-d1/src/schema.js`) and, in the fixture
+  path, as a `fileVersions` array on the graph JSON. Both carry the same shape:
+  `version_id`, `graph_revision`, `path`, `operation`, `old_file_json`,
+  `new_file_json`, `blob_provider/blob_key/blob_hash`, `scope`, `privacy_zone`,
+  `zone_id`, `actor`, `created_at`.
+- **Snapshot-by-replay**, not stored snapshots. `compareVersionRows`
+  (`packages/backend-d1/src/history.js`) folds versions ordered by
+  `(graph_revision, version_id, path)` up to each requested revision. This keeps
+  writes proportional to changed files (the doc's D1-write-pressure constraint).
+- **Ordering is by revision id, never timestamp** (per the concurrent-writes
+  failure mode). `version_id` breaks ties within a revision.
+- Indexes match the doc's "codebase, selected state, path, revision" guidance:
+  `(codebase_id, graph_revision, path)`, `(codebase_id, path, graph_revision)`,
+  and `(codebase_id, blob_key)` for GC reachability lookups.
+
+### API surface
+
+- The reconstruction lives in the agent/backend layer the doc names, exposed as
+  `compareRevisions(left, right, requester)` on both `D1CloudGraphService`
+  (production, R2 blobs) and `FixtureJsonCloudGraphService` (tests/demo,
+  filesystem blobs), plus `listFileVersions` and
+  `retainedBlobKeysForFileVersions`.
+- CLI surface is `hop compare --from <rev> --to <rev> [--path <file>]`. Directory
+  compare (no `--path`) returns metadata only and fetches zero blob bodies; a
+  `--path` opens exactly one file's two blob bodies. This is the doc's
+  cost-guardrail ("fetch bodies lazily when a file diff row is opened").
+
+### Caching
+
+- **Server/request-scoped cache only in this slice.** `createCompareBlobReader`
+  holds a per-invocation `Map` keyed by `blobKey || blobHash || hash`, and
+  surfaces `bodyFetches` / `blobCacheHits` on the compare result so a caller can
+  prove no duplicate fetch occurred. This is the simplest thing that satisfies
+  "switching files does not re-fetch the same content" within one compare
+  request.
+- **Client-side per-view cache is deferred to the dashboard/Trail consumer.** The
+  design doc lists both a server-per-request and a client-per-view cache. The
+  dashboard compare page (`src/components/features/review/compare-view.tsx`) is
+  still a status-snapshot shell ("full line-by-line diffing is on the roadmap")
+  and is intentionally out of this slice per the Phase 2 roadmap note that the
+  Trail view consumes this reconstruction later. The client cache belongs with
+  that consumer and is recorded here as an explicit deferral, not an omission of
+  the backend contract.
+
+### Retention and GC
+
+- `hop storage gc` computes the retained set as the union of (a) blobs reachable
+  from the current graph and (b) blobs referenced by any retained file-version
+  row (`retainedBlobKeysForFileVersions`). Anything else is an orphan candidate.
+- **Dry-run is the default**; deletion requires `--execute`. An optional
+  retention window (`storageRetentionMsFromOptions`) further protects
+  recently-written orphans. Output reports listed/reachable/orphaned/deleted
+  counts and a bounded orphan sample, satisfying the doc's dry-run-with-counts
+  requirement.
+- **Fails honest, never fabricates.** A diff whose referenced blob has been GC'd
+  (or is otherwise absent) yields per-file `state: "missing_blob"` and increments
+  `summary.missingBlob`; the rest of the compare still returns. A fetched body
+  whose hash does not match its recorded hash yields `integrity_failure` and
+  fails closed for that file only. Neither path invents content.
+
+### Failure-mode choices
+
+- **Text diff** uses deterministic common-prefix / common-suffix line trimming
+  rather than a full Myers diff. It is cheap and stable for the acceptance proof;
+  a richer diff can replace `textDiffSummary` without touching the contract.
+- **Rename detection is absent** (delete + add), matching the doc's initial-cut
+  note; hash-based rename detection is a later addition over the same rows.
+- **Encrypted files** return `requiresLocalKey` metadata-only when
+  `clientEncryption` is present; **binary files** (base64 encoding) return
+  `binary_changed` / `binary_unchanged` metadata with no body fetch.
+- **Out-of-window revisions** return `revision_expired` rather than silently
+  comparing against current state.
+
+### Demo proof
+
+`hop demo` builds the three-revision chain (initial → README edit → new source
+file plus private-note edit) and prints a deterministic
+`{ action: "demo.compare", revisions: [1,2,3], summary, readmeDiff }` block. The
+README diff is reconstructed from stored blobs, and the private-note edit
+confirms owner-visible `.private/` reconstruction.
+
+### Tests
+
+Fixture-backed coverage lives in `packages/agent/test/d1-backend.test.js`
+("D1 backend records file versions and compares retained revisions" — owner vs
+collaborator visibility, `missing_blob`, integrity rejection) and
+`packages/agent/test/agent-cli.test.js` ("demo creates object-backed revision
+chain and compare reads README blobs lazily", "compare reports binary metadata
+and missing object blobs without crashing", "storage gc dry-runs and deletes only
+orphaned managed filesystem blobs with execute").
