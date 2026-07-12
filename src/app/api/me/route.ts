@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server'
 import { auth, currentUser } from '@clerk/nextjs/server'
 
-import { shouldUseClerkAuth } from '@/lib/auth-config'
+import { isMultiTenant, shouldUseClerkAuth } from '@/lib/auth-config'
 import { hasValidBasicAuthFallbackCredentials } from '@/lib/basic-auth-fallback'
 import {
   bootstrapCloudAccount,
   configuredCloudBackend,
+  provisionCloudTenant,
   upsertCloudUser,
   type CloudActor,
 } from '@/lib/cloud-backend'
@@ -80,6 +81,12 @@ export async function GET(request: Request) {
     currentAuthEmailVerified: user?.primaryEmailAddress?.verification?.status === 'verified',
   }
   const accountSync = await syncCloudAccount(actor)
+  // Tenant auto-provision (Phase 3 §2e). With tenancy on, a stranger's first
+  // authenticated request ensures their own free tenant — the universal,
+  // no-card, no-owner-gate replacement for the owner-only bootstrap. Idempotent,
+  // best-effort: a provisioning failure never blocks /api/me. Flag off => skipped
+  // entirely (no proxy call), so single-tenant behavior is byte-for-byte.
+  const tenant = accountSync.ok ? await ensureTenant(actor) : null
   const accountBootstrap = accountSync.ok
     ? await bootstrapAccount(actor)
     : { ok: false, error: accountSync.error, codebases: [], claimed: [], failed: [] }
@@ -102,6 +109,7 @@ export async function GET(request: Request) {
         configured: cloudBackend !== 'unavailable',
         accountSynced: accountSync.ok,
         bootstrap: accountBootstrap,
+        tenant,
         error: accountSync.error,
       },
     },
@@ -130,6 +138,21 @@ async function syncCloudAccount(input: {
     return { ok: true, account: accountSummary(account), error: undefined }
   } catch (error) {
     return { ok: false, account: null, error: errorMessage(error) }
+  }
+}
+
+async function ensureTenant(actor: CloudActor) {
+  if (!isMultiTenant() || !actor.userId || configuredCloudBackend() === 'unavailable') return null
+  try {
+    const provisioned = await provisionCloudTenant(actor)
+    if (!provisioned) return null
+    return {
+      tenantId: stringValue(provisioned.tenantId),
+      plan: stringValue(provisioned.plan) ?? 'free',
+      provisioned: true,
+    }
+  } catch (error) {
+    return { tenantId: null, plan: null, provisioned: false, error: errorMessage(error) }
   }
 }
 

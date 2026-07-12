@@ -727,6 +727,72 @@ hopit.dev → Clerk sign-up (open) → tenant auto-provisioned on first authed r
    (`HOPIT_ALLOW_BASIC_AUTH_FALLBACK` off; ensure `cloudActorFromRequest` never returns
    `{}` when tenancy is on) — §1.4.
 
+#### Addendum — signup → first-sync funnel, **implemented behind flag** (Stage 2 + 6, 2026-07-13)
+
+The open-signup onboarding funnel is now implemented and gated by `HOPIT_MULTITENANT`
+(default **off**, so single-tenant production is byte-for-byte unchanged until the owner
+flips it). This is the funnel diagram above, made real; the billing wall (step 5–6) is
+still deferred to Stage 5 per Decision 5 (free-sync-first — **no wall before first
+sync**). What each numbered item became:
+
+- **1 — Tenant auto-provision (chosen mechanism: idempotent upsert on the first authed
+  request via the admin proxy).** A new backend method
+  `CloudflareD1HopBackend.ensureTenant({ tenantId })`
+  (`packages/backend-d1/src/graph.js`) upserts exactly one `tenant_usage` row with
+  `plan='free'` using a pure builder `buildTenantProvisionStatement`
+  (`packages/backend-d1/src/quota.js`) whose SQL is `insert … on conflict(tenant_id) do
+  nothing` — idempotent by the primary key and, critically, **carrying no update clause**,
+  so a later `plan='paid'` set by billing is never reset (billing owns the plan column,
+  matching the Worker meter upsert's invariant). It runs on the **admin proxy token**, not
+  the `hsa_` server-actor tier, because the server-actor scoped-SQL firewall
+  (`cloudflare/d1/scoped-sql.js`) forbids `tenant_usage` **writes** (it permits only the
+  actor's own-tenant `select`); provisioning is an account-ensure keyed by the caller's
+  own verified Clerk id, not a cross-tenant surface. It is hooked at two points, both
+  flag-gated, idempotent, and best-effort (never block the request): the canonical
+  post-signup hook `GET /api/me` (`src/lib/cloud-backend.ts` `provisionCloudTenant` →
+  `ensureTenant`, surfaced as `cloud.tenant`) and, for robustness, the dashboard's first
+  `GET /api/codebases` load. The **owner-email `bootstrapAccount` path is untouched** and
+  retained only for the legacy `local-owner` adoption; a stranger no longer needs
+  `HOPIT_OWNER_EMAIL`.
+- **2 — First codebase + device (verified, no code change needed).** `createCodebase`'s
+  Stage-3 Plane-A gate (`assertCodebaseCreationWithinQuota`, free = 1 codebase) already
+  gives a fresh tenant an honest typed `quota_exceeded_codebases` wall at the 2nd
+  codebase ("…Upgrade to add more codebases."), and the device-approval page
+  (`src/app/device/device-approval.tsx`) already creates the requested codebase via `POST
+  /api/codebases` **before** approving — so `hop add` works end-to-end for a non-owner
+  tenant, create-first succeeds, second blocks.
+- **3 — Free entitlement / no-card path.** Provisioning sets `plan='free'`; the free caps
+  (2 GB / 2,000 writes-day / 1 codebase, reads & export always open) come from the
+  Stage-3 env knobs. Sign up → create 1 codebase → `hop add` → sync, all with no card.
+- **4/5/6 — Billing seam only.** The subscription/seat gates stay always-allow stubs
+  (`packages/backend-d1/src/quota.js` `assertSubscriptionActive` / `assertSeatAvailable`),
+  the clearly-marked seam Stage 5 fills in. No billing UI, no wall before first sync.
+- **7 — Basic-auth / empty-actor closed under the flag.** `shouldAllowBasicAuthFallback()`
+  (`src/lib/auth-config.ts`) is forced **false** whenever `HOPIT_MULTITENANT` is on
+  (regardless of `HOPIT_ALLOW_BASIC_AUTH_FALLBACK`), and `cloudActorFromRequest`
+  (`src/lib/request-cloud-actor.ts`) carries an explicit belt-and-suspenders guard so it
+  **cannot return the empty wildcard actor `{}`** with tenancy on — proven unreachable by
+  test even when the credential check is forced to pass. A new `isMultiTenant()` helper
+  mirrors the backend's truthy parsing so both ends agree on when tenancy is on. (Flag
+  off: the `{}` path is byte-for-byte the legacy behavior.)
+
+**Owner must configure before flipping `HOPIT_MULTITENANT` on (Clerk side):** open signups
+in the **Clerk dashboard** — *Configure → Restrictions* (set sign-up mode to **Public**;
+remove any allowlist that currently limits registration to the owner's email). App-side
+signup is already open (`src/app/sign-up/[[...sign-up]]/page.tsx` renders Clerk's
+`<SignUp>`); whether strangers can actually register is purely that dashboard toggle. The
+public **privacy policy + terms pages** (already flagged in §2b for MoR/Google-OAuth
+verification) should be live before broad signup. No new secret is required for this
+stage beyond the Stage 1–3 ones (`HOPIT_D1_SERVER_ACTOR_SECRET`, the R2 broker secrets);
+the `tenant_usage` table is already owner-applied per Stage 2-3.
+
+Proven by tests (`test:web`, +14 over the 111 baseline → 125): tenant auto-provision on
+first authed request + idempotency (`src/app/api/me/route.test.ts`,
+`src/lib/tenant-provision.test.ts`); the empty-actor bypass closed under the flag and
+unchanged with it off (`src/lib/request-cloud-actor.test.ts`, `src/lib/auth-config.test.ts`);
+the create-first-succeeds/second-blocked codebase gate is covered end-to-end against a
+real SQLite Worker by the existing `packages/agent/test/quota-enforcement.test.js`.
+
 ### (f) Abuse / rate limiting on the worker
 
 The worker today has only the per-isolate failed-auth bucket (`api-worker.js:299-324`),

@@ -1,6 +1,7 @@
 import { auth, currentUser } from '@clerk/nextjs/server'
 
 import { agentSessionTokenFromHeaders } from '@/lib/agent-session-token'
+import { isMultiTenant } from '@/lib/auth-config'
 import { hasValidBasicAuthFallbackCredentials } from '@/lib/basic-auth-fallback'
 import { configuredCloudBackend } from '@/lib/cloud-backend'
 import { createD1Backend } from '@hopit/backend-d1'
@@ -16,8 +17,17 @@ export async function cloudActorFromRequest(
   request: Request,
   { allowBasicFallback = false, codebaseId = null, agentCapability = 'read' }: CloudActorOptions = {},
 ): Promise<CloudActor | null> {
-  if (allowBasicFallback && hasValidBasicAuthFallbackCredentials(request.headers)) return {}
-  if (hasValidBasicAuthFallbackCredentials(request.headers)) return null
+  // The basic-auth fallback resolves to an empty wildcard actor ({}) that
+  // downstream visibility code treats as an unscoped bypass — acceptable for a
+  // single locked-down operator, a tenant bypass under multi-tenancy (§1.4 /
+  // decision 10). When the flag is on this branch is unreachable both because
+  // shouldAllowBasicAuthFallback() forces the credential check false AND because
+  // this explicit guard refuses to mint {} regardless — so no config combination
+  // can produce an empty actor with tenancy on.
+  if (!isMultiTenant()) {
+    if (allowBasicFallback && hasValidBasicAuthFallbackCredentials(request.headers)) return {}
+    if (hasValidBasicAuthFallbackCredentials(request.headers)) return null
+  }
 
   const agentSessionToken = agentSessionTokenFromHeaders(request.headers)
   if (agentSessionToken) {

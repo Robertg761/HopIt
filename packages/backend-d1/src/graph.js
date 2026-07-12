@@ -3,7 +3,7 @@ import { privacyZoneForPath, privacyZoneIdForPath, scopeForPath } from '@hopit/c
 import { defineBackendMethods } from './method-support.js'
 import { d1CloudServiceType, d1AuthorizationToken, schemaCacheKey, usesCloudflareD1Api, usesScopedD1SessionAuth } from './config.js'
 import { d1SchemaStatements } from './schema.js'
-import { QuotaExceededError, assertSeatAvailable, assertSubscriptionActive, computeUsageStatus, normalizePlan, resolveCodebaseLimit, resolvePlanLimits, utcDay, warnRatioFromEnv } from './quota.js'
+import { QuotaExceededError, assertSeatAvailable, assertSubscriptionActive, buildTenantProvisionStatement, computeUsageStatus, normalizePlan, resolveCodebaseLimit, resolvePlanLimits, utcDay, warnRatioFromEnv } from './quota.js'
 import { attachTextDiff, buildFileVersionRowForEntry, buildFileVersionRows, compareVersionRows, createCompareBlobReader, retainedBlobKeysForVersions } from './history.js'
 import { summarizeAccessContext, normalizeEmail, normalizeCodebaseName, normalizeNewCodebaseId, backendErrorMessage, normalizeFutureTimestamp, normalizePositiveInteger, nullablePositiveInteger, nullableNonNegativeInteger, actorAuditId, requireTextValue, uniqueStrings, parseStringArray, normalizeRole, graphMemberCount, countPathScopes, assertSafeGraphPath, hashText, byteLength, parseJson, stringifyJson, stringOrNull, integerOrNull, integerValue, boundedLimit, requireAuthenticatedActor, requireVerifiedEmailActor, requireOwnerClaimActor, isBootstrapOwnerMember, claimedOwnerValue, graphFromRows, codebaseRowToRecord, codebaseRecordFromGraph, fileRowToEntry, normalizeGraph, normalizeFileEntry, normalizeVisibilityContract, normalizeOptionalVisibility, normalizeVisibilityValue, summarizeCodebaseHead, summarizeCodebaseRemoteUpdate, buildStatus, buildSyncHealth, buildRefreshHealth, mapD1AgentEvent, latestEventOf, applyJournalEntryToCloud, slugifyCodebaseId, hasCapability, visibilityContextForGraph, filterVisibleGraphForRequester, filterVisibleGraphForAccess, canRequesterSeePath, canRead, canWrite, permissionsForRole, accessContextForCodebaseHead, memberSelectSql, mapD1Member, mapD1Invitation, invitationRole, invitationStatusOrNull, isInvitationExpired, invitationStatusForRead, hashInvitationToken, createAgentSessionId, createAgentSessionToken, hashAgentSessionToken, normalizeAgentSessionId, assertReusableAgentSession, normalizeAgentSessionCapabilities, agentSessionStatusOrNull, agentSessionHasCapability, codebaseCapabilityForAgentCapability, agentCapabilityForCodebaseCapability, isExpiredTimestamp, summarizeAgentSession, normalizeKeyEntityId, assertDevicePublicKeyDescriptor, looksLikePem, assertSameDevicePublicKeys, assertSameCodebaseKeyring, wrappedKeyType, wrappedKeyRecipientType, capabilityForWrappedKey, isPrivateZoneId, assertWrappedKeyEnvelope, assertSameWrappedKey, effectiveWrappedKeyStatus, canActorReadWrappedKey, createWrappedKeyId, summarizeDeviceKey, summarizeUserKeyring, summarizeCodebaseKeyring, summarizeWrappedKey, deviceKeyStatusOrNull, keyRotationState, mapD1Issue, mapD1IssueComment, mapD1Discussion, mapD1DiscussionComment, mapD1Release, mapD1ReleaseAsset, mapD1ReviewThread, mapD1ReviewThreadComment, mapD1ReviewDecision, mapD1Notification, mapD1Project, mapD1ProjectItem, issuePriorityOrNull, issueStatus, discussionCategory, discussionStatus, releaseStatus, releaseAssetKind, reviewDecision, notificationKind, reviewDecisionTitle, reviewDecisionBody, reviewHref, workItemHref, projectStatus, normalizeProjectColumns, normalizeProjectColumnId, normalizeProjectPosition, projectItemType, normalizeReleaseTarget, collaborationScope, actionCommandForKind, summarizeActionJob, actionSummary, capOutput } from './helpers/index.js'
 
@@ -599,6 +599,33 @@ export function attachGraphMethods(Backend) {
       currentAuthEmailVerified: row.email_verified === 1,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
+    }
+  },
+
+  // Tenant auto-provision (Phase 3 §2e signup funnel). Called on a new tenant's
+  // first authenticated request (the /api/me hook and dashboard first load) so a
+  // stranger who just signed up with Clerk gets a free tenant with no card and no
+  // owner-email gate — the universal replacement for the owner-only bootstrap
+  // throw. Idempotent (insert ... on conflict do nothing on the tenant_id primary
+  // key), so repeated requests never duplicate the row or reset a plan billing set
+  // to 'paid'. Flag off => a no-op that never touches D1, preserving byte-for-byte
+  // single-tenant behavior. Runs on the admin proxy path, not the server-actor tier
+  // (whose firewall forbids tenant_usage writes); v1 tenant == owner user.
+  async ensureTenant({ tenantId } = {}) {
+    if (!this.config.multiTenant) return null
+    const id = stringOrNull(tenantId)
+    if (!id || id === 'local-owner') return null
+    await this.ensureSchema()
+    const statement = buildTenantProvisionStatement({ tenantId: id })
+    await this.query(statement.sql, statement.params)
+    const row = await this.first(
+      'select tenant_id, plan, created_at from tenant_usage where tenant_id = ? limit 1',
+      [id],
+    )
+    return {
+      tenantId: id,
+      plan: normalizePlan(row?.plan),
+      createdAt: row?.created_at ?? null,
     }
   },
 

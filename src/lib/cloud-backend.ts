@@ -250,6 +250,19 @@ export async function upsertCloudUser(input: CloudActor & {
   throw new Error('No HopIt cloud backend is configured for account sync.')
 }
 
+// Tenant auto-provision (Phase 3 §2e signup funnel). Ensures the authenticated
+// user has a free tenant row on their first authenticated request — no card, no
+// owner-email gate. Idempotent, so it is safe to call on every dashboard load.
+// Deliberately actor-less (d1Backend() with no server-actor id) so the write
+// rides the admin proxy token: the server-actor firewall forbids tenant_usage
+// mutation, and this is an account-ensure step keyed by the caller's own verified
+// user id, not a cross-tenant surface. Returns null (a no-op) with the flag off,
+// keeping single-tenant behavior byte-for-byte.
+export async function provisionCloudTenant(actor: CloudActor) {
+  if (!actor.userId || configuredCloudBackend() !== 'd1') return null
+  return d1Backend().ensureTenant({ tenantId: actor.userId })
+}
+
 export async function createCloudDeviceAuthorization(input: Record<string, unknown>) {
   if (configuredCloudBackend() === 'd1') return d1Backend().createDeviceAuthorization(input)
   throw new Error('No HopIt cloud backend is configured for device authorization.')

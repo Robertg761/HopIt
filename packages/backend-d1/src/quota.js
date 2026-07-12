@@ -98,6 +98,25 @@ export function assertSubscriptionActive() {
   return { allowed: true }
 }
 
+// Tenant auto-provision (Phase 3 §2e / Stage 6 signup funnel). On a new tenant's
+// first authenticated request the backend ensures exactly one tenant_usage row
+// exists with the free plan — no card, no owner-email gate. Idempotent by the
+// tenant_id primary key: `on conflict do nothing` so a second request never
+// duplicates the row NOR resets a plan billing later set to 'paid'. Mirrors the
+// Worker's buildMeterUpsertStatement column shape (plan defaults 'free' on
+// insert, never overwritten) so provisioning and metering agree on the row. This
+// write runs on the admin proxy path (not the server-actor tier, whose firewall
+// forbids tenant_usage mutation), matching the meter/provisioning note in
+// scoped-sql.js.
+export function buildTenantProvisionStatement({ tenantId, plan = 'free', now = new Date().toISOString() }) {
+  return {
+    sql: `insert into tenant_usage (tenant_id, plan, storage_bytes, write_day, rows_written_today, created_at, updated_at)
+      values (?, ?, 0, null, 0, ?, ?)
+      on conflict(tenant_id) do nothing`,
+    params: [tenantId, normalizePlan(plan), now, now],
+  }
+}
+
 export class QuotaExceededError extends Error {
   constructor(message, detail = {}) {
     super(message)
