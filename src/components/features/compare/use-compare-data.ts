@@ -8,7 +8,7 @@ import {
   fetchFileDiff,
 } from '@/lib/client/compare/api'
 import { apiErrorFromUnknown } from '@/lib/client/api'
-import { defaultRevisionPair, revisionOptions } from '@/lib/client/compare/mappers'
+import { initialRevisionPair, revisionOptions } from '@/lib/client/compare/mappers'
 import type {
   CompareEntry,
   CompareError,
@@ -73,7 +73,17 @@ function fileKey(from: number, to: number, path: string) {
   return `${from}:${to}:${path}`
 }
 
-export function useCompareData(codebaseId: string | null): CompareData {
+export type InitialComparePair = {
+  from: number | null
+  to: number | null
+}
+
+export function useCompareData(
+  codebaseId: string | null,
+  initialPair?: InitialComparePair,
+): CompareData {
+  const initialFrom = initialPair?.from ?? null
+  const initialTo = initialPair?.to ?? null
   const [revisions, setRevisions] = React.useState<LoadState<RevisionsData> | null>(null)
   const [from, setFromState] = React.useState<number | null>(null)
   const [to, setToState] = React.useState<number | null>(null)
@@ -112,7 +122,7 @@ export function useCompareData(codebaseId: string | null): CompareData {
           status: 'ready',
           data: { revisions: response.revisions ?? [], retention: response.retention ?? null, options },
         })
-        const pair = defaultRevisionPair(options)
+        const pair = initialRevisionPair(options, { from: initialFrom, to: initialTo })
         if (pair) {
           setFromState((current) => (current === null ? pair.from : current))
           setToState((current) => (current === null ? pair.to : current))
@@ -125,7 +135,7 @@ export function useCompareData(codebaseId: string | null): CompareData {
     return () => {
       cancelled = true
     }
-  }, [codebaseId, reloadToken])
+  }, [codebaseId, reloadToken, initialFrom, initialTo])
 
   // Load the directory compare for the current pair, once per pair.
   React.useEffect(() => {

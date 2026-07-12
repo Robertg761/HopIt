@@ -222,3 +222,38 @@ export function defaultRevisionPair(options: number[]): { from: number; to: numb
   const from = options.length > 1 ? options[options.length - 2] : options[0]
   return { from, to }
 }
+
+/**
+ * Deep-link support for the compare page. Reads `?from=&to=` from a query string
+ * so a trail episode (or any external link) can preload a specific step pair.
+ * Only integer values survive; anything else becomes null and the surface falls
+ * back to its default pair. Never throws on malformed input.
+ */
+export function parseComparePairFromSearch(
+  search: string | null | undefined,
+): { from: number | null; to: number | null } {
+  const params = new URLSearchParams(search ?? '')
+  return { from: integerParam(params.get('from')), to: integerParam(params.get('to')) }
+}
+
+function integerParam(value: string | null): number | null {
+  if (value === null || value.trim() === '') return null
+  const parsed = Number(value)
+  return Number.isSafeInteger(parsed) ? parsed : null
+}
+
+/**
+ * The pair the compare pickers open on: a deep-linked `from`/`to` when both are
+ * valid options, otherwise the default pair. Keeping this pure means the
+ * data hook never has to reason about option membership inline.
+ */
+export function initialRevisionPair(
+  options: number[],
+  requested: { from: number | null; to: number | null },
+): { from: number; to: number } | null {
+  const fallback = defaultRevisionPair(options)
+  if (options.length === 0) return fallback
+  const has = (value: number | null): value is number => value !== null && options.includes(value)
+  if (has(requested.from) && has(requested.to)) return { from: requested.from, to: requested.to }
+  return fallback
+}

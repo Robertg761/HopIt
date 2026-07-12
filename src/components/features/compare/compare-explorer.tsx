@@ -22,6 +22,7 @@ import { humanizeApiError } from '@/lib/client/errors'
 import {
   changedEntryCount,
   fileStateView,
+  parseComparePairFromSearch,
   sortCompareEntries,
   summaryChips,
   unifiedDiffLines,
@@ -32,7 +33,13 @@ import { useCompareData, type LoadState, type FileDiffData } from './use-compare
 const BACKEND_UNAVAILABLE_CODES = new Set(['d1_required', 'cloud_backend_unavailable', 'http_503'])
 
 export function CompareExplorer({ codebaseId }: { codebaseId: string | null }) {
-  const compare = useCompareData(codebaseId)
+  // Deep-link support: a trail episode links here as `?from=&to=`. Read the pair
+  // once on mount from the URL (no useSearchParams, so no Suspense boundary is
+  // required for static export). Falls back to the default pair when absent.
+  const [initialPair] = React.useState(() =>
+    parseComparePairFromSearch(typeof window === 'undefined' ? '' : window.location.search),
+  )
+  const compare = useCompareData(codebaseId, initialPair)
   const { revisions, from, to, setFrom, setTo, swap, directory } = compare
   const [expanded, setExpanded] = React.useState<string | null>(null)
 

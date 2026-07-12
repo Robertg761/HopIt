@@ -13,6 +13,7 @@ import { useWorkspace, type AgentCommand } from '@/components/workspace/workspac
 import { cn } from '@/lib/utils'
 import { repoPath } from '@/components/shell/repo-nav'
 import { CompareExplorer } from '@/components/features/compare/compare-explorer'
+import { TrailView } from '@/components/features/trail/trail-view'
 import { ChangedFilesCard } from './changed-files'
 import { DecisionsCard } from './decisions-card'
 import { FileInspector } from './file-inspector'
@@ -191,7 +192,10 @@ export function ReviewPage({ mode, codebaseId }: { mode: ReviewPageMode; codebas
           description="Open a repository to review its active change set."
         />
       ) : mode === 'history' ? (
-        <HistoryTimelineCard events={filterReviewHistory(status.events)} />
+        <div className="space-y-6">
+          <TrailView codebaseId={status.codebaseId} />
+          <HistoryTimelineCard events={filterReviewHistory(status.events)} />
+        </div>
       ) : mode === 'compare' ? (
         <CompareExplorer codebaseId={status.codebaseId} />
       ) : (

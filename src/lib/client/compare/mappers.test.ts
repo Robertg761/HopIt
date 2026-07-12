@@ -4,6 +4,8 @@ import {
   changedEntryCount,
   defaultRevisionPair,
   fileStateView,
+  initialRevisionPair,
+  parseComparePairFromSearch,
   revisionOptions,
   sortCompareEntries,
   summaryChips,
@@ -162,5 +164,33 @@ describe('revisionOptions / defaultRevisionPair', () => {
 
   it('returns null for an empty option list', () => {
     expect(defaultRevisionPair([])).toBeNull()
+  })
+})
+
+describe('parseComparePairFromSearch / initialRevisionPair', () => {
+  it('parses integer from/to out of a query string', () => {
+    expect(parseComparePairFromSearch('?from=2&to=7')).toEqual({ from: 2, to: 7 })
+  })
+
+  it('drops non-integer and absent params', () => {
+    expect(parseComparePairFromSearch('?from=abc')).toEqual({ from: null, to: null })
+    expect(parseComparePairFromSearch('')).toEqual({ from: null, to: null })
+    expect(parseComparePairFromSearch(null)).toEqual({ from: null, to: null })
+  })
+
+  it('honors a requested pair when both are valid options', () => {
+    expect(initialRevisionPair([1, 2, 3, 5], { from: 2, to: 5 })).toEqual({ from: 2, to: 5 })
+  })
+
+  it('falls back to the default pair when a requested revision is not an option', () => {
+    expect(initialRevisionPair([1, 2, 3, 5], { from: 2, to: 99 })).toEqual({ from: 3, to: 5 })
+  })
+
+  it('falls back to the default pair when nothing is requested', () => {
+    expect(initialRevisionPair([1, 2, 3, 5], { from: null, to: null })).toEqual({ from: 3, to: 5 })
+  })
+
+  it('returns null when there are no options at all', () => {
+    expect(initialRevisionPair([], { from: 1, to: 2 })).toBeNull()
   })
 })
