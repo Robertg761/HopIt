@@ -2206,6 +2206,32 @@ test('backup writes restorable cloud status events journal and manifest files', 
   assert.ok(manifest.files.find((file) => file.path === 'cloud.json')?.sha256)
 })
 
+test('backup captures both the current and rotated events generations', async () => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+
+  // Simulate a prior rotation: a retained generation sits beside the live file.
+  const rotatedEvents = path.join(state.root, 'events.1.ndjson')
+  const rotatedLine = `${JSON.stringify({ event: 'rotated-tick', detail: { seq: 1 }, at: 't-rotated' })}\n`
+  await fs.writeFile(rotatedEvents, rotatedLine, 'utf8')
+
+  const output = path.join(state.root, 'backup-rotated')
+  const backup = JSON.parse((await runCli('backup', [
+    ...stateArgs(state),
+    '--output',
+    output,
+    '--force',
+  ])).stdout)
+  assert.equal(backup.ok, true)
+  assert.equal(await pathExists(path.join(output, 'events.ndjson')), true)
+  assert.equal(await pathExists(path.join(output, 'events.1.ndjson')), true)
+  assert.equal(await fs.readFile(path.join(output, 'events.1.ndjson'), 'utf8'), rotatedLine)
+
+  const manifest = await readJson(path.join(output, 'manifest.json'))
+  assert.ok(manifest.files.find((file) => file.path === 'events.1.ndjson')?.sha256)
+})
+
 test('install prepares production-style state, workspace, index, and env template', async () => {
   const state = await makeState()
   const stateRoot = path.join(state.root, 'agent-state')

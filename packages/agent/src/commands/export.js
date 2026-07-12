@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { createCloudGraphService, summarizeGraphContract, validateCloudGraphContract } from '../cloud/d1-graph-service.js'
 import { fileScope } from '../constants.js'
-import { emit } from '../io.js'
+import { emit, rotatedNdjsonPath } from '../io.js'
 import { countCloudScopes, countPathScopes, hashContent, normalizeCloudFileEntry } from '../journal.js'
 import { serviceStatus } from '../service.js'
 import { readAgentState } from '../status-state.js'
@@ -211,6 +211,9 @@ export async function backupAgentState(options) {
   await writeBackupFile(output, files, 'cloud.json', cloud)
   await writeBackupFile(output, files, 'status.json', state.status)
   await copyBackupFileIfExists(output, files, 'events.ndjson', options.events)
+  // Include the rotated events generation so a backup captures the full retained
+  // history, not just the (possibly freshly rotated, near-empty) current file.
+  await copyBackupFileIfExists(output, files, 'events.1.ndjson', rotatedNdjsonPath(options.events))
   await copyBackupFileIfExists(output, files, 'journal.ndjson', options.journal)
   await copyBackupFileIfExists(output, files, 'workspaces.json', workspaceIndexPath(options))
 
