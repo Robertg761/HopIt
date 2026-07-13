@@ -1568,6 +1568,40 @@ and repeat the checklist against the intended go-live environment. Monitor the
 20,000-row paid allowance during the first 30–60 days of real usage as already
 decided.
 
+### 2026-07-13 Phase 3 — production launch preparation
+
+- Added an unauthenticated HopIt homepage plus public privacy and terms pages at
+  `/`, `/privacy`, and `/terms`. The signed-in dashboard moved to `/overview`,
+  and unauthenticated access to `/overview` still redirects through Clerk.
+- Backed up production D1 before migration to
+  `/Users/robert/HopIt-Backups/d1/hopit-production-pre-phase3-20260713.sql.gz`
+  (compressed SHA-256
+  `a19b39a6839df2826c825d249679a72ac1d479a05c8cd73b364e3baccd67fedc`),
+  then applied the idempotent Phase 3 schema. Existing codebase and file counts
+  were unchanged.
+- Backfilled the production tenant meter from the current logical file graph so
+  quota enforcement starts from real stored bytes rather than zero.
+- Fixed current-storage accounting before the production flag flip: replacing a
+  file now meters only its trusted net size change, and deleting a file releases
+  its current size. Deletes remain available at the daily-write cap so an
+  over-limit tenant can free space without losing read or export access.
+- Enabled multi-tenant isolation, quota enforcement, the R2 broker, and the
+  tenant blob prefix on the production Worker. The production dashboard received
+  the matching server-actor and broker configuration; billing remains separately
+  gated until the durable live Stripe key and webhook secret are installed.
+- The production configuration checker now permits the intentional 9.5 GB R2
+  personal-production ceiling while preserving 500 MB of the current 10 GB free
+  storage allowance as headroom.
+- Full verification passed after the changes: agent `315`, web `146`, Worker
+  `74`, configuration `2`, desktop `124`, TypeScript, lint, and the production
+  Next.js build. The packaged production agent doctor also passed with a clean
+  journal, current workspace, requester identity, and running service.
+
+Still deliberately gated at this checkpoint: a working `support@hopit.dev`
+forward, durable live Stripe credentials, the billing flag, production web
+deployment, Google OAuth production publishing, Clerk public signup, and the
+literal no-charge production rehearsal.
+
 ## Known Gaps
 
 - Phase 3 billing plumbing is implemented behind `HOPIT_BILLING`: Stripe Managed

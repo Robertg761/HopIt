@@ -30,7 +30,7 @@ export const navGroups: NavGroup[] = [
     items: [
       {
         id: 'home',
-        href: '/',
+        href: '/overview',
         label: 'Dashboard',
         description: 'Overview of your workspace and repositories.',
         icon: House,
@@ -59,7 +59,7 @@ export const navGroups: NavGroup[] = [
 export const navItems: NavItem[] = navGroups.flatMap((group) => group.items)
 
 export function activeNavId(pathname: string): string {
-  if (pathname === '/' || pathname === '/overview') return 'home'
+  if (pathname === '/overview') return 'home'
   if (pathname.startsWith('/codebases')) return 'codebases'
   if (pathname.startsWith('/pricing')) return 'pricing'
   // Legacy routes still highlight Repositories while redirecting.

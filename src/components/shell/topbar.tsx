@@ -32,7 +32,7 @@ export function Topbar({ onOpenPalette }: { onOpenPalette: () => void }) {
     <header className="sticky top-0 z-30 border-b border-border bg-background/95 backdrop-blur-sm">
       <div className="mx-auto flex h-14 w-full max-w-[1280px] items-center gap-3 px-4 sm:px-6 lg:px-8">
         <Link
-          href="/"
+          href="/overview"
           className="shrink-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           <HopItLogo size={22} />

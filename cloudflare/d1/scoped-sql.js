@@ -288,6 +288,7 @@ function scopedFileMutationPolicy(sql, params, operation, table, session) {
     return {
       table,
       operation,
+      codebaseId: insertedBoundColumnValue(parsed, params, 'codebase_id'),
       path: insertedBoundColumnValue(parsed, params, 'path'),
       knownGuarded,
       // Storage-tally contribution for the per-tenant usage meter (Phase 3): the
@@ -305,6 +306,7 @@ function scopedFileMutationPolicy(sql, params, operation, table, session) {
     return {
       table,
       operation,
+      codebaseId: boundPredicateValue(sql, params, 'codebase_id'),
       path: knownGuarded ? params[1] ?? null : boundPredicateValue(sql, params, 'path'),
       knownGuarded,
     }

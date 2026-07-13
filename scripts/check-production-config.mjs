@@ -135,7 +135,10 @@ if (!env.HOPIT_BLOB_PROVIDER) {
     checks.push(secret('HOPIT_R2_ACCESS_KEY_ID', { minLength: 16 }))
     checks.push(secret('HOPIT_R2_SECRET_ACCESS_KEY', { minLength: 32 }))
     checks.push(truthyDefault('HOPIT_BLOB_FREE_ONLY', '1'))
-    checks.push(integerRangeDefault('HOPIT_BLOB_STORAGE_BUDGET_BYTES', { defaultValue: 8000000000, min: 1, max: 8000000000 }))
+    // Cloudflare R2 includes 10 GB-month. Keep the documented 8 GB default,
+    // while allowing the deliberate 9.5 GB production ceiling to retain a
+    // 500 MB safety margin below the provider limit.
+    checks.push(integerRangeDefault('HOPIT_BLOB_STORAGE_BUDGET_BYTES', { defaultValue: 8000000000, min: 1, max: 9500000000 }))
     if (env.HOPIT_R2_ENDPOINT) checks.push(urlCheck('HOPIT_R2_ENDPOINT'))
   } else if (blobProvider === 'b2') {
     checks.push(required('HOPIT_B2_BUCKET'))

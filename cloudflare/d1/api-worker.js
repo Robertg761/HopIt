@@ -397,13 +397,39 @@ function mutatingStatementCount(policies) {
   return count
 }
 
-function guardedStorageDelta(policies) {
+async function guardedStorageDelta(db, policies) {
   let bytes = 0
+  const currentByFile = new Map()
   for (const policy of policies ?? []) {
-    const contribution = Number(policy?.fileMutation?.storageBytes)
-    if (Number.isFinite(contribution) && contribution > 0) bytes += contribution
+    const mutation = policy?.fileMutation
+    if (mutation?.table !== 'files' || !mutation.knownGuarded) continue
+    if (!mutation.codebaseId || !mutation.path) continue
+    const key = `${mutation.codebaseId}\u0000${mutation.path}`
+    let previousBytes = currentByFile.get(key)
+    if (previousBytes === undefined) {
+      previousBytes = await readCurrentFileStorageBytes(db, mutation.codebaseId, mutation.path)
+    }
+    const nextBytes = mutation.operation === 'delete'
+      ? 0
+      : nonNegativeStorageBytes(mutation.storageBytes)
+    bytes += nextBytes - previousBytes
+    currentByFile.set(key, nextBytes)
   }
   return bytes
+}
+
+async function readCurrentFileStorageBytes(db, codebaseId, path) {
+  const result = await db.prepare(
+    `select size, blob_size, length(content) as content_size
+    from files where codebase_id = ? and path = ? limit 1`,
+  ).bind(codebaseId, path).all()
+  const row = result.results?.[0]
+  return nonNegativeStorageBytes(row?.size ?? row?.blob_size ?? row?.content_size)
+}
+
+function nonNegativeStorageBytes(value) {
+  const bytes = Number(value)
+  return Number.isFinite(bytes) && bytes > 0 ? bytes : 0
 }
 
 async function readCodebaseOwnerId(db, codebaseId) {
@@ -446,13 +472,17 @@ async function prepareTenantMetering({ env, db, authorization }) {
   const tenantId = await resolveTenantIdForAuthorization(db, authorization)
   if (!tenantId) return null
 
-  const storageDelta = guardedStorageDelta(policies)
+  const storageDelta = await guardedStorageDelta(db, policies)
   const day = utcDay()
 
   if (isQuotaEnforced(env)) {
     const usage = await readTenantUsageRow(db, tenantId)
     const limits = resolvePlanLimits(env, usage?.plan ?? 'free')
-    const rejection = evaluateWriteQuota({ usage, limits, day, rowsDelta, storageDelta })
+    // A guarded delete must remain available so an over-limit tenant can free
+    // space. Its real D1 rows are still metered, but the daily-write gate does
+    // not prevent the storage-releasing operation itself.
+    const enforcementRowsDelta = storageDelta < 0 ? 0 : rowsDelta
+    const rejection = evaluateWriteQuota({ usage, limits, day, rowsDelta: enforcementRowsDelta, storageDelta })
     if (rejection) return { tenantId, rowsDelta, storageDelta, rejection }
   }
 

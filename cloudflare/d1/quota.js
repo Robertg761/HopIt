@@ -170,16 +170,17 @@ export function evaluateWriteQuota({ usage, limits, day = utcDay(), rowsDelta = 
   return null
 }
 
-// The single meter upsert folded into the tenant's write batch. Storage is
-// cumulative (added unconditionally); the daily counter resets on a day roll
-// inside the same statement. `plan` is only set on first insert (default 'free')
-// and never overwritten here, so billing/provisioning owns the plan column.
+// The single meter upsert folded into the tenant's write batch. Storage receives
+// a trusted net delta calculated by the Worker from the current file row and is
+// clamped at zero; the daily counter resets on a day roll inside the same
+// statement. `plan` is only set on first insert (default 'free') and never
+// overwritten here, so billing/provisioning owns the plan column.
 export function buildMeterUpsertStatement({ tenantId, day = utcDay(), rowsDelta = 0, storageDelta = 0, now = new Date().toISOString() }) {
   return {
     sql: `insert into tenant_usage (tenant_id, plan, storage_bytes, write_day, rows_written_today, created_at, updated_at)
-      values (?, 'free', ?, ?, ?, ?, ?)
+      values (?, 'free', max(0, ?), ?, ?, ?, ?)
       on conflict(tenant_id) do update set
-        storage_bytes = tenant_usage.storage_bytes + ?,
+        storage_bytes = max(0, tenant_usage.storage_bytes + ?),
         rows_written_today = case when tenant_usage.write_day = ? then tenant_usage.rows_written_today + ? else ? end,
         write_day = ?,
         updated_at = ?`,

@@ -2247,7 +2247,7 @@ test('quota: computeUsageStatus reports per-line used/limit/ratio/state', () => 
 // A mutation-capable mock that also answers the tenant meter read and records
 // the folded meter upsert. Owner = user-owner (the tenant), writer = an active
 // team-member collaborator on a team-visible change set.
-function createQuotaMutationDb({ usage = null } = {}) {
+function createQuotaMutationDb({ usage = null, currentFileSize = null } = {}) {
   const selected = { type: 'active-change-set', id: 'cs_1', revision: 1, effectiveVisibility: 'team-visible', mergeState: 'unmerged' }
   const db = {
     executedStatements: [],
@@ -2276,6 +2276,9 @@ function createQuotaMutationDb({ usage = null } = {}) {
               }
               if (normalized.includes('from tenant_usage where tenant_id')) {
                 return { results: usage ? [usage] : [] }
+              }
+              if (normalized.includes('length(content) as content_size') && normalized.includes('from files where codebase_id')) {
+                return { results: currentFileSize == null ? [] : [{ size: currentFileSize, blob_size: null, content_size: currentFileSize }] }
               }
               if (normalized.includes('select count(*) as n from codebases')) {
                 return { results: [{ n: 1 }] }
@@ -2330,6 +2333,37 @@ test('meter: flag ON folds exactly one tenant-keyed meter upsert into the batch 
   // The appended meter result is trimmed from the tenant-visible response.
   const body = await response.json()
   assert.equal(body.result.length, 3)
+})
+
+test('meter: replacing a file adds only its trusted net size growth', async () => {
+  const db = createQuotaMutationDb({ currentFileSize: 5 })
+  const response = await worker.fetch(scopedQueryRequest(guardedCommitBatch(), '203.0.113.110'), {
+    HOPIT_D1_DB: db,
+    HOPIT_MULTITENANT: '1',
+  })
+  assert.equal(response.status, 200)
+  const meter = meterStatementsOf(db)[0]
+  assert.ok(meter.params.includes(2)) // 7-byte replacement minus the trusted 5-byte current row
+})
+
+test('meter: deleting a file releases its trusted current size even at the daily cap', async () => {
+  const states = journalSelectedStates('team-visible')
+  const db = createQuotaMutationDb({
+    usage: { plan: 'free', write_day: TODAY, rows_written_today: 2_000, storage_bytes: 5 },
+    currentFileSize: 5,
+  })
+  const response = await worker.fetch(scopedQueryRequest(guardedJournalBatch({
+    path: 'README.md',
+    operation: 'delete',
+    previousSelectedState: states.previous,
+    nextSelectedState: states.next,
+  }), '203.0.113.111'), {
+    HOPIT_D1_DB: db,
+    HOPIT_MULTITENANT: '1',
+    HOPIT_ENFORCE_QUOTA: '1',
+  })
+  assert.equal(response.status, 200)
+  assert.ok(meterStatementsOf(db)[0].params.includes(-5))
 })
 
 test('meter: flag ON with enforce ON under cap still writes + meters', async () => {

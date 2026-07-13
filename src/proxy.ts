@@ -13,7 +13,13 @@ import { hasValidBasicAuthFallbackCredentials } from '@/lib/basic-auth-fallback'
 
 const AUTH_HEADER = 'WWW-Authenticate'
 const REALM = 'Basic realm="HopIt"'
-const isPublicRoute = createRouteMatcher(['/sign-in(.*)', '/sign-up(.*)'])
+const isPublicRoute = createRouteMatcher([
+  '/',
+  '/privacy',
+  '/terms',
+  '/sign-in(.*)',
+  '/sign-up(.*)',
+])
 // The one-liner installer (`curl -fsSL https://hopit.dev/install | sh`) must
 // return the raw script to unauthenticated clients in every auth mode, so it is
 // always public. `/install` is rewritten to the static `/install.sh` file.

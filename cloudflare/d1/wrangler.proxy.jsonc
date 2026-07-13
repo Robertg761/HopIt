@@ -5,6 +5,15 @@
   "compatibility_date": "2026-06-30",
   "workers_dev": true,
   "preview_urls": false,
+  "vars": {
+    "HOPIT_MULTITENANT": "1",
+    "HOPIT_ENFORCE_QUOTA": "1",
+    "HOPIT_R2_ACCOUNT_ID": "7e973beb5ca98560ac7bbe1e2694337a",
+    "HOPIT_R2_BUCKET": "hopit-blobs",
+    "HOPIT_BLOB_PREFIX": "production",
+    "HOPIT_BLOB_BROKER_TTL_SECONDS": "120",
+    "HOPIT_D1_PROXY_LOG_REQUESTS": "1"
+  },
   "durable_objects": {
     "bindings": [
       {
