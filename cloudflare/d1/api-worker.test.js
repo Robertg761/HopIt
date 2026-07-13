@@ -2076,7 +2076,12 @@ test('quota: resolvePlanLimits returns free/paid defaults and honors env knobs',
   const paid = resolvePlanLimits({}, 'paid')
   assert.deepEqual(
     { s: paid.storageBytes, w: paid.dailyWrites, c: paid.codebases },
-    { s: 30_000_000_000, w: 50_000, c: 1_000_000 },
+    { s: 30_000_000_000, w: 20_000, c: 1_000_000 },
+  )
+  const paidStorage = resolvePlanLimits({}, 'paid_storage')
+  assert.deepEqual(
+    { s: paidStorage.storageBytes, w: paidStorage.dailyWrites, c: paidStorage.codebases },
+    { s: 100_000_000_000, w: 20_000, c: 1_000_000 },
   )
   // Absent/unknown plan defaults to free.
   assert.equal(resolvePlanLimits({}, undefined).plan, 'free')
@@ -2085,6 +2090,12 @@ test('quota: resolvePlanLimits returns free/paid defaults and honors env knobs',
   const tuned = resolvePlanLimits({ HOPIT_QUOTA_FREE_STORAGE_BYTES: '500', HOPIT_QUOTA_FREE_DAILY_WRITES: '9' }, 'free')
   assert.equal(tuned.storageBytes, 500)
   assert.equal(tuned.dailyWrites, 9)
+  const tunedStorage = resolvePlanLimits({
+    HOPIT_QUOTA_PAID_STORAGE_BYTES: '700',
+    HOPIT_QUOTA_PAID_STORAGE_DAILY_WRITES: '11',
+  }, 'paid_storage')
+  assert.equal(tunedStorage.storageBytes, 700)
+  assert.equal(tunedStorage.dailyWrites, 11)
 })
 
 test('quota: the daily counter resets on a UTC day roll', () => {

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { auth } from '@clerk/nextjs/server'
 
+import { isMultiTenant } from '@/lib/auth-config'
 import { hasValidBasicAuthFallbackCredentials } from '@/lib/basic-auth-fallback'
 import {
   bootstrapCloudAccount,
@@ -9,6 +10,7 @@ import {
   deleteCloudCodebase,
   listCloudCodebases,
   missingCloudBackendConfig,
+  provisionCloudTenant,
   updateCloudCodebase,
   type CloudActor,
 } from '@/lib/cloud-backend'
@@ -24,6 +26,12 @@ export async function GET(request: Request) {
 
   try {
     const actor = await requireActor(request, { allowBasicFallback: true })
+    // Tenant auto-provision (Phase 3 §2e): with tenancy on, ensure the caller has
+    // their own free tenant before listing — the universal replacement for the
+    // owner-only bootstrap, so a stranger's dashboard first load provisions them
+    // even if they never hit /api/me. Idempotent + best-effort; never blocks the
+    // list. Flag off => skipped, byte-for-byte legacy behavior.
+    await ensureTenantForCodebaseList(actor)
     const accountBootstrap = await bootstrapAccountForCodebaseList(actor)
     const codebases = await listCloudCodebases(actor)
     const localDiscovery = await readLocalWorkspaceDiscovery()
@@ -66,7 +74,7 @@ export async function POST(request: Request) {
       responseInit(),
     )
   } catch (error) {
-    return codebaseError('codebase_create_failed', errorMessage(error), 400)
+    return codebaseError(errorCode(error, 'codebase_create_failed'), errorMessage(error), 400)
   }
 }
 
@@ -159,6 +167,17 @@ async function requireActor(request: Request, { allowBasicFallback = false } = {
   const actor = await cloudActorFromRequest(request, { allowBasicFallback })
   if (!actor) throw new Error('Product auth is required.')
   return actor
+}
+
+async function ensureTenantForCodebaseList(actor: CloudActor) {
+  if (!isMultiTenant() || !actor.userId || configuredCloudBackend() !== 'd1') return
+  try {
+    await provisionCloudTenant(actor)
+  } catch {
+    // Provisioning is best-effort; a stranger with no tenant row is still treated
+    // as the free plan by the quota gate (absent row => free), so listing must
+    // never fail because provisioning did.
+  }
 }
 
 async function bootstrapAccountForCodebaseList(actor: CloudActor) {
@@ -327,6 +346,11 @@ function codebaseError(code: string, message: string, status = 400) {
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : 'Codebase request failed.'
+}
+
+function errorCode(error: unknown, fallback: string) {
+  if (error && typeof error === 'object' && 'code' in error && typeof error.code === 'string') return error.code
+  return fallback
 }
 
 function bootstrapSummary(value: unknown) {

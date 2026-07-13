@@ -25,7 +25,8 @@ export const QUOTA_DEFAULTS = {
   // ceiling and bounds the one cost line that can go margin-negative.
   free: { storageBytes: 2_000_000_000, dailyWrites: 2_000, codebases: 1 },
   // Paid caps (design §4.b): 30 GB included; a daily-write fair-use backstop.
-  paid: { storageBytes: 30_000_000_000, dailyWrites: 50_000, codebases: 1_000_000 },
+  paid: { storageBytes: 30_000_000_000, dailyWrites: 20_000, codebases: 1_000_000 },
+  paid_storage: { storageBytes: 100_000_000_000, dailyWrites: 20_000, codebases: 1_000_000 },
   warnRatio: 0.8,
 }
 
@@ -36,13 +37,33 @@ function numberFromEnv(value, fallback) {
 }
 
 export function normalizePlan(plan) {
-  return String(plan ?? '').toLowerCase() === 'paid' ? 'paid' : 'free'
+  const normalized = String(plan ?? '').toLowerCase()
+  if (normalized === 'paid_storage' || normalized === 'plus_storage') return 'paid_storage'
+  if (normalized === 'paid' || normalized === 'plus') return 'paid'
+  return 'free'
 }
 
 // A single indexed read resolves the tenant's plan; caps derive from that plan
 // via owner-tunable env knobs (so retuning caps never requires a data migration).
 export function resolvePlanLimits(env = {}, plan = 'free') {
   const normalized = normalizePlan(plan)
+  if (normalized === 'paid_storage') {
+    return {
+      plan: 'paid_storage',
+      storageBytes: numberFromEnv(
+        env.HOPIT_QUOTA_PLUS_STORAGE_BYTES ?? env.HOPIT_QUOTA_PAID_STORAGE_BYTES,
+        QUOTA_DEFAULTS.paid_storage.storageBytes,
+      ),
+      dailyWrites: numberFromEnv(
+        env.HOPIT_QUOTA_PLUS_STORAGE_DAILY_WRITES ?? env.HOPIT_QUOTA_PAID_STORAGE_DAILY_WRITES,
+        QUOTA_DEFAULTS.paid_storage.dailyWrites,
+      ),
+      codebases: numberFromEnv(
+        env.HOPIT_QUOTA_PLUS_STORAGE_CODEBASES ?? env.HOPIT_QUOTA_PAID_STORAGE_CODEBASES,
+        QUOTA_DEFAULTS.paid_storage.codebases,
+      ),
+    }
+  }
   if (normalized === 'paid') {
     return {
       plan: 'paid',

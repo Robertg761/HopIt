@@ -1,5 +1,6 @@
 import {
   BookMarked,
+  CircleDollarSign,
   House,
   type LucideIcon,
 } from 'lucide-react'
@@ -43,6 +44,14 @@ export const navGroups: NavGroup[] = [
         icon: BookMarked,
         keywords: ['repos', 'repositories', 'codebases', 'projects', 'import', 'attach'],
       },
+      {
+        id: 'pricing',
+        href: '/pricing',
+        label: 'Plans',
+        description: 'Compare storage plans and manage billing.',
+        icon: CircleDollarSign,
+        keywords: ['plans', 'pricing', 'billing', 'upgrade', 'storage'],
+      },
     ],
   },
 ]
@@ -52,6 +61,7 @@ export const navItems: NavItem[] = navGroups.flatMap((group) => group.items)
 export function activeNavId(pathname: string): string {
   if (pathname === '/' || pathname === '/overview') return 'home'
   if (pathname.startsWith('/codebases')) return 'codebases'
+  if (pathname.startsWith('/pricing')) return 'pricing'
   // Legacy routes still highlight Repositories while redirecting.
   if (
     pathname.startsWith('/files') ||

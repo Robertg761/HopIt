@@ -1,6 +1,7 @@
 import { d1ConfigFromOptions } from './config.js'
 import { attachAccessMethods } from './access.js'
 import { attachActionMethods } from './actions.js'
+import { attachBillingMethods } from './billing.js'
 import { attachClientMethods } from './client.js'
 import { attachCollaborationMethods } from './collaboration.js'
 import { attachDeviceAuthorizationMethods } from './device-authorizations.js'
@@ -13,6 +14,8 @@ import { attachSessionMethods } from './sessions.js'
 
 export { d1CloudServiceType, d1ConfigFromOptions, isD1Configured, usesServerActorAuth } from './config.js'
 export { mintServerActorToken } from './server-actor-token.js'
+export { buildTenantProvisionStatement, normalizePlan, resolveCodebaseLimit, resolvePlanLimits } from './quota.js'
+export { buildBillingEventStatements } from './billing.js'
 export { d1SchemaStatements } from './schema.js'
 export {
   attachTextDiff,
@@ -54,6 +57,7 @@ attachSchemaMethods(CloudflareD1HopBackend)
 attachGraphMethods(CloudflareD1HopBackend)
 attachAccessMethods(CloudflareD1HopBackend)
 attachActionMethods(CloudflareD1HopBackend)
+attachBillingMethods(CloudflareD1HopBackend)
 attachMemberMethods(CloudflareD1HopBackend)
 attachCollaborationMethods(CloudflareD1HopBackend)
 attachSessionMethods(CloudflareD1HopBackend)

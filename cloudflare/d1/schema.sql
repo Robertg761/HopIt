@@ -515,3 +515,44 @@ create table if not exists notifications (
 
 create index if not exists idx_notifications_codebase_created on notifications(codebase_id, created_at);
 create index if not exists idx_notifications_recipient_created on notifications(recipient_user_id, created_at);
+
+-- Phase 3 multi-tenant usage and billing. These are additive tables so the
+-- migration is safe to apply before the feature flags are enabled.
+create table if not exists tenant_usage (
+  tenant_id text primary key,
+  plan text not null default 'free',
+  storage_bytes integer not null default 0,
+  write_day text,
+  rows_written_today integer not null default 0,
+  created_at text not null,
+  updated_at text not null
+);
+
+create table if not exists subscriptions (
+  tenant_id text primary key,
+  provider text not null,
+  provider_customer_id text,
+  provider_subscription_id text unique,
+  plan_key text not null,
+  status text not null,
+  entitlement_active integer not null default 0,
+  cancel_at_period_end integer not null default 0,
+  current_period_end text,
+  last_event_id text not null,
+  last_event_created_at text not null,
+  created_at text not null,
+  updated_at text not null
+);
+
+create index if not exists idx_subscriptions_provider_customer
+  on subscriptions(provider, provider_customer_id);
+
+create table if not exists billing_webhook_events (
+  event_id text primary key,
+  provider text not null,
+  event_created_at text not null,
+  received_at text not null
+);
+
+create index if not exists idx_billing_webhook_events_received
+  on billing_webhook_events(received_at);

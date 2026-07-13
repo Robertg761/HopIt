@@ -330,7 +330,7 @@ databases.** Until then, A1 is correct and cheap. *(This is surfaced as an
 either/or in the Decisions list — both drafts leaned shared/hardened; the dissent is
 per-tenant DBs for structural isolation at the cost of the re-architecture above.)*
 
-### (b) Billing provider — one person selling a $7/mo flat sub
+### (b) Billing provider — one person selling flat subscriptions
 
 The seller is a **solo founder** (`docs/product-roadmap.md:23-24`). The dominant
 concern is **not** API ergonomics but **who is the merchant of record (MoR)** — who is
@@ -362,18 +362,58 @@ later change. Either way the entitlement the agent enforces against is *our own 
 refreshed by webhook and a daily reconcile job, so a missed webhook degrades to a
 stale-but-safe entitlement, not an outage; the webhook signature is always verified.
 
-Plan shape (both drafts agree): one **Product** with one **recurring Price = $7/mo
-flat** (above GitHub Pro $4, below the $10 2 TB consumer plans, per research §4.b),
-**30 GB included storage**, overage **$0.05/GB-mo beyond 30 GB** (~3× the ~$0.015 R2
-cost, restoring margin on storage-heavy tenants) billed as a metered price that can
-ship **dark (reported, not charged)** until enabled.
+**Owner decision (updated 2026-07-13): Stripe Managed Payments is the merchant of
+record.** Stripe's Canadian onboarding flow explicitly supports HopIt's SaaS model;
+Managed Payments, rather than raw Stripe Billing, owns indirect-tax calculation,
+collection, filing, remittance, transaction support, and order management. Launch with
+two fixed-price paid products and no metered overage: **Plus = $10 USD/mo with a hard
+30 GB cap** and **Plus Storage = $15 USD/mo with a hard 100 GB cap**. Both use the
+same 20,000-row daily write allowance. A cap-crossing write pauses safely while reads,
+exports, and local edits remain available; the customer upgrades to the larger tier
+instead of receiving an unpredictable bill. Pricing must retain at least **50% gross
+margin at permitted maximum usage**, with roughly 75% targeted under normal usage.
+Launch is **monthly billing only**; annual billing stays deferred until after the
+30–60 day real-world quota and margin review.
+
+**Failed-payment policy (updated 2026-07-13).** Preserve the paid entitlement while
+Stripe reports `past_due` or `unpaid`, allowing its configured retry/dunning policy to
+run. Downgrade to free limits only on the signed subscription-deleted/canceled state,
+or an explicit full-refund, dispute, or fraud-revocation event. A downgrade never
+deletes data: reads and full export remain available indefinitely, and local edits
+remain untouched.
+
+**Plan-change policy (owner decision, 2026-07-12).** Plus → Plus Storage upgrades
+apply immediately with provider-calculated proration. Plus Storage → Plus downgrades
+apply at the next renewal. If usage is still above 30 GB when the downgrade takes
+effect, storage-growing syncs pause while reads, export, deletes, and local edits stay
+available.
+
+**Routine launch defaults (updated 2026-07-13).** Use Stripe-hosted Checkout with
+`managed_payments[enabled]=true` and Stripe's hosted Billing Portal; charge in USD with
+provider-calculated tax added where
+required; offer no paid trial because the permanent free tier is the trial; disable
+annual billing, coupons, metered billing, and discretionary custom plans
+at launch. Treat signed, idempotent webhooks as the fast entitlement path and a daily
+provider reconciliation as repair. Cancellation remains paid through `ends_at`;
+full refund, chargeback, fraud revocation, or subscription deletion removes the paid entitlement
+without deleting or locking readable data. Prefer card and wallet payments at launch;
+leave additional payment methods disabled until their recurring behavior is exercised
+in staging and any added fee is included in the margin review.
 
 **Owner actions required (blocking, cannot be built around):**
-- Create the billing account (Stripe or MoR), complete business/identity verification
-  and payout bank details (a personal/financial action for the owner).
-- Create the single `$7/mo` product/price and capture its id.
-- Store the API key and webhook signing secret in Vercel + Cloudflare secrets (never
-  in repo/docs, matching `docs/personal-production.md:39`).
+- **Completed 2026-07-13:** create and activate the separate HopIt Stripe account,
+  complete business/identity verification and payout bank details, classify the
+  business as SaaS, set `HOPIT` as the statement descriptor, and keep optional Stripe
+  Tax and Climate contributions off.
+- **Completed 2026-07-13:** the two live monthly products are configured at $10 and
+  $15 with Stripe's eligible SaaS business-use tax code. Managed Payments reports
+  `Ready to use`, both live price ids are captured outside the repo, and the hosted
+  Customer Portal supports prorated upgrades plus end-of-period downgrades and
+  cancellations.
+- Configure the production webhook endpoint and store the webhook signing secret;
+  Managed Payments becomes `Active` only after its first transaction.
+- Store the Stripe API key, two price ids, webhook signing secret, and cron secret in
+  Vercel secrets (never in repo/docs, matching `docs/personal-production.md:39`).
 - Add the public **privacy policy and terms pages** the roadmap already flags
   (`docs/personal-production.md:71`) — MoRs and Google OAuth verification both require
   them.
@@ -499,7 +539,7 @@ Of the model options above, the choices made:
   indexed lookup; caps derive from that plan via **owner-tunable env knobs** so
   retuning never needs a data migration.
 - **Free-tier default → caps** (Decision 4): **2 GB storage, 2,000 D1 rows/day,
-  1 codebase; reads/export always open.** Paid: **30 GB, 50,000 rows/day, effectively
+  1 codebase; reads/export always open.** Paid: **30 GB, 20,000 rows/day, effectively
   unlimited codebases.** An over-quota free tenant's reads/exports keep working.
 
 **Owner-tunable env knobs** (Worker env for storage/daily-write enforcement; the Next
@@ -507,7 +547,7 @@ backend reads the same names from its env for the codebase-count gate + status
 display), all with the free/paid defaults above:
 `HOPIT_QUOTA_FREE_STORAGE_BYTES` (2_000_000_000), `HOPIT_QUOTA_FREE_DAILY_WRITES`
 (2000), `HOPIT_QUOTA_FREE_CODEBASES` (1), `HOPIT_QUOTA_PAID_STORAGE_BYTES`
-(30_000_000_000), `HOPIT_QUOTA_PAID_DAILY_WRITES` (50000), `HOPIT_QUOTA_PAID_CODEBASES`
+(30_000_000_000), `HOPIT_QUOTA_PAID_DAILY_WRITES` (20000), `HOPIT_QUOTA_PAID_CODEBASES`
 (1_000_000), `HOPIT_QUOTA_WARN_RATIO` (0.8), and the Stage-3 enforcement sub-gate
 `HOPIT_ENFORCE_QUOTA` (off). The new `tenant_usage` table is owner-applied to the
 production D1 per the migration procedure in `docs/personal-production.md:191-193`.
@@ -764,9 +804,13 @@ sync**). What each numbered item became:
 - **3 — Free entitlement / no-card path.** Provisioning sets `plan='free'`; the free caps
   (2 GB / 2,000 writes-day / 1 codebase, reads & export always open) come from the
   Stage-3 env knobs. Sign up → create 1 codebase → `hop add` → sync, all with no card.
-- **4/5/6 — Billing seam only.** The subscription/seat gates stay always-allow stubs
-  (`packages/backend-d1/src/quota.js` `assertSubscriptionActive` / `assertSeatAvailable`),
-  the clearly-marked seam Stage 5 fills in. No billing UI, no wall before first sync.
+- **4/5/6 — Billing seam filled 2026-07-13.** A public `/pricing` surface connects the
+  second-codebase quota wall to Stripe-hosted Managed Payments Checkout. Signed Stripe
+  webhooks atomically claim an idempotency event, upsert the tenant subscription, and
+  derive `tenant_usage.plan`; a daily authenticated reconciliation route repairs missed
+  events. Plus maps to the 30 GB `paid` quota profile and Plus Storage to the distinct
+  100 GB `paid_storage` profile. Checkout and all entitlement writes remain behind
+  `HOPIT_BILLING`; no wall appears before the first free sync.
 - **7 — Basic-auth / empty-actor closed under the flag.** `shouldAllowBasicAuthFallback()`
   (`src/lib/auth-config.ts`) is forced **false** whenever `HOPIT_MULTITENANT` is on
   (regardless of `HOPIT_ALLOW_BASIC_AUTH_FALLBACK`), and `cloudActorFromRequest`
@@ -865,18 +909,26 @@ stored, 300k journal writes/mo, 3M reads/mo, 300k Worker requests/mo):
 | **Marginal / user** | | | **≈ $1.00–1.20** |
 
 Plus one **$5/mo Workers Paid account minimum**, amortized to ~$0 past a handful of
-tenants. At $7/mo flat that is **~83% gross margin** (`§4.b`). The **D1 rows written
-line is the one to watch** — a heavy user (200 GB, 5M writes/mo) costs ~$8.40/mo and
-goes margin-negative, mitigated by the storage overage beyond 30 GB and the daily-write
-fair-use cap from Decision (c) (`§4.b` sensitivity table: 5M writes/mo = $5 > storage
-$3).
+tenants. The **D1 rows written line is the one to watch** — a heavy user (200 GB,
+5M writes/mo) costs ~$8.40/mo and goes margin-negative under the superseded
+$7/no-hard-cap proposal. The selected fixed storage tiers and daily-write fair-use cap
+prevent that shape (`§4.b` sensitivity table: 5M writes/mo = $5 > storage $3).
 
 **Free-tier protection.** Free cap 2 GB ⇒ at least ~5 concurrent free tenants fit
 inside the 10 GB R2 free ceiling before any R2 bill. Per-tenant daily D1-write budget
-(proposal: free = **2,000 rows/day** ≈ ~285 saves/day; paid fair-use = **50,000
-rows/day** ≈ ~7,000 saves/day) keeps any one tenant from exhausting the shared
+(proposal: free = **2,000 rows/day** ≈ ~285 saves/day; paid fair-use = **20,000
+rows/day** ≈ ~2,850 saves/day) keeps any one tenant from exhausting the shared
 account-wide 100k-rows/day ceiling (~14k saves/day across all tenants) and caps the one
 cost line that can go negative.
+
+**Early-limit monitoring checkpoint (owner decision, 2026-07-12).** Treat 20,000
+rows/day as a launch hypothesis, not a permanent product truth. During staging and the
+first 30–60 days of real-world use, record per-tenant daily rows, save-to-row
+amplification, 80% warnings, hard blocks, large-import behavior, and the percentage of
+active tenants above 50%/80% of the allowance. Review the limit after that window and
+raise it only if measured provider cost still preserves the 50% worst-case gross-margin
+floor. A legitimate exceptional import may receive a time-limited owner override;
+reads, exports, and local edits remain available regardless.
 
 **What tenant count forces the paid transitions** (all ceilings are **account-wide**,
 consumed by the *sum* of tenants):
@@ -1037,16 +1089,10 @@ blobs included) are green in CI.
 Each is a crisp question with a recommendation; the two open **either/or** choices are
 marked. These are the questions to bring to the owner before build.
 
-1. **Billing provider — EITHER/OR.** Raw **Stripe Billing** (you are merchant of
-   record; lowest fee ~2.9%+30¢; *you* register/collect/remit sales-tax/VAT) **or** a
-   **merchant-of-record** (Paddle / Lemon Squeezy; ~5%+50¢, they own global tax
-   compliance and first-line chargebacks)?
-   *Recommendation:* **a merchant-of-record (Paddle or Lemon Squeezy)** — for a solo
-   founder the tax offload is worth the **~$0.35/user/mo** premium (negligible at ~83%
-   margin). *Dissenting view:* **start on raw Stripe** — simplest integration, lowest
-   fee, low volume; the plumbing is provider-agnostic (a `subscriptions` table fed by
-   webhooks), so moving to an MoR before broad EU marketing is a cheap later change.
-   (§2b.)
+1. **Billing provider — DECIDED 2026-07-13.** Use **Stripe Managed Payments** as
+   merchant of record so Stripe owns indirect-tax compliance and transaction/order
+   support. Keep HopIt's entitlement table provider-agnostic so the adapter remains
+   replaceable. (§2b.)
 
 2. **Tenant boundary — EITHER/OR.** **Shared D1 tables keyed by owner, hardened** (A1)
    **or** **per-tenant databases** (A2/A3) for structural isolation?
@@ -1057,10 +1103,20 @@ marked. These are the questions to bring to the owner before build.
    **~7 GB (70% of 10 GB)** or any single tenant exceeds **~1 GB** of D1 metadata, split
    data tables to per-tenant databases. (§2a.)
 
-3. **Plan shape.** Confirm **$7/mo flat, 30 GB included, $0.05/GB-mo overage beyond 30
-   GB** (research §4.b)?
-   *Recommendation:* **Yes**, and ship overage **reported-but-not-charged** first, flip
-   charging on later. (§2b.)
+3. **Plan shape — DECIDED 2026-07-12.** **Plus = $10 USD/mo, 30 GB hard cap**;
+   **Plus Storage = $15 USD/mo, 100 GB hard cap**; no metered overage or surprise
+   billing. Both paid plans use a 20,000-row daily write allowance, subject to the
+   documented early-testing review and the 50% worst-case gross-margin floor. Launch
+   with monthly billing only; reconsider annual billing after the 30–60 day review.
+   (§2b.)
+
+   **Failed-payment behavior — UPDATED 2026-07-13.** Keep paid access while Stripe
+   reports `past_due` or `unpaid`; downgrade only on a signed deleted/canceled,
+   refunded, disputed, or fraud-revoked state. Reads/export remain open.
+
+   **Plan changes — DECIDED 2026-07-12.** Upgrades are immediate and prorated;
+   downgrades take effect at renewal. Above-limit downgrades pause storage-growing
+   writes but never reads, exports, deletes, or local edits.
 
 4. **Free tier: caps and permanence.** What are the free caps, and is "free" a
    permanent entitlement or a time-boxed no-card trial? Proposal: **2 GB storage, 2,000
@@ -1120,10 +1176,12 @@ marked. These are the questions to bring to the owner before build.
     *Recommendation:* **Yes** — budget it as a Phase-3 launch cost; D1 daily writes force
     it at a handful of active tenants. (§3, §4.)
 
-14. **Staging billing.** Approve building and testing entirely against **test
-    mode/sandbox + webhook fixtures** (no live account/charges until launch)?
-    *Recommendation:* **Yes** — the whole billing stage is provable in CI without a live
-    account. (§3, §6.)
+14. **Staging billing — APPROVED / IMPLEMENTED 2026-07-13.** Webhook/entitlement
+    fixtures prove signature, replay, dunning, cancellation, full-refund/dispute
+    revocation, and the 30/100 GB plan mapping. The live Stripe products are eligible,
+    Managed Payments is `Ready to use`, and the Customer Portal is configured. Live
+    checkout stays off until the production webhook and Vercel secrets are configured,
+    the D1 schema is applied, and an end-to-end staging purchase is complete. (§3, §6.)
 
 ---
 

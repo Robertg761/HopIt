@@ -10,6 +10,7 @@
 export const BACKEND_QUOTA_DEFAULTS = {
   free: { codebases: 1 },
   paid: { codebases: 1_000_000 },
+  paid_storage: { codebases: 1_000_000 },
 }
 
 function numberFromEnv(value, fallback) {
@@ -19,13 +20,24 @@ function numberFromEnv(value, fallback) {
 }
 
 export function normalizePlan(plan) {
-  return String(plan ?? '').toLowerCase() === 'paid' ? 'paid' : 'free'
+  const normalized = String(plan ?? '').toLowerCase()
+  if (normalized === 'paid_storage' || normalized === 'plus_storage') return 'paid_storage'
+  if (normalized === 'paid' || normalized === 'plus') return 'paid'
+  return 'free'
 }
 
 export function resolveCodebaseLimit(env = {}, plan = 'free') {
-  return normalizePlan(plan) === 'paid'
-    ? numberFromEnv(env.HOPIT_QUOTA_PAID_CODEBASES, BACKEND_QUOTA_DEFAULTS.paid.codebases)
-    : numberFromEnv(env.HOPIT_QUOTA_FREE_CODEBASES, BACKEND_QUOTA_DEFAULTS.free.codebases)
+  const normalized = normalizePlan(plan)
+  if (normalized === 'free') {
+    return numberFromEnv(env.HOPIT_QUOTA_FREE_CODEBASES, BACKEND_QUOTA_DEFAULTS.free.codebases)
+  }
+  if (normalized === 'paid_storage') {
+    return numberFromEnv(
+      env.HOPIT_QUOTA_PLUS_STORAGE_CODEBASES ?? env.HOPIT_QUOTA_PAID_STORAGE_CODEBASES,
+      BACKEND_QUOTA_DEFAULTS.paid_storage.codebases,
+    )
+  }
+  return numberFromEnv(env.HOPIT_QUOTA_PAID_CODEBASES, BACKEND_QUOTA_DEFAULTS.paid.codebases)
 }
 
 // Storage + daily-write caps mirror the Worker's quota.js so the dashboard can
@@ -35,13 +47,28 @@ export function resolveCodebaseLimit(env = {}, plan = 'free') {
 // authoritative enforcement point; this is display-only on Plane A.
 const STORAGE_DAILY_DEFAULTS = {
   free: { storageBytes: 2_000_000_000, dailyWrites: 2_000 },
-  paid: { storageBytes: 30_000_000_000, dailyWrites: 50_000 },
+  paid: { storageBytes: 30_000_000_000, dailyWrites: 20_000 },
+  paid_storage: { storageBytes: 100_000_000_000, dailyWrites: 20_000 },
   warnRatio: 0.8,
 }
 
 export function resolvePlanLimits(env = {}, plan = 'free') {
   const normalized = normalizePlan(plan)
-  const base = normalized === 'paid' ? STORAGE_DAILY_DEFAULTS.paid : STORAGE_DAILY_DEFAULTS.free
+  const base = STORAGE_DAILY_DEFAULTS[normalized]
+  if (normalized === 'paid_storage') {
+    return {
+      plan: normalized,
+      storageBytes: numberFromEnv(
+        env.HOPIT_QUOTA_PLUS_STORAGE_BYTES ?? env.HOPIT_QUOTA_PAID_STORAGE_BYTES,
+        base.storageBytes,
+      ),
+      dailyWrites: numberFromEnv(
+        env.HOPIT_QUOTA_PLUS_STORAGE_DAILY_WRITES ?? env.HOPIT_QUOTA_PAID_STORAGE_DAILY_WRITES,
+        base.dailyWrites,
+      ),
+      codebases: resolveCodebaseLimit(env, normalized),
+    }
+  }
   const prefix = normalized === 'paid' ? 'PAID' : 'FREE'
   return {
     plan: normalized,

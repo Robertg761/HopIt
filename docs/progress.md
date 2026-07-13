@@ -1520,6 +1520,19 @@ Deferred:
 
 ## Known Gaps
 
+- Phase 3 billing plumbing is implemented behind `HOPIT_BILLING`: Stripe Managed
+  Payments hosted Checkout, customer portal, signature-verified/idempotent webhook,
+  D1 `subscriptions` + webhook-event ledger, daily reconciliation, the `/pricing`
+  upgrade surface, and distinct 30 GB / 100 GB paid quota profiles. Web/worker/agent
+  suites are green. The live HopIt Stripe account is activated and the two live
+  monthly products now exist at $10 and $15 with Stripe's SaaS business-use preset.
+  Managed Payments now reports `Ready to use`, both products are eligible, and the
+  hosted Customer Portal is configured for prorated upgrades plus end-of-period
+  downgrades and cancellations. The production webhook, Vercel secrets, D1 schema
+  application, deployment, and an end-to-end staging purchase remain. Public
+  privacy/terms pages still require an owner-reviewed legal decision before broad
+  signup.
+
 - No full HopIt Workspace Root contract yet: the root-level codebase/workspace index, D1 account-visible discovery with scoped-token fallback, automatic account bootstrap, metadata-only attach, dashboard setup/attach/hydrate/dehydrate/open actions, hydration cursor, metadata-only/partial/materialized state, per-file cache state, path-level hydrate/pin/prune primitives, open-time first-working-set hydration, and explicit metadata-first lazy materialization policy exist, but true read-triggered hydration is deferred until a native filesystem provider is chosen.
 - The current managed folder path has a safe metadata-first policy and dashboard controls, but metadata-only, path hydration, and open-time hydration are still bounded explicit/intent-driven operations rather than complete native demand hydration. Automatic pruning now exists as a conservative opt-in scheduler; default-on policy and production dogfood evidence remain pending.
 - Real account provider code exists and production Clerk DNS/issuer/live-key plus Google OAuth rollout is active; owner sign-in and D1 owner mapping are smoke-tested, and Basic Auth fallback env vars are removed from production.

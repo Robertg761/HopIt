@@ -263,6 +263,28 @@ export async function provisionCloudTenant(actor: CloudActor) {
   return d1Backend().ensureTenant({ tenantId: actor.userId })
 }
 
+export async function applyCloudBillingEvent(input: Record<string, unknown>) {
+  if (configuredCloudBackend() === 'd1') return d1Backend().applyBillingEvent(input)
+  throw new Error('No HopIt cloud backend is configured for billing.')
+}
+
+export async function readCloudTenantSubscription(tenantId: string) {
+  if (configuredCloudBackend() === 'd1') return d1Backend().readTenantSubscription({ tenantId })
+  throw new Error('No HopIt cloud backend is configured for billing.')
+}
+
+export async function readCloudSubscriptionByProviderCustomer(provider: string, providerCustomerId: string) {
+  if (configuredCloudBackend() === 'd1') {
+    return d1Backend().readSubscriptionByProviderCustomer({ provider, providerCustomerId })
+  }
+  throw new Error('No HopIt cloud backend is configured for billing.')
+}
+
+export async function readCloudTenantUsage(tenantId: string) {
+  if (configuredCloudBackend() === 'd1') return d1Backend().readTenantUsage({ tenantId })
+  throw new Error('No HopIt cloud backend is configured for billing.')
+}
+
 export async function createCloudDeviceAuthorization(input: Record<string, unknown>) {
   if (configuredCloudBackend() === 'd1') return d1Backend().createDeviceAuthorization(input)
   throw new Error('No HopIt cloud backend is configured for device authorization.')

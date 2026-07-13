@@ -8,6 +8,7 @@ import { Field } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
+import { ToastAction } from '@/components/ui/toast'
 import { useToast } from '@/hooks/use-toast'
 import { useWorkspace, type CodebaseSummary } from '@/components/workspace/workspace-provider'
 import { createCodebase, deleteCodebase, renameCodebase, type ApiError } from './codebases-api'
@@ -46,6 +47,16 @@ function useApiErrorToast() {
     (title: string, error: ApiError) => {
       if (error.code === 'browser_auth_required') {
         toast({ title: 'Sign in required', description: 'Sign in to manage codebases.' })
+      } else if (error.code === 'quota_exceeded_codebases') {
+        toast({
+          title: 'Free project used',
+          description: error.message,
+          action: (
+            <ToastAction altText="View HopIt plans" onClick={() => window.location.assign('/pricing')}>
+              View plans
+            </ToastAction>
+          ),
+        })
       } else {
         toast({ title, description: error.message, variant: 'destructive' })
       }

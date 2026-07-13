@@ -7,6 +7,12 @@ export function d1ConfigFromOptions(options?: D1Options, env?: D1Environment): R
 export function isD1Configured(options?: D1Options, env?: D1Environment): boolean
 export function createD1Backend(options?: D1Options, env?: D1Environment): CloudflareD1HopBackend
 
+export function buildTenantProvisionStatement(input: { tenantId: string; plan?: string; now?: string }): { sql: string; params: unknown[] }
+export function buildBillingEventStatements(input: Record<string, unknown>): Array<{ sql: string; params: unknown[] }>
+export function normalizePlan(plan?: string | null): 'free' | 'paid' | 'paid_storage'
+export function resolveCodebaseLimit(env?: Record<string, unknown>, plan?: string): number
+export function resolvePlanLimits(env?: Record<string, unknown>, plan?: string): { plan: 'free' | 'paid' | 'paid_storage'; storageBytes: number; dailyWrites: number; codebases: number }
+
 export const d1SchemaStatements: string[]
 export function attachTextDiff(result: unknown, filePath: string, readFileBody: (...args: unknown[]) => Promise<unknown>): Promise<unknown>
 export function buildFileVersionRowForEntry(input: Record<string, unknown>): unknown
