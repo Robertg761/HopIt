@@ -1176,12 +1176,45 @@ marked. These are the questions to bring to the owner before build.
     *Recommendation:* **Yes** — budget it as a Phase-3 launch cost; D1 daily writes force
     it at a handful of active tenants. (§3, §4.)
 
-14. **Staging billing — APPROVED / IMPLEMENTED 2026-07-13.** Webhook/entitlement
+14. **Staging billing — APPROVED / REHEARSED 2026-07-13.** Webhook/entitlement
     fixtures prove signature, replay, dunning, cancellation, full-refund/dispute
     revocation, and the 30/100 GB plan mapping. The live Stripe products are eligible,
-    Managed Payments is `Ready to use`, and the Customer Portal is configured. Live
+    Managed Payments is `Ready to use`, and the Customer Portal is configured. An
+    isolated Stripe sandbox checkout and cancellation now prove Free -> Plus -> Free,
+    the paid second-project entitlement, and post-cancel data preservation. Production
     checkout stays off until the production webhook and Vercel secrets are configured,
-    the D1 schema is applied, and an end-to-end staging purchase is complete. (§3, §6.)
+    the D1 schema is applied deliberately, Clerk signup is opened, and the final
+    go-live checklist is approved. (§3, §6.)
+
+### 2026-07-13 isolated staging rehearsal evidence
+
+The protected `hopit-phase3-staging.vercel.app` preview used its own D1 database,
+R2 bucket, Worker, Clerk development user, Stripe test products, and signed test
+webhook. Production remained flag-off and unchanged.
+
+The literal stranger journey passed: no-card signup, first Free project, second
+project blocked, device authorization, scoped session, local attach, WebSocket,
+inline and brokered-R2 sync, hard daily-write block with a retained local journal,
+Stripe sandbox Plus checkout, paid second project, cancellation, and downgrade
+without deletion. Live adversarial probes returned `403` for a foreign SQL
+codebase, foreign session header, and foreign blob prefix.
+
+The rehearsal found and fixed three integration gaps:
+
+1. A server actor could not create its first codebase because entitlement was
+   checked before the row existed. Only a sole plain actor-owned insert now gets
+   the creation exception; UPSERTs and mixed batches remain denied.
+2. Device authorization returned the scoped token but not the public broker
+   configuration. Connected setup now receives and persists broker mode, provider,
+   and prefix while leaving all D1/R2 administrative credentials absent.
+3. Device and user key metadata was treated as codebase-scoped SQL. The Worker now
+   permits those two tables only when every user predicate or inserted `user_id`
+   matches the authenticated session user; wrapped keys stay codebase constrained.
+
+Provisioning note: applying only `cloudflare/d1/schema.sql` is insufficient for an
+existing environment. Apply the additive schema statements/migrations represented
+in `packages/backend-d1/src/schema.js` as well; the staging rehearsal specifically
+required the two requested-codebase columns on `device_authorizations`.
 
 ---
 

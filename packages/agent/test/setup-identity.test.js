@@ -59,6 +59,9 @@ test('connected setup persists requester identity and enables pull and push hand
     sessionToken: 'hst_test_session_token',
     apiBaseUrl: 'https://agent-api.example.test',
     remotePushUrl: 'wss://agent-api.example.test/events',
+    blobProvider: 'r2',
+    blobBroker: true,
+    blobPrefix: 'hopit-staging',
   }
 
   await writeConnectedEnvFile(envFilePath, options, connection)
@@ -68,6 +71,9 @@ test('connected setup persists requester identity and enables pull and push hand
   assert.match(content, /^HOPIT_REMOTE_PULL=1$/m)
   assert.match(content, /^HOPIT_REMOTE_PUSH=1$/m)
   assert.match(content, /^HOPIT_REMOTE_PUSH_URL=wss:\/\/agent-api\.example\.test\/events$/m)
+  assert.match(content, /^HOPIT_BLOB_PROVIDER=r2$/m)
+  assert.match(content, /^HOPIT_BLOB_BROKER=1$/m)
+  assert.match(content, /^HOPIT_BLOB_PREFIX=hopit-staging$/m)
 
   const template = productionEnvTemplate(options)
   assert.match(template, /^HOPIT_REQUESTER_ID=user_collaborator$/m)

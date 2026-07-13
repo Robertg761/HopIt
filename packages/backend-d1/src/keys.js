@@ -17,7 +17,10 @@ export function attachKeyMethods(Backend) {
     const now = new Date().toISOString()
     const deviceId = normalizeKeyEntityId(options.deviceId, 'Device id')
     assertDevicePublicKeyDescriptor(options)
-    const existing = await this.first(`select * from device_keys where device_id = ? limit 1`, [deviceId])
+    const existing = await this.first(
+      `select * from device_keys where user_id = ? and device_id = ? limit 1`,
+      [actor.userId, deviceId],
+    )
     if (existing) {
       if (existing.user_id !== actor.userId) {
         throw new Error(`Device key ${deviceId} already belongs to another user.`)
@@ -29,16 +32,20 @@ export function attachKeyMethods(Backend) {
       await this.query(
         `update device_keys set display_name = ?, platform = ?, status = 'trusted',
           trusted_at = coalesce(trusted_at, ?), last_seen_at = ?
-         where device_id = ?`,
+         where user_id = ? and device_id = ?`,
         [
           stringOrNull(options.displayName) ?? existing.display_name,
           stringOrNull(options.platform) ?? existing.platform,
           now,
           now,
+          actor.userId,
           deviceId,
         ],
       )
-      return summarizeDeviceKey(await this.first(`select * from device_keys where device_id = ?`, [deviceId]))
+      return summarizeDeviceKey(await this.first(
+        `select * from device_keys where user_id = ? and device_id = ?`,
+        [actor.userId, deviceId],
+      ))
     }
 
     await this.query(
@@ -72,7 +79,10 @@ export function attachKeyMethods(Backend) {
       targetUserId: actor.userId,
       targetDeviceId: deviceId,
     })
-    return summarizeDeviceKey(await this.first(`select * from device_keys where device_id = ?`, [deviceId]))
+    return summarizeDeviceKey(await this.first(
+      `select * from device_keys where user_id = ? and device_id = ?`,
+      [actor.userId, deviceId],
+    ))
   },
 
   async listDeviceKeys(options = {}) {
@@ -190,7 +200,11 @@ export function attachKeyMethods(Backend) {
     const recipientId = normalizeKeyEntityId(options.recipientId, 'Wrapped key recipient id')
     const expiresAt = normalizeFutureTimestamp(options.expiresAt, 'Wrapped key expiry')
     assertWrappedKeyEnvelope({ ...options, wrappedKeyId, recipientId })
-    const recipientDevice = await this.requireTrustedRecipientDevice({ recipientType, recipientId })
+    const recipientDevice = await this.requireTrustedRecipientDevice({
+      recipientType,
+      recipientId,
+      userId: options.wrappedKeyType === 'user-vault' ? actor.userId : null,
+    })
     if (options.wrappedKeyType === 'user-vault' && recipientDevice?.user_id !== actor.userId) {
       throw new Error("User vault keys can only be wrapped to the owner's trusted devices.")
     }
@@ -198,7 +212,10 @@ export function attachKeyMethods(Backend) {
       await this.requireKeyActorCapability(codebaseId, actor, 'manage_members')
     }
 
-    const existing = await this.first(`select * from wrapped_keys where wrap_id = ? limit 1`, [wrapId])
+    const existing = await this.first(
+      `select * from wrapped_keys where codebase_id = ? and wrap_id = ? limit 1`,
+      [codebaseId, wrapId],
+    )
     const value = {
       wrapId,
       wrappedKeyId,
@@ -259,7 +276,10 @@ export function attachKeyMethods(Backend) {
       keyId: wrappedKeyId,
       wrapId,
     })
-    return summarizeWrappedKey(await this.first(`select * from wrapped_keys where wrap_id = ?`, [wrapId]))
+    return summarizeWrappedKey(await this.first(
+      `select * from wrapped_keys where codebase_id = ? and wrap_id = ?`,
+      [codebaseId, wrapId],
+    ))
   },
 
   async listWrappedKeys(options = {}) {
@@ -419,16 +439,24 @@ export function attachKeyMethods(Backend) {
     return access
   },
 
-  async requireTrustedRecipientDevice({ recipientType, recipientId }) {
+  async requireTrustedRecipientDevice({ recipientType, recipientId, userId = null }) {
     if (recipientType !== 'device') return null
-    const device = await this.first(`select * from device_keys where device_id = ? limit 1`, [recipientId])
+    const device = userId
+      ? await this.first(
+        `select * from device_keys where user_id = ? and device_id = ? limit 1`,
+        [userId, recipientId],
+      )
+      : await this.first(`select * from device_keys where device_id = ? limit 1`, [recipientId])
     if (!device) throw new Error(`Recipient device ${recipientId} was not found.`)
     if (device.status !== 'trusted') throw new Error(`Recipient device ${recipientId} is not trusted.`)
     return device
   },
 
   async assertNoDuplicateActiveWrappedKey(value) {
-    const rows = await this.query(`select * from wrapped_keys where wrapped_key_id = ?`, [value.wrappedKeyId])
+    const rows = await this.query(
+      `select * from wrapped_keys where codebase_id = ? and wrapped_key_id = ?`,
+      [value.codebaseId, value.wrappedKeyId],
+    )
     const duplicate = rows.find((row) => (
       row.codebase_id === value.codebaseId &&
       row.wrapped_key_type === value.wrappedKeyType &&

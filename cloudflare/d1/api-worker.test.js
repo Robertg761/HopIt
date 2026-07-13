@@ -233,6 +233,34 @@ test('scoped SQL policy rejects cross-codebase predicates and SQL shape escapes'
   }
 })
 
+test('scoped SQL policy permits key metadata only for the authenticated session user', () => {
+  const session = scopedSession()
+  const accepted = [
+    { sql: 'select * from device_keys where user_id = ? and device_id = ? limit 1', params: ['user-1', 'device-1'] },
+    { sql: 'update device_keys set last_seen_at = ? where user_id = ? and device_id = ?', params: ['now', 'user-1', 'device-1'] },
+    { sql: 'insert into device_keys (device_id, user_id, status) values (?, ?, ?)', params: ['device-1', 'user-1', 'trusted'] },
+    { sql: 'select * from user_keyrings where user_id = ? limit 1', params: ['user-1'] },
+    { sql: 'insert into user_keyrings (user_id, vault_key_id) values (?, ?)', params: ['user-1', 'vault-1'] },
+  ]
+  for (const statement of accepted) {
+    assert.doesNotThrow(() => assertScopedSessionStatementAllowed(session, statement), statement.sql)
+  }
+
+  const rejected = [
+    { sql: 'select * from device_keys where device_id = ? limit 1', params: ['device-1'] },
+    { sql: 'select * from device_keys where user_id = ? and device_id = ? limit 1', params: ['user-2', 'device-1'] },
+    { sql: 'insert into device_keys (device_id, user_id, status) values (?, ?, ?)', params: ['device-1', 'user-2', 'trusted'] },
+    { sql: 'update user_keyrings set status = ? where user_id = ?', params: ['active', 'user-2'] },
+  ]
+  for (const statement of rejected) {
+    assert.throws(
+      () => assertScopedSessionStatementAllowed(session, statement),
+      /authenticated user/,
+      statement.sql,
+    )
+  }
+})
+
 test('generic write capability cannot rewrite privileged codebase, membership, session, or key state', () => {
   const session = scopedSession({ capabilities_json: JSON.stringify(['write']) })
   const privilegedStatements = [
@@ -1329,6 +1357,13 @@ const multiTenantEnv = (extra = {}) => ({
   ...extra,
 })
 
+function serverActorCreateCodebaseStatement({ codebaseId = 'codebase-new', ownerId = 'user-a', upsert = false } = {}) {
+  return {
+    sql: `insert into codebases (codebase_id, name, owner_id) values (?, ?, ?)${upsert ? ' on conflict(codebase_id) do update set owner_id = excluded.owner_id' : ''}`,
+    params: [codebaseId, 'New codebase', ownerId],
+  }
+}
+
 test('server-actor static policy: own vs cross-tenant, listing, and deny-by-default', () => {
   const actor = { userId: 'user-a' }
   // Codebase-anchored read the actor is (statically) allowed to name.
@@ -1371,6 +1406,57 @@ test('server-actor static policy: own vs cross-tenant, listing, and deny-by-defa
   assert.throws(() => assertServerActorStatementAllowed({ userId: '' }, {
     sql: 'select * from files where codebase_id = ?', params: ['codebase-a'],
   }), /authenticated user id/)
+})
+
+test('server-actor: permits only a sole plain INSERT to create an actor-owned codebase', async () => {
+  const db = createServerActorDb()
+  const response = await worker.fetch(serverActorRequest({
+    token: mintTestServerActorToken({ userId: 'user-a' }),
+    body: serverActorCreateCodebaseStatement(),
+    ip: '203.0.113.74',
+    codebaseId: 'codebase-new',
+  }), multiTenantEnv({ HOPIT_D1_DB: db }))
+
+  assert.equal(response.status, 200)
+  const createStatements = db.executedStatements.filter(({ sql }) => /^insert into codebases/i.test(sql))
+  assert.equal(createStatements.length, 1)
+  assert.deepEqual(createStatements[0].params, ['codebase-new', 'New codebase', 'user-a'])
+
+  const wrongOwnerDb = createServerActorDb()
+  const wrongOwner = await worker.fetch(serverActorRequest({
+    token: mintTestServerActorToken({ userId: 'user-a' }),
+    body: serverActorCreateCodebaseStatement({ ownerId: 'user-b' }),
+    ip: '203.0.113.75',
+    codebaseId: 'codebase-new',
+  }), multiTenantEnv({ HOPIT_D1_DB: wrongOwnerDb }))
+  assert.equal(wrongOwner.status, 403)
+  assert.match((await wrongOwner.json()).errors[0].message, /only create a codebase it owns/)
+  assert.equal(wrongOwnerDb.executedStatements.length, 0)
+
+  const upsertDb = createServerActorDb()
+  const upsert = await worker.fetch(serverActorRequest({
+    token: mintTestServerActorToken({ userId: 'user-a' }),
+    body: serverActorCreateCodebaseStatement({ upsert: true }),
+    ip: '203.0.113.76',
+    codebaseId: 'codebase-new',
+  }), multiTenantEnv({ HOPIT_D1_DB: upsertDb }))
+  assert.equal(upsert.status, 403)
+  assert.match((await upsert.json()).errors[0].message, /not entitled/)
+  assert.equal(upsertDb.executedStatements.length, 0)
+
+  const batchDb = createServerActorDb()
+  const batched = await worker.fetch(serverActorRequest({
+    token: mintTestServerActorToken({ userId: 'user-a' }),
+    body: [
+      serverActorCreateCodebaseStatement(),
+      { sql: 'delete from files where codebase_id = ?', params: ['codebase-new'] },
+    ],
+    ip: '203.0.113.77',
+    codebaseId: 'codebase-new',
+  }), multiTenantEnv({ HOPIT_D1_DB: batchDb }))
+  assert.equal(batched.status, 403)
+  assert.match((await batched.json()).errors[0].message, /single-codebase statement/)
+  assert.equal(batchDb.executedStatements.length, 0)
 })
 
 test('server-actor: flag OFF refuses the hsa_ token and executes nothing (single-tenant unchanged)', async () => {

@@ -59,6 +59,7 @@ export async function GET(request: Request) {
       ...(approved ? {
         requesterId: requireText(authorization.requesterId, 'requesterId'),
         apiBaseUrl: publicAgentApiBaseUrl(),
+        ...publicAgentBlobConfig(),
       } : {}),
     }, responseInit())
   } catch (error) {
@@ -79,6 +80,19 @@ function publicAgentApiBaseUrl() {
     throw new Error('HopIt agent API URL is not configured.')
   }
   return value.replace(/\/+$/, '')
+}
+
+function publicAgentBlobConfig() {
+  const provider = process.env.HOPIT_AGENT_BLOB_PROVIDER?.trim().toLowerCase()
+  if (!provider) return {}
+  if (provider !== 'r2') {
+    throw new Error('HopIt agent blob provider is not supported.')
+  }
+  return {
+    blobProvider: provider,
+    blobBroker: true,
+    blobPrefix: process.env.HOPIT_BLOB_PREFIX?.trim().replace(/^\/+|\/+$/g, '') ?? '',
+  }
 }
 
 function requireText(value: unknown, label: string) {

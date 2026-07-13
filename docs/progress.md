@@ -1518,6 +1518,56 @@ Deferred:
 - True read-triggered hydration remains deferred until HopIt chooses a native filesystem provider such as macOS File Provider, FSKit, or FUSE. The v1 managed-folder adapter does not create source-code placeholder files and cannot intercept arbitrary OS reads.
 - Editor-specific signals, production dogfood of the opt-in pruning policy, and production rollout of open-time hydration remain follow-up work.
 
+### 2026-07-13 Phase 3 — isolated staging rehearsal
+
+Completed against isolated infrastructure with `HOPIT_MULTITENANT=1`,
+`HOPIT_ENFORCE_QUOTA=1`, and `HOPIT_BILLING=1`:
+
+- Deployed a protected Vercel preview at `hopit-phase3-staging.vercel.app`, a
+  dedicated `hopit-staging` D1 database, `hopit-blobs-staging` R2 bucket, and
+  `hopit-d1-api-staging` Worker. Production flags, schema, Clerk signup, and
+  deployment were not changed.
+- Created a brand-new Clerk staging user with no owner allowlist and no card.
+  The first Free project succeeded; the second was rejected with the honest
+  `1/1` upgrade wall.
+- Fixed two failures found only by the real rehearsal: a server actor could not
+  create its first not-yet-entitled codebase, and a fresh device authorization
+  did not hand the agent the public R2 broker configuration. New-codebase creation
+  is now limited to one plain actor-owned insert, and connected setup persists
+  `HOPIT_BLOB_PROVIDER=r2`, broker mode, and the non-secret tenant prefix without
+  persisting bucket credentials.
+- Fixed scoped device/key registration so `device_keys` and `user_keyrings` are
+  constrained to the authenticated session user, while wrapped-key operations
+  remain codebase constrained. A real device, user keyring, and device-wrapped
+  user-vault key registered successfully through the scoped session.
+- Proved browser-to-device authorization, local attach, WebSocket connection,
+  one-shot sync, inline D1 storage, and brokered R2 storage. The R2 object's
+  remote SHA-256 matched its local descriptor, while the client environment held
+  no D1 admin token and no R2 access key or secret.
+- Proved live isolation with the real tenant session and a temporary victim
+  tenant: foreign SQL parameters, a foreign codebase session header, and a
+  foreign R2 key prefix all returned `403`; the victim fixture was removed.
+- Proved the Free daily-write cap at exactly `2,000/2,000`: the write failed with
+  `quota_exceeded_daily`, cloud data and the meter did not change, reads/status
+  remained available, and the local journal retained the edit. Restoring the
+  original staging meter replayed the same edit successfully and emitted
+  `sync.recovered`.
+- Completed Stripe Managed Payments sandbox checkout for Plus, including the
+  signed webhook changing the authoritative tenant plan to `paid`. The same
+  second-project create then succeeded. Canceled the test subscription with a
+  test-key and `livemode=false` guard; the deletion webhook restored Free while
+  preserving both projects and all files, and a third project was blocked.
+- Staging schema provisioning required the base `cloudflare/d1/schema.sql` plus
+  the additive `device_authorizations` migrations from
+  `packages/backend-d1/src/schema.js`. Future rehearsals must apply both rather
+  than assuming the base schema is the complete migration history.
+
+Remaining before a production flag flip: configure production billing/webhook
+secrets and schema deliberately, review public legal pages, open Clerk signup,
+and repeat the checklist against the intended go-live environment. Monitor the
+20,000-row paid allowance during the first 30–60 days of real usage as already
+decided.
+
 ## Known Gaps
 
 - Phase 3 billing plumbing is implemented behind `HOPIT_BILLING`: Stripe Managed
@@ -1528,10 +1578,12 @@ Deferred:
   monthly products now exist at $10 and $15 with Stripe's SaaS business-use preset.
   Managed Payments now reports `Ready to use`, both products are eligible, and the
   hosted Customer Portal is configured for prorated upgrades plus end-of-period
-  downgrades and cancellations. The production webhook, Vercel secrets, D1 schema
-  application, deployment, and an end-to-end staging purchase remain. Public
-  privacy/terms pages still require an owner-reviewed legal decision before broad
-  signup.
+  downgrades and cancellations. An isolated end-to-end staging signup, sync,
+  checkout, entitlement lift, cancellation, and downgrade-preservation rehearsal
+  passed on 2026-07-13. The production webhook, Vercel secrets, D1 schema
+  application, deployment, and Clerk signup flip remain deliberate go-live work.
+  Public privacy/terms pages still require an owner-reviewed legal decision before
+  broad signup.
 
 - No full HopIt Workspace Root contract yet: the root-level codebase/workspace index, D1 account-visible discovery with scoped-token fallback, automatic account bootstrap, metadata-only attach, dashboard setup/attach/hydrate/dehydrate/open actions, hydration cursor, metadata-only/partial/materialized state, per-file cache state, path-level hydrate/pin/prune primitives, open-time first-working-set hydration, and explicit metadata-first lazy materialization policy exist, but true read-triggered hydration is deferred until a native filesystem provider is chosen.
 - The current managed folder path has a safe metadata-first policy and dashboard controls, but metadata-only, path hydration, and open-time hydration are still bounded explicit/intent-driven operations rather than complete native demand hydration. Automatic pruning now exists as a conservative opt-in scheduler; default-on policy and production dogfood evidence remain pending.

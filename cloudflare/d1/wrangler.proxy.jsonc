@@ -25,5 +25,35 @@
       "database_name": "hopit",
       "database_id": "5447007f-8bc8-4d24-ae49-08ad252e53f4"
     }
-  ]
+  ],
+  "env": {
+    "staging": {
+      "workers_dev": true,
+      "preview_urls": false,
+      "vars": {
+        "HOPIT_MULTITENANT": "1",
+        "HOPIT_ENFORCE_QUOTA": "1",
+        "HOPIT_R2_ACCOUNT_ID": "7e973beb5ca98560ac7bbe1e2694337a",
+        "HOPIT_R2_BUCKET": "hopit-blobs-staging",
+        "HOPIT_BLOB_PREFIX": "hopit-staging",
+        "HOPIT_BLOB_BROKER_TTL_SECONDS": "120",
+        "HOPIT_D1_PROXY_LOG_REQUESTS": "1"
+      },
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "HOPIT_PUSH_HUB",
+            "class_name": "CodebasePushHub"
+          }
+        ]
+      },
+      "d1_databases": [
+        {
+          "binding": "HOPIT_D1_DB",
+          "database_name": "hopit-staging",
+          "database_id": "a60007da-458c-424f-a523-73aa8e1b9e31"
+        }
+      ]
+    }
+  }
 }

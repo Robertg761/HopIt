@@ -123,14 +123,29 @@ async function authorizeServerActorRequest(request, env, statements, token) {
 
   const statementPolicies = statements.map((statement) => assertServerActorStatementAllowed(actor, statement))
   const referencedCodebaseIds = new Set()
+  const createdCodebaseIds = new Set()
   for (const policy of statementPolicies) {
     for (const codebaseId of policy.codebaseIds ?? []) referencedCodebaseIds.add(codebaseId)
+    if (policy.createsCodebaseId) createdCodebaseIds.add(policy.createsCodebaseId)
+  }
+  if (createdCodebaseIds.size > 0) {
+    if (statements.length !== 1 || createdCodebaseIds.size !== 1 || referencedCodebaseIds.size !== 1) {
+      throw new Error('Server actor codebase creation must be a single-codebase statement.')
+    }
+    const [createdCodebaseId] = createdCodebaseIds
+    if (!referencedCodebaseIds.has(createdCodebaseId)) {
+      throw new Error('Server actor codebase creation scope is invalid.')
+    }
   }
   // The dynamic half of the tenant check: every codebase named by the batch must
   // be one this authenticated user owns or is an active member of. This is what
   // makes a forged/absent predicate on the dashboard path fail closed AT THE
   // WORKER rather than relying on application-level filtering.
-  await assertServerActorEntitlement(env.HOPIT_D1_DB, actor.userId, [...referencedCodebaseIds])
+  await assertServerActorEntitlement(
+    env.HOPIT_D1_DB,
+    actor.userId,
+    [...referencedCodebaseIds].filter((codebaseId) => !createdCodebaseIds.has(codebaseId)),
+  )
 
   return { kind: 'server-actor', actor, statementPolicies }
 }

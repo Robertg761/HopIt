@@ -131,6 +131,24 @@ describe('proxy() unchanged pass-throughs (Clerk mode)', () => {
     expect(isClerkRedirect(response)).toBe(false)
   })
 
+  it('lets Stripe webhooks reach their signature verifier without Clerk', () => {
+    const response = run('/api/billing/webhook')
+    expect(isPassThrough(response)).toBe(true)
+    expect(isClerkRedirect(response)).toBe(false)
+  })
+
+  it('lets the billing reconcile cron reach its secret check without Clerk', () => {
+    const response = run('/api/billing/reconcile')
+    expect(isPassThrough(response)).toBe(true)
+    expect(isClerkRedirect(response)).toBe(false)
+  })
+
+  it('keeps browser-authenticated billing routes protected', () => {
+    const response = run('/api/billing/checkout')
+    expect(isClerkRedirect(response)).toBe(true)
+    expect(isPassThrough(response)).toBe(false)
+  })
+
   it('keeps the install route public', () => {
     const response = run('/install')
     expect(isPassThrough(response)).toBe(true)

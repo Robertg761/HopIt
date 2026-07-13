@@ -51,6 +51,9 @@ function approvedResponseBody(keyring) {
     tokenContext,
     wrappedSessionToken,
     apiBaseUrl: 'https://agent-api.example.test',
+    blobProvider: 'r2',
+    blobBroker: true,
+    blobPrefix: 'hopit-staging',
     codebaseId: 'my-project',
     requesterId: 'user_fixture',
     sessionId: 'session_fixture',
@@ -97,6 +100,9 @@ test('authorizeDeviceWithBrowser tolerates a dropped poll and completes on the n
     assert.equal(connection.sessionToken, 'hst_fixture_session_token')
     assert.equal(connection.apiBaseUrl, 'https://agent-api.example.test')
     assert.equal(connection.remotePushUrl, 'wss://agent-api.example.test/events')
+    assert.equal(connection.blobProvider, 'r2')
+    assert.equal(connection.blobBroker, true)
+    assert.equal(connection.blobPrefix, 'hopit-staging')
     assert.equal(connection.authorizationId, 'dau_fixture')
   } finally {
     await fixture.close()

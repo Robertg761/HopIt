@@ -368,6 +368,7 @@ export async function authorizeDeviceWithBrowser({
     }).toString('utf8')
     if (!sessionToken.startsWith('hst_')) throw new Error('Device authorization returned an invalid session token.')
     const apiBaseUrl = requireResponseText(polled.apiBaseUrl, 'apiBaseUrl').replace(/\/+$/, '')
+    const blobProvider = optionalResponseText(polled.blobProvider)
     return {
       codebaseId: requireResponseText(polled.codebaseId, 'codebaseId'),
       requesterId: requireResponseText(polled.requesterId, 'requesterId'),
@@ -375,6 +376,11 @@ export async function authorizeDeviceWithBrowser({
       sessionToken,
       apiBaseUrl,
       remotePushUrl: deriveRemotePushUrl(apiBaseUrl),
+      ...(blobProvider ? {
+        blobProvider,
+        blobBroker: polled.blobBroker === true,
+        blobPrefix: optionalResponseText(polled.blobPrefix) ?? '',
+      } : {}),
       authorizationId: requireResponseText(polled.authorizationId, 'authorizationId'),
     }
   }
@@ -443,6 +449,10 @@ function requireResponseText(value, label) {
   return value.trim()
 }
 
+function optionalResponseText(value) {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
+}
+
 function recordValue(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : null
 }
@@ -506,6 +516,11 @@ export async function writeConnectedEnvFile(envFilePath, installOptions, connect
     HOPIT_REMOTE_PULL: '1',
     HOPIT_REMOTE_PUSH: '1',
     HOPIT_REMOTE_PUSH_URL: connection.remotePushUrl,
+    ...(connection.blobProvider ? {
+      HOPIT_BLOB_PROVIDER: connection.blobProvider,
+      HOPIT_BLOB_BROKER: connection.blobBroker ? '1' : '0',
+      HOPIT_BLOB_PREFIX: connection.blobPrefix ?? '',
+    } : {}),
   }
   for (const [key, value] of Object.entries(values)) {
     const line = `${key}=${formatEnvValue(value)}`

@@ -20,8 +20,9 @@ export function assertScopedSessionStatementAllowed(session, statement) {
     throw new Error(`Agent session does not have ${requiredCapability} capability.`)
   }
 
-  if (!statementIsScopedToCodebase(normalized, params, session)) {
-    throw new Error('Scoped agent session SQL must be constrained to its codebase.')
+  if (!statementIsScopedToCodebase(normalized, params, session)
+    && !statementIsScopedToSessionUser(normalized, params, session)) {
+    throw new Error('Scoped agent session SQL must be constrained to its codebase or authenticated user.')
   }
 
   return policy
@@ -57,6 +58,21 @@ export function assertServerActorStatementAllowed(actor, statement) {
   if (!table) throw new Error('Server actor SQL must target a known table.')
 
   const codebaseIds = serverActorReferencedCodebaseIds(normalized, params, operation)
+
+  // Creating a brand-new codebase is the one legitimate server-actor operation
+  // that cannot pass the dynamic entitlement lookup yet: the row does not exist.
+  // Permit only a plain INSERT whose owner_id is the authenticated actor. The
+  // Worker separately requires this to be the request's sole statement. UPSERTs
+  // stay on the normal entitlement path so a colliding id can never overwrite a
+  // codebase owned by another tenant.
+  if (table === 'codebases' && operation === 'insert' && !/\bon conflict\b/.test(normalized)) {
+    const createsCodebaseId = serverActorInsertedCodebaseId(normalized, params)
+    const ownerId = serverActorInsertedColumnValue(normalized, params, 'owner_id')
+    if (!createsCodebaseId || ownerId !== userId) {
+      throw new Error('Server actor can only create a codebase it owns.')
+    }
+    return { operation, table, codebaseIds, createsCodebaseId }
+  }
 
   // codebases / codebase_members are the only tables the dashboard reaches
   // across codebases (the "list my codebases" surface). Either they are pinned
@@ -426,6 +442,28 @@ function statementIsScopedToCodebase(normalizedSql, params, session) {
 
   if (hasDirectCodebasePredicate(normalizedSql, params, codebaseId)) return true
   return table === 'agent_sessions' && hasOwnSessionPredicate(normalizedSql, params, session.session_id)
+}
+
+const sessionUserScopedTables = new Set(['device_keys', 'user_keyrings'])
+
+function statementIsScopedToSessionUser(normalizedSql, params, session) {
+  const userId = session?.user_id
+  if (!userId) return false
+  const operation = normalizedSql.match(/^(select|insert|update|delete)\b/)?.[1]
+  const table = primaryTableForStatement(normalizedSql, operation)
+  if (!table || !sessionUserScopedTables.has(table)) return false
+
+  if (operation === 'insert') {
+    return serverActorInsertedColumnValue(normalizedSql, params, 'user_id') === userId
+  }
+
+  const matches = []
+  const pattern = /\b(?:[a-z_][a-z0-9_]*\.)?user_id\s*=\s*\?/g
+  for (const match of sqlCodeView(normalizedSql).matchAll(pattern)) {
+    const questionIndex = match.index + match[0].lastIndexOf('?')
+    matches.push(countSqlPlaceholders(normalizedSql.slice(0, questionIndex)))
+  }
+  return matches.length > 0 && matches.every((ordinal) => params[ordinal] === userId)
 }
 
 const codebaseScopedTables = new Set([

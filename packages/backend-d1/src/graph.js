@@ -70,6 +70,49 @@ export function attachGraphMethods(Backend) {
     return normalizeGraph(graphFromRows(codebaseRow, fileRows))
   },
 
+  async insertNewGraph(graph, options = {}) {
+    await this.ensureSchema()
+    const normalized = normalizeGraph(graph)
+    const codebaseId = normalized.codebase.id
+    const files = Object.entries(normalized.files ?? {})
+    if (files.length > 0) throw new Error('A new codebase graph must start empty.')
+    this.codebaseId = codebaseId
+    this.location = `d1:${this.config.databaseId}:${codebaseId}`
+    const now = options.now ?? new Date().toISOString()
+
+    // This must remain a plain INSERT. In multi-tenant mode the Worker permits
+    // an authenticated server actor to create exactly one codebase it owns, but
+    // deliberately refuses an UPSERT until entitlement already exists. A global
+    // UUID makes collisions negligible; the database uniqueness constraint is
+    // the final guard against replacing another tenant's row.
+    await this.query(
+      `insert into codebases (
+        codebase_id, name, owner_id, schema_version, revision, main_json,
+        selected_state_json, owner_json, collaborators_json, session_json,
+        visibility_json, file_count, private_file_count, member_count, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        codebaseId,
+        normalized.codebase.name,
+        normalized.codebase.ownerId,
+        normalized.schemaVersion,
+        normalized.revision,
+        stringifyJson(normalized.main),
+        stringifyJson(normalized.selectedState),
+        stringifyJson(normalized.owner),
+        stringifyJson(normalized.collaborators),
+        stringifyJson(normalized.session),
+        stringifyJson(normalized.visibility),
+        0,
+        0,
+        graphMemberCount(normalized),
+        now,
+      ],
+    )
+
+    return { ok: true, codebaseId, revision: normalized.revision, fileCount: 0 }
+  },
+
   async writeGraph(graph, options = {}) {
     await this.ensureSchema()
     const normalized = normalizeGraph(graph)
@@ -693,7 +736,6 @@ export function attachGraphMethods(Backend) {
     const id = codebaseId === undefined || codebaseId === null
       ? allocateCodebaseId(normalizedName)
       : normalizeNewCodebaseId(codebaseId)
-    if (await this.readOptionalGraph(id)) throw new Error(`Codebase ${id} already exists.`)
     const ownerId = stringOrNull(actor.userId) ?? 'local-owner'
     // Plane-A quota gate (Phase 3 Stage 3): with multi-tenancy on, enforce the
     // plan's codebase-count cap (free = 1) at create time. Codebase count is
@@ -761,7 +803,7 @@ export function attachGraphMethods(Backend) {
       revision: 0,
       files: {},
     })
-    await this.writeGraph(graph, { actor })
+    await this.insertNewGraph(graph, { actor, now })
     await this.upsertMember({
       codebaseId: id,
       userId: ownerId,

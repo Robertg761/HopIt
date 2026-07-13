@@ -21,6 +21,13 @@ const isInstallRoute = createRouteMatcher(['/install', '/install.sh'])
 // Device-code creation and polling are intentionally public. Approval lives on
 // a separate Clerk-protected route and requires the signed-in user.
 const isPublicDeviceAuthorizationRoute = createRouteMatcher(['/api/device-authorizations'])
+// Stripe webhooks and the Vercel reconcile cron authenticate inside their
+// route handlers (signature verification and CRON_SECRET respectively). They
+// must reach those handlers without an ambient Clerk browser session.
+const isServerAuthenticatedBillingRoute = createRouteMatcher([
+  '/api/billing/webhook',
+  '/api/billing/reconcile',
+])
 
 const clerkProxy = clerkMiddleware(async (auth, request) => {
   await auth.protect({ unauthenticatedUrl: new URL(signInPath, request.url).toString() })
@@ -28,7 +35,11 @@ const clerkProxy = clerkMiddleware(async (auth, request) => {
 })
 
 export function proxy(request: NextRequest, event: NextFetchEvent) {
-  if (isInstallRoute(request) || isPublicDeviceAuthorizationRoute(request)) return NextResponse.next()
+  if (
+    isInstallRoute(request)
+    || isPublicDeviceAuthorizationRoute(request)
+    || isServerAuthenticatedBillingRoute(request)
+  ) return NextResponse.next()
 
   if (shouldUseClerkAuth()) {
     if (!isClerkServerConfigured()) return authProviderMissing()
