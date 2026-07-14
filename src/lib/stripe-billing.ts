@@ -91,6 +91,7 @@ export async function createManagedCheckout(input: {
     success_url: input.successUrl,
     cancel_url: input.cancelUrl,
     allow_promotion_codes: false,
+    consent_collection: { terms_of_service: 'required' },
     managed_payments: { enabled: true },
   }
   return stripeClient().checkout.sessions.create(
