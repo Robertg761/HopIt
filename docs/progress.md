@@ -1663,6 +1663,26 @@ or charge.
 - Verification: full `npm run verify` passed (agent 315, web 149, Worker 82,
   config 2, TypeScript, lint, optimized Next build) and desktop 124/124 passed.
 
+### 2026-07-14 comprehensive service control plane
+
+- Expanded `/admin` into six focused views: Overview, Tenants, Billing, Fleet &
+  Sync, Infrastructure, and Audit. The Worker now returns repository inventory,
+  account growth windows, full safe session/device/pairing metadata, hosted
+  action state, Stripe webhook history, keyring/rotation health, invitation
+  state, subscription provider ids, and recent sync detail without returning
+  credentials, key material, approval codes, or raw action output.
+- Added tenant drill-down and redacted snapshot export. Live runtime cards expose
+  feature/config presence, deployment commit/region, plan ceilings, and provider
+  links while secret values remain server-only.
+- Added confirmation-gated, durably audited controls for revoking every tenant
+  session, revoking a trusted device plus its linked sessions/pairings, expiring
+  pending device setup, canceling a queued hosted action, retrying a failed
+  hosted action, and setting or clearing Stripe end-of-period cancellation.
+  Stripe subscription ids are resolved server-side from the tenant record, and
+  billing reconciliation runs after every renewal change.
+- Verification: full `npm run verify` passed (agent 315, web 152, Worker 85,
+  config 2, TypeScript, lint, optimized Next build) and desktop 124/124 passed.
+
 ## Known Gaps
 
 - Phase 3 billing plumbing is live behind `HOPIT_BILLING`: Stripe Managed

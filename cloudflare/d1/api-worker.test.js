@@ -1612,6 +1612,20 @@ function createAdminOperationsDb() {
       status: 'active', capabilities_json: '["read","write","sync"]', expires_at: null,
       created_at: '2026-07-13T00:00:00.000Z', last_seen_at: '2026-07-14T12:00:00.000Z', revoked_at: null,
     },
+    device: {
+      device_id: 'device-owner-1', user_id: 'owner-user', display_name: 'Owner Mac', platform: 'darwin',
+      status: 'trusted', created_at: '2026-07-13T00:00:00.000Z', trusted_at: '2026-07-13T00:01:00.000Z',
+      revoked_at: null, last_seen_at: '2026-07-14T12:00:00.000Z',
+    },
+    authorization: {
+      authorization_id: 'auth-owner-1', device_id: 'device-owner-1', device_name: 'Owner Mac', platform: 'darwin',
+      status: 'pending', user_id: 'owner-user', codebase_id: 'repo-1', session_id: 'session-owner-1',
+      created_at: '2026-07-14T12:00:00.000Z', expires_at: '2026-07-14T12:10:00.000Z', updated_at: '2026-07-14T12:00:00.000Z',
+    },
+    job: {
+      job_id: 'job-owner-1', codebase_id: 'repo-1', kind: 'test', command: 'npm test', status: 'failed',
+      requested_by_user_id: 'owner-user', created_at: '2026-07-14T11:00:00.000Z', updated_at: '2026-07-14T11:05:00.000Z',
+    },
   }
   const users = [
     { user_id: 'owner-user', primary_email: 'owner@example.com', display_name: 'Owner', email_verified: 1, created_at: '2026-07-01T00:00:00.000Z', updated_at: '2026-07-14T00:00:00.000Z' },
@@ -1640,12 +1654,19 @@ function createAdminOperationsDb() {
               if (normalized.includes('from codebases group by owner_id')) return { results: [{ tenant_id: 'owner-user', codebase_count: 1, file_count: 2, last_codebase_update: '2026-07-14T12:00:00.000Z' }] }
               if (normalized.includes('count(*) as session_count')) return { results: [{ tenant_id: 'owner-user', session_count: 1, active_session_count: state.session.status === 'active' ? 1 : 0, last_seen_at: state.session.last_seen_at }] }
               if (normalized.includes('from agent_sessions s join codebases c') && normalized.includes('s.session_id')) return { results: [{ ...state.session, tenant_id: 'owner-user', codebase_name: 'HopIt' }] }
-              if (normalized.includes('from action_jobs')) return { results: [] }
+              if (normalized.includes('from device_authorizations order by')) return { results: [state.authorization] }
+              if (normalized.includes('from device_keys order by')) return { results: [state.device] }
+              if (normalized.includes('from action_jobs j left join')) return { results: [{ ...state.job, codebase_name: 'HopIt', tenant_id: 'owner-user' }] }
+              if (normalized.includes('from action_jobs') && normalized.includes('group by status')) return { results: [{ status: state.job.status, count: 1 }] }
               if (normalized.includes('from agent_events e')) return { results: [{ id: 1, codebase_id: 'repo-1', codebase_name: 'HopIt', tenant_id: 'owner-user', event: 'sync.complete', at: '2026-07-14T12:00:00.000Z', source: 'agent' }] }
               if (normalized.includes('from service_admin_events order by')) return { results: [...state.adminEvents].reverse() }
               if (normalized.includes('from billing_webhook_events')) return { results: [{ received_at: '2026-07-14T11:00:00.000Z', event_created_at: '2026-07-14T11:00:00.000Z' }] }
               if (normalized.includes('select tenant_id from tenant_usage')) return { results: params[0] === 'owner-user' ? [{ tenant_id: 'owner-user' }] : [] }
               if (normalized.includes('select session_id, codebase_id, status from agent_sessions')) return { results: params[0] === state.session.session_id ? [state.session] : [] }
+              if (normalized.includes('select device_id, user_id, status from device_keys')) return { results: params[0] === state.device.device_id ? [state.device] : [] }
+              if (normalized.startsWith('select session_id from device_authorizations')) return { results: params[0] === state.device.device_id ? [{ session_id: state.session.session_id }] : [] }
+              if (normalized.includes('select authorization_id, status, device_id, user_id')) return { results: params[0] === state.authorization.authorization_id ? [state.authorization] : [] }
+              if (normalized.includes('select job_id, codebase_id, status from action_jobs')) return { results: params[0] === state.job.job_id ? [state.job] : [] }
               if (normalized.startsWith('insert into tenant_controls')) {
                 state.controls.set(params[0], { writes_paused: params[1], reason: params[2], updated_at: params[5] })
                 return { success: true, results: [], meta: { changes: 1 } }
@@ -1653,6 +1674,24 @@ function createAdminOperationsDb() {
               if (normalized.startsWith('update agent_sessions set status')) {
                 state.session.status = 'revoked'
                 state.session.revoked_at = params[1]
+                return { success: true, results: [], meta: { changes: 1 } }
+              }
+              if (normalized.startsWith('update device_keys set status')) {
+                state.device.status = 'revoked'
+                state.device.revoked_at = params[0]
+                return { success: true, results: [], meta: { changes: 1 } }
+              }
+              if (normalized.startsWith('update device_authorizations set status')) {
+                state.authorization.status = 'expired'
+                state.authorization.updated_at = params[0]
+                return { success: true, results: [], meta: { changes: 1 } }
+              }
+              if (normalized.startsWith("update action_jobs set status = 'canceled'")) {
+                state.job.status = 'canceled'
+                return { success: true, results: [], meta: { changes: 1 } }
+              }
+              if (normalized.startsWith("update action_jobs set status = 'queued'")) {
+                state.job.status = 'queued'
                 return { success: true, results: [], meta: { changes: 1 } }
               }
               if (normalized.startsWith('insert into service_admin_events')) {
@@ -1735,6 +1774,44 @@ test('operations: revoking a device session updates fleet health and audit histo
   assert.equal(result.sessions[0].status, 'revoked')
   assert.equal(result.totals.activeSessions, 0)
   assert.equal(db.state.adminEvents.at(-1).action, 'revoke_session')
+})
+
+test('operations: tenant containment revokes every active session and is audited', async () => {
+  const db = createAdminOperationsDb()
+  const response = await worker.fetch(adminOperationsRequest({
+    method: 'POST', body: { action: 'revoke_tenant_sessions', tenantId: 'owner-user', confirmation: 'owner-user' },
+  }), adminOperationsEnv(db))
+  assert.equal(response.status, 200)
+  assert.equal(db.state.session.status, 'revoked')
+  assert.equal(db.state.adminEvents.at(-1).action, 'revoke_tenant_sessions')
+})
+
+test('operations: revoking a trusted device also revokes linked sessions and pending setup', async () => {
+  const db = createAdminOperationsDb()
+  const response = await worker.fetch(adminOperationsRequest({
+    method: 'POST', body: { action: 'revoke_device', deviceId: 'device-owner-1', confirmation: 'device-owner-1' },
+  }), adminOperationsEnv(db))
+  assert.equal(response.status, 200)
+  assert.equal(db.state.device.status, 'revoked')
+  assert.equal(db.state.session.status, 'revoked')
+  assert.equal(db.state.authorization.status, 'expired')
+  assert.equal(db.state.adminEvents.at(-1).action, 'revoke_device')
+})
+
+test('operations: queued jobs can be canceled and failed jobs can be requeued', async () => {
+  const db = createAdminOperationsDb()
+  const requeued = await worker.fetch(adminOperationsRequest({
+    method: 'POST', body: { action: 'requeue_action_job', jobId: 'job-owner-1', confirmation: 'job-owner-1' },
+  }), adminOperationsEnv(db))
+  assert.equal(requeued.status, 200)
+  assert.equal(db.state.job.status, 'queued')
+
+  const canceled = await worker.fetch(adminOperationsRequest({
+    method: 'POST', body: { action: 'cancel_action_job', jobId: 'job-owner-1', confirmation: 'job-owner-1' },
+  }), adminOperationsEnv(db))
+  assert.equal(canceled.status, 200)
+  assert.equal(db.state.job.status, 'canceled')
+  assert.deepEqual(db.state.adminEvents.slice(-2).map((event) => event.action), ['requeue_action_job', 'cancel_action_job'])
 })
 
 async function captureLogs(callback) {

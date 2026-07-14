@@ -458,6 +458,19 @@ pricing changes. The D1 Worker also needs `HOPIT_OWNER_EMAIL` as a Worker secret
 or variable so the typed `/admin/operations` endpoint can independently verify
 the owner; do not grant the browser a proxy token.
 
+The console is organized as Overview, Tenants, Billing, Fleet & Sync,
+Infrastructure, and Audit. It exposes account growth windows, plan and quota
+pressure, repository inventory, trusted devices and pairing attempts, active and
+revoked sessions, hosted action jobs, subscription/webhook state, keyring and
+invitation health, deployment/config presence, margin assumptions, and the owner
+audit ledger. Controls are confirmation-gated and include tenant write
+pause/resume, tenant-wide session containment, individual session or trusted
+device revocation, pairing expiration, queued-job cancellation, failed-job
+requeue, Stripe end-of-period cancellation/resume, and billing reconciliation.
+The browser can export the current redacted operations snapshot; it never
+receives secret values, approval codes, raw key material, storage credentials,
+or a D1 proxy token. Paid entitlement still comes only from Stripe.
+
 Hosted HopIt requires cloud-backed status. The `/api/agent/command` route refuses local workspace commands on Vercel. The current production env uses `HOPIT_AUTH_PROVIDER=clerk`; keep `HOPIT_ALLOW_BASIC_AUTH_FALLBACK` unset for normal production access. Vercel Deployment Protection can be enabled as an additional account-level guard.
 
 ## Domain And Auth Rollout

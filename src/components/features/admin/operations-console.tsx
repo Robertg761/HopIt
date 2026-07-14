@@ -2,15 +2,28 @@
 
 import * as React from 'react'
 import {
+  Activity,
   AlertTriangle,
   Ban,
   CircleDollarSign,
   Database,
+  Download,
+  ExternalLink,
+  GitBranch,
+  HardDrive,
+  KeyRound,
+  MoreHorizontal,
   Play,
   RefreshCw,
+  RotateCcw,
+  Server,
   ShieldCheck,
   Smartphone,
+  Terminal,
+  UserPlus,
+  Users,
   Webhook,
+  XCircle,
 } from 'lucide-react'
 
 import { PageScaffold } from '@/components/shell/page-scaffold'
@@ -18,18 +31,38 @@ import { Badge, type BadgeTone } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog } from '@/components/ui/dialog'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { StatusDot } from '@/components/ui/status-dot'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/hooks/use-toast'
 import { cn } from '@/lib/utils'
 
 type Json = Record<string, any>
 
 type PendingAction = {
-  action: 'pause_tenant_writes' | 'resume_tenant_writes' | 'revoke_session'
+  action:
+    | 'pause_tenant_writes'
+    | 'resume_tenant_writes'
+    | 'revoke_session'
+    | 'revoke_tenant_sessions'
+    | 'revoke_device'
+    | 'expire_device_authorization'
+    | 'cancel_action_job'
+    | 'requeue_action_job'
+    | 'set_subscription_cancellation'
   targetId: string
+  targetType: 'tenant' | 'session' | 'device' | 'authorization' | 'job'
   label: string
+  detail?: string
+  cancelAtPeriodEnd?: boolean
 }
 
 const POLL_MS = 30_000
@@ -43,6 +76,7 @@ export function OperationsConsole() {
   const [error, setError] = React.useState<string | null>(null)
   const [query, setQuery] = React.useState('')
   const [pending, setPending] = React.useState<PendingAction | null>(null)
+  const [selectedTenantId, setSelectedTenantId] = React.useState<string | null>(null)
   const [reason, setReason] = React.useState('')
 
   const refresh = React.useCallback(async (quiet = false) => {
@@ -102,6 +136,18 @@ export function OperationsConsole() {
       .some((value) => String(value ?? '').toLowerCase().includes(needle))
   })
   const alerts = data ? buildAlerts(data) : []
+  const selectedTenant = tenants.find((tenant: Json) => tenant.tenantId === selectedTenantId) ?? null
+
+  function exportSnapshot() {
+    if (!data) return
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `hopit-operations-${new Date().toISOString().replaceAll(':', '-')}.json`
+    anchor.click()
+    URL.revokeObjectURL(url)
+  }
 
   return (
     <PageScaffold
@@ -116,6 +162,10 @@ export function OperationsConsole() {
           <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={refreshing}>
             <RefreshCw className={cn(refreshing && 'animate-spin')} />
             Refresh
+          </Button>
+          <Button variant="outline" size="sm" onClick={exportSnapshot} disabled={!data}>
+            <Download />
+            Export
           </Button>
           <Button
             size="sm"
@@ -132,23 +182,71 @@ export function OperationsConsole() {
         <>
           {error ? <InlineNotice tone="danger" title="Live refresh failed" detail={error} /> : null}
           <ServiceRail data={data} />
-          <EconomicsPanel economics={data.economics} />
-          <AttentionQueue alerts={alerts} />
-          <TenantTable
-            tenants={filteredTenants}
-            query={query}
-            onQueryChange={setQuery}
-            onAction={(action) => {
-              setPending(action)
-              setReason('')
-            }}
-          />
-          <div className="grid items-start gap-4 xl:grid-cols-[1.15fr_.85fr]">
-            <SessionPanel sessions={data.sessions ?? []} onRevoke={(action) => setPending(action)} />
-            <EventPanel events={data.recentEvents ?? []} adminEvents={data.adminEvents ?? []} />
-          </div>
+          <Tabs defaultValue="overview">
+            <TabsList className="sticky top-0 z-10 bg-background/95 backdrop-blur">
+              <TabsTrigger value="overview">Overview</TabsTrigger>
+              <TabsTrigger value="tenants" count={tenants.length}>Tenants</TabsTrigger>
+              <TabsTrigger value="billing" count={number(data.totals?.activeSubscriptions)}>Billing</TabsTrigger>
+              <TabsTrigger value="fleet" count={number(data.totals?.activeSessions)}>Fleet & sync</TabsTrigger>
+              <TabsTrigger value="infrastructure">Infrastructure</TabsTrigger>
+              <TabsTrigger value="audit">Audit</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="overview" className="space-y-4">
+              <GrowthPanel data={data} />
+              <EconomicsPanel economics={data.economics} />
+              <AttentionQueue alerts={alerts} />
+              <div className="grid items-start gap-4 xl:grid-cols-[1.15fr_.85fr]">
+                <JobsPanel jobs={data.actionJobs ?? []} onAction={setPending} compact />
+                <EventPanel events={data.recentEvents ?? []} adminEvents={data.adminEvents ?? []} />
+              </div>
+            </TabsContent>
+
+            <TabsContent value="tenants" className="space-y-4">
+              <TenantTable
+                tenants={filteredTenants}
+                query={query}
+                onQueryChange={setQuery}
+                onOpen={(tenantId) => setSelectedTenantId(tenantId)}
+                onAction={(action) => {
+                  setPending(action)
+                  setReason('')
+                }}
+              />
+            </TabsContent>
+
+            <TabsContent value="billing" className="space-y-4">
+              <BillingPanel data={data} onAction={setPending} />
+              <EconomicsPanel economics={data.economics} />
+            </TabsContent>
+
+            <TabsContent value="fleet" className="space-y-4">
+              <FleetPanel data={data} onAction={setPending} />
+              <JobsPanel jobs={data.actionJobs ?? []} onAction={setPending} />
+            </TabsContent>
+
+            <TabsContent value="infrastructure" className="space-y-4">
+              <ConfigurationPanel data={data} />
+              <RepositoryInventory codebases={data.codebases ?? []} />
+              <SecurityPanel security={data.security ?? {}} />
+            </TabsContent>
+
+            <TabsContent value="audit" className="space-y-4">
+              <AuditLedger data={data} />
+            </TabsContent>
+          </Tabs>
         </>
       ) : null}
+
+      <TenantDetailDialog
+        tenant={selectedTenant}
+        data={data}
+        onClose={() => setSelectedTenantId(null)}
+        onAction={(action) => {
+          setPending(action)
+          setReason('')
+        }}
+      />
 
       <Dialog
         open={Boolean(pending)}
@@ -156,29 +254,19 @@ export function OperationsConsole() {
           if (!open) setPending(null)
         }}
         title={pending?.label ?? 'Confirm operation'}
-        description={pending?.action === 'pause_tenant_writes'
-          ? 'Cloud writes will pause. Reads, exports, deletes that free storage, and local journals remain available.'
-          : pending?.action === 'revoke_session'
-            ? 'This device must authenticate again before it can sync.'
-            : 'Cloud writes will resume under the tenant’s normal plan limits.'}
+        description={pending?.detail ?? actionDescription(pending)}
         footer={
           <>
             <Button variant="outline" onClick={() => setPending(null)}>Cancel</Button>
             <Button
-              variant={pending?.action === 'resume_tenant_writes' ? 'default' : 'destructive'}
+              variant={safeAction(pending) ? 'default' : 'destructive'}
               disabled={!pending || Boolean(running)}
               onClick={() => {
                 if (!pending) return
-                void runAction({
-                  action: pending.action,
-                  ...(pending.action === 'revoke_session'
-                    ? { sessionId: pending.targetId }
-                    : { tenantId: pending.targetId, reason }),
-                  confirmation: pending.targetId,
-                }, pending.label)
+                void runAction(actionBody(pending, reason), pending.label)
               }}
             >
-              {pending?.action === 'resume_tenant_writes' ? <Play /> : <Ban />}
+              {safeAction(pending) ? <Play /> : <Ban />}
               Confirm
             </Button>
           </>
@@ -189,11 +277,7 @@ export function OperationsConsole() {
             Operator note
             <Input value={reason} onChange={(event) => setReason(event.target.value)} placeholder="Security review, abuse investigation…" maxLength={240} />
           </label>
-        ) : (
-          <p className="rounded-md border border-border bg-muted/50 p-3 font-mono text-xs text-muted-foreground break-all">
-            {pending?.targetId}
-          </p>
-        )}
+        ) : <ConfirmationTarget target={pending?.targetId} />}
       </Dialog>
     </PageScaffold>
   )
@@ -296,7 +380,178 @@ function AttentionQueue({ alerts }: { alerts: Json[] }) {
   )
 }
 
-function TenantTable({ tenants, query, onQueryChange, onAction }: { tenants: Json[]; query: string; onQueryChange: (value: string) => void; onAction: (action: PendingAction) => void }) {
+function GrowthPanel({ data }: { data: Json }) {
+  const totals = data.totals ?? {}
+  const syncEvents = Object.entries(totals.eventTypes24h ?? {}).reduce((sum, [, value]) => sum + number(value), 0)
+  const metrics = [
+    { icon: Users, label: 'Accounts', value: compact(totals.users), detail: `${compact(totals.newUsers7d)} new in 7d` },
+    { icon: GitBranch, label: 'Repositories', value: compact(totals.codebases), detail: `${compact(data.codebases?.reduce((sum: number, repo: Json) => sum + number(repo.fileCount), 0))} files` },
+    { icon: HardDrive, label: 'Tracked storage', value: bytes(number(totals.totalStorageBytes)), detail: `${compact(totals.storageAt80)} near cap` },
+    { icon: Activity, label: 'Sync events', value: compact(syncEvents), detail: 'Last 24 hours' },
+    { icon: UserPlus, label: 'Pending setup', value: compact(totals.pendingDeviceAuthorizations), detail: `${compact(totals.activeDevices)} trusted devices` },
+    { icon: Terminal, label: 'Action failures', value: compact(totals.actionJobs24h?.failed), detail: `${compact(totals.actionJobs24h?.running)} running` },
+  ]
+  return (
+    <div className="grid gap-px overflow-hidden rounded-md border border-border bg-border sm:grid-cols-2 xl:grid-cols-6">
+      {metrics.map((metric) => (
+        <div key={metric.label} className="bg-card p-4">
+          <metric.icon className="mb-3 size-4 text-muted-foreground" />
+          <p className="text-2xl font-semibold tracking-tight">{metric.value}</p>
+          <p className="mt-1 text-xs font-medium">{metric.label}</p>
+          <p className="text-[11px] text-muted-foreground">{metric.detail}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function TenantActions({ tenant, onAction }: { tenant: Json; onAction: (action: PendingAction) => void }) {
+  const subscription = tenant.subscription
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild><Button variant="outline" size="icon-sm" aria-label={`Manage ${tenant.email || tenant.tenantId}`}><MoreHorizontal /></Button></DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-60">
+        <DropdownMenuItem onSelect={() => onAction({
+          action: tenant.writesPaused ? 'resume_tenant_writes' : 'pause_tenant_writes',
+          targetId: tenant.tenantId,
+          targetType: 'tenant',
+          label: tenant.writesPaused ? 'Tenant writes resumed' : 'Tenant writes paused',
+        })}>{tenant.writesPaused ? <Play /> : <Ban />}{tenant.writesPaused ? 'Resume cloud writes' : 'Pause cloud writes'}</DropdownMenuItem>
+        <DropdownMenuItem variant="destructive" disabled={!tenant.activeSessionCount} onSelect={() => onAction({
+          action: 'revoke_tenant_sessions', targetId: tenant.tenantId, targetType: 'tenant', label: 'Tenant sessions revoked',
+          detail: 'Every active sync session owned by this tenant will be revoked. Each device must authenticate again.',
+        })}><XCircle />Revoke all sessions</DropdownMenuItem>
+        {subscription?.providerSubscriptionId ? <>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onSelect={() => onAction({
+            action: 'set_subscription_cancellation', targetId: tenant.tenantId, targetType: 'tenant',
+            label: subscription.cancelAtPeriodEnd ? 'Subscription renewal resumed' : 'Subscription set to cancel',
+            cancelAtPeriodEnd: !subscription.cancelAtPeriodEnd,
+            detail: subscription.cancelAtPeriodEnd
+              ? 'Stripe will resume renewal at the next billing period. No immediate charge is created by this action.'
+              : 'Stripe will cancel this subscription at the end of its paid period. Access remains active until then.',
+          })}><CircleDollarSign />{subscription.cancelAtPeriodEnd ? 'Resume renewal' : 'Cancel at period end'}</DropdownMenuItem>
+          <DropdownMenuItem asChild><a href={stripeSubscriptionUrl(subscription.providerSubscriptionId)} target="_blank" rel="noreferrer"><ExternalLink />Open in Stripe</a></DropdownMenuItem>
+        </> : null}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+function BillingPanel({ data, onAction }: { data: Json; onAction: (action: PendingAction) => void }) {
+  const billed = (data.tenants ?? []).filter((tenant: Json) => tenant.subscription)
+  return (
+    <div className="grid items-start gap-4 xl:grid-cols-[1.35fr_.65fr]">
+      <Card className="overflow-hidden">
+        <CardHeader className="flex-row items-center justify-between"><div><CardTitle>Subscriptions</CardTitle><p className="mt-1 text-xs text-muted-foreground">Stripe owns entitlement; this console controls renewal and reconciliation.</p></div><Badge tone="iris">{billed.length}</Badge></CardHeader>
+        <div className="overflow-x-auto border-t border-border">
+          <table className="w-full min-w-[760px] text-left text-sm">
+            <thead className="bg-muted/40 text-xs text-muted-foreground"><tr><th className="px-5 py-2.5 font-medium">Tenant</th><th className="px-4 py-2.5 font-medium">Plan</th><th className="px-4 py-2.5 font-medium">State</th><th className="px-4 py-2.5 font-medium">Period</th><th className="px-5 py-2.5 text-right font-medium">Manage</th></tr></thead>
+            <tbody className="divide-y divide-border">
+              {billed.map((tenant: Json) => <tr key={tenant.tenantId}>
+                <td className="px-5 py-3"><p className="font-medium">{tenant.displayName || tenant.email}</p><p className="font-mono text-[11px] text-muted-foreground">{tenant.subscription.providerCustomerId}</p></td>
+                <td className="px-4 py-3"><PlanBadge tenant={tenant} /></td>
+                <td className="px-4 py-3"><Badge tone={tenant.subscription.entitlementActive ? 'hop' : 'danger'}>{tenant.subscription.status}</Badge>{tenant.subscription.cancelAtPeriodEnd ? <p className="mt-1 text-[11px] text-amber">Cancels at period end</p> : null}</td>
+                <td className="px-4 py-3 text-xs text-muted-foreground">{tenant.subscription.currentPeriodEnd ? absoluteDate(tenant.subscription.currentPeriodEnd) : 'Not reported'}</td>
+                <td className="px-5 py-3 text-right"><TenantActions tenant={tenant} onAction={onAction} /></td>
+              </tr>)}
+              {!billed.length ? <tr><td colSpan={5} className="px-5 py-10 text-center text-muted-foreground">No Stripe subscriptions yet.</td></tr> : null}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+      <Card>
+        <CardHeader><CardTitle>Webhook ledger</CardTitle><p className="text-xs text-muted-foreground">Accepted, signed Stripe events.</p></CardHeader>
+        <CardContent className="space-y-2 pt-3">
+          {(data.webhooks ?? []).slice(0, 12).map((event: Json) => <div key={event.event_id} className="rounded-md border border-border p-3"><p className="truncate font-mono text-[11px]">{event.event_id}</p><p className="mt-1 text-xs text-muted-foreground">Received {relative(event.received_at)}</p></div>)}
+          {!data.webhooks?.length ? <p className="py-8 text-center text-sm text-muted-foreground">No live webhook recorded yet.</p> : null}
+        </CardContent>
+      </Card>
+    </div>
+  )
+}
+
+function FleetPanel({ data, onAction }: { data: Json; onAction: (action: PendingAction) => void }) {
+  return (
+    <div className="grid items-start gap-4 xl:grid-cols-3">
+      <SessionPanel sessions={data.sessions ?? []} onRevoke={onAction} />
+      <Card><CardHeader><CardTitle>Trusted devices</CardTitle><p className="text-xs text-muted-foreground">Device keys and their trust state.</p></CardHeader><CardContent className="space-y-1 pt-3">
+        {(data.devices ?? []).slice(0, 20).map((device: Json) => <div key={device.deviceId} className="flex items-center gap-3 rounded-md px-2 py-2 hover:bg-muted/50"><KeyRound className="size-4 text-muted-foreground"/><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{device.displayName || device.deviceId}</p><p className="truncate text-xs text-muted-foreground">{device.platform || 'Unknown platform'} · {device.status} · {device.lastSeenAt ? relative(device.lastSeenAt) : 'never seen'}</p></div>{device.status !== 'revoked' ? <Button variant="ghost" size="sm" onClick={() => onAction({ action: 'revoke_device', targetId: device.deviceId, targetType: 'device', label: 'Device revoked' })}>Revoke</Button> : null}</div>)}
+      </CardContent></Card>
+      <Card><CardHeader><CardTitle>Setup authorizations</CardTitle><p className="text-xs text-muted-foreground">Recent pairing attempts without exposing approval codes.</p></CardHeader><CardContent className="space-y-1 pt-3">
+        {(data.deviceAuthorizations ?? []).slice(0, 20).map((authorization: Json) => <div key={authorization.authorizationId} className="flex items-center gap-3 rounded-md px-2 py-2 hover:bg-muted/50"><Smartphone className="size-4 text-muted-foreground"/><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{authorization.deviceName || authorization.deviceId}</p><p className="truncate text-xs text-muted-foreground">{authorization.status} · {relative(authorization.createdAt)}</p></div>{['pending', 'approving'].includes(authorization.status) ? <Button variant="ghost" size="sm" onClick={() => onAction({ action: 'expire_device_authorization', targetId: authorization.authorizationId, targetType: 'authorization', label: 'Authorization expired' })}>Expire</Button> : null}</div>)}
+      </CardContent></Card>
+    </div>
+  )
+}
+
+function JobsPanel({ jobs, onAction, compact: compactView = false }: { jobs: Json[]; onAction: (action: PendingAction) => void; compact?: boolean }) {
+  const visible = compactView ? jobs.slice(0, 8) : jobs
+  return <Card><CardHeader className="flex-row items-center justify-between"><div><CardTitle>Hosted actions</CardTitle><p className="mt-1 text-xs text-muted-foreground">Queue, runner, exit state, and safe recovery controls.</p></div><Badge tone="outline">{jobs.length}</Badge></CardHeader><CardContent className="space-y-1 pt-3">
+    {visible.map((job) => <div key={job.jobId} className="flex items-center gap-3 rounded-md border border-transparent px-2 py-2 hover:border-border hover:bg-muted/30"><Terminal className="size-4 text-muted-foreground"/><div className="min-w-0 flex-1"><p className="truncate text-sm font-medium">{job.kind} <span className="font-normal text-muted-foreground">· {job.codebaseName || job.codebaseId}</span></p><p className="truncate text-xs text-muted-foreground">{job.status} · {job.summary || job.command} · {relative(job.updatedAt)}</p></div>{job.status === 'queued' ? <Button variant="ghost" size="sm" onClick={() => onAction({ action: 'cancel_action_job', targetId: job.jobId, targetType: 'job', label: 'Action job canceled' })}>Cancel</Button> : job.status === 'failed' ? <Button variant="ghost" size="sm" onClick={() => onAction({ action: 'requeue_action_job', targetId: job.jobId, targetType: 'job', label: 'Action job requeued', detail: 'The same hosted action will be queued again and may repeat external side effects.' })}><RotateCcw/>Retry</Button> : null}</div>)}
+    {!visible.length ? <p className="py-8 text-center text-sm text-muted-foreground">No hosted action jobs.</p> : null}
+  </CardContent></Card>
+}
+
+function ConfigurationPanel({ data }: { data: Json }) {
+  const runtime = data.runtime ?? {}
+  const entries = [
+    ['Multi-tenant isolation', runtime.features?.multiTenant], ['Quota enforcement', runtime.features?.quotaEnforcement],
+    ['Stripe billing', runtime.features?.billing], ['Clerk authentication', runtime.features?.clerk],
+    ['Owner email', runtime.configured?.ownerEmail], ['Server actor token', runtime.configured?.serverActor],
+    ['D1 Worker', runtime.configured?.worker], ['Stripe webhook', runtime.configured?.stripeWebhook],
+  ]
+  return <Card><CardHeader className="flex-row items-center justify-between"><div><CardTitle>Runtime configuration</CardTitle><p className="mt-1 text-xs text-muted-foreground">Presence and feature state only—secret values never reach the browser.</p></div><Badge tone="outline">{runtime.environment || 'unknown'}</Badge></CardHeader><CardContent className="grid gap-3 pt-3 md:grid-cols-2 xl:grid-cols-4">
+    {entries.map(([label, active]) => <div key={String(label)} className="flex items-center justify-between rounded-md border border-border p-3"><span className="text-sm">{String(label)}</span><Badge tone={active ? 'hop' : 'danger'}>{active ? 'On' : 'Off'}</Badge></div>)}
+    <div className="md:col-span-2 xl:col-span-4 flex flex-wrap gap-2 border-t border-border pt-3">
+      {Object.entries(runtime.links ?? {}).filter(([, href]) => href).map(([label, href]) => <Button key={label} asChild variant="outline" size="sm"><a href={String(href)} target="_blank" rel="noreferrer"><ExternalLink/>{label}</a></Button>)}
+      <span className="ml-auto self-center font-mono text-[11px] text-muted-foreground">{runtime.deployment?.commitSha?.slice(0, 8) || 'commit unknown'} · {runtime.deployment?.region || 'region unknown'}</span>
+    </div>
+  </CardContent></Card>
+}
+
+function RepositoryInventory({ codebases }: { codebases: Json[] }) {
+  return <Card className="overflow-hidden"><CardHeader className="flex-row items-center justify-between"><div><CardTitle>Repository inventory</CardTitle><p className="mt-1 text-xs text-muted-foreground">All tenant workspaces, revisions, privacy mix, and last movement.</p></div><Badge tone="outline">{codebases.length}</Badge></CardHeader><div className="overflow-x-auto border-t border-border"><table className="w-full min-w-[800px] text-left text-sm"><thead className="bg-muted/40 text-xs text-muted-foreground"><tr><th className="px-5 py-2.5 font-medium">Repository</th><th className="px-4 py-2.5 font-medium">Owner</th><th className="px-4 py-2.5 font-medium">Revision</th><th className="px-4 py-2.5 font-medium">Files</th><th className="px-4 py-2.5 font-medium">Members</th><th className="px-5 py-2.5 font-medium">Updated</th></tr></thead><tbody className="divide-y divide-border">{codebases.map((repo) => <tr key={repo.codebaseId}><td className="px-5 py-3"><p className="font-medium">{repo.name}</p><p className="font-mono text-[11px] text-muted-foreground">{repo.codebaseId}</p></td><td className="px-4 py-3 text-xs">{repo.ownerEmail || repo.tenantId}</td><td className="px-4 py-3 font-mono text-xs">{repo.revision}</td><td className="px-4 py-3">{compact(repo.fileCount)} <span className="text-xs text-muted-foreground">({compact(repo.privateFileCount)} private)</span></td><td className="px-4 py-3">{repo.memberCount}</td><td className="px-5 py-3 text-xs text-muted-foreground">{relative(repo.updatedAt)}</td></tr>)}</tbody></table></div></Card>
+}
+
+function SecurityPanel({ security }: { security: Json }) {
+  return <div className="grid gap-4 lg:grid-cols-3"><SecurityCard title="User keyrings" icon={KeyRound} rows={(security.userKeyrings ?? []).map((row: Json) => [`${row.status}${row.recoveryConfigured ? ' · recovery' : ''}`, row.count])}/><SecurityCard title="Repository keyrings" icon={ShieldCheck} rows={(security.codebaseKeyrings ?? []).map((row: Json) => [row.rotationState, row.count])}/><SecurityCard title="Invitations" icon={UserPlus} rows={Object.entries(security.invitations ?? {})}/></div>
+}
+
+function SecurityCard({ title, icon: Icon, rows }: { title: string; icon: React.ComponentType<{ className?: string }>; rows: Array<[unknown, unknown]> }) {
+  return <Card><CardHeader className="flex-row items-center gap-3"><Icon className="size-4 text-muted-foreground"/><CardTitle>{title}</CardTitle></CardHeader><CardContent className="space-y-2 pt-3">{rows.map(([label, value]) => <div key={String(label)} className="flex justify-between text-sm"><span className="capitalize text-muted-foreground">{String(label).replaceAll('_', ' ')}</span><span className="font-mono">{number(value)}</span></div>)}{!rows.length ? <p className="text-sm text-muted-foreground">No records.</p> : null}</CardContent></Card>
+}
+
+function AuditLedger({ data }: { data: Json }) {
+  return <div className="grid items-start gap-4 xl:grid-cols-2"><EventPanel events={data.recentEvents ?? []} adminEvents={data.adminEvents ?? []}/><Card><CardHeader><CardTitle>Owner actions</CardTitle><p className="text-xs text-muted-foreground">Full retained console audit window.</p></CardHeader><CardContent className="space-y-1 pt-3">{(data.adminEvents ?? []).map((event: Json) => <div key={event.event_id} className="grid grid-cols-[1fr_auto] gap-3 border-b border-border py-2 last:border-0"><div className="min-w-0"><p className="truncate text-sm font-medium capitalize">{String(event.action).replaceAll('_', ' ')}</p><p className="truncate font-mono text-[11px] text-muted-foreground">{event.target_type} · {event.target_id}</p></div><span className="text-[11px] text-muted-foreground">{absoluteDateTime(event.created_at)}</span></div>)}</CardContent></Card></div>
+}
+
+function TenantDetailDialog({ tenant, data, onClose, onAction }: { tenant: Json | null; data: Json | null; onClose: () => void; onAction: (action: PendingAction) => void }) {
+  if (!tenant) return null
+  const repos = (data?.codebases ?? []).filter((repo: Json) => repo.tenantId === tenant.tenantId)
+  const sessions = (data?.sessions ?? []).filter((session: Json) => session.tenantId === tenant.tenantId)
+  const devices = (data?.devices ?? []).filter((device: Json) => device.tenantId === tenant.tenantId)
+  return <Dialog open onOpenChange={(open) => { if (!open) onClose() }} title={tenant.displayName || tenant.email || 'Tenant'} description={tenant.email || tenant.tenantId} className="max-w-5xl" footer={<><Button variant="outline" onClick={onClose}>Close</Button><TenantActions tenant={tenant} onAction={onAction}/></>}>
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 gap-3 md:grid-cols-4"><Metric label="Plan" value={planName(tenant.plan)}/><Metric label="Storage" value={`${bytes(number(tenant.quota?.storage?.used))} / ${bytes(number(tenant.quota?.storage?.limit))}`}/><Metric label="Writes today" value={`${compact(tenant.quota?.dailyWrites?.used)} / ${compact(tenant.quota?.dailyWrites?.limit)}`}/><Metric label="Member since" value={tenant.userCreatedAt ? absoluteDate(tenant.userCreatedAt) : 'Unknown'}/></div>
+      {tenant.writesPaused ? <InlineNotice tone="danger" title="Cloud writes paused" detail={tenant.pauseReason || 'No operator note was recorded.'}/> : null}
+      <div className="grid gap-4 lg:grid-cols-3"><DetailList title="Repositories" rows={repos.map((repo: Json) => ({ title: repo.name, detail: `${repo.fileCount} files · revision ${repo.revision} · ${relative(repo.updatedAt)}` }))}/><DetailList title="Sessions" rows={sessions.map((session: Json) => ({ title: session.deviceName || session.sessionId, detail: `${session.status} · ${session.codebaseName} · ${relative(session.lastSeenAt)}` }))}/><DetailList title="Devices" rows={devices.map((device: Json) => ({ title: device.displayName || device.deviceId, detail: `${device.status} · ${device.platform || 'unknown'} · ${device.lastSeenAt ? relative(device.lastSeenAt) : 'never seen'}` }))}/></div>
+      {tenant.subscription ? <div className="rounded-md border border-border p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-semibold">Stripe subscription</p><p className="font-mono text-[11px] text-muted-foreground">{tenant.subscription.providerSubscriptionId}</p></div><div className="flex gap-2"><Badge tone={tenant.subscription.entitlementActive ? 'hop' : 'danger'}>{tenant.subscription.status}</Badge>{tenant.subscription.providerSubscriptionId ? <Button asChild variant="outline" size="sm"><a href={stripeSubscriptionUrl(tenant.subscription.providerSubscriptionId)} target="_blank" rel="noreferrer"><ExternalLink/>Stripe</a></Button> : null}</div></div></div> : null}
+    </div>
+  </Dialog>
+}
+
+function DetailList({ title, rows }: { title: string; rows: Array<{ title: string; detail: string }> }) {
+  return <div className="rounded-md border border-border p-3"><p className="mb-2 text-xs font-medium uppercase tracking-wider text-muted-foreground">{title}</p><div className="space-y-2">{rows.slice(0, 12).map((row, index) => <div key={`${row.title}-${index}`}><p className="truncate text-sm font-medium">{row.title}</p><p className="truncate text-[11px] text-muted-foreground">{row.detail}</p></div>)}{!rows.length ? <p className="text-sm text-muted-foreground">None</p> : null}</div></div>
+}
+
+function TenantTable({ tenants, query, onQueryChange, onOpen, onAction }: {
+  tenants: Json[]
+  query: string
+  onQueryChange: (value: string) => void
+  onOpen: (tenantId: string) => void
+  onAction: (action: PendingAction) => void
+}) {
   return (
     <Card className="overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3 sm:px-5">
@@ -333,18 +588,10 @@ function TenantTable({ tenants, query, onQueryChange, onAction }: { tenants: Jso
                   <p className="text-xs text-muted-foreground">{tenant.codebaseCount} repos · {tenant.lastSeenAt ? relative(tenant.lastSeenAt) : 'never seen'}</p>
                 </td>
                 <td className="px-5 py-3 text-right">
-                  <Button
-                    variant={tenant.writesPaused ? 'default' : 'outline'}
-                    size="sm"
-                    onClick={() => onAction({
-                      action: tenant.writesPaused ? 'resume_tenant_writes' : 'pause_tenant_writes',
-                      targetId: tenant.tenantId,
-                      label: tenant.writesPaused ? 'Tenant writes resumed' : 'Tenant writes paused',
-                    })}
-                  >
-                    {tenant.writesPaused ? <Play /> : <Ban />}
-                    {tenant.writesPaused ? 'Resume' : 'Pause writes'}
-                  </Button>
+                  <div className="flex justify-end gap-2">
+                    <Button variant="ghost" size="sm" onClick={() => onOpen(tenant.tenantId)}>Inspect</Button>
+                    <TenantActions tenant={tenant} onAction={onAction} />
+                  </div>
                 </td>
               </tr>
             ))}
@@ -372,7 +619,7 @@ function SessionPanel({ sessions, onRevoke }: { sessions: Json[]; onRevoke: (act
               <p className="truncate font-medium">{session.deviceName || 'Unnamed device'} <span className="font-normal text-muted-foreground">· {session.codebaseName}</span></p>
               <p className="truncate text-xs text-muted-foreground">{session.tenantId} · seen {relative(session.lastSeenAt)}</p>
             </div>
-            <Button variant="ghost" size="sm" onClick={() => onRevoke({ action: 'revoke_session', targetId: session.sessionId, label: 'Device session revoked' })}>Revoke</Button>
+            <Button variant="ghost" size="sm" onClick={() => onRevoke({ action: 'revoke_session', targetId: session.sessionId, targetType: 'session', label: 'Device session revoked' })}>Revoke</Button>
           </div>
         ))}
         {active.length === 0 ? <p className="py-8 text-center text-sm text-muted-foreground">No active device sessions.</p> : null}
@@ -456,9 +703,60 @@ function buildAlerts(data: Json) {
   return alerts
 }
 
+function actionDescription(pending: PendingAction | null) {
+  if (!pending) return undefined
+  if (pending.action === 'pause_tenant_writes') return 'Cloud writes will pause. Reads, exports, deletes that free storage, and local journals remain available.'
+  if (pending.action === 'resume_tenant_writes') return 'Cloud writes will resume under the tenant’s normal plan limits.'
+  if (pending.action === 'revoke_session') return 'This session will be revoked and the device must authenticate again before it can sync.'
+  if (pending.action === 'revoke_tenant_sessions') return 'Every active session for this tenant will be revoked.'
+  if (pending.action === 'revoke_device') return 'The device key, linked sessions, and pending pairing attempts will be revoked.'
+  if (pending.action === 'expire_device_authorization') return 'This pending device pairing request will be expired immediately.'
+  if (pending.action === 'cancel_action_job') return 'This queued hosted action will be canceled before a runner claims it.'
+  if (pending.action === 'requeue_action_job') return 'This failed hosted action will be placed back in the runner queue.'
+  return pending.cancelAtPeriodEnd ? 'The subscription will stop renewing at the end of its current paid period.' : 'Automatic renewal will resume for the next billing period.'
+}
+
+function safeAction(pending: PendingAction | null) {
+  return pending?.action === 'resume_tenant_writes'
+    || (pending?.action === 'set_subscription_cancellation' && pending.cancelAtPeriodEnd === false)
+}
+
+function actionBody(pending: PendingAction, reason: string) {
+  const target = pending.targetType === 'tenant'
+    ? { tenantId: pending.targetId }
+    : pending.targetType === 'session'
+      ? { sessionId: pending.targetId }
+      : pending.targetType === 'device'
+        ? { deviceId: pending.targetId }
+        : pending.targetType === 'authorization'
+          ? { authorizationId: pending.targetId }
+          : { jobId: pending.targetId }
+  return {
+    action: pending.action,
+    ...target,
+    ...(pending.action === 'pause_tenant_writes' ? { reason } : {}),
+    ...(pending.action === 'set_subscription_cancellation' ? { cancelAtPeriodEnd: pending.cancelAtPeriodEnd === true } : {}),
+    confirmation: pending.targetId,
+  }
+}
+
+function ConfirmationTarget({ target }: { target?: string }) {
+  return <p className="rounded-md border border-border bg-muted/50 p-3 font-mono text-xs text-muted-foreground break-all">{target}</p>
+}
+
+function stripeSubscriptionUrl(subscriptionId: string) {
+  return `https://dashboard.stripe.com/subscriptions/${encodeURIComponent(subscriptionId)}`
+}
+
+function planName(value: unknown) {
+  return value === 'paid_storage' ? 'Plus Storage' : value === 'paid' ? 'Plus' : 'Free'
+}
+
 function number(value: unknown) { const parsed = Number(value); return Number.isFinite(parsed) ? parsed : 0 }
 function percent(value: unknown) { return `${Math.round(number(value) * 100)}%` }
 function compact(value: unknown) { return Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 }).format(number(value)) }
 function usd(value: unknown) { return Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 2 }).format(number(value)) }
 function bytes(value: number) { if (value < 1_000_000) return `${(value / 1_000).toFixed(1)} KB`; if (value < 1_000_000_000) return `${(value / 1_000_000).toFixed(1)} MB`; return `${(value / 1_000_000_000).toFixed(2)} GB` }
 function relative(value: unknown) { const at = Date.parse(String(value ?? '')); if (!Number.isFinite(at)) return 'unknown'; const delta = Date.now() - at; if (delta < 60_000) return 'just now'; if (delta < 3_600_000) return `${Math.floor(delta / 60_000)}m ago`; if (delta < 86_400_000) return `${Math.floor(delta / 3_600_000)}h ago`; return `${Math.floor(delta / 86_400_000)}d ago` }
+function absoluteDate(value: unknown) { const date = new Date(String(value ?? '')); return Number.isFinite(date.getTime()) ? date.toLocaleDateString('en-CA', { year: 'numeric', month: 'short', day: 'numeric' }) : 'Unknown' }
+function absoluteDateTime(value: unknown) { const date = new Date(String(value ?? '')); return Number.isFinite(date.getTime()) ? date.toLocaleString('en-CA', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : 'Unknown' }

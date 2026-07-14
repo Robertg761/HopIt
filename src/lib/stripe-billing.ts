@@ -107,6 +107,12 @@ export async function createBillingPortal(input: { customerId: string; returnUrl
   })
 }
 
+export async function setStripeSubscriptionCancellation(input: { subscriptionId: string; cancelAtPeriodEnd: boolean }) {
+  return stripeClient().subscriptions.update(input.subscriptionId, {
+    cancel_at_period_end: input.cancelAtPeriodEnd,
+  })
+}
+
 export function constructStripeEvent(payload: string, signature: string) {
   return stripeClient().webhooks.constructEvent(payload, signature, stripeWebhookSecret())
 }

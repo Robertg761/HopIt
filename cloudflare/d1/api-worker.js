@@ -627,7 +627,27 @@ async function readServiceOperations(env) {
   const db = env.HOPIT_D1_DB
   const now = Date.now()
   const day = utcDay(now)
-  const [users, usageRows, subscriptions, codebaseCounts, sessionCounts, sessions, jobRows, recentEvents, adminEvents, webhookRows] = await Promise.all([
+  const since24h = new Date(now - 24 * 60 * 60 * 1000).toISOString()
+  const [
+    users,
+    usageRows,
+    subscriptions,
+    codebaseCounts,
+    codebases,
+    sessionCounts,
+    sessions,
+    deviceAuthorizations,
+    deviceKeys,
+    jobRows,
+    actionJobs,
+    eventCounts,
+    recentEvents,
+    adminEvents,
+    webhookRows,
+    keyringRows,
+    codebaseKeyringRows,
+    invitationRows,
+  ] = await Promise.all([
     dbRows(db, 'select user_id, primary_email, display_name, email_verified, created_at, updated_at from users order by created_at desc limit 250'),
     dbRows(db, `select u.tenant_id, u.plan, u.storage_bytes, u.write_day, u.rows_written_today, u.created_at, u.updated_at,
       c.writes_paused, c.reason as pause_reason, c.updated_at as control_updated_at
@@ -635,6 +655,10 @@ async function readServiceOperations(env) {
       order by u.updated_at desc limit 250`),
     dbRows(db, 'select * from subscriptions order by updated_at desc limit 250'),
     dbRows(db, 'select owner_id as tenant_id, count(*) as codebase_count, sum(file_count) as file_count, max(updated_at) as last_codebase_update from codebases group by owner_id'),
+    dbRows(db, `select c.codebase_id, c.name, c.owner_id as tenant_id, u.primary_email as owner_email,
+      c.schema_version, c.revision, c.file_count, c.private_file_count, c.member_count, c.updated_at
+      from codebases c left join users u on u.user_id = c.owner_id
+      order by c.updated_at desc limit 250`),
     dbRows(db, `select c.owner_id as tenant_id, count(*) as session_count,
       sum(case when s.status = 'active' and (s.expires_at is null or s.expires_at > ?) then 1 else 0 end) as active_session_count,
       max(s.last_seen_at) as last_seen_at
@@ -643,19 +667,38 @@ async function readServiceOperations(env) {
       s.device_name, s.status, s.capabilities_json, s.expires_at, s.created_at, s.last_seen_at, s.revoked_at
       from agent_sessions s join codebases c on c.codebase_id = s.codebase_id
       order by s.last_seen_at desc limit 100`),
+    dbRows(db, `select authorization_id, device_id, device_name, platform, status, user_id, codebase_id,
+      session_id, requested_codebase_id, requested_codebase_name, created_at, expires_at, approved_at,
+      consumed_at, updated_at from device_authorizations order by created_at desc limit 100`),
+    dbRows(db, `select device_id, user_id, display_name, platform, status, created_at, trusted_at,
+      revoked_at, last_seen_at from device_keys order by coalesce(last_seen_at, created_at) desc limit 100`),
     dbRows(db, `select status, count(*) as count from action_jobs
-      where created_at >= ? group by status`, [new Date(now - 24 * 60 * 60 * 1000).toISOString()]),
-    dbRows(db, `select e.id, e.codebase_id, c.name as codebase_name, c.owner_id as tenant_id, e.event, e.at, e.source
+      where created_at >= ? group by status`, [since24h]),
+    dbRows(db, `select j.job_id, j.codebase_id, c.name as codebase_name, c.owner_id as tenant_id,
+      j.kind, j.command, j.status, j.requested_by_user_id, j.runner_id, j.exit_code, j.summary,
+      j.created_at, j.updated_at, j.claimed_at, j.started_at, j.finished_at
+      from action_jobs j left join codebases c on c.codebase_id = j.codebase_id
+      order by j.created_at desc limit 100`),
+    dbRows(db, `select event, count(*) as count from agent_events where at >= ? group by event order by count(*) desc`, [since24h]),
+    dbRows(db, `select e.id, e.codebase_id, c.name as codebase_name, c.owner_id as tenant_id,
+      e.event, e.detail_json, e.at, e.source
       from agent_events e left join codebases c on c.codebase_id = e.codebase_id
-      order by e.at desc, e.id desc limit 40`),
-    dbRows(db, 'select event_id, actor_user_id, action, target_type, target_id, detail_json, created_at from service_admin_events order by created_at desc limit 30'),
-    dbRows(db, 'select received_at, event_created_at from billing_webhook_events order by received_at desc limit 1'),
+      order by e.at desc, e.id desc limit 100`),
+    dbRows(db, 'select event_id, actor_user_id, action, target_type, target_id, detail_json, created_at from service_admin_events order by created_at desc limit 100'),
+    dbRows(db, `select event_id, provider, event_created_at, received_at
+      from billing_webhook_events order by received_at desc limit 50`),
+    dbRows(db, 'select status, recovery_configured, count(*) as count from user_keyrings group by status, recovery_configured'),
+    dbRows(db, `select coalesce(rotation_state, 'stable') as rotation_state, count(*) as count
+      from codebase_keyrings group by coalesce(rotation_state, 'stable')`),
+    dbRows(db, 'select status, count(*) as count from codebase_invitations group by status'),
   ])
 
   const usersById = new Map(users.map((row) => [row.user_id, row]))
   const subscriptionsByTenant = new Map(subscriptions.map((row) => [row.tenant_id, row]))
   const codebasesByTenant = new Map(codebaseCounts.map((row) => [row.tenant_id, row]))
   const sessionsByTenant = new Map(sessionCounts.map((row) => [row.tenant_id, row]))
+  const deviceCountsByTenant = groupCounts(deviceKeys, 'user_id', 'status')
+  const authorizationCountsByTenant = groupCounts(deviceAuthorizations.filter((row) => row.user_id), 'user_id', 'status')
   const warnRatio = warnRatioFromEnv(env)
   const tenants = usageRows.map((usage) => {
     const limits = resolvePlanLimits(env, usage.plan)
@@ -681,11 +724,15 @@ async function readServiceOperations(env) {
       controlUpdatedAt: usage.control_updated_at ?? null,
       subscription: subscription ? {
         provider: subscription.provider,
+        providerCustomerId: subscription.provider_customer_id ?? null,
+        providerSubscriptionId: subscription.provider_subscription_id ?? null,
         planKey: subscription.plan_key,
         status: subscription.status,
         entitlementActive: Number(subscription.entitlement_active) === 1,
         cancelAtPeriodEnd: Number(subscription.cancel_at_period_end) === 1,
         currentPeriodEnd: subscription.current_period_end ?? null,
+        lastEventId: subscription.last_event_id,
+        lastEventCreatedAt: subscription.last_event_created_at,
         updatedAt: subscription.updated_at,
       } : null,
       codebaseCount: Number(codebasesByTenant.get(usage.tenant_id)?.codebase_count ?? 0),
@@ -694,6 +741,10 @@ async function readServiceOperations(env) {
       sessionCount: Number(session?.session_count ?? 0),
       activeSessionCount: Number(session?.active_session_count ?? 0),
       lastSeenAt: session?.last_seen_at ?? null,
+      deviceCounts: deviceCountsByTenant.get(usage.tenant_id) ?? {},
+      authorizationCounts: authorizationCountsByTenant.get(usage.tenant_id) ?? {},
+      userCreatedAt: user?.created_at ?? null,
+      userUpdatedAt: user?.updated_at ?? null,
       createdAt: usage.created_at,
       updatedAt: usage.updated_at,
     }
@@ -708,6 +759,12 @@ async function readServiceOperations(env) {
     counts[tenant.plan] = (counts[tenant.plan] ?? 0) + 1
     return counts
   }, {})
+  const eventTypes24h = Object.fromEntries(eventCounts.map((row) => [row.event, Number(row.count ?? 0)]))
+  const userCreatedWithin = (days) => users.filter((user) => Date.parse(user.created_at) >= now - days * 24 * 60 * 60 * 1000).length
+  const subscriptionStatuses = subscriptions.reduce((counts, subscription) => {
+    counts[subscription.status] = (counts[subscription.status] ?? 0) + 1
+    return counts
+  }, {})
 
   return {
     generatedAt: new Date(now).toISOString(),
@@ -717,6 +774,7 @@ async function readServiceOperations(env) {
       quotaEnforced: isQuotaEnforced(env),
       ownerGuard: Boolean(normalizeEmail(env.HOPIT_OWNER_EMAIL)),
       lastWebhookAt: webhookRows[0]?.received_at ?? null,
+      latestEventAt: recentEvents[0]?.at ?? null,
     },
     totals: {
       users: users.length,
@@ -724,10 +782,19 @@ async function readServiceOperations(env) {
       codebases: codebaseCounts.reduce((sum, row) => sum + Number(row.codebase_count ?? 0), 0),
       activeSessions: sessionCounts.reduce((sum, row) => sum + Number(row.active_session_count ?? 0), 0),
       activeSubscriptions: activeSubscriptions.length,
+      subscriptionStatuses,
       totalStorageBytes,
       rowsWrittenToday,
       planCounts,
+      newUsers24h: userCreatedWithin(1),
+      newUsers7d: userCreatedWithin(7),
+      newUsers30d: userCreatedWithin(30),
+      verifiedUsers: users.filter((user) => Number(user.email_verified) === 1).length,
+      activeDevices: deviceKeys.filter((device) => device.status === 'trusted').length,
+      revokedDevices: deviceKeys.filter((device) => device.status === 'revoked').length,
+      pendingDeviceAuthorizations: deviceAuthorizations.filter((authorization) => authorization.status === 'pending').length,
       actionJobs24h: jobs,
+      eventTypes24h,
       storageAt50: thresholdCounts('storage', 0.5),
       storageAt80: thresholdCounts('storage', warnRatio),
       storageBlocked: thresholdCounts('storage', 1),
@@ -736,6 +803,18 @@ async function readServiceOperations(env) {
       writesBlocked: thresholdCounts('dailyWrites', 1),
     },
     tenants,
+    codebases: codebases.map((row) => ({
+      codebaseId: row.codebase_id,
+      name: row.name,
+      tenantId: row.tenant_id,
+      ownerEmail: row.owner_email ?? null,
+      schemaVersion: Number(row.schema_version ?? 0),
+      revision: Number(row.revision ?? 0),
+      fileCount: Number(row.file_count ?? 0),
+      privateFileCount: Number(row.private_file_count ?? 0),
+      memberCount: Number(row.member_count ?? 0),
+      updatedAt: row.updated_at,
+    })),
     sessions: sessions.map((row) => ({
       sessionId: row.session_id,
       userId: row.user_id,
@@ -750,9 +829,73 @@ async function readServiceOperations(env) {
       lastSeenAt: row.last_seen_at,
       revokedAt: row.revoked_at ?? null,
     })),
-    recentEvents,
+    deviceAuthorizations: deviceAuthorizations.map((row) => ({
+      authorizationId: row.authorization_id,
+      deviceId: row.device_id,
+      deviceName: row.device_name ?? null,
+      platform: row.platform ?? null,
+      status: row.status,
+      tenantId: row.user_id ?? null,
+      codebaseId: row.codebase_id ?? row.requested_codebase_id ?? null,
+      requestedCodebaseName: row.requested_codebase_name ?? null,
+      sessionId: row.session_id ?? null,
+      createdAt: row.created_at,
+      expiresAt: row.expires_at,
+      approvedAt: row.approved_at ?? null,
+      consumedAt: row.consumed_at ?? null,
+      updatedAt: row.updated_at,
+    })),
+    devices: deviceKeys.map((row) => ({
+      deviceId: row.device_id,
+      tenantId: row.user_id,
+      displayName: row.display_name ?? null,
+      platform: row.platform ?? null,
+      status: row.status,
+      createdAt: row.created_at,
+      trustedAt: row.trusted_at ?? null,
+      revokedAt: row.revoked_at ?? null,
+      lastSeenAt: row.last_seen_at ?? null,
+    })),
+    actionJobs: actionJobs.map((row) => ({
+      jobId: row.job_id,
+      codebaseId: row.codebase_id,
+      codebaseName: row.codebase_name ?? null,
+      tenantId: row.tenant_id ?? null,
+      kind: row.kind,
+      command: row.command,
+      status: row.status,
+      requestedByUserId: row.requested_by_user_id,
+      runnerId: row.runner_id ?? null,
+      exitCode: row.exit_code ?? null,
+      summary: row.summary ?? null,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      claimedAt: row.claimed_at ?? null,
+      startedAt: row.started_at ?? null,
+      finishedAt: row.finished_at ?? null,
+    })),
+    webhooks: webhookRows,
+    security: {
+      userKeyrings: keyringRows.map((row) => ({ status: row.status, recoveryConfigured: Number(row.recovery_configured) === 1, count: Number(row.count ?? 0) })),
+      codebaseKeyrings: codebaseKeyringRows.map((row) => ({ rotationState: row.rotation_state, count: Number(row.count ?? 0) })),
+      invitations: Object.fromEntries(invitationRows.map((row) => [row.status, Number(row.count ?? 0)])),
+    },
+    recentEvents: recentEvents.map((row) => ({ ...row, detail: parseJson(row.detail_json, {}) })),
     adminEvents: adminEvents.map((row) => ({ ...row, detail: parseJson(row.detail_json, {}) })),
   }
+}
+
+function groupCounts(rows, keyField, statusField) {
+  const result = new Map()
+  for (const row of rows) {
+    const key = row[keyField]
+    if (!key) continue
+    const counts = result.get(key) ?? {}
+    const status = row[statusField] ?? 'unknown'
+    counts[status] = (counts[status] ?? 0) + 1
+    result.set(key, counts)
+  }
+  return result
 }
 
 async function applyServiceAdminAction(db, actor, input) {
@@ -762,7 +905,13 @@ async function applyServiceAdminAction(db, actor, input) {
     ? input.tenantId.trim()
     : typeof input.sessionId === 'string'
       ? input.sessionId.trim()
-      : 'hopit-service'
+      : typeof input.deviceId === 'string'
+        ? input.deviceId.trim()
+        : typeof input.authorizationId === 'string'
+          ? input.authorizationId.trim()
+          : typeof input.jobId === 'string'
+            ? input.jobId.trim()
+            : 'hopit-service'
   const confirmation = typeof input.confirmation === 'string' ? input.confirmation.trim() : ''
   if (!targetId || confirmation !== targetId) throw new Error('Action confirmation did not match its target.')
   const now = new Date().toISOString()
@@ -810,10 +959,132 @@ async function applyServiceAdminAction(db, actor, input) {
     return { action, sessionId: targetId, status: 'revoked' }
   }
 
+  if (action === 'revoke_tenant_sessions') {
+    const tenant = (await dbRows(db, 'select tenant_id from tenant_usage where tenant_id = ? limit 1', [targetId]))[0]
+    if (!tenant) throw new Error('Tenant was not found.')
+    const active = await dbRows(db, `select s.session_id from agent_sessions s join codebases c on c.codebase_id = s.codebase_id
+      where c.owner_id = ? and s.status = 'active'`, [targetId])
+    await executeStatements(db, [
+      {
+        sql: `update agent_sessions set status = 'revoked', revoked_by_user_id = ?, revoked_at = ?, updated_at = ?
+          where status = 'active' and codebase_id in (select codebase_id from codebases where owner_id = ?)`,
+        params: [actor.userId, now, now, targetId],
+      },
+      adminAuditStatement({
+        eventId,
+        actor,
+        action,
+        targetType: 'tenant',
+        targetId,
+        detail: { revokedSessionCount: active.length },
+        now,
+      }),
+    ])
+    return { action, tenantId: targetId, revokedSessionCount: active.length }
+  }
+
+  if (action === 'revoke_device') {
+    const device = (await dbRows(db, 'select device_id, user_id, status from device_keys where device_id = ? limit 1', [targetId]))[0]
+    if (!device) throw new Error('Device was not found.')
+    const linkedSessions = await dbRows(db, `select session_id from device_authorizations
+      where device_id = ? and session_id is not null`, [targetId])
+    await executeStatements(db, [
+      {
+        sql: `update device_keys set status = 'revoked', revoked_at = ? where device_id = ?`,
+        params: [now, targetId],
+      },
+      {
+        sql: `update agent_sessions set status = 'revoked', revoked_by_user_id = ?, revoked_at = ?, updated_at = ?
+          where session_id in (select session_id from device_authorizations where device_id = ? and session_id is not null)`,
+        params: [actor.userId, now, now, targetId],
+      },
+      {
+        sql: `update device_authorizations set status = 'expired', updated_at = ?
+          where device_id = ? and status in ('pending', 'approving')`,
+        params: [now, targetId],
+      },
+      adminAuditStatement({
+        eventId,
+        actor,
+        action,
+        targetType: 'device',
+        targetId,
+        detail: { tenantId: device.user_id, previousStatus: device.status, revokedSessionCount: linkedSessions.length },
+        now,
+      }),
+    ])
+    return { action, deviceId: targetId, status: 'revoked', revokedSessionCount: linkedSessions.length }
+  }
+
+  if (action === 'expire_device_authorization') {
+    const authorization = (await dbRows(db, `select authorization_id, status, device_id, user_id
+      from device_authorizations where authorization_id = ? limit 1`, [targetId]))[0]
+    if (!authorization) throw new Error('Device authorization was not found.')
+    if (authorization.status !== 'pending' && authorization.status !== 'approving') {
+      throw new Error(`Device authorization is already ${authorization.status}.`)
+    }
+    await executeStatements(db, [
+      {
+        sql: `update device_authorizations set status = 'expired', updated_at = ?
+          where authorization_id = ? and status in ('pending', 'approving')`,
+        params: [now, targetId],
+      },
+      adminAuditStatement({
+        eventId,
+        actor,
+        action,
+        targetType: 'device_authorization',
+        targetId,
+        detail: { deviceId: authorization.device_id, tenantId: authorization.user_id, previousStatus: authorization.status },
+        now,
+      }),
+    ])
+    return { action, authorizationId: targetId, status: 'expired' }
+  }
+
+  if (action === 'cancel_action_job' || action === 'requeue_action_job') {
+    const job = (await dbRows(db, `select job_id, codebase_id, status from action_jobs where job_id = ? limit 1`, [targetId]))[0]
+    if (!job) throw new Error('Action job was not found.')
+    if (action === 'cancel_action_job' && job.status !== 'queued') throw new Error('Only queued action jobs can be canceled safely.')
+    if (action === 'requeue_action_job' && job.status !== 'failed') throw new Error('Only failed action jobs can be requeued.')
+    const nextStatus = action === 'cancel_action_job' ? 'canceled' : 'queued'
+    const statement = action === 'cancel_action_job'
+      ? {
+          sql: `update action_jobs set status = 'canceled', summary = 'Canceled by service owner', updated_at = ?, finished_at = ?
+            where job_id = ? and status = 'queued'`,
+          params: [now, now, targetId],
+        }
+      : {
+          sql: `update action_jobs set status = 'queued', runner_id = null, exit_code = null, stdout = null, stderr = null,
+            summary = null, claimed_at = null, started_at = null, finished_at = null, updated_at = ?
+            where job_id = ? and status = 'failed'`,
+          params: [now, targetId],
+        }
+    await executeStatements(db, [
+      statement,
+      adminAuditStatement({
+        eventId,
+        actor,
+        action,
+        targetType: 'action_job',
+        targetId,
+        detail: { codebaseId: job.codebase_id, previousStatus: job.status, nextStatus },
+        now,
+      }),
+    ])
+    return { action, jobId: targetId, status: nextStatus }
+  }
+
   if (action === 'record_billing_reconcile') {
     const detail = input.detail && typeof input.detail === 'object' && !Array.isArray(input.detail) ? input.detail : {}
     await executeStatements(db, [adminAuditStatement({ eventId, actor, action, targetType: 'service', targetId, detail, now })])
     return { action, recorded: true }
+  }
+
+  if (action === 'record_billing_action') {
+    const detail = input.detail && typeof input.detail === 'object' && !Array.isArray(input.detail) ? input.detail : {}
+    await executeStatements(db, [adminAuditStatement({ eventId, actor, action, targetType: 'tenant', targetId, detail, now })])
+    return { action, tenantId: targetId, recorded: true }
   }
 
   throw new Error('Unsupported service admin action.')

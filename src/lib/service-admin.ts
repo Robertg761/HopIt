@@ -1,7 +1,7 @@
 import { auth, currentUser } from '@clerk/nextjs/server'
 import { mintServerActorToken } from '@hopit/backend-d1'
 
-import { isBillingEnabled } from '@/lib/stripe-billing'
+import { billingPlans, isBillingEnabled } from '@/lib/stripe-billing'
 
 export type ServiceAdminActor = {
   userId: string
@@ -73,6 +73,9 @@ export async function requestServiceOperations(
 }
 
 export function serviceAdminRuntimeConfig() {
+  const deploymentUrl = process.env.VERCEL_PROJECT_PRODUCTION_URL?.trim()
+    ?? process.env.VERCEL_URL?.trim()
+    ?? null
   return {
     billingEnabled: isBillingEnabled(),
     billingConfigured: Boolean(
@@ -82,6 +85,38 @@ export function serviceAdminRuntimeConfig() {
       && process.env.STRIPE_PRICE_PLUS_STORAGE?.trim(),
     ),
     signupMode: process.env.HOPIT_AUTH_PROVIDER === 'clerk' ? 'clerk' : 'other',
+    environment: process.env.VERCEL_ENV ?? process.env.NODE_ENV ?? 'unknown',
+    deployment: {
+      url: deploymentUrl ? `https://${deploymentUrl.replace(/^https?:\/\//, '')}` : null,
+      region: process.env.VERCEL_REGION ?? null,
+      commitSha: process.env.VERCEL_GIT_COMMIT_SHA ?? null,
+      commitRef: process.env.VERCEL_GIT_COMMIT_REF ?? null,
+    },
+    features: {
+      multiTenant: enabled(process.env.HOPIT_MULTITENANT),
+      quotaEnforcement: enabled(process.env.HOPIT_ENFORCE_QUOTA),
+      billing: isBillingEnabled(),
+      clerk: process.env.HOPIT_AUTH_PROVIDER === 'clerk',
+    },
+    configured: {
+      ownerEmail: Boolean(process.env.HOPIT_OWNER_EMAIL?.trim()),
+      serverActor: Boolean(process.env.HOPIT_D1_SERVER_ACTOR_SECRET?.trim()),
+      worker: Boolean(process.env.HOPIT_D1_API_BASE_URL?.trim()),
+      stripeSecret: Boolean(process.env.STRIPE_SECRET_KEY?.trim()),
+      stripeWebhook: Boolean(process.env.STRIPE_WEBHOOK_SECRET?.trim()),
+      plusPrice: Boolean(process.env.STRIPE_PRICE_PLUS?.trim()),
+      plusStoragePrice: Boolean(process.env.STRIPE_PRICE_PLUS_STORAGE?.trim()),
+    },
+    plans: {
+      free: { priceUsd: 0, storageGb: 2, dailyWrites: 2_000, codebases: 1 },
+      plus: billingPlans.plus,
+      plusStorage: billingPlans.plus_storage,
+    },
+    links: {
+      stripe: 'https://dashboard.stripe.com/',
+      vercel: deploymentUrl ? `https://vercel.com/robertg761s-projects/hopit` : null,
+      worker: process.env.HOPIT_D1_API_BASE_URL?.trim().replace(/\/query\/?$/, '') ?? null,
+    },
   }
 }
 
@@ -162,6 +197,10 @@ function normalizeEmail(value: unknown) {
 function envNumber(name: string, fallback: number) {
   const value = Number(process.env[name])
   return Number.isFinite(value) && value >= 0 ? value : fallback
+}
+
+function enabled(value: unknown) {
+  return /^(1|true|yes|on)$/i.test(String(value ?? ''))
 }
 
 function record(value: unknown): Record<string, any> | null {
