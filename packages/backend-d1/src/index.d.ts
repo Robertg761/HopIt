@@ -12,6 +12,7 @@ export function buildBillingEventStatements(input: Record<string, unknown>): Arr
 export function normalizePlan(plan?: string | null): 'free' | 'paid' | 'paid_storage'
 export function resolveCodebaseLimit(env?: Record<string, unknown>, plan?: string): number
 export function resolvePlanLimits(env?: Record<string, unknown>, plan?: string): { plan: 'free' | 'paid' | 'paid_storage'; storageBytes: number; dailyWrites: number; codebases: number }
+export function mintServerActorToken(input: { userId: string; secret: string; ttlMs?: number; now?: number }): string
 
 export const d1SchemaStatements: string[]
 export function attachTextDiff(result: unknown, filePath: string, readFileBody: (...args: unknown[]) => Promise<unknown>): Promise<unknown>

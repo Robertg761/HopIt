@@ -8,7 +8,7 @@ import type { LucideIcon } from 'lucide-react'
 
 import { cn } from '@/lib/utils'
 import { Kbd } from '@/components/ui/kbd'
-import { navItems, repoPaletteItems } from '@/components/shell/nav'
+import { accountNavItems, repoPaletteItems } from '@/components/shell/nav'
 import { useWorkspace, type AgentCommand } from '@/components/workspace/workspace-provider'
 import { useToast } from '@/hooks/use-toast'
 
@@ -48,9 +48,11 @@ const agentActions: Array<{
 export function CommandPalette({
   open,
   onOpenChange,
+  serviceAdmin = false,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
+  serviceAdmin?: boolean
 }) {
   const router = useRouter()
   const { status, selectedCodebaseId, runCommand } = useWorkspace()
@@ -59,6 +61,7 @@ export function CommandPalette({
   const [activeIndex, setActiveIndex] = React.useState(0)
   const inputRef = React.useRef<HTMLInputElement>(null)
   const [mounted, setMounted] = React.useState(false)
+  const navItems = React.useMemo(() => accountNavItems(serviceAdmin), [serviceAdmin])
 
   React.useEffect(() => setMounted(true), [])
 
@@ -117,7 +120,7 @@ export function CommandPalette({
         }))
       : []
     return [...nav, ...repo, ...agent]
-  }, [router, runAgentCommand, selectedCodebaseId, status.codebaseId, status.commandsAvailable])
+  }, [navItems, router, runAgentCommand, selectedCodebaseId, status.codebaseId, status.commandsAvailable])
 
   const filtered = React.useMemo(() => {
     const trimmed = query.trim().toLowerCase()

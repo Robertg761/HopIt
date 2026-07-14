@@ -1589,6 +1589,154 @@ test('server-actor: enabling the flag leaves the proxy token and hst_ session pa
   assert.equal(hstDb.executedStatements.length, 0)
 })
 
+// --- Owner-only service operations -----------------------------------------
+
+function adminOperationsRequest({ userId = 'owner-user', method = 'GET', body } = {}) {
+  return new Request('https://worker.example/admin/operations', {
+    method,
+    headers: {
+      authorization: `Bearer ${mintTestServerActorToken({ userId })}`,
+      'content-type': 'application/json',
+      'cf-connecting-ip': '203.0.113.130',
+    },
+    body: body ? JSON.stringify(body) : undefined,
+  })
+}
+
+function createAdminOperationsDb() {
+  const state = {
+    controls: new Map(),
+    adminEvents: [],
+    session: {
+      session_id: 'session-owner-1', user_id: 'owner-user', codebase_id: 'repo-1', device_name: 'Owner Mac',
+      status: 'active', capabilities_json: '["read","write","sync"]', expires_at: null,
+      created_at: '2026-07-13T00:00:00.000Z', last_seen_at: '2026-07-14T12:00:00.000Z', revoked_at: null,
+    },
+  }
+  const users = [
+    { user_id: 'owner-user', primary_email: 'owner@example.com', display_name: 'Owner', email_verified: 1, created_at: '2026-07-01T00:00:00.000Z', updated_at: '2026-07-14T00:00:00.000Z' },
+    { user_id: 'tenant-2', primary_email: 'tenant@example.com', display_name: 'Tenant', email_verified: 1, created_at: '2026-07-12T00:00:00.000Z', updated_at: '2026-07-14T00:00:00.000Z' },
+  ]
+  const db = {
+    state,
+    prepare(sql) {
+      const normalized = sql.replace(/\s+/g, ' ').trim().toLowerCase()
+      return {
+        bind(...params) {
+          return {
+            async all() {
+              if (normalized.includes('from users where user_id')) return { results: users.filter((user) => user.user_id === params[0]) }
+              if (normalized.includes('from users order by')) return { results: users }
+              if (normalized.includes('from tenant_usage u left join tenant_controls')) {
+                const control = state.controls.get('owner-user')
+                return { results: [{
+                  tenant_id: 'owner-user', plan: 'paid', storage_bytes: 12_000_000_000,
+                  write_day: utcDay(), rows_written_today: 10_000, created_at: '2026-07-01T00:00:00.000Z',
+                  updated_at: '2026-07-14T12:00:00.000Z', writes_paused: control?.writes_paused ?? 0,
+                  pause_reason: control?.reason ?? null, control_updated_at: control?.updated_at ?? null,
+                }] }
+              }
+              if (normalized.startsWith('select * from subscriptions')) return { results: [{ tenant_id: 'owner-user', provider: 'stripe_managed_payments', plan_key: 'plus', status: 'active', entitlement_active: 1, cancel_at_period_end: 0, current_period_end: null, updated_at: '2026-07-14T00:00:00.000Z' }] }
+              if (normalized.includes('from codebases group by owner_id')) return { results: [{ tenant_id: 'owner-user', codebase_count: 1, file_count: 2, last_codebase_update: '2026-07-14T12:00:00.000Z' }] }
+              if (normalized.includes('count(*) as session_count')) return { results: [{ tenant_id: 'owner-user', session_count: 1, active_session_count: state.session.status === 'active' ? 1 : 0, last_seen_at: state.session.last_seen_at }] }
+              if (normalized.includes('from agent_sessions s join codebases c') && normalized.includes('s.session_id')) return { results: [{ ...state.session, tenant_id: 'owner-user', codebase_name: 'HopIt' }] }
+              if (normalized.includes('from action_jobs')) return { results: [] }
+              if (normalized.includes('from agent_events e')) return { results: [{ id: 1, codebase_id: 'repo-1', codebase_name: 'HopIt', tenant_id: 'owner-user', event: 'sync.complete', at: '2026-07-14T12:00:00.000Z', source: 'agent' }] }
+              if (normalized.includes('from service_admin_events order by')) return { results: [...state.adminEvents].reverse() }
+              if (normalized.includes('from billing_webhook_events')) return { results: [{ received_at: '2026-07-14T11:00:00.000Z', event_created_at: '2026-07-14T11:00:00.000Z' }] }
+              if (normalized.includes('select tenant_id from tenant_usage')) return { results: params[0] === 'owner-user' ? [{ tenant_id: 'owner-user' }] : [] }
+              if (normalized.includes('select session_id, codebase_id, status from agent_sessions')) return { results: params[0] === state.session.session_id ? [state.session] : [] }
+              if (normalized.startsWith('insert into tenant_controls')) {
+                state.controls.set(params[0], { writes_paused: params[1], reason: params[2], updated_at: params[5] })
+                return { success: true, results: [], meta: { changes: 1 } }
+              }
+              if (normalized.startsWith('update agent_sessions set status')) {
+                state.session.status = 'revoked'
+                state.session.revoked_at = params[1]
+                return { success: true, results: [], meta: { changes: 1 } }
+              }
+              if (normalized.startsWith('insert into service_admin_events')) {
+                state.adminEvents.push({ event_id: params[0], actor_user_id: params[1], action: params[2], target_type: params[3], target_id: params[4], detail_json: params[5], created_at: params[6] })
+                return { success: true, results: [], meta: { changes: 1 } }
+              }
+              return { results: [] }
+            },
+          }
+        },
+      }
+    },
+  }
+  return db
+}
+
+function adminOperationsEnv(db) {
+  return {
+    HOPIT_MULTITENANT: '1',
+    HOPIT_ENFORCE_QUOTA: '1',
+    HOPIT_D1_SERVER_ACTOR_SECRET: SERVER_ACTOR_SECRET,
+    HOPIT_OWNER_EMAIL: 'owner@example.com',
+    HOPIT_D1_DB: db,
+  }
+}
+
+test('operations: only the verified service owner can read cross-tenant health', async () => {
+  const db = createAdminOperationsDb()
+  const owner = await worker.fetch(adminOperationsRequest(), adminOperationsEnv(db))
+  assert.equal(owner.status, 200)
+  const result = (await owner.json()).result
+  assert.equal(result.totals.users, 2)
+  assert.equal(result.totals.activeSubscriptions, 1)
+  assert.equal(result.tenants[0].quota.storage.limit, 30_000_000_000)
+  assert.equal(result.sessions[0].deviceName, 'Owner Mac')
+
+  const stranger = await worker.fetch(adminOperationsRequest({ userId: 'tenant-2' }), adminOperationsEnv(db))
+  assert.equal(stranger.status, 403)
+  assert.match((await stranger.json()).errors[0].message, /not the HopIt service owner/)
+})
+
+test('operations: flag off makes the owner endpoint nonexistent', async () => {
+  const db = createAdminOperationsDb()
+  const response = await worker.fetch(adminOperationsRequest(), {
+    ...adminOperationsEnv(db),
+    HOPIT_MULTITENANT: '0',
+  })
+  assert.equal(response.status, 404)
+})
+
+test('operations: pause and resume are confirmed, reversible, and audited', async () => {
+  const db = createAdminOperationsDb()
+  const unconfirmed = await worker.fetch(adminOperationsRequest({
+    method: 'POST', body: { action: 'pause_tenant_writes', tenantId: 'owner-user', confirmation: 'wrong' },
+  }), adminOperationsEnv(db))
+  assert.equal(unconfirmed.status, 400)
+
+  const paused = await worker.fetch(adminOperationsRequest({
+    method: 'POST', body: { action: 'pause_tenant_writes', tenantId: 'owner-user', confirmation: 'owner-user', reason: 'abuse review' },
+  }), adminOperationsEnv(db))
+  assert.equal(paused.status, 200)
+  assert.equal((await paused.json()).result.tenants[0].writesPaused, true)
+  assert.equal(db.state.adminEvents.at(-1).action, 'pause_tenant_writes')
+
+  const resumed = await worker.fetch(adminOperationsRequest({
+    method: 'POST', body: { action: 'resume_tenant_writes', tenantId: 'owner-user', confirmation: 'owner-user' },
+  }), adminOperationsEnv(db))
+  assert.equal(resumed.status, 200)
+  assert.equal((await resumed.json()).result.tenants[0].writesPaused, false)
+  assert.equal(db.state.adminEvents.at(-1).action, 'resume_tenant_writes')
+})
+
+test('operations: revoking a device session updates fleet health and audit history', async () => {
+  const db = createAdminOperationsDb()
+  const response = await worker.fetch(adminOperationsRequest({
+    method: 'POST', body: { action: 'revoke_session', sessionId: 'session-owner-1', confirmation: 'session-owner-1' },
+  }), adminOperationsEnv(db))
+  assert.equal(response.status, 200)
+  const result = (await response.json()).result
+  assert.equal(result.sessions[0].status, 'revoked')
+  assert.equal(result.totals.activeSessions, 0)
+  assert.equal(db.state.adminEvents.at(-1).action, 'revoke_session')
+})
+
 async function captureLogs(callback) {
   const logs = []
   const originalLog = console.log
@@ -2258,7 +2406,7 @@ test('quota: computeUsageStatus reports per-line used/limit/ratio/state', () => 
 // A mutation-capable mock that also answers the tenant meter read and records
 // the folded meter upsert. Owner = user-owner (the tenant), writer = an active
 // team-member collaborator on a team-visible change set.
-function createQuotaMutationDb({ usage = null, currentFileSize = null } = {}) {
+function createQuotaMutationDb({ usage = null, control = null, currentFileSize = null } = {}) {
   const selected = { type: 'active-change-set', id: 'cs_1', revision: 1, effectiveVisibility: 'team-visible', mergeState: 'unmerged' }
   const db = {
     executedStatements: [],
@@ -2287,6 +2435,9 @@ function createQuotaMutationDb({ usage = null, currentFileSize = null } = {}) {
               }
               if (normalized.includes('from tenant_usage where tenant_id')) {
                 return { results: usage ? [usage] : [] }
+              }
+              if (normalized.includes('from tenant_controls where tenant_id')) {
+                return { results: control ? [control] : [] }
               }
               if (normalized.includes('length(content) as content_size') && normalized.includes('from files where codebase_id')) {
                 return { results: currentFileSize == null ? [] : [{ size: currentFileSize, blob_size: null, content_size: currentFileSize }] }
@@ -2442,6 +2593,34 @@ test('meter: flag ON with enforce ON under cap still writes + meters', async () 
   })
   assert.equal(response.status, 200)
   assert.equal(meterStatementsOf(db).length, 1)
+})
+
+test('service control: paused tenant blocks writes but leaves reads and storage-releasing deletes available', async () => {
+  const control = { writes_paused: 1, reason: 'abuse review' }
+  const blockedDb = createQuotaMutationDb({ control })
+  const blocked = await worker.fetch(scopedQueryRequest(guardedCommitBatch(), '203.0.113.123'), {
+    HOPIT_D1_DB: blockedDb,
+    HOPIT_MULTITENANT: '1',
+    HOPIT_ENFORCE_QUOTA: '1',
+  })
+  assert.equal(blocked.status, 429)
+  assert.equal((await blocked.json()).errors[0].quota.code, 'tenant_writes_paused')
+  assert.equal(blockedDb.executedStatements.length, 0)
+
+  const states = journalSelectedStates('team-visible')
+  const deleteDb = createQuotaMutationDb({ control, currentFileSize: 5 })
+  const deletion = await worker.fetch(scopedQueryRequest(guardedJournalBatch({
+    path: 'README.md',
+    operation: 'delete',
+    previousSelectedState: states.previous,
+    nextSelectedState: states.next,
+  }), '203.0.113.124'), {
+    HOPIT_D1_DB: deleteDb,
+    HOPIT_MULTITENANT: '1',
+    HOPIT_ENFORCE_QUOTA: '1',
+  })
+  assert.equal(deletion.status, 200)
+  assert.ok(meterStatementsOf(deleteDb)[0].params.includes(-5))
 })
 
 test('enforce: an over-daily-cap write is rejected at the Worker with nothing written (no data loss)', async () => {

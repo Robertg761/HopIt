@@ -13,7 +13,7 @@ import { HopItLogo } from '@/components/brand/logo'
 import { AuthMenu } from '@/components/shell/auth-menu'
 import { ThemeToggle } from '@/components/shell/theme-toggle'
 import { CodebaseSwitcher } from '@/components/shell/codebase-switcher'
-import { activeNavId, navItems } from '@/components/shell/nav'
+import { accountNavItems, activeNavId } from '@/components/shell/nav'
 import { useWorkspace } from '@/components/workspace/workspace-provider'
 
 const stateTone: Record<string, StatusDotTone> = {
@@ -23,10 +23,11 @@ const stateTone: Record<string, StatusDotTone> = {
   blocked: 'danger',
 }
 
-export function Topbar({ onOpenPalette }: { onOpenPalette: () => void }) {
+export function Topbar({ onOpenPalette, serviceAdmin = false }: { onOpenPalette: () => void; serviceAdmin?: boolean }) {
   const pathname = usePathname() ?? '/'
   const active = activeNavId(pathname)
   const { status } = useWorkspace()
+  const navItems = accountNavItems(serviceAdmin)
 
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-background/95 backdrop-blur-sm">

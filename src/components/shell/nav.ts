@@ -2,6 +2,7 @@ import {
   BookMarked,
   CircleDollarSign,
   House,
+  SlidersHorizontal,
   type LucideIcon,
 } from 'lucide-react'
 
@@ -58,10 +59,24 @@ export const navGroups: NavGroup[] = [
 
 export const navItems: NavItem[] = navGroups.flatMap((group) => group.items)
 
+export const serviceAdminNavItem: NavItem = {
+  id: 'admin',
+  href: '/admin',
+  label: 'Operations',
+  description: 'Monitor tenants, quotas, billing, sync health, and service controls.',
+  icon: SlidersHorizontal,
+  keywords: ['admin', 'operations', 'tenants', 'quota', 'billing', 'health', 'monitor'],
+}
+
+export function accountNavItems(serviceAdmin = false) {
+  return serviceAdmin ? [...navItems, serviceAdminNavItem] : navItems
+}
+
 export function activeNavId(pathname: string): string {
   if (pathname === '/overview') return 'home'
   if (pathname.startsWith('/codebases')) return 'codebases'
   if (pathname.startsWith('/pricing')) return 'pricing'
+  if (pathname.startsWith('/admin')) return 'admin'
   // Legacy routes still highlight Repositories while redirecting.
   if (
     pathname.startsWith('/files') ||

@@ -434,6 +434,12 @@ NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
 CLERK_SECRET_KEY
 CLERK_JWT_ISSUER_DOMAIN
 HOPIT_OWNER_EMAIL
+HOPIT_MARGIN_PROVIDER_RATE
+HOPIT_MARGIN_PROVIDER_FIXED_USD
+HOPIT_MARGIN_R2_PER_GB_USD
+HOPIT_MARGIN_D1_PER_MILLION_WRITES_USD
+HOPIT_MARGIN_OPS_HEADROOM_PER_TENANT_USD
+HOPIT_MARGIN_PLATFORM_BASE_USD
 HOPIT_BLOB_PROVIDER
 HOPIT_BLOB_PREFIX
 HOPIT_BLOB_FREE_ONLY
@@ -443,6 +449,14 @@ HOPIT_R2_BUCKET
 HOPIT_R2_ACCESS_KEY_ID
 HOPIT_R2_SECRET_ACCESS_KEY
 ```
+
+The owner operations page is `/admin`. The six `HOPIT_MARGIN_*` variables are
+optional; when absent, it uses the launch research assumptions (5% + $0.50
+payment cost, $0.015/GB-month R2, $1/M D1 writes, $0.40 paid-tenant operations
+headroom, and the $5 shared platform base). Keep these current when provider
+pricing changes. The D1 Worker also needs `HOPIT_OWNER_EMAIL` as a Worker secret
+or variable so the typed `/admin/operations` endpoint can independently verify
+the owner; do not grant the browser a proxy token.
 
 Hosted HopIt requires cloud-backed status. The `/api/agent/command` route refuses local workspace commands on Vercel. The current production env uses `HOPIT_AUTH_PROVIDER=clerk`; keep `HOPIT_ALLOW_BASIC_AUTH_FALLBACK` unset for normal production access. Vercel Deployment Protection can be enabled as an additional account-level guard.
 

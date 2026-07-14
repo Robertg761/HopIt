@@ -1645,6 +1645,24 @@ or charge.
   during the first 30–60 days of real usage before treating it as permanently
   sufficient.
 
+### 2026-07-14 owner service operations console
+
+- Added an owner-only `/admin` control room backed by a typed Worker endpoint,
+  not the arbitrary-SQL proxy. Both the Next route and Worker independently
+  require the signed-in, verified `HOPIT_OWNER_EMAIL` account.
+- The live view polls every 30 seconds and surfaces tenant plan mix, storage and
+  daily-write pressure at 50/80/100%, active sync sessions, recent sync/action
+  events, billing/webhook state, gross MRR, modeled provider/storage/write costs,
+  and the 50% at-cap margin floor for both paid plans.
+- Safe service controls can pause/resume a tenant's storage-growing cloud writes,
+  revoke a device session, and run Stripe entitlement reconciliation. Pausing
+  never blocks reads, exports, local journals, or deletes that free storage;
+  billing remains the only source allowed to grant a paid entitlement.
+- Added durable `tenant_controls` and `service_admin_events` tables. Every owner
+  control requires target confirmation and is recorded in the service audit trail.
+- Verification: full `npm run verify` passed (agent 315, web 149, Worker 82,
+  config 2, TypeScript, lint, optimized Next build) and desktop 124/124 passed.
+
 ## Known Gaps
 
 - Phase 3 billing plumbing is live behind `HOPIT_BILLING`: Stripe Managed

@@ -6,7 +6,7 @@ import { Topbar } from '@/components/shell/topbar'
 import { CommandPalette } from '@/components/shell/command-palette'
 import { WorkspaceProvider } from '@/components/workspace/workspace-provider'
 
-export function AppShell({ children }: { children: React.ReactNode }) {
+export function AppShell({ children, serviceAdmin = false }: { children: React.ReactNode; serviceAdmin?: boolean }) {
   const [paletteOpen, setPaletteOpen] = React.useState(false)
 
   React.useEffect(() => {
@@ -23,13 +23,13 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   return (
     <WorkspaceProvider>
       <div className="relative flex min-h-dvh flex-col">
-        <Topbar onOpenPalette={() => setPaletteOpen(true)} />
+        <Topbar serviceAdmin={serviceAdmin} onOpenPalette={() => setPaletteOpen(true)} />
         <main id="page-main" className="relative flex-1">
           {children}
         </main>
       </div>
 
-      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      <CommandPalette serviceAdmin={serviceAdmin} open={paletteOpen} onOpenChange={setPaletteOpen} />
     </WorkspaceProvider>
   )
 }

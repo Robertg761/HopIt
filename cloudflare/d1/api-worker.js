@@ -451,6 +451,14 @@ async function readTenantUsageRow(db, tenantId) {
   return result.results?.[0] ?? null
 }
 
+async function readTenantControlRow(db, tenantId) {
+  if (!tenantId) return null
+  const result = await db.prepare(
+    'select tenant_id, writes_paused, reason, updated_by_user_id, updated_at from tenant_controls where tenant_id = ? limit 1',
+  ).bind(tenantId).all()
+  return result.results?.[0] ?? null
+}
+
 async function resolveTenantIdForAuthorization(db, authorization) {
   if (authorization.kind === 'server-actor') return authorization.actor?.userId ?? null
   if (authorization.kind === 'session') {
@@ -479,6 +487,24 @@ async function prepareTenantMetering({ env, db, authorization }) {
 
   const storageDelta = await guardedStorageDelta(db, policies)
   const day = utcDay()
+
+  const control = await readTenantControlRow(db, tenantId)
+  const hasStorageGrowingWrite = policies.some((policy) => policy?.operation === 'insert' || policy?.operation === 'update')
+  if (Number(control?.writes_paused) === 1 && hasStorageGrowingWrite && storageDelta >= 0) {
+    return {
+      tenantId,
+      rowsDelta,
+      storageDelta,
+      rejection: {
+        code: 'tenant_writes_paused',
+        message: control?.reason
+          ? `Cloud writes are temporarily paused by the HopIt operator: ${control.reason}`
+          : 'Cloud writes are temporarily paused by the HopIt operator.',
+        tenantId,
+        retryable: true,
+      },
+    }
+  }
 
   if (isQuotaEnforced(env)) {
     const usage = await readTenantUsageRow(db, tenantId)
@@ -519,6 +545,287 @@ function quotaError(rejection) {
 // otherwise, so single-tenant is unchanged).
 function isUsageStatusPath(pathname) {
   return pathname === '/usage' || pathname.endsWith('/usage')
+}
+
+// --- Owner operations console ------------------------------------------------
+//
+// This is a typed administrative surface, not a general SQL proxy. It accepts
+// the same short-lived hsa_ actor token as the tenant dashboard, then verifies
+// that actor against the verified owner account stored in D1. The browser never
+// receives the proxy token or a capability that can run arbitrary SQL.
+function isAdminOperationsPath(pathname) {
+  return pathname === '/admin/operations' || pathname.endsWith('/admin/operations')
+}
+
+async function handleAdminOperations(request, env) {
+  if (request.method !== 'GET' && request.method !== 'POST') {
+    return cloudflareError('Method not allowed.', 1004, 405)
+  }
+  if (failedAuthRateLimited(request)) return rateLimitError()
+
+  let actor
+  try {
+    actor = await resolveServiceAdmin(request, env)
+    clearFailedAuth(request)
+  } catch (error) {
+    const rateLimited = recordFailedAuth(request)
+    return rateLimited
+      ? rateLimitError()
+      : authenticationError(error instanceof Error ? error.message : undefined)
+  }
+
+  try {
+    let actionResult = null
+    if (request.method === 'POST') {
+      const body = await request.json().catch(() => null)
+      actionResult = await applyServiceAdminAction(env.HOPIT_D1_DB, actor, body)
+    }
+    const result = await readServiceOperations(env)
+    const response = json({ success: true, errors: [], messages: [], result: { ...result, actionResult } })
+    logRequest({ request, env, authMode: 'service-admin', status: response.status })
+    return response
+  } catch (error) {
+    const response = cloudflareError(error instanceof Error ? error.message : 'Operations request failed.', 1002, 400)
+    logRequest({
+      request,
+      env,
+      authMode: 'service-admin',
+      status: response.status,
+      rejectedReason: error instanceof Error ? error.message : 'operations-failed',
+    })
+    return response
+  }
+}
+
+async function resolveServiceAdmin(request, env) {
+  const token = bearerTokenFromRequest(request)
+  const actor = await verifyServerActorToken(token, env.HOPIT_D1_SERVER_ACTOR_SECRET)
+  if (!actor) throw new Error('Authentication error')
+  const expectedEmail = normalizeEmail(env.HOPIT_OWNER_EMAIL)
+  if (!expectedEmail) throw new Error('Service owner is not configured.')
+  const result = await env.HOPIT_D1_DB.prepare(
+    'select primary_email, email_verified from users where user_id = ? limit 1',
+  ).bind(actor.userId).all()
+  const owner = result.results?.[0]
+  if (Number(owner?.email_verified) !== 1 || normalizeEmail(owner?.primary_email) !== expectedEmail) {
+    throw new Error('Authenticated account is not the HopIt service owner.')
+  }
+  return actor
+}
+
+function normalizeEmail(value) {
+  return typeof value === 'string' ? value.trim().toLowerCase() : ''
+}
+
+async function dbRows(db, sql, params = []) {
+  const result = await db.prepare(sql).bind(...params).all()
+  if (result?.success === false) throw new Error(result.error ?? 'D1 operation failed.')
+  return result.results ?? []
+}
+
+async function readServiceOperations(env) {
+  const db = env.HOPIT_D1_DB
+  const now = Date.now()
+  const day = utcDay(now)
+  const [users, usageRows, subscriptions, codebaseCounts, sessionCounts, sessions, jobRows, recentEvents, adminEvents, webhookRows] = await Promise.all([
+    dbRows(db, 'select user_id, primary_email, display_name, email_verified, created_at, updated_at from users order by created_at desc limit 250'),
+    dbRows(db, `select u.tenant_id, u.plan, u.storage_bytes, u.write_day, u.rows_written_today, u.created_at, u.updated_at,
+      c.writes_paused, c.reason as pause_reason, c.updated_at as control_updated_at
+      from tenant_usage u left join tenant_controls c on c.tenant_id = u.tenant_id
+      order by u.updated_at desc limit 250`),
+    dbRows(db, 'select * from subscriptions order by updated_at desc limit 250'),
+    dbRows(db, 'select owner_id as tenant_id, count(*) as codebase_count, sum(file_count) as file_count, max(updated_at) as last_codebase_update from codebases group by owner_id'),
+    dbRows(db, `select c.owner_id as tenant_id, count(*) as session_count,
+      sum(case when s.status = 'active' and (s.expires_at is null or s.expires_at > ?) then 1 else 0 end) as active_session_count,
+      max(s.last_seen_at) as last_seen_at
+      from agent_sessions s join codebases c on c.codebase_id = s.codebase_id group by c.owner_id`, [new Date(now).toISOString()]),
+    dbRows(db, `select s.session_id, s.user_id, s.codebase_id, c.owner_id as tenant_id, c.name as codebase_name,
+      s.device_name, s.status, s.capabilities_json, s.expires_at, s.created_at, s.last_seen_at, s.revoked_at
+      from agent_sessions s join codebases c on c.codebase_id = s.codebase_id
+      order by s.last_seen_at desc limit 100`),
+    dbRows(db, `select status, count(*) as count from action_jobs
+      where created_at >= ? group by status`, [new Date(now - 24 * 60 * 60 * 1000).toISOString()]),
+    dbRows(db, `select e.id, e.codebase_id, c.name as codebase_name, c.owner_id as tenant_id, e.event, e.at, e.source
+      from agent_events e left join codebases c on c.codebase_id = e.codebase_id
+      order by e.at desc, e.id desc limit 40`),
+    dbRows(db, 'select event_id, actor_user_id, action, target_type, target_id, detail_json, created_at from service_admin_events order by created_at desc limit 30'),
+    dbRows(db, 'select received_at, event_created_at from billing_webhook_events order by received_at desc limit 1'),
+  ])
+
+  const usersById = new Map(users.map((row) => [row.user_id, row]))
+  const subscriptionsByTenant = new Map(subscriptions.map((row) => [row.tenant_id, row]))
+  const codebasesByTenant = new Map(codebaseCounts.map((row) => [row.tenant_id, row]))
+  const sessionsByTenant = new Map(sessionCounts.map((row) => [row.tenant_id, row]))
+  const warnRatio = warnRatioFromEnv(env)
+  const tenants = usageRows.map((usage) => {
+    const limits = resolvePlanLimits(env, usage.plan)
+    const quota = computeUsageStatus({
+      usage,
+      limits,
+      warnRatio,
+      day,
+      codebaseCount: Number(codebasesByTenant.get(usage.tenant_id)?.codebase_count ?? 0),
+    })
+    const subscription = subscriptionsByTenant.get(usage.tenant_id)
+    const session = sessionsByTenant.get(usage.tenant_id)
+    const user = usersById.get(usage.tenant_id)
+    return {
+      tenantId: usage.tenant_id,
+      email: user?.primary_email ?? null,
+      displayName: user?.display_name ?? null,
+      emailVerified: Number(user?.email_verified) === 1,
+      plan: quota.plan,
+      quota,
+      writesPaused: Number(usage.writes_paused) === 1,
+      pauseReason: usage.pause_reason ?? null,
+      controlUpdatedAt: usage.control_updated_at ?? null,
+      subscription: subscription ? {
+        provider: subscription.provider,
+        planKey: subscription.plan_key,
+        status: subscription.status,
+        entitlementActive: Number(subscription.entitlement_active) === 1,
+        cancelAtPeriodEnd: Number(subscription.cancel_at_period_end) === 1,
+        currentPeriodEnd: subscription.current_period_end ?? null,
+        updatedAt: subscription.updated_at,
+      } : null,
+      codebaseCount: Number(codebasesByTenant.get(usage.tenant_id)?.codebase_count ?? 0),
+      fileCount: Number(codebasesByTenant.get(usage.tenant_id)?.file_count ?? 0),
+      lastCodebaseUpdate: codebasesByTenant.get(usage.tenant_id)?.last_codebase_update ?? null,
+      sessionCount: Number(session?.session_count ?? 0),
+      activeSessionCount: Number(session?.active_session_count ?? 0),
+      lastSeenAt: session?.last_seen_at ?? null,
+      createdAt: usage.created_at,
+      updatedAt: usage.updated_at,
+    }
+  })
+
+  const jobs = Object.fromEntries(jobRows.map((row) => [row.status, Number(row.count ?? 0)]))
+  const totalStorageBytes = tenants.reduce((sum, tenant) => sum + Number(tenant.quota.storage.used ?? 0), 0)
+  const rowsWrittenToday = tenants.reduce((sum, tenant) => sum + Number(tenant.quota.dailyWrites.used ?? 0), 0)
+  const activeSubscriptions = subscriptions.filter((row) => Number(row.entitlement_active) === 1)
+  const thresholdCounts = (field, threshold) => tenants.filter((tenant) => tenant.quota[field].ratio >= threshold).length
+  const planCounts = tenants.reduce((counts, tenant) => {
+    counts[tenant.plan] = (counts[tenant.plan] ?? 0) + 1
+    return counts
+  }, {})
+
+  return {
+    generatedAt: new Date(now).toISOString(),
+    health: {
+      database: 'operational',
+      multiTenant: isMultiTenantEnabled(env),
+      quotaEnforced: isQuotaEnforced(env),
+      ownerGuard: Boolean(normalizeEmail(env.HOPIT_OWNER_EMAIL)),
+      lastWebhookAt: webhookRows[0]?.received_at ?? null,
+    },
+    totals: {
+      users: users.length,
+      tenants: tenants.length,
+      codebases: codebaseCounts.reduce((sum, row) => sum + Number(row.codebase_count ?? 0), 0),
+      activeSessions: sessionCounts.reduce((sum, row) => sum + Number(row.active_session_count ?? 0), 0),
+      activeSubscriptions: activeSubscriptions.length,
+      totalStorageBytes,
+      rowsWrittenToday,
+      planCounts,
+      actionJobs24h: jobs,
+      storageAt50: thresholdCounts('storage', 0.5),
+      storageAt80: thresholdCounts('storage', warnRatio),
+      storageBlocked: thresholdCounts('storage', 1),
+      writesAt50: thresholdCounts('dailyWrites', 0.5),
+      writesAt80: thresholdCounts('dailyWrites', warnRatio),
+      writesBlocked: thresholdCounts('dailyWrites', 1),
+    },
+    tenants,
+    sessions: sessions.map((row) => ({
+      sessionId: row.session_id,
+      userId: row.user_id,
+      tenantId: row.tenant_id,
+      codebaseId: row.codebase_id,
+      codebaseName: row.codebase_name,
+      deviceName: row.device_name ?? null,
+      status: row.status,
+      capabilities: parseJson(row.capabilities_json, []),
+      expiresAt: row.expires_at ?? null,
+      createdAt: row.created_at,
+      lastSeenAt: row.last_seen_at,
+      revokedAt: row.revoked_at ?? null,
+    })),
+    recentEvents,
+    adminEvents: adminEvents.map((row) => ({ ...row, detail: parseJson(row.detail_json, {}) })),
+  }
+}
+
+async function applyServiceAdminAction(db, actor, input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new Error('Action body is required.')
+  const action = typeof input.action === 'string' ? input.action.trim() : ''
+  const targetId = typeof input.tenantId === 'string'
+    ? input.tenantId.trim()
+    : typeof input.sessionId === 'string'
+      ? input.sessionId.trim()
+      : 'hopit-service'
+  const confirmation = typeof input.confirmation === 'string' ? input.confirmation.trim() : ''
+  if (!targetId || confirmation !== targetId) throw new Error('Action confirmation did not match its target.')
+  const now = new Date().toISOString()
+  const eventId = `admin_${crypto.randomUUID()}`
+
+  if (action === 'pause_tenant_writes' || action === 'resume_tenant_writes') {
+    const tenant = (await dbRows(db, 'select tenant_id from tenant_usage where tenant_id = ? limit 1', [targetId]))[0]
+    if (!tenant) throw new Error('Tenant was not found.')
+    const paused = action === 'pause_tenant_writes' ? 1 : 0
+    const reason = paused && typeof input.reason === 'string' && input.reason.trim()
+      ? input.reason.trim().slice(0, 240)
+      : null
+    await executeStatements(db, [
+      {
+        sql: `insert into tenant_controls (tenant_id, writes_paused, reason, updated_by_user_id, created_at, updated_at)
+          values (?, ?, ?, ?, ?, ?)
+          on conflict(tenant_id) do update set writes_paused = excluded.writes_paused, reason = excluded.reason,
+            updated_by_user_id = excluded.updated_by_user_id, updated_at = excluded.updated_at`,
+        params: [targetId, paused, reason, actor.userId, now, now],
+      },
+      adminAuditStatement({ eventId, actor, action, targetType: 'tenant', targetId, detail: { reason }, now }),
+    ])
+    return { action, tenantId: targetId, writesPaused: paused === 1 }
+  }
+
+  if (action === 'revoke_session') {
+    const session = (await dbRows(db, 'select session_id, codebase_id, status from agent_sessions where session_id = ? limit 1', [targetId]))[0]
+    if (!session) throw new Error('Session was not found.')
+    await executeStatements(db, [
+      {
+        sql: `update agent_sessions set status = 'revoked', revoked_by_user_id = ?, revoked_at = ?, updated_at = ?
+          where session_id = ?`,
+        params: [actor.userId, now, now, targetId],
+      },
+      adminAuditStatement({
+        eventId,
+        actor,
+        action,
+        targetType: 'session',
+        targetId,
+        detail: { codebaseId: session.codebase_id, previousStatus: session.status },
+        now,
+      }),
+    ])
+    return { action, sessionId: targetId, status: 'revoked' }
+  }
+
+  if (action === 'record_billing_reconcile') {
+    const detail = input.detail && typeof input.detail === 'object' && !Array.isArray(input.detail) ? input.detail : {}
+    await executeStatements(db, [adminAuditStatement({ eventId, actor, action, targetType: 'service', targetId, detail, now })])
+    return { action, recorded: true }
+  }
+
+  throw new Error('Unsupported service admin action.')
+}
+
+function adminAuditStatement({ eventId, actor, action, targetType, targetId, detail, now }) {
+  return {
+    sql: `insert into service_admin_events
+      (event_id, actor_user_id, action, target_type, target_id, detail_json, created_at)
+      values (?, ?, ?, ?, ?, ?, ?)`,
+    params: [eventId, actor.userId, action, targetType, targetId, JSON.stringify(detail ?? {}), now],
+  }
 }
 
 async function handleUsageStatus(request, env) {
@@ -927,6 +1234,10 @@ const worker = {
     // with the flag on; otherwise it falls through to the 404 below.
     if (isMultiTenantEnabled(env) && isUsageStatusPath(url.pathname)) {
       return await handleUsageStatus(request, env)
+    }
+
+    if (isMultiTenantEnabled(env) && isAdminOperationsPath(url.pathname)) {
+      return await handleAdminOperations(request, env)
     }
 
     if (!url.pathname.endsWith('/query')) {
