@@ -1640,6 +1640,8 @@ function createAdminOperationsDb() {
           return {
             async all() {
               if (normalized.includes('from users where user_id')) return { results: users.filter((user) => user.user_id === params[0]) }
+              if (normalized.includes('count(*) as total_users')) return { results: [{ total_users: state.aggregateTotals?.users ?? users.length, verified_users: 2, new_users_24h: 0, new_users_7d: 1, new_users_30d: 2 }] }
+              if (state.failSnapshotAfterMutation && normalized.includes('from users order by')) throw new Error('snapshot read failed')
               if (normalized.includes('from users order by')) return { results: users }
               if (normalized.includes('from tenant_usage u left join tenant_controls')) {
                 const control = state.controls.get('owner-user')
@@ -1651,6 +1653,10 @@ function createAdminOperationsDb() {
                 }] }
               }
               if (normalized.startsWith('select * from subscriptions')) return { results: [{ tenant_id: 'owner-user', provider: 'stripe_managed_payments', plan_key: 'plus', status: 'active', entitlement_active: 1, cancel_at_period_end: 0, current_period_end: null, updated_at: '2026-07-14T00:00:00.000Z' }] }
+              if (normalized.includes('from subscriptions group by status')) return { results: [{ status: 'active', count: 1, active_count: 1 }] }
+              if (normalized.includes('count(*) as tenant_count')) return { results: [{ tenant_count: state.aggregateTotals?.tenants ?? 1, total_storage_bytes: 12_000_000_000, rows_written_today: 10_000, storage_at_50: 0, storage_at_warn: 0, storage_blocked: 0, writes_at_50: 1, writes_at_warn: 0, writes_blocked: 0 }] }
+              if (normalized.includes('from tenant_usage group by case')) return { results: [{ plan: 'paid', count: 1 }] }
+              if (normalized.includes('(select count(*) from codebases) as codebases')) return { results: [{ codebases: state.aggregateTotals?.codebases ?? 1, sessions: state.aggregateTotals?.sessions ?? 1, devices: state.aggregateTotals?.devices ?? 1, active_devices: state.device.status === 'trusted' ? 1 : 0, revoked_devices: state.device.status === 'revoked' ? 1 : 0, device_authorizations: state.aggregateTotals?.deviceAuthorizations ?? 1, pending_device_authorizations: state.authorization.status === 'pending' ? 1 : 0, action_jobs: state.aggregateTotals?.actionJobs ?? 1, admin_events: state.aggregateTotals?.adminEvents ?? state.adminEvents.length, webhooks: state.aggregateTotals?.webhooks ?? 1 }] }
               if (normalized.includes('from codebases group by owner_id')) return { results: [{ tenant_id: 'owner-user', codebase_count: 1, file_count: 2, last_codebase_update: '2026-07-14T12:00:00.000Z' }] }
               if (normalized.includes('count(*) as session_count')) return { results: [{ tenant_id: 'owner-user', session_count: 1, active_session_count: state.session.status === 'active' ? 1 : 0, last_seen_at: state.session.last_seen_at }] }
               if (normalized.includes('from agent_sessions s join codebases c') && normalized.includes('s.session_id')) return { results: [{ ...state.session, tenant_id: 'owner-user', codebase_name: 'HopIt' }] }
@@ -1686,8 +1692,8 @@ function createAdminOperationsDb() {
                 state.authorization.updated_at = params[0]
                 return { success: true, results: [], meta: { changes: 1 } }
               }
-              if (normalized.startsWith("update action_jobs set status = 'canceled'")) {
-                state.job.status = 'canceled'
+              if (normalized.startsWith("update action_jobs set status = 'cancelled'")) {
+                state.job.status = 'cancelled'
                 return { success: true, results: [], meta: { changes: 1 } }
               }
               if (normalized.startsWith("update action_jobs set status = 'queued'")) {
@@ -1731,6 +1737,29 @@ test('operations: only the verified service owner can read cross-tenant health',
   const stranger = await worker.fetch(adminOperationsRequest({ userId: 'tenant-2' }), adminOperationsEnv(db))
   assert.equal(stranger.status, 403)
   assert.match((await stranger.json()).errors[0].message, /not the HopIt service owner/)
+})
+
+test('operations: global aggregates remain complete when detail collections are bounded', async () => {
+  const db = createAdminOperationsDb()
+  db.state.aggregateTotals = {
+    users: 300,
+    tenants: 300,
+    codebases: 400,
+    sessions: 500,
+    devices: 350,
+    deviceAuthorizations: 320,
+    actionJobs: 700,
+    adminEvents: 450,
+    webhooks: 275,
+  }
+  const response = await worker.fetch(adminOperationsRequest(), adminOperationsEnv(db))
+  assert.equal(response.status, 200)
+  const result = (await response.json()).result
+  assert.equal(result.totals.users, 300)
+  assert.equal(result.totals.tenants, 300)
+  assert.deepEqual(result.collections.tenants, { shown: 1, total: 300, truncated: true })
+  assert.deepEqual(result.collections.codebases, { shown: 0, total: 400, truncated: true })
+  assert.deepEqual(result.collections.sessions, { shown: 1, total: 500, truncated: true })
 })
 
 test('operations: flag off makes the owner endpoint nonexistent', async () => {
@@ -1810,8 +1839,21 @@ test('operations: queued jobs can be canceled and failed jobs can be requeued', 
     method: 'POST', body: { action: 'cancel_action_job', jobId: 'job-owner-1', confirmation: 'job-owner-1' },
   }), adminOperationsEnv(db))
   assert.equal(canceled.status, 200)
-  assert.equal(db.state.job.status, 'canceled')
+  assert.equal(db.state.job.status, 'cancelled')
   assert.deepEqual(db.state.adminEvents.slice(-2).map((event) => event.action), ['requeue_action_job', 'cancel_action_job'])
+})
+
+test('operations: a committed action stays successful when the follow-up snapshot fails', async () => {
+  const db = createAdminOperationsDb()
+  db.state.failSnapshotAfterMutation = true
+  const response = await worker.fetch(adminOperationsRequest({
+    method: 'POST', body: { action: 'pause_tenant_writes', tenantId: 'owner-user', confirmation: 'owner-user' },
+  }), adminOperationsEnv(db))
+  assert.equal(response.status, 200)
+  const result = (await response.json()).result
+  assert.equal(result.snapshotAvailable, false)
+  assert.equal(result.actionResult.action, 'pause_tenant_writes')
+  assert.equal(db.state.controls.get('owner-user').writes_paused, 1)
 })
 
 async function captureLogs(callback) {

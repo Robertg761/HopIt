@@ -1680,7 +1680,15 @@ or charge.
   hosted action, and setting or clearing Stripe end-of-period cancellation.
   Stripe subscription ids are resolved server-side from the tenant record, and
   billing reconciliation runs after every renewal change.
-- Verification: full `npm run verify` passed (agent 315, web 152, Worker 85,
+- Hardened the control plane after review: renewal changes now reject omitted or
+  non-boolean cancellation state; billing reconciliation requires confirmation,
+  continues tenant-by-tenant, and returns exact failures; committed mutations
+  remain successful when the follow-up dashboard read fails; aggregate totals no
+  longer inherit detail-list caps; bounded collections disclose their shown and
+  total counts; billing health distinguishes configured, recently verified, and
+  stale verification; expired sessions are excluded from the active-device list;
+  and hosted-action cancellation uses the existing `cancelled` status vocabulary.
+- Verification: full `npm run verify` passed (agent 315, web 156, Worker 87,
   config 2, TypeScript, lint, optimized Next build) and desktop 124/124 passed.
 
 ## Known Gaps

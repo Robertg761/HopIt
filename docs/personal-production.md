@@ -467,9 +467,21 @@ audit ledger. Controls are confirmation-gated and include tenant write
 pause/resume, tenant-wide session containment, individual session or trusted
 device revocation, pairing expiration, queued-job cancellation, failed-job
 requeue, Stripe end-of-period cancellation/resume, and billing reconciliation.
+Renewal changes require an explicit boolean and never default to resuming a
+subscription. Billing reconciliation reports per-tenant failures and continues
+past an isolated tenant error. Once an external or D1 mutation commits, a later
+snapshot-refresh failure is returned as an applied operation with warnings—not
+as a false mutation failure.
 The browser can export the current redacted operations snapshot; it never
 receives secret values, approval codes, raw key material, storage credentials,
 or a D1 proxy token. Paid entitlement still comes only from Stripe.
+
+Global totals, growth windows, quota pressure, and plan/subscription counts use
+dedicated aggregate queries. Detail collections remain intentionally bounded;
+when any collection is truncated, the console shows the exact displayed and
+total record counts. Billing health says `Configured` until a signed webhook is
+observed, `Verified` while that evidence is recent, and `Verification stale`
+after 45 days without another signed event.
 
 Hosted HopIt requires cloud-backed status. The `/api/agent/command` route refuses local workspace commands on Vercel. The current production env uses `HOPIT_AUTH_PROVIDER=clerk`; keep `HOPIT_ALLOW_BASIC_AUTH_FALLBACK` unset for normal production access. Vercel Deployment Protection can be enabled as an additional account-level guard.
 

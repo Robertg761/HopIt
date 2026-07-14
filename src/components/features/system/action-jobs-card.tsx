@@ -145,7 +145,7 @@ export function ActionJobsCard({ codebaseId }: { codebaseId: string | null }) {
 
 function statusTone(status: string): BadgeTone {
   if (status === 'succeeded' || status === 'completed' || status === 'passed') return 'hop'
-  if (status === 'failed' || status === 'error' || status === 'cancelled') return 'danger'
+  if (status === 'failed' || status === 'error' || status === 'cancelled' || status === 'canceled') return 'danger'
   if (status === 'running' || status === 'queued' || status === 'pending') return 'amber'
   return 'neutral'
 }

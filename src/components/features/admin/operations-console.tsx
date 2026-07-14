@@ -57,9 +57,10 @@ type PendingAction = {
     | 'expire_device_authorization'
     | 'cancel_action_job'
     | 'requeue_action_job'
+    | 'reconcile_billing'
     | 'set_subscription_cancellation'
   targetId: string
-  targetType: 'tenant' | 'session' | 'device' | 'authorization' | 'job'
+  targetType: 'tenant' | 'session' | 'device' | 'authorization' | 'job' | 'service'
   label: string
   detail?: string
   cancelAtPeriodEnd?: boolean
@@ -113,11 +114,22 @@ export function OperationsConsole() {
       })
       const next = await response.json().catch(() => null)
       if (!response.ok || next?.ok === false) throw new Error(next?.error?.message ?? `${label} failed.`)
-      setData(next)
+      const warnings = [
+        ...(Array.isArray(next?.operation?.warnings) ? next.operation.warnings : []),
+        ...(typeof next?.refreshWarning === 'string' ? [next.refreshWarning] : []),
+      ]
+      if (next?.snapshotAvailable === false) {
+        void refresh(true)
+      } else {
+        setData(next)
+      }
       setError(null)
       setPending(null)
       setReason('')
-      toast({ title: label, description: 'The service state and audit trail are up to date.' })
+      toast({
+        title: warnings.length ? `${label} with warnings` : label,
+        description: warnings[0] ?? 'The service state and audit trail are up to date.',
+      })
     } catch (cause) {
       toast({
         title: `${label} failed`,
@@ -169,7 +181,13 @@ export function OperationsConsole() {
           </Button>
           <Button
             size="sm"
-            onClick={() => void runAction({ action: 'reconcile_billing' }, 'Billing reconciled')}
+            onClick={() => setPending({
+              action: 'reconcile_billing',
+              targetId: 'hopit-service',
+              targetType: 'service',
+              label: 'Billing reconciled',
+              detail: 'Stripe will be compared with every stored entitlement. Tenant plans may change to match the provider state.',
+            })}
             disabled={Boolean(running) || data?.runtime?.billingEnabled !== true}
           >
             <CircleDollarSign />
@@ -182,6 +200,7 @@ export function OperationsConsole() {
         <>
           {error ? <InlineNotice tone="danger" title="Live refresh failed" detail={error} /> : null}
           <ServiceRail data={data} />
+          <CollectionScopeNotice collections={data.collections ?? {}} />
           <Tabs defaultValue="overview">
             <TabsList className="sticky top-0 z-10 bg-background/95 backdrop-blur">
               <TabsTrigger value="overview">Overview</TabsTrigger>
@@ -285,10 +304,14 @@ export function OperationsConsole() {
 
 function ServiceRail({ data }: { data: Json }) {
   const totals = data.totals ?? {}
+  const billingConfigured = data.runtime?.billingConfigured === true
+  const lastWebhookAt = Date.parse(String(data.health?.lastWebhookAt ?? ''))
+  const billingVerified = Number.isFinite(lastWebhookAt) && Date.now() - lastWebhookAt < 45 * 24 * 60 * 60 * 1000
+  const billingVerificationStale = Number.isFinite(lastWebhookAt) && !billingVerified
   const items = [
     { icon: Database, label: 'Data plane', value: data.health?.database === 'operational' ? 'Operational' : 'Unknown', detail: `${totals.tenants ?? 0} tenants`, tone: 'hop' as const },
     { icon: ShieldCheck, label: 'Quota guard', value: data.health?.quotaEnforced ? 'Enforcing' : 'Monitor only', detail: `${totals.writesAt80 ?? 0} near write cap`, tone: data.health?.quotaEnforced ? 'hop' as const : 'amber' as const },
-    { icon: Webhook, label: 'Billing', value: data.runtime?.billingConfigured ? 'Connected' : 'Incomplete', detail: data.health?.lastWebhookAt ? `Webhook ${relative(data.health.lastWebhookAt)}` : 'No live event yet', tone: data.runtime?.billingConfigured ? 'hop' as const : 'amber' as const },
+    { icon: Webhook, label: 'Billing', value: !billingConfigured ? 'Incomplete' : billingVerified ? 'Verified' : billingVerificationStale ? 'Verification stale' : 'Configured', detail: Number.isFinite(lastWebhookAt) ? `Last signed webhook ${relative(data.health.lastWebhookAt)}` : 'Awaiting a signed live event', tone: billingVerified ? 'hop' as const : 'amber' as const },
     { icon: Smartphone, label: 'Sync fleet', value: `${totals.activeSessions ?? 0} active`, detail: `${totals.codebases ?? 0} repositories`, tone: 'iris' as const },
   ]
   return (
@@ -306,6 +329,24 @@ function ServiceRail({ data }: { data: Json }) {
             </div>
           </div>
         ))}
+      </div>
+    </div>
+  )
+}
+
+function CollectionScopeNotice({ collections }: { collections: Json }) {
+  const partial = Object.entries(collections)
+    .map(([name, value]) => ({ name, value: value as Json }))
+    .filter(({ value }) => value?.truncated === true)
+  if (!partial.length) return null
+  return (
+    <div className="flex items-start gap-3 rounded-md border border-amber/25 bg-amber-soft/50 p-3">
+      <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber" />
+      <div>
+        <p className="font-medium">Recent-detail window</p>
+        <p className="text-xs text-muted-foreground">
+          Global totals and quota alerts cover every record. Detail lists are bounded: {partial.map(({ name, value }) => `${name} ${compact(value.shown)} of ${compact(value.total)}`).join(' · ')}.
+        </p>
       </div>
     </div>
   )
@@ -604,7 +645,8 @@ function TenantTable({ tenants, query, onQueryChange, onOpen, onAction }: {
 }
 
 function SessionPanel({ sessions, onRevoke }: { sessions: Json[]; onRevoke: (action: PendingAction) => void }) {
-  const active = sessions.filter((session) => session.status === 'active')
+  const active = sessions.filter((session) => session.status === 'active'
+    && (!session.expiresAt || Date.parse(session.expiresAt) > Date.now()))
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between">
@@ -713,6 +755,7 @@ function actionDescription(pending: PendingAction | null) {
   if (pending.action === 'expire_device_authorization') return 'This pending device pairing request will be expired immediately.'
   if (pending.action === 'cancel_action_job') return 'This queued hosted action will be canceled before a runner claims it.'
   if (pending.action === 'requeue_action_job') return 'This failed hosted action will be placed back in the runner queue.'
+  if (pending.action === 'reconcile_billing') return 'Stripe will be compared with every stored entitlement. Tenant plans may change to match the provider state.'
   return pending.cancelAtPeriodEnd ? 'The subscription will stop renewing at the end of its current paid period.' : 'Automatic renewal will resume for the next billing period.'
 }
 
@@ -730,7 +773,9 @@ function actionBody(pending: PendingAction, reason: string) {
         ? { deviceId: pending.targetId }
         : pending.targetType === 'authorization'
           ? { authorizationId: pending.targetId }
-          : { jobId: pending.targetId }
+          : pending.targetType === 'job'
+            ? { jobId: pending.targetId }
+            : {}
   return {
     action: pending.action,
     ...target,

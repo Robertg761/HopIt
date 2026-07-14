@@ -24,7 +24,7 @@ vi.mock('@/lib/stripe-billing', () => ({
 import { POST } from './route'
 
 beforeEach(() => {
-  vi.clearAllMocks()
+  vi.resetAllMocks()
   requireServiceAdmin.mockResolvedValue({ userId: 'owner-user', email: 'owner@example.com' })
   requestServiceOperations
     .mockResolvedValueOnce({
@@ -47,6 +47,17 @@ describe('POST /api/admin/operations', () => {
       cancelAtPeriodEnd: true,
     }))
     expect(response.status).toBe(400)
+    expect(setStripeSubscriptionCancellation).not.toHaveBeenCalled()
+  })
+
+  it('rejects a missing or non-boolean cancellation state instead of resuming renewal', async () => {
+    const response = await POST(request({
+      action: 'set_subscription_cancellation',
+      tenantId: 'tenant-a',
+      confirmation: 'tenant-a',
+    }))
+    expect(response.status).toBe(400)
+    expect(await response.json()).toMatchObject({ error: { code: 'invalid_cancellation_state' } })
     expect(setStripeSubscriptionCancellation).not.toHaveBeenCalled()
   })
 
@@ -82,6 +93,30 @@ describe('POST /api/admin/operations', () => {
       cancelAtPeriodEnd: false,
     }))
     expect(setStripeSubscriptionCancellation).toHaveBeenCalledWith({ subscriptionId: 'sub_a', cancelAtPeriodEnd: false })
+  })
+
+  it('reports Stripe success with warnings when reconciliation fails afterward', async () => {
+    reconcileBillingEntitlements.mockRejectedValueOnce(new Error('D1 unavailable'))
+    const response = await POST(request({
+      action: 'set_subscription_cancellation',
+      tenantId: 'tenant-a',
+      confirmation: 'tenant-a',
+      cancelAtPeriodEnd: true,
+    }))
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({
+      ok: true,
+      operation: {
+        applied: true,
+        completedWithWarnings: true,
+      },
+    })
+  })
+
+  it('requires service confirmation before reconciling billing', async () => {
+    const response = await POST(request({ action: 'reconcile_billing' }))
+    expect(response.status).toBe(400)
+    expect(reconcileBillingEntitlements).not.toHaveBeenCalled()
   })
 })
 

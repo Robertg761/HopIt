@@ -30,16 +30,16 @@ export async function POST(request: Request) {
     if (!body) return NextResponse.json({ ok: false, error: { code: 'invalid_body', message: 'An action body is required.' } }, { status: 400 })
 
     if (body.action === 'reconcile_billing') {
+      if (body.confirmation !== 'hopit-service') {
+        return NextResponse.json({ ok: false, error: { code: 'confirmation_mismatch', message: 'Action confirmation did not match the service.' } }, { status: 400 })
+      }
       const result = await reconcileBillingEntitlements()
-      const operations = await requestServiceOperations(actor, {
-        method: 'POST',
-        body: {
-          action: 'record_billing_reconcile',
-          confirmation: 'hopit-service',
-          detail: result,
-        },
+      const recorded = await recordAppliedOperation(actor, {
+        action: 'record_billing_reconcile',
+        confirmation: 'hopit-service',
+        detail: result,
       })
-      return response(operations)
+      return response(recorded.operations, operationResult('billing_reconcile', result, recorded.warnings))
     }
 
     if (body.action === 'set_subscription_cancellation') {
@@ -55,23 +55,31 @@ export async function POST(request: Request) {
       if (!subscriptionId) {
         return NextResponse.json({ ok: false, error: { code: 'subscription_missing', message: 'No Stripe subscription was found for this tenant.' } }, { status: 404 })
       }
-      const cancelAtPeriodEnd = body.cancelAtPeriodEnd === true
+      if (typeof body.cancelAtPeriodEnd !== 'boolean') {
+        return NextResponse.json({ ok: false, error: { code: 'invalid_cancellation_state', message: 'cancelAtPeriodEnd must be an explicit boolean.' } }, { status: 400 })
+      }
+      const cancelAtPeriodEnd = body.cancelAtPeriodEnd
       const stripeSubscription = await setStripeSubscriptionCancellation({ subscriptionId, cancelAtPeriodEnd })
-      const reconcile = await reconcileBillingEntitlements()
-      const operations = await requestServiceOperations(actor, {
-        method: 'POST',
-        body: {
-          action: 'record_billing_action',
-          tenantId,
-          confirmation: tenantId,
-          detail: {
-            operation: cancelAtPeriodEnd ? 'cancel_at_period_end' : 'resume_renewal',
-            providerSubscriptionId: stripeSubscription.id,
-            reconcile,
-          },
-        },
+      const warnings: string[] = []
+      const reconcile = await reconcileBillingAfterMutation(tenantId, warnings)
+      const detail = {
+        operation: cancelAtPeriodEnd ? 'cancel_at_period_end' : 'resume_renewal',
+        providerSubscriptionId: stripeSubscription.id,
+        reconcile,
+      }
+      const recorded = await recordAppliedOperation(actor, {
+        action: 'record_billing_action',
+        tenantId,
+        confirmation: tenantId,
+        detail,
       })
-      return response(operations)
+      return response(
+        recorded.operations,
+        operationResult(detail.operation, reconcile, [...warnings, ...recorded.warnings], {
+          tenantId,
+          providerSubscriptionId: stripeSubscription.id,
+        }),
+      )
     }
 
     const operations = await requestServiceOperations(actor, { method: 'POST', body })
@@ -85,10 +93,59 @@ function record(value: unknown): Record<string, any> | null {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : null
 }
 
-function response(operations: Record<string, unknown>) {
+async function reconcileBillingAfterMutation(tenantId: string, warnings: string[]) {
+  try {
+    return await reconcileBillingEntitlements()
+  } catch (cause) {
+    const message = cause instanceof Error ? cause.message : 'Billing reconciliation could not run.'
+    warnings.push(`Stripe changed successfully, but entitlement reconciliation failed: ${message}`)
+    return { ok: false, partial: false, checked: 0, applied: 0, failures: [{ tenantId, message }] }
+  }
+}
+
+async function recordAppliedOperation(actor: Awaited<ReturnType<typeof requireServiceAdmin>>, body: Record<string, unknown>) {
+  const warnings: string[] = []
+  try {
+    return {
+      operations: await requestServiceOperations(actor, { method: 'POST', body }),
+      warnings,
+    }
+  } catch (cause) {
+    warnings.push(`The operation was applied, but its audit record could not be confirmed: ${cause instanceof Error ? cause.message : 'unknown audit failure'}`)
+    try {
+      return { operations: await requestServiceOperations(actor), warnings }
+    } catch (refreshCause) {
+      warnings.push(`The dashboard snapshot could not be refreshed: ${refreshCause instanceof Error ? refreshCause.message : 'unknown refresh failure'}`)
+      return { operations: { snapshotAvailable: false }, warnings }
+    }
+  }
+}
+
+function operationResult(
+  operation: string,
+  reconcile: Record<string, any>,
+  warnings: string[],
+  detail: Record<string, unknown> = {},
+) {
+  const reconciliationFailures = Array.isArray(reconcile.failures)
+    ? reconcile.failures.map((failure: unknown) => record(failure)?.message).filter((message): message is string => typeof message === 'string')
+    : []
+  const allWarnings = [...warnings, ...reconciliationFailures.map((message) => `Entitlement reconciliation warning: ${message}`)]
+  return {
+    operation,
+    applied: true,
+    completedWithWarnings: allWarnings.length > 0,
+    warnings: allWarnings,
+    reconcile,
+    ...detail,
+  }
+}
+
+function response(operations: Record<string, unknown>, operation?: Record<string, unknown>) {
   return NextResponse.json({
     ok: true,
     ...operations,
+    ...(operation ? { operation } : {}),
     runtime: serviceAdminRuntimeConfig(),
     economics: serviceEconomics(operations),
   }, { headers: { 'Cache-Control': 'no-store' } })

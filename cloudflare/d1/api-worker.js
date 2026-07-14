@@ -580,8 +580,22 @@ async function handleAdminOperations(request, env) {
       const body = await request.json().catch(() => null)
       actionResult = await applyServiceAdminAction(env.HOPIT_D1_DB, actor, body)
     }
-    const result = await readServiceOperations(env)
-    const response = json({ success: true, errors: [], messages: [], result: { ...result, actionResult } })
+    let result
+    try {
+      result = await readServiceOperations(env)
+    } catch (error) {
+      if (request.method !== 'POST') throw error
+      const refreshWarning = error instanceof Error ? error.message : 'The operations snapshot could not be refreshed.'
+      const response = json({
+        success: true,
+        errors: [],
+        messages: [{ code: 'snapshot_refresh_failed', message: refreshWarning }],
+        result: { snapshotAvailable: false, actionResult, refreshWarning },
+      })
+      logRequest({ request, env, authMode: 'service-admin', status: response.status, rejectedReason: 'snapshot-refresh-failed' })
+      return response
+    }
+    const response = json({ success: true, errors: [], messages: [], result: { ...result, snapshotAvailable: true, actionResult } })
     logRequest({ request, env, authMode: 'service-admin', status: response.status })
     return response
   } catch (error) {
@@ -628,6 +642,15 @@ async function readServiceOperations(env) {
   const now = Date.now()
   const day = utcDay(now)
   const since24h = new Date(now - 24 * 60 * 60 * 1000).toISOString()
+  const since7d = new Date(now - 7 * 24 * 60 * 60 * 1000).toISOString()
+  const since30d = new Date(now - 30 * 24 * 60 * 60 * 1000).toISOString()
+  const warnRatio = warnRatioFromEnv(env)
+  const freeLimits = resolvePlanLimits(env, 'free')
+  const paidLimits = resolvePlanLimits(env, 'paid')
+  const paidStorageLimits = resolvePlanLimits(env, 'paid_storage')
+  const storageLimitSql = `(case plan when 'paid_storage' then ${paidStorageLimits.storageBytes} when 'plus_storage' then ${paidStorageLimits.storageBytes} when 'paid' then ${paidLimits.storageBytes} when 'plus' then ${paidLimits.storageBytes} else ${freeLimits.storageBytes} end)`
+  const writeLimitSql = `(case plan when 'paid_storage' then ${paidStorageLimits.dailyWrites} when 'plus_storage' then ${paidStorageLimits.dailyWrites} when 'paid' then ${paidLimits.dailyWrites} when 'plus' then ${paidLimits.dailyWrites} else ${freeLimits.dailyWrites} end)`
+  const writesTodaySql = `(case when write_day = '${day}' then rows_written_today else 0 end)`
   const [
     users,
     usageRows,
@@ -647,6 +670,11 @@ async function readServiceOperations(env) {
     keyringRows,
     codebaseKeyringRows,
     invitationRows,
+    userStatsRows,
+    usageStatsRows,
+    usagePlanRows,
+    subscriptionStatusRows,
+    inventoryTotalRows,
   ] = await Promise.all([
     dbRows(db, 'select user_id, primary_email, display_name, email_verified, created_at, updated_at from users order by created_at desc limit 250'),
     dbRows(db, `select u.tenant_id, u.plan, u.storage_bytes, u.write_day, u.rows_written_today, u.created_at, u.updated_at,
@@ -691,6 +719,38 @@ async function readServiceOperations(env) {
     dbRows(db, `select coalesce(rotation_state, 'stable') as rotation_state, count(*) as count
       from codebase_keyrings group by coalesce(rotation_state, 'stable')`),
     dbRows(db, 'select status, count(*) as count from codebase_invitations group by status'),
+    dbRows(db, `select count(*) as total_users,
+      sum(case when email_verified = 1 then 1 else 0 end) as verified_users,
+      sum(case when created_at >= ? then 1 else 0 end) as new_users_24h,
+      sum(case when created_at >= ? then 1 else 0 end) as new_users_7d,
+      sum(case when created_at >= ? then 1 else 0 end) as new_users_30d
+      from users`, [since24h, since7d, since30d]),
+    dbRows(db, `select count(*) as tenant_count,
+      coalesce(sum(storage_bytes), 0) as total_storage_bytes,
+      coalesce(sum(${writesTodaySql}), 0) as rows_written_today,
+      sum(case when ${storageLimitSql} > 0 and storage_bytes >= ${storageLimitSql} * 0.5 then 1 else 0 end) as storage_at_50,
+      sum(case when ${storageLimitSql} > 0 and storage_bytes >= ${storageLimitSql} * ${warnRatio} then 1 else 0 end) as storage_at_warn,
+      sum(case when ${storageLimitSql} > 0 and storage_bytes >= ${storageLimitSql} then 1 else 0 end) as storage_blocked,
+      sum(case when ${writeLimitSql} > 0 and ${writesTodaySql} >= ${writeLimitSql} * 0.5 then 1 else 0 end) as writes_at_50,
+      sum(case when ${writeLimitSql} > 0 and ${writesTodaySql} >= ${writeLimitSql} * ${warnRatio} then 1 else 0 end) as writes_at_warn,
+      sum(case when ${writeLimitSql} > 0 and ${writesTodaySql} >= ${writeLimitSql} then 1 else 0 end) as writes_blocked
+      from tenant_usage`),
+    dbRows(db, `select case when plan in ('paid_storage', 'plus_storage') then 'paid_storage'
+      when plan in ('paid', 'plus') then 'paid' else 'free' end as plan, count(*) as count
+      from tenant_usage group by case when plan in ('paid_storage', 'plus_storage') then 'paid_storage'
+      when plan in ('paid', 'plus') then 'paid' else 'free' end`),
+    dbRows(db, 'select status, count(*) as count, sum(case when entitlement_active = 1 then 1 else 0 end) as active_count from subscriptions group by status'),
+    dbRows(db, `select
+      (select count(*) from codebases) as codebases,
+      (select count(*) from agent_sessions) as sessions,
+      (select count(*) from device_keys) as devices,
+      (select count(*) from device_keys where status = 'trusted') as active_devices,
+      (select count(*) from device_keys where status = 'revoked') as revoked_devices,
+      (select count(*) from device_authorizations) as device_authorizations,
+      (select count(*) from device_authorizations where status = 'pending') as pending_device_authorizations,
+      (select count(*) from action_jobs) as action_jobs,
+      (select count(*) from service_admin_events) as admin_events,
+      (select count(*) from billing_webhook_events) as webhooks`),
   ])
 
   const usersById = new Map(users.map((row) => [row.user_id, row]))
@@ -699,7 +759,6 @@ async function readServiceOperations(env) {
   const sessionsByTenant = new Map(sessionCounts.map((row) => [row.tenant_id, row]))
   const deviceCountsByTenant = groupCounts(deviceKeys, 'user_id', 'status')
   const authorizationCountsByTenant = groupCounts(deviceAuthorizations.filter((row) => row.user_id), 'user_id', 'status')
-  const warnRatio = warnRatioFromEnv(env)
   const tenants = usageRows.map((usage) => {
     const limits = resolvePlanLimits(env, usage.plan)
     const quota = computeUsageStatus({
@@ -751,20 +810,16 @@ async function readServiceOperations(env) {
   })
 
   const jobs = Object.fromEntries(jobRows.map((row) => [row.status, Number(row.count ?? 0)]))
-  const totalStorageBytes = tenants.reduce((sum, tenant) => sum + Number(tenant.quota.storage.used ?? 0), 0)
-  const rowsWrittenToday = tenants.reduce((sum, tenant) => sum + Number(tenant.quota.dailyWrites.used ?? 0), 0)
-  const activeSubscriptions = subscriptions.filter((row) => Number(row.entitlement_active) === 1)
-  const thresholdCounts = (field, threshold) => tenants.filter((tenant) => tenant.quota[field].ratio >= threshold).length
-  const planCounts = tenants.reduce((counts, tenant) => {
-    counts[tenant.plan] = (counts[tenant.plan] ?? 0) + 1
-    return counts
-  }, {})
+  const userStats = userStatsRows[0] ?? {}
+  const usageStats = usageStatsRows[0] ?? {}
+  const inventoryTotals = inventoryTotalRows[0] ?? {}
+  const totalStorageBytes = Number(usageStats.total_storage_bytes ?? 0)
+  const rowsWrittenToday = Number(usageStats.rows_written_today ?? 0)
+  const activeSubscriptionCount = subscriptionStatusRows.reduce((sum, row) => sum + Number(row.active_count ?? 0), 0)
+  const planCounts = Object.fromEntries(usagePlanRows.map((row) => [row.plan, Number(row.count ?? 0)]))
   const eventTypes24h = Object.fromEntries(eventCounts.map((row) => [row.event, Number(row.count ?? 0)]))
-  const userCreatedWithin = (days) => users.filter((user) => Date.parse(user.created_at) >= now - days * 24 * 60 * 60 * 1000).length
-  const subscriptionStatuses = subscriptions.reduce((counts, subscription) => {
-    counts[subscription.status] = (counts[subscription.status] ?? 0) + 1
-    return counts
-  }, {})
+  const subscriptionStatuses = Object.fromEntries(subscriptionStatusRows.map((row) => [row.status, Number(row.count ?? 0)]))
+  const collection = (shown, total) => ({ shown, total: Number(total ?? 0), truncated: shown < Number(total ?? 0) })
 
   return {
     generatedAt: new Date(now).toISOString(),
@@ -777,30 +832,40 @@ async function readServiceOperations(env) {
       latestEventAt: recentEvents[0]?.at ?? null,
     },
     totals: {
-      users: users.length,
-      tenants: tenants.length,
-      codebases: codebaseCounts.reduce((sum, row) => sum + Number(row.codebase_count ?? 0), 0),
+      users: Number(userStats.total_users ?? 0),
+      tenants: Number(usageStats.tenant_count ?? 0),
+      codebases: Number(inventoryTotals.codebases ?? 0),
       activeSessions: sessionCounts.reduce((sum, row) => sum + Number(row.active_session_count ?? 0), 0),
-      activeSubscriptions: activeSubscriptions.length,
+      activeSubscriptions: activeSubscriptionCount,
       subscriptionStatuses,
       totalStorageBytes,
       rowsWrittenToday,
       planCounts,
-      newUsers24h: userCreatedWithin(1),
-      newUsers7d: userCreatedWithin(7),
-      newUsers30d: userCreatedWithin(30),
-      verifiedUsers: users.filter((user) => Number(user.email_verified) === 1).length,
-      activeDevices: deviceKeys.filter((device) => device.status === 'trusted').length,
-      revokedDevices: deviceKeys.filter((device) => device.status === 'revoked').length,
-      pendingDeviceAuthorizations: deviceAuthorizations.filter((authorization) => authorization.status === 'pending').length,
+      newUsers24h: Number(userStats.new_users_24h ?? 0),
+      newUsers7d: Number(userStats.new_users_7d ?? 0),
+      newUsers30d: Number(userStats.new_users_30d ?? 0),
+      verifiedUsers: Number(userStats.verified_users ?? 0),
+      activeDevices: Number(inventoryTotals.active_devices ?? 0),
+      revokedDevices: Number(inventoryTotals.revoked_devices ?? 0),
+      pendingDeviceAuthorizations: Number(inventoryTotals.pending_device_authorizations ?? 0),
       actionJobs24h: jobs,
       eventTypes24h,
-      storageAt50: thresholdCounts('storage', 0.5),
-      storageAt80: thresholdCounts('storage', warnRatio),
-      storageBlocked: thresholdCounts('storage', 1),
-      writesAt50: thresholdCounts('dailyWrites', 0.5),
-      writesAt80: thresholdCounts('dailyWrites', warnRatio),
-      writesBlocked: thresholdCounts('dailyWrites', 1),
+      storageAt50: Number(usageStats.storage_at_50 ?? 0),
+      storageAt80: Number(usageStats.storage_at_warn ?? 0),
+      storageBlocked: Number(usageStats.storage_blocked ?? 0),
+      writesAt50: Number(usageStats.writes_at_50 ?? 0),
+      writesAt80: Number(usageStats.writes_at_warn ?? 0),
+      writesBlocked: Number(usageStats.writes_blocked ?? 0),
+    },
+    collections: {
+      tenants: collection(tenants.length, usageStats.tenant_count),
+      codebases: collection(codebases.length, inventoryTotals.codebases),
+      sessions: collection(sessions.length, inventoryTotals.sessions),
+      devices: collection(deviceKeys.length, inventoryTotals.devices),
+      deviceAuthorizations: collection(deviceAuthorizations.length, inventoryTotals.device_authorizations),
+      actionJobs: collection(actionJobs.length, inventoryTotals.action_jobs),
+      adminEvents: collection(adminEvents.length, inventoryTotals.admin_events),
+      webhooks: collection(webhookRows.length, inventoryTotals.webhooks),
     },
     tenants,
     codebases: codebases.map((row) => ({
@@ -1047,10 +1112,10 @@ async function applyServiceAdminAction(db, actor, input) {
     if (!job) throw new Error('Action job was not found.')
     if (action === 'cancel_action_job' && job.status !== 'queued') throw new Error('Only queued action jobs can be canceled safely.')
     if (action === 'requeue_action_job' && job.status !== 'failed') throw new Error('Only failed action jobs can be requeued.')
-    const nextStatus = action === 'cancel_action_job' ? 'canceled' : 'queued'
+    const nextStatus = action === 'cancel_action_job' ? 'cancelled' : 'queued'
     const statement = action === 'cancel_action_job'
       ? {
-          sql: `update action_jobs set status = 'canceled', summary = 'Canceled by service owner', updated_at = ?, finished_at = ?
+          sql: `update action_jobs set status = 'cancelled', summary = 'Cancelled by service owner', updated_at = ?, finished_at = ?
             where job_id = ? and status = 'queued'`,
           params: [now, now, targetId],
         }
