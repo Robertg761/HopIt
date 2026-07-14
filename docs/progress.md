@@ -1,6 +1,6 @@
 # HopIt Progress Tracker
 
-Last updated: 2026-07-12
+Last updated: 2026-07-14
 
 This tracker is the working view of what is done, what is in progress, what is next, and what is still deliberately out of scope. The roadmap source remains [MVP Plan](mvp-plan.md), and the agent contract source remains [Local Agent Architecture](agent-architecture.md). This file turns those plans into a practical implementation ledger.
 
@@ -31,7 +31,7 @@ Current live deployment:
 - Vercel org/team id: `team_x1SyEPIryEghBSkkwoXSTIZ2`
 - Production URL: `https://hopit.dev`
 - Secondary production alias: `https://www.hopit.dev`
-- Current Vercel deployment URL: inspect `https://hopit.dev` with `vercel inspect https://hopit.dev` because generated deployment aliases change on every production deploy.
+- Current Vercel deployment: `dpl_3sA6MnsvWgPBa42SKAt7X4t9Uuba` (`https://hopit-a1qwmge0d-robertg761s-projects.vercel.app`), aliased to `https://hopit.dev`.
 - Cloud graph target: Cloudflare D1 with schema at `cloudflare/d1/schema.sql`
 - Historical export source: saved snapshot under `/Users/robert/HopIt-Backups/convex/`
 - Cloudflare R2 bucket: `hopit-blobs`, private public-access-disabled object storage for HopIt blobs
@@ -46,7 +46,7 @@ Current live deployment:
 - Production workspace: `/Users/robert/HopIt Workspaces/hopit`
 - Second onboarded codebase (2026-07-11, via `hop add`): `lunarlog`, 816 files at revision 816, managed folder `/Users/robert/HopIt Workspaces/lunarlog`, scoped session for `lunarlog` only
 
-Domain-dependent production auth setup is no longer pinned. `hopit.dev` is live, Clerk production DNS/SSL are verified, Vercel has the redacted live Clerk env vars, and Vercel Production now uses `HOPIT_AUTH_PROVIDER=clerk`. Google OAuth is enabled in Clerk production through the Google Cloud project `hopit-auth-prod-rg`; the Google app remains in Testing mode with `robertgordon761@gmail.com` added as the owner test user. Production owner sign-in and D1 owner claim are smoke-tested, and Basic Auth fallback env vars have been removed from Vercel Production.
+Domain-dependent production auth setup is no longer pinned. `hopit.dev` is live, Clerk production DNS/SSL are verified, Vercel has the redacted live Clerk env vars, and Vercel Production now uses `HOPIT_AUTH_PROVIDER=clerk`. Google OAuth is enabled in Clerk production through the Google Cloud project `hopit-auth-prod-rg`, and the Google app is published `In production`. Clerk's production allowlist is disabled, so public signup is open. Production owner sign-in and D1 owner claim are smoke-tested, and Basic Auth fallback env vars have been removed from Vercel Production.
 
 The current setup source of truth is [Personal Production Runbook](personal-production.md). It records the Vercel, D1 migration target, historical export, R2, LaunchAgent, local env, workspace, backup, and export locations without documenting secret values.
 
@@ -1597,14 +1597,57 @@ decided.
   Next.js build. The packaged production agent doctor also passed with a clean
   journal, current workspace, requester identity, and running service.
 
-Still deliberately gated at this checkpoint: a working `support@hopit.dev`
-forward, durable live Stripe credentials, the billing flag, production web
-deployment, Google OAuth production publishing, Clerk public signup, and the
-literal no-charge production rehearsal.
+This preparation checkpoint was completed by the production launch and
+no-charge rehearsal below. The only intentionally unexecuted billing proof is a
+real paid subscription; the rehearsal stopped at live Checkout before card entry
+or charge.
+
+### 2026-07-14 Phase 3 — production launch and no-charge rehearsal
+
+- Deployed production Vercel release `dpl_3sA6MnsvWgPBa42SKAt7X4t9Uuba`, now
+  aliased to `https://hopit.dev`. `/`, `/privacy`, and `/terms` return `200`,
+  while signed-in application routes still redirect signed-out visitors through
+  Clerk.
+- Installed the durable live Stripe restricted key and signature-verifying
+  webhook secret in Vercel, enabled billing with the exact value
+  `HOPIT_BILLING=1`, and repaired `HOPIT_D1_ASSUME_SCHEMA` to the exact value
+  `1`. No secret value is recorded in this repository. Stripe's public support
+  and legal details now point to `support@hopit.dev`, `https://hopit.dev`,
+  `/privacy`, and `/terms`.
+- Published the Google OAuth consent app (`In production`) and disabled Clerk's
+  production allowlist. A brand-new public user completed Turnstile plus email
+  verification, was auto-provisioned as a Free tenant, created its first project,
+  and saw the second project rejected at the honest `1/1` upgrade wall.
+- Opened live Plus Checkout and verified the `US$10/month` price plus the required
+  Terms and Privacy consent links. No card was entered, Subscribe was not clicked,
+  and no charge or live subscription was created.
+- Installed the literal public one-liner into a clean temporary home. It resolved
+  the official R2 `latest` channel to runtime `0.0.1+aa7a923`, completed scoped
+  browser device approval for only the rehearsal project, attached a clean
+  metadata-first workspace, and started on port `4795` because the owner's
+  existing personal service legitimately owns `4785`.
+- The first production write exposed a released-runtime compatibility defect:
+  the current Worker required the stronger selected-state/Main compare-and-swap
+  predicates that the published runtime's legacy guarded head did not send. The
+  journal retained the edit with no data loss. Worker version
+  `5bab8479-c12e-4a0f-9705-57539b548d86` now validates the legacy request against
+  the current codebase head and upgrades it to the stronger atomic guard before
+  execution; attempts to change Main or selected-state security fields are
+  rejected. The canonical current client path remains unchanged.
+- Replayed the retained journal entry successfully, then wrote a second proof file
+  through the direct unproxied watcher path. Final live status: `ok=true`,
+  `readiness=ready`, `cloudflare-d1-graph`, cloud revision `2`, two visible cloud
+  files, two acknowledged journal entries, zero pending, zero failed,
+  `sync=healthy`, and `watch=watching`.
+- Repository verification passed after the compatibility fix: full agent, web,
+  Worker (`77/77`), configuration, TypeScript, lint, and production Next.js build
+  gates are green. Continue monitoring the paid plan's 20,000-row daily allowance
+  during the first 30–60 days of real usage before treating it as permanently
+  sufficient.
 
 ## Known Gaps
 
-- Phase 3 billing plumbing is implemented behind `HOPIT_BILLING`: Stripe Managed
+- Phase 3 billing plumbing is live behind `HOPIT_BILLING`: Stripe Managed
   Payments hosted Checkout, customer portal, signature-verified/idempotent webhook,
   D1 `subscriptions` + webhook-event ledger, daily reconciliation, the `/pricing`
   upgrade surface, and distinct 30 GB / 100 GB paid quota profiles. Web/worker/agent
@@ -1614,10 +1657,11 @@ literal no-charge production rehearsal.
   hosted Customer Portal is configured for prorated upgrades plus end-of-period
   downgrades and cancellations. An isolated end-to-end staging signup, sync,
   checkout, entitlement lift, cancellation, and downgrade-preservation rehearsal
-  passed on 2026-07-13. The production webhook, Vercel secrets, D1 schema
-  application, deployment, and Clerk signup flip remain deliberate go-live work.
-  Public privacy/terms pages still require an owner-reviewed legal decision before
-  broad signup.
+  passed on 2026-07-13. Production webhook signing, Vercel secrets, D1 schema,
+  deployment, public signup, OAuth publishing, public legal routes, and a clean
+  stranger signup-to-sync rehearsal are complete as of 2026-07-14. A real paid
+  subscription remains intentionally untested because this launch rehearsal was
+  required to incur no charge; the live Checkout boundary itself was verified.
 
 - No full HopIt Workspace Root contract yet: the root-level codebase/workspace index, D1 account-visible discovery with scoped-token fallback, automatic account bootstrap, metadata-only attach, dashboard setup/attach/hydrate/dehydrate/open actions, hydration cursor, metadata-only/partial/materialized state, per-file cache state, path-level hydrate/pin/prune primitives, open-time first-working-set hydration, and explicit metadata-first lazy materialization policy exist, but true read-triggered hydration is deferred until a native filesystem provider is chosen.
 - The current managed folder path has a safe metadata-first policy and dashboard controls, but metadata-only, path hydration, and open-time hydration are still bounded explicit/intent-driven operations rather than complete native demand hydration. Automatic pruning now exists as a conservative opt-in scheduler; default-on policy and production dogfood evidence remain pending.

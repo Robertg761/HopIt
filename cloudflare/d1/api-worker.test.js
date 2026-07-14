@@ -1770,6 +1770,15 @@ function guardedJournalBatch({ path, operation = 'write', previousSelectedState,
   return [head, file, version]
 }
 
+function legacyGuardedJournalBatch(options) {
+  const batch = guardedJournalBatch(options)
+  batch[0] = {
+    sql: batch[0].sql.replace(' and selected_state_json = ? and main_json = ?', ''),
+    params: batch[0].params.slice(0, 8),
+  }
+  return batch
+}
+
 function createMockDb({ session = null, codebase = null, files = [], membership = null } = {}) {
   const db = {
     executedStatements: [],
@@ -1789,7 +1798,9 @@ function createMockDb({ session = null, codebase = null, files = [], membership 
                   results: codebase
                     ? [{
                         owner_id: codebase.owner_id,
+                        revision: codebase.revision,
                         selected_state_json: codebase.selected_state_json,
+                        main_json: codebase.main_json ?? JSON.stringify({ id: 'main', revision: 1 }),
                         visibility_json: codebase.visibility_json,
                         member_role: membership?.role ?? null,
                         member_status: membership?.status ?? null,
@@ -2304,6 +2315,62 @@ function guardedCommitBatch() {
   const states = journalSelectedStates('team-visible')
   return guardedJournalBatch({ path: 'README.md', previousSelectedState: states.previous, nextSelectedState: states.next })
 }
+
+test('scoped session upgrades the released legacy guarded head to the current atomic guard', async () => {
+  const states = journalSelectedStates('team-visible')
+  const db = createScopedMutationDb(states.previous, 'team-visible')
+  const response = await worker.fetch(scopedQueryRequest(legacyGuardedJournalBatch({
+    path: 'README.md',
+    previousSelectedState: states.previous,
+    nextSelectedState: states.next,
+  }), '203.0.113.120'), {
+    HOPIT_D1_DB: db,
+    HOPIT_MULTITENANT: '1',
+  })
+
+  assert.equal(response.status, 200)
+  const head = db.executedStatements.find((statement) => /^update codebases/i.test(statement.sql.trim()))
+  assert.ok(head)
+  assert.match(head.sql.replace(/\s+/g, ' '), /and selected_state_json = \? and main_json = \?$/)
+  assert.equal(head.params.length, 10)
+  assert.equal(head.params[8], JSON.stringify(states.previous))
+  assert.equal(head.params[9], JSON.stringify({ id: 'main', revision: 1 }))
+})
+
+test('scoped session rejects a legacy guarded head that changes selected-state security fields', async () => {
+  const states = journalSelectedStates('team-visible')
+  const batch = legacyGuardedJournalBatch({
+    path: 'README.md',
+    previousSelectedState: states.previous,
+    nextSelectedState: { ...states.next, effectiveVisibility: 'private' },
+  })
+  const db = createScopedMutationDb(states.previous, 'team-visible')
+  const response = await worker.fetch(scopedQueryRequest(batch, '203.0.113.121'), {
+    HOPIT_D1_DB: db,
+    HOPIT_MULTITENANT: '1',
+  })
+
+  assert.equal(response.status, 403)
+  assert.equal(db.executedStatements.length, 0)
+})
+
+test('scoped session rejects a legacy guarded head that changes Main', async () => {
+  const states = journalSelectedStates('team-visible')
+  const batch = legacyGuardedJournalBatch({
+    path: 'README.md',
+    previousSelectedState: states.previous,
+    nextSelectedState: states.next,
+  })
+  batch[0].params[2] = JSON.stringify({ id: 'main', revision: 2 })
+  const db = createScopedMutationDb(states.previous, 'team-visible')
+  const response = await worker.fetch(scopedQueryRequest(batch, '203.0.113.122'), {
+    HOPIT_D1_DB: db,
+    HOPIT_MULTITENANT: '1',
+  })
+
+  assert.equal(response.status, 403)
+  assert.equal(db.executedStatements.length, 0)
+})
 
 const meterStatementsOf = (db) => db.executedStatements.filter((entry) => /insert into tenant_usage/i.test(entry.sql))
 

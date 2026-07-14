@@ -350,7 +350,7 @@ function base64UrlToString(value) {
 
 async function readScopedFileAccess(db, session) {
   const result = await db.prepare(
-    `select c.owner_id, c.selected_state_json, c.visibility_json,
+    `select c.owner_id, c.revision, c.selected_state_json, c.main_json, c.visibility_json,
       m.role as member_role, m.status as member_status
     from codebases c
     left join codebase_members m on m.codebase_id = c.codebase_id and m.user_id = ?
@@ -367,6 +367,11 @@ async function readScopedFileAccess(db, session) {
     // writing session user (a collaborator's writes count against the owner's
     // tenant budget).
     ownerId: row.owner_id ?? null,
+    revision: integerOrNull(row.revision),
+    selectedState,
+    selectedStateJson: row.selected_state_json ?? null,
+    main: parseJson(row.main_json, {}),
+    mainJson: row.main_json ?? null,
     isOwner: Boolean(session.user_id && session.user_id === row.owner_id),
     isActiveMember: row.member_status === 'active' && ['owner', 'maintainer', 'member', 'viewer'].includes(row.member_role),
     selectedStateType: selectedState?.type ?? null,
@@ -647,6 +652,11 @@ function assertScopedMutationAccess(policies, access) {
     if (access.selectedStateMergeState !== 'unmerged') {
       throw new Error('Scoped journal mutations require an unmerged change set.')
     }
+    for (const policy of policies) {
+      if (policy.journalHead?.format === 'legacy') {
+        assertLegacyJournalHeadMatchesCurrentAccess(policy.journalHead, access)
+      }
+    }
   }
   if (access.isOwner) return
   if (!access.isActiveMember) {
@@ -666,6 +676,46 @@ function assertScopedMutationAccess(policies, access) {
       throw new Error('Scoped collaborators cannot mutate owner-private paths.')
     }
   }
+}
+
+function assertLegacyJournalHeadMatchesCurrentAccess(head, access) {
+  const nextSelectedState = parseJson(head.nextSelectedStateJson, null)
+  const nextMain = parseJson(head.nextMainJson, null)
+  if (head.codebaseId !== access.codebaseId || head.previousRevision !== access.revision) {
+    throw new Error('Scoped agent session legacy guarded journal head does not match the current codebase revision.')
+  }
+  if (stableJson(nextMain) !== stableJson(access.main)) {
+    throw new Error('Scoped agent session guarded journal updates must preserve Main.')
+  }
+  const expectedNext = { ...access.selectedState, revision: head.nextRevision }
+  if (stableJson(nextSelectedState) !== stableJson(expectedNext)) {
+    throw new Error('Scoped agent session guarded journal updates may only advance selected-state revision.')
+  }
+}
+
+function stableJson(value) {
+  if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+  if (value && typeof value === 'object') {
+    return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${stableJson(value[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+function upgradeLegacyScopedJournalStatements(statements, authorization) {
+  if (authorization.kind !== 'session') return statements
+  return statements.map((statement, index) => {
+    const head = authorization.statementPolicies?.[index]?.journalHead
+    if (head?.format !== 'legacy') return statement
+    const access = authorization.fileAccess
+    if (!access?.selectedStateJson || !access?.mainJson) {
+      throw new Error('Scoped agent session legacy guarded journal upgrade requires the current codebase head.')
+    }
+    return {
+      ...statement,
+      sql: `${statement.sql.trim()} and selected_state_json = ? and main_json = ?`,
+      params: [...(Array.isArray(statement.params) ? statement.params : []), access.selectedStateJson, access.mainJson],
+    }
+  })
 }
 
 async function enforceScopedResultVisibility(db, results, authorization) {
@@ -973,7 +1023,23 @@ const worker = {
       })
       return response
     }
-    const statementsToRun = metering?.meterStatement ? [...statements, metering.meterStatement] : statements
+    let authorizedStatements
+    try {
+      authorizedStatements = upgradeLegacyScopedJournalStatements(statements, authorization)
+    } catch (error) {
+      const response = authenticationError(error instanceof Error ? error.message : undefined)
+      logRequest({
+        request,
+        env,
+        authMode: authorization.kind,
+        codebaseId: requestCodebaseId(request, authorization.session),
+        statementCount: statementCountForBody(body),
+        status: response.status,
+        rejectedReason: error instanceof Error ? error.message : 'legacy-guard-upgrade-failed',
+      })
+      return response
+    }
+    const statementsToRun = metering?.meterStatement ? [...authorizedStatements, metering.meterStatement] : authorizedStatements
 
     try {
       const executed = await executeStatements(env.HOPIT_D1_DB, statementsToRun)

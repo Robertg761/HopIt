@@ -241,9 +241,19 @@ function scopedStatementPolicy(normalizedSql, params, session) {
   const operation = normalizedSql.match(/^(select|insert|update|delete)\b/)?.[1] ?? null
   const table = primaryTableForStatement(normalizedSql, operation)
   const fileMutation = scopedFileMutationPolicy(normalizedSql, params, operation, table, session)
-  const journalHead = operation === 'update'
-    && table === 'codebases'
-    && isGuardedJournalHeadUpdate(normalizedSql, updateColumns(normalizedSql))
+  const journalHeadFormat = operation === 'update' && table === 'codebases'
+    ? guardedJournalHeadFormat(normalizedSql, updateColumns(normalizedSql))
+    : null
+  const journalHead = journalHeadFormat
+    ? {
+        format: journalHeadFormat,
+        nextRevision: params[0],
+        nextSelectedStateJson: params[1],
+        nextMainJson: params[2],
+        codebaseId: params[6],
+        previousRevision: params[7],
+      }
+    : null
   let baseCapability = 'write'
   if (operation === 'select') baseCapability = 'read'
   else if (table === 'releases' || table === 'release_assets') baseCapability = 'release'
@@ -362,14 +372,46 @@ function codebaseMutationRequiresAdmin(normalizedSql, params, operation, table) 
   if (operation === 'insert' || operation === 'delete') return true
 
   const columns = updateColumns(normalizedSql)
-  if (isGuardedJournalHeadUpdate(normalizedSql, columns)) {
-    if (params[2] !== params[9]) {
-      throw new Error('Scoped agent session guarded journal updates must preserve Main.')
-    }
-    assertGuardedJournalSelectedStateTransition(params)
+  const journalHeadFormat = guardedJournalHeadFormat(normalizedSql, columns)
+  if (journalHeadFormat === 'current') {
+    assertCurrentGuardedJournalHead(params)
+    return false
+  }
+  if (journalHeadFormat === 'legacy') {
+    assertLegacyGuardedJournalHead(params)
     return false
   }
   return true
+}
+
+function assertCurrentGuardedJournalHead(params) {
+  if (params[2] !== params[9]) {
+    throw new Error('Scoped agent session guarded journal updates must preserve Main.')
+  }
+  assertGuardedJournalSelectedStateTransition(params)
+}
+
+function assertLegacyGuardedJournalHead(params) {
+  if (params.length !== 8) {
+    throw new Error('Scoped agent session legacy guarded journal updates have invalid parameters.')
+  }
+  const next = parseJson(params[1], null)
+  const main = parseJson(params[2], null)
+  if (!next || typeof next !== 'object' || !main || typeof main !== 'object') {
+    throw new Error('Scoped agent session guarded journal state must be valid JSON objects.')
+  }
+  if (!Number.isInteger(params[0]) || !Number.isInteger(params[7]) || next.revision !== params[0] || params[0] <= params[7]) {
+    throw new Error('Scoped agent session guarded journal state revisions do not match the head guard.')
+  }
+  if (next.type !== 'active-change-set' || !next.id || next.mergeState !== 'unmerged') {
+    throw new Error('Scoped agent session guarded journal updates require an unmerged active change set.')
+  }
+  if (!Number.isInteger(params[3]) || params[3] < 0 || !Number.isInteger(params[4]) || params[4] < 0 || params[4] > params[3]) {
+    throw new Error('Scoped agent session guarded journal file counts are invalid.')
+  }
+  if (typeof params[5] !== 'string' || !params[5] || typeof params[6] !== 'string' || !params[6]) {
+    throw new Error('Scoped agent session legacy guarded journal guard values are invalid.')
+  }
 }
 
 function assertGuardedJournalSelectedStateTransition(params) {
@@ -410,7 +452,7 @@ function updateColumns(sql) {
   return splitSqlList(match[1]).map((assignment) => assignment.match(/^([a-z_][a-z0-9_]*)\s*=/)?.[1] ?? '')
 }
 
-function isGuardedJournalHeadUpdate(sql, columns) {
+function guardedJournalHeadFormat(sql, columns) {
   const expectedColumns = [
     'revision',
     'selected_state_json',
@@ -419,8 +461,14 @@ function isGuardedJournalHeadUpdate(sql, columns) {
     'private_file_count',
     'updated_at',
   ]
-  if (columns.length !== expectedColumns.length || columns.some((column, index) => column !== expectedColumns[index])) return false
-  return /^update codebases set revision = \?, selected_state_json = \?, main_json = \?, file_count = \?, private_file_count = \?, updated_at = \? where codebase_id = \? and revision = \? and selected_state_json = \? and main_json = \?$/.test(sql)
+  if (columns.length !== expectedColumns.length || columns.some((column, index) => column !== expectedColumns[index])) return null
+  if (/^update codebases set revision = \?, selected_state_json = \?, main_json = \?, file_count = \?, private_file_count = \?, updated_at = \? where codebase_id = \? and revision = \? and selected_state_json = \? and main_json = \?$/.test(sql)) {
+    return 'current'
+  }
+  if (/^update codebases set revision = \?, selected_state_json = \?, main_json = \?, file_count = \?, private_file_count = \?, updated_at = \? where codebase_id = \? and revision = \?$/.test(sql)) {
+    return 'legacy'
+  }
+  return null
 }
 
 function touchesAdminTable(normalizedSql) {
