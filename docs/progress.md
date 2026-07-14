@@ -31,7 +31,7 @@ Current live deployment:
 - Vercel org/team id: `team_x1SyEPIryEghBSkkwoXSTIZ2`
 - Production URL: `https://hopit.dev`
 - Secondary production alias: `https://www.hopit.dev`
-- Current Vercel deployment: `dpl_3sA6MnsvWgPBa42SKAt7X4t9Uuba` (`https://hopit-a1qwmge0d-robertg761s-projects.vercel.app`), aliased to `https://hopit.dev`.
+- Current Vercel deployment: inspect `https://hopit.dev` with `vercel inspect https://hopit.dev` because every production Git push creates a new immutable deployment URL.
 - Cloud graph target: Cloudflare D1 with schema at `cloudflare/d1/schema.sql`
 - Historical export source: saved snapshot under `/Users/robert/HopIt-Backups/convex/`
 - Cloudflare R2 bucket: `hopit-blobs`, private public-access-disabled object storage for HopIt blobs
