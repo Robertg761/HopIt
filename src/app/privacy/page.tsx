@@ -12,7 +12,6 @@ export default function PrivacyPage() {
   return (
     <PublicShell>
       <LegalPage
-        eyebrow="LEGAL / PRIVACY"
         title="Privacy Policy"
         summary="This policy explains what HopIt receives when you create an account and synchronize a workspace, why we use it, and the controls you retain."
         updated="July 13, 2026"

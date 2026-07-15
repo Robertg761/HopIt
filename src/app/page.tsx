@@ -35,10 +35,7 @@ export default function MarketingPage() {
         <div className="absolute inset-0 -z-10 opacity-50 [background-image:linear-gradient(to_right,var(--border)_1px,transparent_1px),linear-gradient(to_bottom,var(--border)_1px,transparent_1px)] [background-size:48px_48px] [mask-image:linear-gradient(to_bottom,black,transparent_85%)]" />
         <div className="mx-auto grid w-full max-w-[1180px] gap-12 px-4 py-20 sm:px-6 sm:py-28 lg:grid-cols-[1.08fr_.92fr] lg:items-center lg:px-8 lg:py-32">
           <div>
-            <div className="inline-flex items-center gap-2 rounded-full border border-hop/25 bg-hop-soft px-3 py-1 text-xs font-medium text-hop-soft-foreground">
-              <RefreshCw className="size-3.5" /> One workspace, every device
-            </div>
-            <h1 className="mt-7 max-w-3xl text-balance text-5xl font-semibold tracking-[-0.055em] sm:text-6xl lg:text-7xl">
+            <h1 className="max-w-3xl text-balance text-5xl font-semibold tracking-[-0.055em] sm:text-6xl lg:text-7xl">
               Your code,<br /><span className="text-hop">already there.</span>
             </h1>
             <p className="mt-7 max-w-xl text-pretty text-lg leading-8 text-muted-foreground">
@@ -81,8 +78,7 @@ export default function MarketingPage() {
       <section id="how-it-works" className="mx-auto w-full max-w-[1180px] px-4 py-20 sm:px-6 lg:px-8 lg:py-28">
         <div className="grid gap-10 lg:grid-cols-[.8fr_1.2fr] lg:gap-20">
           <div>
-            <p className="mono-label text-hop">HOW IT WORKS</p>
-            <h2 className="mt-4 text-balance text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">The handoff becomes the default.</h2>
+            <h2 className="text-balance text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">The handoff becomes the default.</h2>
             <p className="mt-5 text-base leading-7 text-muted-foreground">Create a cloud project once. Attach any machine. HopIt reconciles the workspace while keeping the safety boundary local.</p>
           </div>
           <ol className="grid gap-px overflow-hidden rounded-2xl border border-border bg-border sm:grid-cols-3">
@@ -111,14 +107,12 @@ export default function MarketingPage() {
 
       <section id="pricing" className="mx-auto w-full max-w-[1180px] px-4 py-20 sm:px-6 lg:px-8 lg:py-28">
         <div className="max-w-2xl">
-          <p className="mono-label text-hop">PRICING</p>
-          <h2 className="mt-4 text-balance text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">Choose a ceiling, not an overage meter.</h2>
+          <h2 className="text-balance text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">Choose a ceiling, not an overage meter.</h2>
           <p className="mt-5 text-base leading-7 text-muted-foreground">Monthly plans in USD. Upgrade when you need room; HopIt does not silently bill for excess usage.</p>
         </div>
         <div className="mt-10 grid gap-4 lg:grid-cols-3">
           {plans.map((plan) => (
             <article key={plan.name} className={`relative flex min-h-[330px] flex-col rounded-2xl border bg-card p-6 ${plan.accent ? 'border-hop ring-1 ring-hop/20 shadow-lg' : 'border-border'}`}>
-              {plan.accent ? <span className="absolute right-5 top-5 rounded-full bg-hop px-2.5 py-1 text-[11px] font-semibold text-white">Most useful</span> : null}
               <h3 className="text-lg font-semibold">{plan.name}</h3>
               <div className="mt-6"><span className="text-4xl font-semibold tracking-tight">{plan.price}</span><span className="ml-1 text-sm text-muted-foreground">USD / month</span></div>
               <ul className="mt-7 space-y-3 text-sm">

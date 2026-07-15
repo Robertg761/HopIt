@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { ArrowRight, Check, Database, HardDrive, ShieldCheck, Sparkles } from 'lucide-react'
+import { ArrowRight, Check, Database, HardDrive, ShieldCheck } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
@@ -98,10 +98,6 @@ export function PricingPage() {
       <section className="relative overflow-hidden rounded-2xl border border-border bg-card px-6 py-10 shadow-sm sm:px-10 lg:px-14">
         <div className="pointer-events-none absolute -right-20 -top-28 size-80 rounded-full bg-iris/10 blur-3xl" />
         <div className="relative max-w-3xl">
-          <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-border bg-background/70 px-3 py-1 text-xs font-medium text-muted-foreground">
-            <ShieldCheck className="size-3.5 text-iris" />
-            Hard caps. No surprise overages.
-          </div>
           <h1 className="text-balance text-3xl font-semibold tracking-tight text-foreground sm:text-4xl lg:text-5xl">
             Pick the ceiling your work needs.
           </h1>
@@ -134,11 +130,6 @@ export function PricingPage() {
                 plan.featured ? 'border-iris/45 ring-1 ring-iris/15' : 'border-border',
               )}
             >
-              {plan.featured ? (
-                <span className="absolute right-5 top-5 inline-flex items-center gap-1.5 rounded-full bg-iris px-2.5 py-1 text-[11px] font-semibold text-white">
-                  <Sparkles className="size-3" /> Most useful
-                </span>
-              ) : null}
               <div>
                 <h2 className="text-lg font-semibold text-foreground">{plan.name}</h2>
                 <p className="mt-1 min-h-10 pr-20 text-sm leading-5 text-muted-foreground">{plan.note}</p>

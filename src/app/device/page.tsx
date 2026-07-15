@@ -46,11 +46,8 @@ export default async function DeviceAuthorizationPage({
       <div className="pointer-events-none absolute inset-0 opacity-30 [background-image:linear-gradient(rgba(23,33,27,0.05)_1px,transparent_1px),linear-gradient(90deg,rgba(23,33,27,0.05)_1px,transparent_1px)] [background-size:32px_32px]" />
 
       <section className="relative w-full max-w-xl">
-        <header className="mb-7 flex items-center justify-between">
+        <header className="mb-7">
           <HopItLogo size={30} className="text-[#17211b]" />
-          <span className="rounded-full border border-[#cbd8cf] bg-white/80 px-3 py-1 font-mono text-[11px] font-medium text-[#506057] shadow-sm backdrop-blur">
-            SECURE DEVICE LINK
-          </span>
         </header>
 
         <div className="overflow-hidden rounded-2xl border border-[#cbd8cf] bg-white/92 shadow-[0_24px_80px_rgba(33,56,42,0.14)] backdrop-blur-xl">
@@ -58,7 +55,6 @@ export default async function DeviceAuthorizationPage({
             <div className="mb-5 flex size-12 items-center justify-center rounded-2xl bg-[#dafbe1] text-[#116329] shadow-[inset_0_0_0_1px_rgba(17,99,41,0.08)]">
               <Laptop className="size-6" aria-hidden="true" />
             </div>
-            <p className="mb-2 font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-[#1a7f37]">New device</p>
             <h1 className="font-display text-2xl font-semibold tracking-[-0.025em] sm:text-3xl">Connect this device to HopIt</h1>
             <p className="mt-3 max-w-md text-sm leading-6 text-[#5d6a62]">
               Review the device details, choose a project, and approve one encrypted session for your terminal.

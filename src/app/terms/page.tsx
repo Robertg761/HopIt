@@ -12,7 +12,6 @@ export default function TermsPage() {
   return (
     <PublicShell>
       <LegalPage
-        eyebrow="LEGAL / TERMS"
         title="Terms of Service"
         summary="These terms describe the agreement between you and HopIt when you create an account, synchronize code, or purchase a subscription."
         updated="July 13, 2026"

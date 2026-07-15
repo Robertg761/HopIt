@@ -3,7 +3,6 @@ import Link from 'next/link'
 import {
   ArrowRight,
   Check,
-  CircleDot,
   Cloud,
   Download,
   ExternalLink,
@@ -38,10 +37,7 @@ export default function DownloadPage() {
         <div className="absolute inset-0 -z-10 opacity-25 [background-image:linear-gradient(to_right,#30363d_1px,transparent_1px),linear-gradient(to_bottom,#30363d_1px,transparent_1px)] [background-size:48px_48px] [mask-image:linear-gradient(to_bottom,black,transparent_92%)]" />
         <div className="mx-auto grid w-full max-w-[1180px] gap-12 px-4 py-16 sm:px-6 sm:py-24 lg:grid-cols-[.9fr_1.1fr] lg:items-center lg:px-8 lg:py-28">
           <div>
-            <div className="inline-flex items-center gap-2 rounded-full border border-[#3fb950]/30 bg-[#12261e] px-3 py-1 text-xs font-medium text-[#56d364]">
-              <CircleDot className="size-3.5" /> Available for macOS and Linux
-            </div>
-            <h1 className="mt-7 text-balance text-5xl font-semibold tracking-[-0.055em] sm:text-6xl">
+            <h1 className="text-balance text-5xl font-semibold tracking-[-0.055em] sm:text-6xl">
               Bring your workspace<br /><span className="text-[#58a6ff]">to this device.</span>
             </h1>
             <p className="mt-6 max-w-xl text-pretty text-lg leading-8 text-[#a1a9b3]">
@@ -82,8 +78,7 @@ export default function DownloadPage() {
       <section className="mx-auto w-full max-w-[1180px] px-4 py-16 sm:px-6 lg:px-8 lg:py-24">
         <div className="grid gap-12 lg:grid-cols-[.7fr_1.3fr] lg:gap-20">
           <div>
-            <p className="mono-label text-hop">SUPPORTED BUILDS</p>
-            <h2 className="mt-4 text-balance text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">One command picks the right package.</h2>
+            <h2 className="text-balance text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">One command picks the right package.</h2>
             <p className="mt-5 leading-7 text-muted-foreground">The installer detects your operating system and processor, verifies the downloaded archive, and places the <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">hop</code> command in your local user account.</p>
           </div>
           <div className="grid gap-px overflow-hidden rounded-2xl border border-border bg-border sm:grid-cols-2">
@@ -91,7 +86,7 @@ export default function DownloadPage() {
               <article key={platform.architecture} className="bg-card p-5 sm:p-6">
                 <div className="flex items-start justify-between gap-4">
                   <span className="grid size-10 place-items-center rounded-lg border border-border bg-muted/55"><Laptop className="size-5 text-hop" /></span>
-                  <span className="rounded-full bg-hop-soft px-2.5 py-1 text-[11px] font-medium text-hop-soft-foreground">Available</span>
+                  <span className="text-xs font-medium text-hop">Available</span>
                 </div>
                 <h3 className="mt-6 font-semibold">{platform.name}</h3>
                 <p className="mt-1 text-sm text-muted-foreground">{platform.target}</p>
@@ -113,8 +108,7 @@ export default function DownloadPage() {
       <section className="mx-auto w-full max-w-[1180px] px-4 py-16 sm:px-6 lg:px-8 lg:py-24">
         <div className="grid overflow-hidden rounded-2xl border border-border lg:grid-cols-[1.15fr_.85fr]">
           <div className="p-6 sm:p-9">
-            <p className="mono-label text-iris">OTHER DEVICES</p>
-            <h2 className="mt-4 text-2xl font-semibold tracking-[-0.025em]">Windows and mobile agents are not available yet.</h2>
+            <h2 className="text-2xl font-semibold tracking-[-0.025em]">Windows and mobile agents are not available yet.</h2>
             <p className="mt-4 max-w-2xl leading-7 text-muted-foreground">You can use the HopIt web dashboard from Windows, iPhone, iPad, or Android today. Local filesystem sync currently requires macOS or Linux.</p>
             <Button asChild variant="outline" className="mt-6">
               <Link href="/sign-in">Open the web dashboard <ArrowRight /></Link>

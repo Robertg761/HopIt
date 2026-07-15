@@ -1,11 +1,9 @@
 export function LegalPage({
-  eyebrow,
   title,
   summary,
   updated,
   children,
 }: {
-  eyebrow: string
   title: string
   summary: string
   updated: string
@@ -14,8 +12,7 @@ export function LegalPage({
   return (
     <article className="mx-auto w-full max-w-[860px] px-4 py-14 sm:px-6 sm:py-20 lg:px-8">
       <header className="border-b border-border pb-10">
-        <p className="mono-label text-hop">{eyebrow}</p>
-        <h1 className="mt-4 text-balance text-4xl font-semibold tracking-[-0.035em] sm:text-5xl">{title}</h1>
+        <h1 className="text-balance text-4xl font-semibold tracking-[-0.035em] sm:text-5xl">{title}</h1>
         <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg">{summary}</p>
         <p className="mt-6 text-xs text-muted-foreground">Effective and last updated {updated}</p>
       </header>
