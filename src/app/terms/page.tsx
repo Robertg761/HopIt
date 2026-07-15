@@ -4,7 +4,7 @@ import { LegalPage } from '@/components/marketing/legal-page'
 import { PublicShell } from '@/components/marketing/public-shell'
 
 export const metadata: Metadata = {
-  title: 'Terms of Service — HopIt',
+  title: 'Terms of Service | HopIt',
   description: 'The terms governing HopIt accounts, synchronized workspaces, subscriptions, acceptable use, and exports.',
 }
 

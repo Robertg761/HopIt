@@ -1,7 +1,5 @@
 import type { Metadata } from 'next'
-import Link from 'next/link'
 import {
-  ArrowRight,
   Check,
   Cloud,
   Download,
@@ -12,11 +10,12 @@ import {
   Terminal,
 } from 'lucide-react'
 
+import { DownloadDashboardButton } from '@/components/marketing/download-auth-actions'
+import { SmartDownloadButton } from '@/components/marketing/smart-download-button'
 import { PublicShell } from '@/components/marketing/public-shell'
-import { Button } from '@/components/ui/button'
 
 export const metadata: Metadata = {
-  title: 'Download HopIt — macOS and Linux',
+  title: 'Download HopIt | macOS and Linux',
   description: 'Install the HopIt sync agent on macOS or Linux and connect this device to your cloud workspace.',
 }
 
@@ -43,14 +42,7 @@ export default function DownloadPage() {
             <p className="mt-6 max-w-xl text-pretty text-lg leading-8 text-[#a1a9b3]">
               Install the lightweight HopIt agent, approve this device in your browser, and continue from the same cloud workspace.
             </p>
-            <div className="mt-8 flex flex-col gap-3 sm:flex-row">
-              <Button asChild size="lg" className="h-11 bg-[#238636] px-5 text-white hover:bg-[#2ea043]">
-                <Link href="/sign-up">Create a free workspace <ArrowRight /></Link>
-              </Button>
-              <Button asChild size="lg" variant="outline" className="h-11 border-[#30363d] bg-[#161b22] px-5 text-[#f0f6fc] hover:bg-[#21262d] hover:text-white">
-                <Link href="/sign-in">Sign in</Link>
-              </Button>
-            </div>
+            <SmartDownloadButton />
           </div>
 
           <div className="overflow-hidden rounded-2xl border border-[#30363d] bg-[#010409] shadow-[0_28px_90px_rgba(0,0,0,.38)]">
@@ -78,8 +70,8 @@ export default function DownloadPage() {
       <section className="mx-auto w-full max-w-[1180px] px-4 py-16 sm:px-6 lg:px-8 lg:py-24">
         <div className="grid gap-12 lg:grid-cols-[.7fr_1.3fr] lg:gap-20">
           <div>
-            <h2 className="text-balance text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">One command picks the right package.</h2>
-            <p className="mt-5 leading-7 text-muted-foreground">The installer detects your operating system and processor, verifies the downloaded archive, and places the <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-foreground">hop</code> command in your local user account.</p>
+            <h2 className="text-balance text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">The right build, automatically.</h2>
+            <p className="mt-5 leading-7 text-muted-foreground">The macOS disk image includes Apple silicon and Intel runtimes, then installs only the correct one. The terminal installer provides the same automatic selection for Linux.</p>
           </div>
           <div className="grid gap-px overflow-hidden rounded-2xl border border-border bg-border sm:grid-cols-2">
             {platforms.map((platform) => (
@@ -99,7 +91,7 @@ export default function DownloadPage() {
 
       <section className="border-y border-border bg-muted/35">
         <div className="mx-auto grid w-full max-w-[1180px] gap-px px-4 py-16 sm:px-6 lg:grid-cols-3 lg:px-8 lg:py-20">
-          <SetupStep number="01" icon={Terminal} title="Install" detail="Run the one-line installer in Terminal. Node and npm are not required." />
+          <SetupStep number="01" icon={Terminal} title="Install" detail="Open the disk image and double-click Install HopIt. Node and npm are not required." />
           <SetupStep number="02" icon={LockKeyhole} title="Approve" detail="Sign in when your browser opens and grant this device a scoped session." />
           <SetupStep number="03" icon={Cloud} title="Attach" detail="Choose your cloud project and local workspace folder. Sync starts in the background." />
         </div>
@@ -110,9 +102,7 @@ export default function DownloadPage() {
           <div className="p-6 sm:p-9">
             <h2 className="text-2xl font-semibold tracking-[-0.025em]">Windows and mobile agents are not available yet.</h2>
             <p className="mt-4 max-w-2xl leading-7 text-muted-foreground">You can use the HopIt web dashboard from Windows, iPhone, iPad, or Android today. Local filesystem sync currently requires macOS or Linux.</p>
-            <Button asChild variant="outline" className="mt-6">
-              <Link href="/sign-in">Open the web dashboard <ArrowRight /></Link>
-            </Button>
+            <DownloadDashboardButton />
           </div>
           <div className="border-t border-border bg-[#0d1117] p-6 text-[#f0f6fc] sm:p-9 lg:border-l lg:border-t-0">
             <h3 className="font-semibold">Before you install</h3>

@@ -1,7 +1,7 @@
 import Link from 'next/link'
 
 import { HopItLogo } from '@/components/brand/logo'
-import { Button } from '@/components/ui/button'
+import { PublicAuthActions } from '@/components/marketing/public-auth-actions'
 
 export function PublicShell({ children }: { children: React.ReactNode }) {
   return (
@@ -17,12 +17,7 @@ export function PublicShell({ children }: { children: React.ReactNode }) {
             <Link className="rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground" href="/download">Download</Link>
             <Link className="rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground" href="/privacy">Privacy</Link>
           </nav>
-          <Button asChild variant="ghost" className="ml-auto sm:ml-0">
-            <Link href="/sign-in">Sign in</Link>
-          </Button>
-          <Button asChild>
-            <Link href="/sign-up">Start free</Link>
-          </Button>
+          <PublicAuthActions />
         </div>
       </header>
 

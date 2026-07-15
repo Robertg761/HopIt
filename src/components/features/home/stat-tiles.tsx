@@ -29,7 +29,7 @@ export function StatTiles({ status }: { status: AgentStatusSnapshot }) {
         </span>
       </StatTile>
       <StatTile label="Behind remote" icon={ArrowDownLeft}>
-        <strong className="text-2xl font-semibold tabular-nums">{behind === null ? '—' : formatCount(behind)}</strong>
+        <strong className="text-2xl font-semibold tabular-nums">{behind === null ? 'Not available' : formatCount(behind)}</strong>
         <span className="text-xs text-muted-foreground">
           {behind && behind > 0 ? `${behind === 1 ? 'revision' : 'revisions'} behind` : 'Up to date'}
         </span>

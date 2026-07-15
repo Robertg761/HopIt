@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
 /**
- * Trail-episodes route — a thin, read-only wrapper over the backend
+ * Trail-episodes route: a thin, read-only wrapper over the backend
  * `listTrailEpisodes` / `readCodebaseSettings` methods in @hopit/backend-d1. It
  * lists the stored episodes for a codebase (labels included, newest first,
  * bounded limit) plus the trail-summaries setting so the dashboard can show the

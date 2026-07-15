@@ -36,7 +36,7 @@ export function HealthCard({ status }: { status: AgentStatusSnapshot }) {
       </CardHeader>
       <CardContent className="space-y-4">
         {!status.commandsAvailable ? (
-          <QuietNote>Hosted dashboard — commands run from your local agent.</QuietNote>
+          <QuietNote>Hosted dashboard: commands run from your local agent.</QuietNote>
         ) : null}
         <dl className="grid gap-x-8 gap-y-3 sm:grid-cols-2">
           <InfoRow label="Workspace path" mono>

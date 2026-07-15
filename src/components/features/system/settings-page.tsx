@@ -67,7 +67,7 @@ export function SettingsPage() {
           <dl className="grid gap-x-8 gap-y-3 sm:grid-cols-2">
             <InfoRow label="Hydration state">{status.workspaceHydrationState}</InfoRow>
             <InfoRow label="Materialized revision">
-              {status.workspaceMaterializedRevision === null ? '—' : status.workspaceMaterializedRevision}
+              {status.workspaceMaterializedRevision === null ? 'Not available' : status.workspaceMaterializedRevision}
             </InfoRow>
             <InfoRow label="Cache state">{status.cacheState}</InfoRow>
             <InfoRow label="Index path" mono>
@@ -116,7 +116,7 @@ export function SettingsPage() {
           </dl>
         </CardContent>
         <CardFooter>
-          <ManagedCaption>Review and merge run from the agent or the Review page — read-only here.</ManagedCaption>
+          <ManagedCaption>Review and merge run from the agent or the Review page. This view is read-only.</ManagedCaption>
         </CardFooter>
       </Card>
 
@@ -135,7 +135,7 @@ export function SettingsPage() {
             </InfoRow>
           </dl>
           <p className="mt-4 text-xs text-muted-foreground">
-            Files under <span className="font-mono">.private/</span> are only ever visible to the codebase owner —
+            Files under <span className="font-mono">.private/</span> are only ever visible to the codebase owner.
             collaborators and reviewers never see them.
           </p>
         </CardContent>

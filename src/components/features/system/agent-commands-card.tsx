@@ -179,7 +179,7 @@ export function ImportGitCard({
               disabled={!commandsAvailable || busy}
             />
           </Field>
-          <Field label="Branch" htmlFor="import-git-branch" hint="Optional — defaults to the remote default branch." className="w-44">
+          <Field label="Branch" htmlFor="import-git-branch" hint="Optional. Defaults to the remote default branch." className="w-44">
             <Input
               id="import-git-branch"
               placeholder="main"
@@ -195,7 +195,7 @@ export function ImportGitCard({
           </Button>
         </form>
         <p className="text-xs text-muted-foreground">
-          Large repositories can take a while — the agent keeps working after you leave this page.
+          Large repositories can take a while. The agent keeps working after you leave this page.
         </p>
       </CardContent>
     </Card>

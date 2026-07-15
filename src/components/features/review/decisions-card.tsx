@@ -89,7 +89,7 @@ export function DecisionsCard({
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') void submit()
                   }}
-                  placeholder="Looks good — ship it"
+                  placeholder="Looks good. Ship it"
                   disabled={composerDisabledReason !== null}
                 />
               </Field>

@@ -97,7 +97,7 @@ export function DiscussionsTab({
           title={data.discussions.length === 0 ? 'No discussions yet' : 'No matching discussions'}
           description={
             data.discussions.length === 0
-              ? 'Start a conversation — ideas, questions, or announcements.'
+              ? 'Start a conversation about ideas, questions, or announcements.'
               : 'Try a different search or status filter.'
           }
         />

@@ -42,6 +42,7 @@
     "actions:runner": "node packages/actions-runner/src/runner.js loop",
     "check:production-config": "node scripts/check-production-config.mjs",
     "package:hop": "node scripts/package-hop.mjs",
+    "package:hop:dmg": "node scripts/package-hop-dmg.mjs",
     "prerelease:hop": "npm run build:core",
     "release:hop": "node scripts/release-hop.mjs",
     "d1:migrate:convex-export": "node scripts/migrate-convex-export-to-d1.mjs",

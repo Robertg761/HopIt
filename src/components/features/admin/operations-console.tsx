@@ -542,7 +542,7 @@ function ConfigurationPanel({ data }: { data: Json }) {
     ['Owner email', runtime.configured?.ownerEmail], ['Server actor token', runtime.configured?.serverActor],
     ['D1 Worker', runtime.configured?.worker], ['Stripe webhook', runtime.configured?.stripeWebhook],
   ]
-  return <Card><CardHeader className="flex-row items-center justify-between"><div><CardTitle>Runtime configuration</CardTitle><p className="mt-1 text-xs text-muted-foreground">Presence and feature state only—secret values never reach the browser.</p></div><Badge tone="outline">{runtime.environment || 'unknown'}</Badge></CardHeader><CardContent className="grid gap-3 pt-3 md:grid-cols-2 xl:grid-cols-4">
+  return <Card><CardHeader className="flex-row items-center justify-between"><div><CardTitle>Runtime configuration</CardTitle><p className="mt-1 text-xs text-muted-foreground">Presence and feature state only. Secret values never reach the browser.</p></div><Badge tone="outline">{runtime.environment || 'unknown'}</Badge></CardHeader><CardContent className="grid gap-3 pt-3 md:grid-cols-2 xl:grid-cols-4">
     {entries.map(([label, active]) => <div key={String(label)} className="flex items-center justify-between rounded-md border border-border p-3"><span className="text-sm">{String(label)}</span><Badge tone={active ? 'hop' : 'danger'}>{active ? 'On' : 'Off'}</Badge></div>)}
     <div className="md:col-span-2 xl:col-span-4 flex flex-wrap gap-2 border-t border-border pt-3">
       {Object.entries(runtime.links ?? {}).filter(([, href]) => href).map(([label, href]) => <Button key={label} asChild variant="outline" size="sm"><a href={String(href)} target="_blank" rel="noreferrer"><ExternalLink/>{label}</a></Button>)}

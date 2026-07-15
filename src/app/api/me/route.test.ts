@@ -82,7 +82,7 @@ describe('GET /api/me tenant provisioning', () => {
     expect(second.cloud.tenant).toMatchObject({ plan: 'free', provisioned: true })
   })
 
-  it('does NOT provision (no proxy call) when tenancy is OFF — byte-for-byte legacy', async () => {
+  it('does NOT provision (no proxy call) when tenancy is OFF; byte-for-byte legacy', async () => {
     isMultiTenant.mockReturnValue(false)
     const payload = await body(await get())
     expect(provisionCloudTenant).not.toHaveBeenCalled()

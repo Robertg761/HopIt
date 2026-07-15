@@ -203,7 +203,7 @@ export function ImportGitDialog({
             required
           />
         </Field>
-        <Field label="Branch" htmlFor="import-git-branch" hint="Optional — defaults to the repository default branch.">
+        <Field label="Branch" htmlFor="import-git-branch" hint="Optional. Defaults to the repository default branch.">
           <Input
             id="import-git-branch"
             value={branch}

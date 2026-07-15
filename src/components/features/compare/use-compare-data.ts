@@ -17,7 +17,7 @@ import type {
 } from '@/lib/client/compare/types'
 
 /**
- * Owns the compare surface's data and its client-side per-view cache — the cache
+ * Owns the compare surface's data and its client-side per-view cache. The cache
  * the WS7c design doc deferred to this consumer. Two caches, both keyed so that
  * switching the selected file never re-fetches the directory compare:
  *
@@ -179,7 +179,7 @@ export function useCompareData(
     (path: string) => {
       if (!codebaseId || from === null || to === null) return
       const key = fileKey(from, to, path)
-      // Already fetched (or in flight) for this pair+path — serve from cache.
+      // Already fetched (or in flight) for this pair+path. Serve from cache.
       if (startedFileKeys.current.has(key)) return
       startedFileKeys.current.add(key)
       setFileCache((cache) => ({ ...cache, [key]: { status: 'loading' } }))

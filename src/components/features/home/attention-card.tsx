@@ -84,7 +84,7 @@ export function AttentionCard() {
     rows.push({
       id: 'blocked',
       tone: 'danger',
-      message: 'The agent is blocked — check recent activity for details.',
+      message: 'The agent is blocked. Check recent activity for details.',
       action: linkAction(activityHref, 'View activity'),
     })
   }

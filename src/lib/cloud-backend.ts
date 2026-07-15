@@ -251,7 +251,7 @@ export async function upsertCloudUser(input: CloudActor & {
 }
 
 // Tenant auto-provision (Phase 3 §2e signup funnel). Ensures the authenticated
-// user has a free tenant row on their first authenticated request — no card, no
+// user has a free tenant row on their first authenticated request. No card, no
 // owner-email gate. Idempotent, so it is safe to call on every dashboard load.
 // Deliberately actor-less (d1Backend() with no server-actor id) so the write
 // rides the admin proxy token: the server-actor firewall forbids tenant_usage

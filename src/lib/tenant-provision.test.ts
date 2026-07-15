@@ -5,7 +5,7 @@ import { buildTenantProvisionStatement, normalizePlan } from '@hopit/backend-d1'
 // Phase 3 §2e item 1: tenant auto-provision. The provisioning statement must be
 // idempotent (insert ... on conflict do nothing on the tenant_id primary key) so
 // a second authenticated request never duplicates the row, and it must NOT carry
-// an update clause that could reset a plan billing later set to 'paid' — billing
+// an update clause that could reset a plan billing later set to 'paid'. Billing
 // owns the plan column. Proving the exact SQL shape guarantees idempotency by
 // construction (the PK + do-nothing conflict), the same pattern the Worker meter
 // upsert is unit-tested against.

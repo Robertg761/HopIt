@@ -35,8 +35,8 @@ export function FileEditor({ file, codebaseId }: { file: AgentFile; codebaseId: 
     return (
       <p className="rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
         {file.kind === 'symlink'
-          ? `Symlink${file.target ? ` to ${file.target}` : ''} — nothing to edit.`
-          : 'Directory entry — nothing to edit.'}
+          ? `Symlink${file.target ? ` to ${file.target}` : ''}. Nothing to edit.`
+          : 'Directory entry. Nothing to edit.'}
       </p>
     )
   }
@@ -44,7 +44,7 @@ export function FileEditor({ file, codebaseId }: { file: AgentFile; codebaseId: 
   if (file.encoding === 'base64') {
     return (
       <p className="rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-        Binary file ({formatBytes(file.size)}) — editing is not available.
+        Binary file ({formatBytes(file.size)}). Editing is not available.
       </p>
     )
   }
@@ -99,7 +99,7 @@ export function FileEditor({ file, codebaseId }: { file: AgentFile; codebaseId: 
             </pre>
             {file.contentPreviewTruncated ? (
               <p className="mt-1.5 text-xs text-muted-foreground">
-                Preview truncated — open the file to see everything.
+                Preview truncated. Open the file to see everything.
               </p>
             ) : null}
           </div>

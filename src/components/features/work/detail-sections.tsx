@@ -105,7 +105,7 @@ export function ReleaseDetailSection({
                             {asset.checksum.length > 16 ? `${asset.checksum.slice(0, 16)}…` : asset.checksum}
                           </span>
                         ) : (
-                          <span className="text-xs text-muted-foreground">—</span>
+                          <span className="text-xs text-muted-foreground">Not available</span>
                         )}
                       </td>
                       <td className="py-2">
@@ -120,7 +120,7 @@ export function ReleaseDetailSection({
                             <ExternalLink className="size-3" aria-hidden />
                           </a>
                         ) : (
-                          <span className="text-xs text-muted-foreground">—</span>
+                          <span className="text-xs text-muted-foreground">Not available</span>
                         )}
                       </td>
                     </tr>

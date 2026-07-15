@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import { ClerkProvider } from '@clerk/nextjs'
-import { signInPath, signUpPath } from '@/lib/auth-config'
+import { signedInHomePath, signInPath, signUpPath } from '@/lib/auth-config'
 
 const ClerkAuthEnabledContext = React.createContext(false)
 
@@ -22,7 +22,12 @@ export function ClerkAuthProvider({ enabled, children }: ClerkAuthProviderProps)
 
   return (
     <ClerkAuthEnabledContext.Provider value>
-      <ClerkProvider signInUrl={signInPath} signUpUrl={signUpPath}>
+      <ClerkProvider
+        signInUrl={signInPath}
+        signUpUrl={signUpPath}
+        signInFallbackRedirectUrl={signedInHomePath}
+        signUpFallbackRedirectUrl={signedInHomePath}
+      >
         {children}
       </ClerkProvider>
     </ClerkAuthEnabledContext.Provider>

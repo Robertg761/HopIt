@@ -2,7 +2,7 @@
 
 // Build every HopIt target and publish immutable archives/checksums first. The
 // single mutable `latest/manifest.json` pointer is uploaded last, so an aborted
-// release can leave only unreachable immutable objects — never a mixed channel.
+// release can leave only unreachable immutable objects, never a mixed channel.
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -14,6 +14,7 @@ import {
   parseTargets,
   packageTargets,
 } from './package-hop.mjs'
+import { buildMacDmg } from './package-hop-dmg.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const repoRoot = path.resolve(path.dirname(__filename), '..')
@@ -24,6 +25,7 @@ const PUBLIC_BASE_URL = 'https://pub-3d89002dcb6c4d71b6d1188f39cc7731.r2.dev'
 
 const CONTENT_TYPES = {
   '.tar.gz': 'application/gzip',
+  '.dmg': 'application/x-apple-diskimage',
   '.sha256': 'text/plain; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
 }
@@ -53,8 +55,11 @@ async function main() {
 
   console.error(`Building ${targets.length} target(s) for release ${version} ...`)
   const built = await packageTargets(targets)
+  const hasBothMacTargets = ['darwin-arm64', 'darwin-x64']
+    .every((target) => built.some((entry) => entry.target === target))
+  const dmg = hasBothMacTargets ? await buildMacDmg({ built, version }) : null
 
-  const manifest = buildReleaseManifest({ version, gitSha, builtAt, built })
+  const manifest = buildReleaseManifest({ version, gitSha, builtAt, built, dmg })
   const publishChannel = hasCompleteReleaseTargetSet(built.map((result) => result.target))
 
   const manifestPath = path.join(artifactsRoot, `release-manifest-${version.replace(/[^\w.-]/g, '_')}.json`)
@@ -62,7 +67,7 @@ async function main() {
 
   // Assemble the full upload plan before touching the network. The mutable
   // channel pointer is deliberately the final item in this plan.
-  const uploads = buildReleaseUploadPlan({ version, built, manifestPath, publishChannel })
+  const uploads = buildReleaseUploadPlan({ version, built, dmg, manifestPath, publishChannel })
 
   for (const upload of uploads) {
     uploadObject(upload, dryRun)
@@ -133,7 +138,7 @@ function uploadObject(upload, dryRun) {
   }
 }
 
-export function buildReleaseManifest({ version, gitSha, builtAt, built }) {
+export function buildReleaseManifest({ version, gitSha, builtAt, built, dmg = null }) {
   const targets = {}
   for (const result of built) {
     const archiveName = `${result.packageName}.tar.gz`
@@ -144,18 +149,30 @@ export function buildReleaseManifest({ version, gitSha, builtAt, built }) {
       verified: result.verified,
     }
   }
-  return {
+  const manifest = {
     schemaVersion: 2,
     version,
     gitSha,
     builtAt,
     targets,
   }
+  if (dmg) {
+    manifest.downloads = {
+      macos: {
+        key: `releases/${version}/${dmg.fileName}`,
+        checksumKey: `releases/${version}/${dmg.fileName}.sha256`,
+        sha256: dmg.sha256,
+        verified: dmg.verified,
+      },
+    }
+  }
+  return manifest
 }
 
 export function buildReleaseUploadPlan({
   version,
   built,
+  dmg = null,
   manifestPath,
   publishChannel = hasCompleteReleaseTargetSet(built.map((result) => result.target)),
 }) {
@@ -172,6 +189,20 @@ export function buildReleaseUploadPlan({
     uploads.push({
       key: `${prefix}/${archiveName}.sha256`,
       file: result.checksumPath,
+      cacheControl: CACHE_IMMUTABLE,
+      phase: 'immutable',
+    })
+  }
+  if (dmg) {
+    uploads.push({
+      key: `${prefix}/${dmg.fileName}`,
+      file: dmg.dmgPath,
+      cacheControl: CACHE_IMMUTABLE,
+      phase: 'immutable',
+    })
+    uploads.push({
+      key: `${prefix}/${dmg.fileName}.sha256`,
+      file: dmg.checksumPath,
       cacheControl: CACHE_IMMUTABLE,
       phase: 'immutable',
     })
@@ -214,6 +245,7 @@ export function hasCompleteReleaseTargetSet(targets = []) {
 
 function contentTypeFor(key) {
   if (key.endsWith('.tar.gz')) return CONTENT_TYPES['.tar.gz']
+  if (key.endsWith('.dmg')) return CONTENT_TYPES['.dmg']
   if (key.endsWith('.sha256')) return CONTENT_TYPES['.sha256']
   if (key.endsWith('.json')) return CONTENT_TYPES['.json']
   return 'application/octet-stream'

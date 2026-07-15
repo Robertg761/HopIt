@@ -9,7 +9,7 @@ import type { TrailEpisode, TrailError, TrailSummariesSettings } from '@/lib/cli
 /**
  * Owns the trail-episode surface's read: a single fetch of the stored episodes
  * plus the codebase's trail-summaries setting, reloaded whenever the codebase
- * changes. Read-only — labeling and toggling summaries happen from the agent CLI,
+ * changes. Read-only. Labeling and toggling summaries happen from the agent CLI,
  * so there is nothing to mutate here.
  */
 

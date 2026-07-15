@@ -17,7 +17,7 @@ const AGENT_SESSION_TOKEN_PREFIX = 'hst_'
  *  - `Authorization: Bearer hst_...`
  *
  * Returns the raw token string when the shape matches, otherwise `null`. This
- * performs NO validation beyond the `hst_` prefix — it never touches D1 and is
+ * performs NO validation beyond the `hst_` prefix. It never touches D1 and is
  * safe to call in the edge runtime.
  */
 export function agentSessionTokenFromHeaders(headers: Headers): string | null {
@@ -37,12 +37,12 @@ export function agentSessionTokenFromHeaders(headers: Headers): string | null {
  * session token in either header form.
  *
  * Deliberately narrow:
- *  - Non-`/api` paths (pages) are NEVER bypassed, even with an `hst_` header —
+ *  - Non-`/api` paths (pages) are NEVER bypassed, even with an `hst_` header.
  *    they keep full Clerk protection.
  *  - A malformed token (missing `hst_` prefix) does NOT bypass; such a request
  *    stays on the Clerk path exactly as before.
  *
- * This function does NOT validate the token (no D1 access — edge runtime). A
+ * This function does NOT validate the token (no D1 access in the edge runtime). A
  * forged-but-well-shaped token bypasses Clerk here and is then rejected by the
  * route's `cloudActorFromRequest` path with a JSON 4xx envelope.
  */

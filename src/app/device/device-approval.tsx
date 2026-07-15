@@ -35,7 +35,7 @@ export function DeviceApproval({
   const [availableCodebases, setAvailableCodebases] = React.useState<DeviceCodebaseOption[]>(codebases)
   const requestedExists = requestedId ? availableCodebases.some((option) => option.id === requestedId) : false
   // When the terminal asked to create a project that does not exist yet, we must
-  // NOT pre-select an existing project — otherwise a single click on "Approve"
+  // NOT pre-select an existing project. Otherwise a single click on "Approve"
   // would connect the device to the wrong project (the live incident).
   const [codebaseId, setCodebaseId] = React.useState(
     requestedId ? (requestedExists ? requestedId : '') : codebases[0]?.id ?? '',
@@ -145,7 +145,7 @@ export function DeviceApproval({
             <p className="text-sm font-semibold">This authorization is {status}</p>
             <p className="mt-1 text-xs leading-5">
               Links are single-use and expire about 10 minutes after they are created. If you re-ran hop setup or hop add,
-              a newer tab was opened — close this one and use the most recent tab, or run the command again in your
+              a newer tab was opened. Close this one and use the most recent tab, or run the command again in your
               terminal to get a fresh link.
             </p>
           </div>
@@ -202,7 +202,7 @@ export function DeviceApproval({
                   <p className="text-sm font-semibold text-[#a40e26]">Connect to an existing project instead</p>
                   <p className="mt-1 text-xs leading-5 text-[#7d2b34]">
                     Your terminal asked for <span className="font-mono font-semibold">{requestedId}</span>. Pointing it at
-                    a different existing project makes this device operate on that project — its managed workspace can be
+                    a different existing project makes this device operate on that project. Its managed workspace can be
                     overwritten by the import. Only do this if you are certain.
                   </p>
                   <label className="mt-3 block">
@@ -235,7 +235,7 @@ export function DeviceApproval({
                     className="mt-3 text-xs font-medium text-[#66736b] underline underline-offset-2"
                     onClick={collapseExistingOverride}
                   >
-                    Cancel — create {requestedId} instead
+                    Cancel and create {requestedId} instead
                   </button>
                 </div>
               )}

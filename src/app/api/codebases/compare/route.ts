@@ -8,7 +8,7 @@ export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
 
 /**
- * Compare route — thin wrapper over the WS7c reconstruction engine
+ * Compare route: thin wrapper over the WS7c reconstruction engine
  * (`compareRevisions` / `listFileVersions` in @hopit/backend-d1). It never
  * re-implements diff logic. Three modes, distinguished by query params:
  *

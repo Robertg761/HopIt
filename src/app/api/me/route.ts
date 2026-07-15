@@ -82,7 +82,7 @@ export async function GET(request: Request) {
   }
   const accountSync = await syncCloudAccount(actor)
   // Tenant auto-provision (Phase 3 §2e). With tenancy on, a stranger's first
-  // authenticated request ensures their own free tenant — the universal,
+  // authenticated request ensures their own free tenant. This is the universal,
   // no-card, no-owner-gate replacement for the owner-only bootstrap. Idempotent,
   // best-effort: a provisioning failure never blocks /api/me. Flag off => skipped
   // entirely (no proxy call), so single-tenant behavior is byte-for-byte.

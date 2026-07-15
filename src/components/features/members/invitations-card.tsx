@@ -225,7 +225,7 @@ export function InvitationsCard({
             {createdToken ? (
               <div className="space-y-2 rounded-lg bg-muted/40 p-3">
                 <p className="text-xs text-muted-foreground">
-                  Share this one-time token with the invitee — they redeem it under “Accept an invitation”.
+                  Share this one-time token with the invitee. They redeem it under “Accept an invitation”.
                   It is only shown once.
                 </p>
                 <div className="flex items-center gap-2">

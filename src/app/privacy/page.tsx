@@ -4,7 +4,7 @@ import { LegalPage } from '@/components/marketing/legal-page'
 import { PublicShell } from '@/components/marketing/public-shell'
 
 export const metadata: Metadata = {
-  title: 'Privacy Policy — HopIt',
+  title: 'Privacy Policy | HopIt',
   description: 'How HopIt collects, uses, stores, and protects account, workspace, and billing information.',
 }
 

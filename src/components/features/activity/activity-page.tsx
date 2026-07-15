@@ -30,7 +30,7 @@ function CadenceNote({
     return (
       <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <StatusDot tone="hop" pulse />
-        Live — updates every few seconds
+        Live, updates every few seconds
       </span>
     )
   }

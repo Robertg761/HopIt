@@ -62,7 +62,7 @@ export type ChangedFile = {
 
 /**
  * A file counts as changed when its local cache state says it diverged
- * (dirty / pending-upload / uploaded) or its cloud revision is ahead of Main —
+ * (dirty / pending-upload / uploaded) or its cloud revision is ahead of Main.
  * the same derivation the previous review surface used.
  */
 export function deriveChangedFiles(files: AgentFile[], mainRevision: string): ChangedFile[] {
@@ -89,7 +89,7 @@ export function fileStateTone(state: AgentFileLocalState): BadgeTone {
 
 /**
  * Review threads / decisions are hosted-D1-only. These error codes mean the
- * backend simply is not there — render a quiet note, not an error blowup.
+ * backend simply is not there. Render a quiet note, not an error blowup.
  */
 export function isBackendUnavailable(error: CollaborationError | null | undefined): boolean {
   if (!error) return false

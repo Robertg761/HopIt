@@ -6,7 +6,7 @@ import { NextRequest } from 'next/server'
 // under test); everything Clerk-shaped is mocked so the suite runs without a
 // live Clerk environment. The guarantee: an hst_-bearing /api request is let
 // through to its route handler (NextResponse.next()), while every other request
-// keeps its pre-fix treatment — pages redirect to Clerk, tokenless /api requests
+// keeps its pre-fix treatment. Pages redirect to Clerk, tokenless /api requests
 // redirect to Clerk, and the basic-auth / public-route pass-throughs are intact.
 
 const shouldUseClerkAuth = vi.fn(() => true)
@@ -33,17 +33,24 @@ vi.mock('@/lib/basic-auth-fallback', () => ({
 // returns a handler that produces a recognizable "would redirect to sign-in"
 // response so tests can distinguish "Clerk handled it" from "middleware stepped
 // aside". `createRouteMatcher` compiles the simple patterns proxy.ts uses.
-vi.mock('@clerk/nextjs/server', () => ({
-  clerkMiddleware: () => () =>
-    new Response(null, {
-      status: 307,
-      headers: { location: '/sign-in', 'x-clerk-protect': '1' },
-    }),
-  createRouteMatcher: (patterns: string[]) => {
-    const regexes = patterns.map((p) => new RegExp('^' + p.replace(/\(\.\*\)/g, '.*') + '$'))
-    return (req: NextRequest) => regexes.some((r) => r.test(req.nextUrl.pathname))
-  },
-}))
+vi.mock('@clerk/nextjs/server', () => {
+  let middlewareRegistration = 0
+  return {
+    clerkMiddleware: () => {
+      const registration = middlewareRegistration++
+      return () => registration === 0
+        ? new Response(null, {
+            status: 307,
+            headers: { location: '/sign-in', 'x-clerk-protect': '1' },
+          })
+        : new Response(null, { headers: { 'x-middleware-next': '1', 'x-clerk-session': '1' } })
+    },
+    createRouteMatcher: (patterns: string[]) => {
+      const regexes = patterns.map((p) => new RegExp('^' + p.replace(/\(\.\*\)/g, '.*') + '$'))
+      return (req: NextRequest) => regexes.some((r) => r.test(req.nextUrl.pathname))
+    },
+  }
+})
 
 import { proxy } from './proxy'
 
@@ -154,9 +161,16 @@ describe('proxy() unchanged pass-throughs (Clerk mode)', () => {
     expect(isPassThrough(response)).toBe(true)
   })
 
+  it('keeps device-specific downloads public', () => {
+    const response = run('/api/download/darwin-arm64')
+    expect(isPassThrough(response)).toBe(true)
+    expect(isClerkRedirect(response)).toBe(false)
+  })
+
   it('keeps the sign-in route public', () => {
     const response = run('/sign-in')
     expect(isPassThrough(response)).toBe(true)
+    expect(response.headers.get('x-clerk-session')).toBe('1')
   })
 
   it.each(['/', '/download', '/privacy', '/terms'])('keeps the public launch route %s open', (path) => {

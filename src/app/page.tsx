@@ -1,9 +1,10 @@
 import type { Metadata } from 'next'
+import { auth } from '@clerk/nextjs/server'
 import Link from 'next/link'
+import { redirect } from 'next/navigation'
 import {
   ArrowRight,
   Check,
-  CircleDollarSign,
   Cloud,
   Download,
   HardDrive,
@@ -15,9 +16,10 @@ import {
 
 import { PublicShell } from '@/components/marketing/public-shell'
 import { Button } from '@/components/ui/button'
+import { shouldEnableClerkUi, signedInHomePath } from '@/lib/auth-config'
 
 export const metadata: Metadata = {
-  title: 'HopIt — Your code, already there',
+  title: 'HopIt | Your code, already there',
   description: 'Cloud-native code workspaces that stay in sync across devices while preserving a local journal and a full export path.',
 }
 
@@ -27,7 +29,12 @@ const plans = [
   { name: 'Plus Storage', price: '$15', storage: '100 GB', writes: '20,000 writes/day', projects: 'Unlimited projects', accent: false },
 ] as const
 
-export default function MarketingPage() {
+export default async function MarketingPage() {
+  if (shouldEnableClerkUi()) {
+    const { userId } = await auth()
+    if (userId) redirect(signedInHomePath)
+  }
+
   return (
     <PublicShell>
       <section className="relative isolate overflow-hidden border-b border-border">
@@ -39,7 +46,7 @@ export default function MarketingPage() {
               Your code,<br /><span className="text-hop">already there.</span>
             </h1>
             <p className="mt-7 max-w-xl text-pretty text-lg leading-8 text-muted-foreground">
-              HopIt keeps cloud-native code workspaces synchronized across devices, with a durable local journal when the network—or your plan limit—gets in the way.
+              HopIt keeps cloud-native code workspaces synchronized across devices, with a durable local journal when the network or your plan limit gets in the way.
             </p>
             <div className="mt-9 flex flex-col gap-3 sm:flex-row">
               <Button asChild size="lg" className="h-11 px-5">
@@ -81,7 +88,7 @@ export default function MarketingPage() {
             <p className="mt-5 text-base leading-7 text-muted-foreground">Create a cloud project once. Attach any machine. HopIt reconciles the workspace while keeping the safety boundary local.</p>
           </div>
           <ol className="grid gap-px overflow-hidden rounded-2xl border border-border bg-border sm:grid-cols-3">
-            <Step number="01" icon={Cloud} title="Create" detail="Start with one free cloud project—no card and no owner approval." />
+            <Step number="01" icon={Cloud} title="Create" detail="Start with one free cloud project. No card and no owner approval." />
             <Step number="02" icon={Download} title="Attach" detail="Authorize a device with a scoped session. Storage credentials never live on the client." />
             <Step number="03" icon={RefreshCw} title="Continue" detail="Sync, switch devices, and recover held edits from the local journal." />
           </ol>
@@ -93,7 +100,7 @@ export default function MarketingPage() {
           <div>
             <LockKeyhole className="size-8 text-[#3fb950]" />
             <h2 className="mt-5 text-3xl font-semibold tracking-[-0.03em]">Isolation is enforced below the UI.</h2>
-            <p className="mt-4 max-w-xl leading-7 text-[#8b949e]">Tenant checks run at the database, session, and blob boundaries. Clients receive scoped sessions and brokered object access—not administrative storage keys.</p>
+            <p className="mt-4 max-w-xl leading-7 text-[#8b949e]">Tenant checks run at the database, session, and blob boundaries. Clients receive scoped sessions and brokered object access, not administrative storage keys.</p>
           </div>
           <div className="grid gap-3 sm:grid-cols-2">
             <DarkFact icon={ShieldCheck} title="Tenant-scoped" detail="Cross-tenant SQL, session, and blob probes fail closed." />
@@ -107,7 +114,6 @@ export default function MarketingPage() {
       <section id="pricing" className="mx-auto w-full max-w-[1180px] px-4 py-20 sm:px-6 lg:px-8 lg:py-28">
         <div className="max-w-2xl">
           <h2 className="text-balance text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">Choose a ceiling, not an overage meter.</h2>
-          <p className="mt-5 text-base leading-7 text-muted-foreground">Monthly plans in USD. Upgrade when you need room; HopIt does not silently bill for excess usage.</p>
         </div>
         <div className="mt-10 grid gap-4 lg:grid-cols-3">
           {plans.map((plan) => (
@@ -122,9 +128,6 @@ export default function MarketingPage() {
               </Button>
             </article>
           ))}
-        </div>
-        <div className="mt-5 flex items-start gap-3 rounded-xl border border-border bg-muted/35 p-4 text-sm text-muted-foreground">
-          <CircleDollarSign className="mt-0.5 size-4 shrink-0 text-iris" /> Paid checkout is handled by Stripe Managed Payments. Applicable sales tax, VAT, or GST is calculated at checkout.
         </div>
       </section>
     </PublicShell>

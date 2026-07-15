@@ -18,11 +18,11 @@ export async function cloudActorFromRequest(
   { allowBasicFallback = false, codebaseId = null, agentCapability = 'read' }: CloudActorOptions = {},
 ): Promise<CloudActor | null> {
   // The basic-auth fallback resolves to an empty wildcard actor ({}) that
-  // downstream visibility code treats as an unscoped bypass — acceptable for a
+  // downstream visibility code treats as an unscoped bypass. This is acceptable for a
   // single locked-down operator, a tenant bypass under multi-tenancy (§1.4 /
   // decision 10). When the flag is on this branch is unreachable both because
   // shouldAllowBasicAuthFallback() forces the credential check false AND because
-  // this explicit guard refuses to mint {} regardless — so no config combination
+  // this explicit guard refuses to mint {} regardless, so no config combination
   // can produce an empty actor with tenancy on.
   if (!isMultiTenant()) {
     if (allowBasicFallback && hasValidBasicAuthFallbackCredentials(request.headers)) return {}

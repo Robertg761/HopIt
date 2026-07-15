@@ -1,7 +1,7 @@
 /**
  * Turn raw backend/vendor error strings into short, human-readable notes.
  * Raw messages (Clerk stack hints, JSON parse noise, proxy errors) must never
- * reach the page — always route user-facing error text through this.
+ * reach the page. Always route user-facing error text through this.
  */
 export function humanizeApiError(message: string | null | undefined): string {
   const text = (message ?? '').trim()
