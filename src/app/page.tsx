@@ -49,7 +49,6 @@ export default function MarketingPage() {
                 <Link href="/download"><Download /> Download HopIt</Link>
               </Button>
             </div>
-            <p className="mt-4 text-xs text-muted-foreground">No card required · 2 GB free · hard caps, never surprise overages</p>
           </div>
 
           <div className="relative mx-auto w-full max-w-[520px]">
