@@ -39,7 +39,11 @@ async function main() {
   const argv = process.argv.slice(2)
   const dryRun = argv.includes('--dry-run')
   const allowUnsigned = argv.includes('--allow-unsigned')
-  assertReleasePublicationAllowed({ dryRun, allowUnsigned })
+  assertReleasePublicationAllowed({
+    dryRun,
+    allowUnsigned,
+    unsignedAcknowledgement: process.env.HOPIT_ACKNOWLEDGE_UNSIGNED_PUBLIC_RELEASE,
+  })
 
   // Default to every target; --target/HOP_PACKAGE_TARGET passthrough is honored.
   const hasExplicitTarget =
@@ -80,10 +84,17 @@ async function main() {
       sha256: `${PUBLIC_BASE_URL}/releases/${version}/${result.packageName}.tar.gz.sha256`,
     }
   }
+  if (dmg) {
+    publicUrls.macos = {
+      dmg: `${PUBLIC_BASE_URL}/releases/${version}/${dmg.fileName}`,
+      sha256: `${PUBLIC_BASE_URL}/releases/${version}/${dmg.fileName}.sha256`,
+    }
+  }
 
   console.log(JSON.stringify({
     ok: true,
     dryRun,
+    signed: false,
     publishChannel,
     version,
     gitSha,
@@ -163,6 +174,8 @@ export function buildReleaseManifest({ version, gitSha, builtAt, built, dmg = nu
         checksumKey: `releases/${version}/${dmg.fileName}.sha256`,
         sha256: dmg.sha256,
         verified: dmg.verified,
+        signed: false,
+        notarized: false,
       },
     }
   }
@@ -224,17 +237,21 @@ export function buildReleaseUploadPlan({
   return uploads
 }
 
-export function assertReleasePublicationAllowed({ dryRun = false, allowUnsigned = false } = {}) {
-  if (dryRun && !allowUnsigned) return
-  if (allowUnsigned) {
-    throw new Error(
-      'Unsigned publication is disabled because this command targets HopIt public release storage. ' +
-      'Use package:hop for local/private dogfood artifacts instead.',
-    )
-  }
+export function assertReleasePublicationAllowed({
+  dryRun = false,
+  allowUnsigned = false,
+  unsignedAcknowledgement = '',
+} = {}) {
+  if (dryRun) return
+  if (allowUnsigned && unsignedAcknowledgement === 'I_ACCEPT_UNSIGNED_PUBLIC_DISTRIBUTION') return
+  if (allowUnsigned) throw new Error(
+    'Unsigned publication requires HOPIT_ACKNOWLEDGE_UNSIGNED_PUBLIC_RELEASE=' +
+    'I_ACCEPT_UNSIGNED_PUBLIC_DISTRIBUTION in addition to --allow-unsigned.',
+  )
   throw new Error(
     'Release publication is blocked because HopIt artifacts are not signed or notarized. ' +
-    'Use --dry-run to verify the plan; public publication has no unsigned escape hatch.',
+    'Use --dry-run to verify the plan. To publish an explicitly approved unsigned release, ' +
+    'use --allow-unsigned with the acknowledgement variable documented in docs/personal-production.md.',
   )
 }
 

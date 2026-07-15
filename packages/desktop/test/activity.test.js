@@ -13,7 +13,7 @@ test('known events get plain-language lines', () => {
   assert.equal(describeEvent('sync.complete', { revision: 4437 }), 'Sync complete (rev 4437)')
   assert.equal(describeEvent('remote-push.applied', { toRevision: 4437 }), 'Applied a pushed change (rev 4437)')
   assert.equal(describeEvent('write.journaled', { path: 'src/a.ts' }), 'Recorded a local change to src/a.ts')
-  assert.equal(describeEvent('remote-push.fallback_polling'), 'Sync hub offline — polling instead')
+  assert.equal(describeEvent('remote-push.fallback_polling'), 'Sync hub offline: polling instead')
   assert.equal(describeEvent('change_set.conflict_detected'), 'Conflict detected')
 })
 

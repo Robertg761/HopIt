@@ -179,7 +179,7 @@ async function readServerActorEntitledCodebases(db, userId, codebaseIds) {
   return entitled
 }
 
-// --- Blob broker (Phase 3 Stage 1b — HOPIT_MULTITENANT / Front 2) ------------
+// --- Blob broker (Phase 3 Stage 1b: HOPIT_MULTITENANT / Front 2) ------------
 //
 // Authenticate the caller by the SAME principals the query path trusts (an hst_
 // scoped session, the hsa_ server-actor, or the admin proxy token), resolve the
@@ -363,7 +363,7 @@ async function readScopedFileAccess(db, session) {
   const visibility = parseJson(row.visibility_json, {})
   return {
     codebaseId: session.codebase_id,
-    // The tenant that owns this codebase — quota accrues to the OWNER, not the
+    // The tenant that owns this codebase: quota accrues to the OWNER, not the
     // writing session user (a collaborator's writes count against the owner's
     // tenant budget).
     ownerId: row.owner_id ?? null,
@@ -390,7 +390,7 @@ async function readScopedFileAccess(db, session) {
 //      guarded file sizes (storage delta),
 //   2. when HOPIT_ENFORCE_QUOTA is also on, reads the tenant's single meter row +
 //      plan and rejects the batch CLEANLY if it would cross a hard cap (no
-//      partial write, no data loss — the agent holds the change on disk),
+//      partial write, no data loss: the agent holds the change on disk),
 //   3. returns a single meter upsert to be folded into the SAME batch, so the
 //      write and its meter increment commit or roll back together (+1 row/batch).
 // Reads, exports, and deletes (which reduce storage) are never routed here.
@@ -480,7 +480,7 @@ async function prepareTenantMetering({ env, db, authorization }) {
 
   const policies = authorization.statementPolicies ?? []
   const rowsDelta = mutatingStatementCount(policies)
-  if (rowsDelta === 0) return null // read-only batch — never metered.
+  if (rowsDelta === 0) return null // read-only batch: never metered.
 
   const tenantId = await resolveTenantIdForAuthorization(db, authorization)
   if (!tenantId) return null

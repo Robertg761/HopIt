@@ -95,6 +95,8 @@ test('release manifest and upload plan include the universal macOS DMG', () => {
   })
   assert.equal(manifest.downloads.macos.key, 'releases/0.0.1+abc1234/HopIt-macOS.dmg')
   assert.equal(manifest.downloads.macos.sha256, 'dmg123')
+  assert.equal(manifest.downloads.macos.signed, false)
+  assert.equal(manifest.downloads.macos.notarized, false)
 
   const plan = buildReleaseUploadPlan({
     version: '0.0.1+abc1234',
@@ -126,12 +128,16 @@ test('release versions use a unique build timestamp instead of reusing one SHA k
   assert.match(first, /^0\.0\.1\+[a-f0-9]+\.20260710000000001$/)
 })
 
-test('public release publication fails closed with no unsigned escape hatch', () => {
+test('public release publication requires explicit unsigned approval', () => {
   assert.doesNotThrow(() => assertReleasePublicationAllowed({ dryRun: true }))
   assert.throws(
     () => assertReleasePublicationAllowed({ allowUnsigned: true }),
-    /targets HopIt public release storage/,
+    /requires HOPIT_ACKNOWLEDGE_UNSIGNED_PUBLIC_RELEASE/,
   )
+  assert.doesNotThrow(() => assertReleasePublicationAllowed({
+    allowUnsigned: true,
+    unsignedAcknowledgement: 'I_ACCEPT_UNSIGNED_PUBLIC_DISTRIBUTION',
+  }))
   assert.throws(
     () => assertReleasePublicationAllowed(),
     /not signed or notarized/,

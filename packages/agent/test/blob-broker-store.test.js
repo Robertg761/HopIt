@@ -1,10 +1,10 @@
-// Phase 3 Stage 1b — R2 blob broker, agent (client) half.
+// Phase 3 Stage 1b: R2 blob broker, agent (client) half.
 //
 // Proves the agent's broker blob-store mode round-trips WITHOUT ever holding
 // account R2 credentials: it asks the REAL Worker broker (authed by its hst_
 // session token) for a short-lived presigned URL, then does a raw PUT/GET against
 // a fake R2. The cross-tenant case proves a codebase-A client cannot obtain a
-// working URL for codebase-B's blob — the broker refuses before signing. Flag-off
+// working URL for codebase-B's blob: the broker refuses before signing. Flag-off
 // keeps the direct-credential S3 provider byte-for-byte.
 
 import assert from 'node:assert/strict'
@@ -101,7 +101,7 @@ test('createObjectBlobStore returns the direct S3 store when the broker flag is 
   })
   assert.ok(store instanceof S3CompatibleBlobStore)
   assert.equal(store.provider, 'r2')
-  // The direct store still holds account credentials and signs locally — unchanged.
+  // The direct store still holds account credentials and signs locally: unchanged.
   assert.equal(store.accessKeyId, 'AKIA')
 })
 

@@ -70,7 +70,7 @@ const throwingProvider = {
 // Payload contract
 // -------------------------------------------------------------------------
 
-test('metadata payload contains only paths/counts/timestamps/device — never file contents', () => {
+test('metadata payload contains only paths/counts/timestamps/device: never file contents', () => {
   const payload = buildEpisodePayload(EPISODE, { mode: 'metadata', diffText: 'SECRET FILE BODY' })
   for (const key of Object.keys(payload)) assert.ok(METADATA_KEYS.has(key), `unexpected key ${key}`)
   assert.equal(payload.mode, 'metadata')

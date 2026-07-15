@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Package the HopIt desktop app as an UNSIGNED local dogfood artifact under
 // <repo>/artifacts/desktop/. This is intentionally NOT wired into any release
-// publication flow — signing/notarization are still blocked repo-wide, matching
+// publication flow: signing/notarization are still blocked repo-wide, matching
 // the CLI. Uses @electron/packager (devDependency of this workspace only), so
 // the agent runtime packaging (scripts/package-hop.mjs) is untouched.
 

@@ -1281,13 +1281,13 @@ test('cross-tenant control: user-b session executes against its own codebase', a
 })
 
 // ---------------------------------------------------------------------------
-// Server-actor tier (Phase 3 Stage 1a — HOPIT_MULTITENANT / Front 1)
+// Server-actor tier (Phase 3 Stage 1a: HOPIT_MULTITENANT / Front 1)
 //
 // The hosted dashboard historically reached D1 with the omnipotent proxy token,
 // which skips all scoping. Behind HOPIT_MULTITENANT, the dashboard instead
 // presents a per-request `hsa_` server-actor token carrying the authenticated
 // user id. The Worker re-derives that id (HMAC) and refuses any statement that
-// touches a codebase the user neither owns nor is an active member of — while
+// touches a codebase the user neither owns nor is an active member of: while
 // still allowing a user to list THEIR OWN multiple codebases. Proxy and hst_
 // behavior must be identical whether the flag is on or off.
 // ---------------------------------------------------------------------------
@@ -2224,7 +2224,7 @@ function createMockSocket() {
 }
 
 // ---------------------------------------------------------------------------
-// Blob broker (Phase 3 Stage 1b — HOPIT_MULTITENANT / Front 2)
+// Blob broker (Phase 3 Stage 1b: HOPIT_MULTITENANT / Front 2)
 //
 // The agent no longer holds account-level R2 credentials. It asks the Worker
 // broker (authed by its existing hst_ session or the hsa_ server-actor) for a

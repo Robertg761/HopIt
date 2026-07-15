@@ -88,9 +88,9 @@ export default async function MarketingPage() {
             <p className="mt-5 text-base leading-7 text-muted-foreground">Create a cloud project once. Attach any machine. HopIt reconciles the workspace while keeping the safety boundary local.</p>
           </div>
           <ol className="grid gap-px overflow-hidden rounded-2xl border border-border bg-border sm:grid-cols-3">
-            <Step number="01" icon={Cloud} title="Create" detail="Start with one free cloud project. No card and no owner approval." />
-            <Step number="02" icon={Download} title="Attach" detail="Authorize a device with a scoped session. Storage credentials never live on the client." />
-            <Step number="03" icon={RefreshCw} title="Continue" detail="Sync, switch devices, and recover held edits from the local journal." />
+            <Step icon={Cloud} title="Create" detail="Start with one free cloud project. No card and no owner approval." />
+            <Step icon={Download} title="Attach" detail="Authorize a device with a scoped session. Storage credentials never live on the client." />
+            <Step icon={RefreshCw} title="Continue" detail="Sync, switch devices, and recover held edits from the local journal." />
           </ol>
         </div>
       </section>
@@ -142,8 +142,8 @@ function RelayStem() {
   return <div className="ml-[55px] h-5 w-px bg-border" aria-hidden />
 }
 
-function Step({ number, icon: Icon, title, detail }: { number: string; icon: typeof Cloud; title: string; detail: string }) {
-  return <li className="bg-card p-6"><div className="flex items-center justify-between"><Icon className="size-5 text-hop" /><span className="font-mono text-xs text-muted-foreground">{number}</span></div><h3 className="mt-12 text-lg font-semibold">{title}</h3><p className="mt-2 text-sm leading-6 text-muted-foreground">{detail}</p></li>
+function Step({ icon: Icon, title, detail }: { icon: typeof Cloud; title: string; detail: string }) {
+  return <li className="bg-card p-6"><Icon className="size-5 text-hop" /><h3 className="mt-12 text-lg font-semibold">{title}</h3><p className="mt-2 text-sm leading-6 text-muted-foreground">{detail}</p></li>
 }
 
 function DarkFact({ icon: Icon, title, detail }: { icon: typeof ShieldCheck; title: string; detail: string }) {

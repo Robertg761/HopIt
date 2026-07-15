@@ -1,23 +1,23 @@
-// Per-tenant usage metering + quota enforcement — Phase 3 Stage 2-3
+// Per-tenant usage metering + quota enforcement: Phase 3 Stage 2-3
 // (HOPIT_MULTITENANT master flag; HOPIT_ENFORCE_QUOTA hard-block sub-gate).
 //
 // Pure, side-effect-free helpers shared by the Worker's mutation path. The
 // Worker is the authoritative (un-bypassable) enforcement point for storage
-// bytes and daily D1 writes because the agent's env is tenant-controlled — a
+// bytes and daily D1 writes because the agent's env is tenant-controlled: a
 // hostile agent can raise its own local budget, but it cannot forge these caps.
 //
 // Metering model (documented tradeoff):
-//   * Daily D1 rows written — the binding cost line. MAINTAINED tally: the Worker
+//   * Daily D1 rows written: the binding cost line. MAINTAINED tally: the Worker
 //     counts the mutating statements it is about to run and folds ONE meter
 //     upsert into the same batch, so a tenant cannot journal without also
 //     incrementing its meter (they commit or roll back together). Cost: exactly
 //     +1 D1 row written per mutating batch (the meter row itself), which is NOT
 //     counted against the tenant's own budget. Reads are never metered.
-//   * Storage bytes — MAINTAINED additive tally of guarded file sizes, folded
+//   * Storage bytes: MAINTAINED additive tally of guarded file sizes, folded
 //     into the same meter upsert. Approximate (a re-save of an unchanged path
 //     adds its size again) and reconciled nightly against an R2/D1 prefix scan;
 //     the exact-delta alternative would cost a read-before-write on every save.
-//   * Codebase count — COMPUTED ON READ in the Next backend at create time (a
+//   * Codebase count: COMPUTED ON READ in the Next backend at create time (a
 //     cold path), never maintained here, so the hot write path stays at +1 row.
 
 export const QUOTA_DEFAULTS = {
@@ -139,7 +139,7 @@ export function computeUsageStatus({ usage, limits, warnRatio, day = utcDay(), c
 }
 
 // Decide whether a mutating batch may proceed. Returns null when allowed, or a
-// typed rejection (never throws) so the caller can fail the write CLEANLY —
+// typed rejection (never throws) so the caller can fail the write CLEANLY -
 // reads/export are never routed here, and a blocked write loses no data (the
 // agent holds the change on local disk and retries).
 export function evaluateWriteQuota({ usage, limits, day = utcDay(), rowsDelta = 0, storageDelta = 0 }) {

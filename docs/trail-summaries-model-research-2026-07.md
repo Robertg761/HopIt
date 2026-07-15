@@ -1,4 +1,4 @@
-# Trail Summaries — Model & Pricing Research (2026-07)
+# Trail Summaries: Model & Pricing Research (2026-07)
 
 Research for Phase 2 "Trail summaries" (`docs/product-roadmap.md`). A cheap API model
 writes one-line labels for clustered "episodes" of a project's revision trail.
@@ -17,7 +17,7 @@ All prices verified against official vendor pages on **2026-07-12** (access date
 
 ---
 
-## 0. The owner's two candidates — identified
+## 0. The owner's two candidates: identified
 
 Both "5.4 mini" and "5.6 Luna" are real, and both are **OpenAI** models. Neither is misremembered.
 
@@ -32,12 +32,12 @@ Both "5.4 mini" and "5.6 Luna" are real, and both are **OpenAI** models. Neither
   [Simon Willison](https://simonwillison.net/2026/Jul/9/gpt-5-6/), accessed 2026-07-12)
   - **Availability caveat:** initial coverage described a narrow (~20-org) preview, but
     OpenAI's own launch and multiple outlets report GA via API and Codex on 2026-07-09. It's
-    the newest option here (3 days old at time of writing) — **confirm your account actually
+    the newest option here (3 days old at time of writing): **confirm your account actually
     has API access before committing.**
     ([VentureBeat](https://venturebeat.com/technology/openai-unveils-gpt-5-6-sol-terra-and-luna-models-but-only-accessible-to-limited-preview-partners-for-now-per-us-gov),
     [QCode GA note](https://qcode.cc/en/gpt-5-6-guide), accessed 2026-07-12)
 
-Note both are **OpenAI** — so the two owner picks share one vendor and one data policy. The
+Note both are **OpenAI**: so the two owner picks share one vendor and one data policy. The
 comparison below adds the three other requested classes: cheapest Anthropic small model,
 cheapest Google Gemini flash-class, and a cheap open-weight-via-API option.
 
@@ -50,8 +50,8 @@ cheapest Google Gemini flash-class, and a cheap open-weight-via-API option.
 | **GPT-5.4 mini** | OpenAI | $0.75 | $4.50 | 50% (→ $0.375 / $2.25); cached in 10% | **No** (API not trained on by default) | ~30 days default; ZDR for eligible enterprise |
 | **GPT-5.6 Luna** | OpenAI | $1.00 | $6.00 | 50% (→ $0.50 / $3.00); cached in 10% | **No** (same OpenAI API policy) | ~30 days default; ZDR for eligible enterprise |
 | **Claude Haiku 4.5** | Anthropic | $1.00 | $5.00 | 50% (→ $0.50 / $2.50); cache read 10% | **No** (Commercial Terms bar training on customer content) | ≤30 days default; ZDR by contract |
-| **Gemini 2.5 Flash-Lite** | Google | $0.10 | $0.40 | 50% (→ $0.05 / $0.20) | **No — on the PAID tier only** (free AI Studio tier DOES train) | Limited logging for abuse/legal; ZDR by approval |
-| **DeepSeek V4 Flash** | DeepSeek | $0.14 | $0.28 | No batch API; off-peak ~50%; cache-hit in $0.0028 | **Paid API: not by default** (since Mar-2026 policy) — but **trains on free tier**, data stored **in China** | No fixed period; "as long as necessary" |
+| **Gemini 2.5 Flash-Lite** | Google | $0.10 | $0.40 | 50% (→ $0.05 / $0.20) | **No: on the PAID tier only** (free AI Studio tier DOES train) | Limited logging for abuse/legal; ZDR by approval |
+| **DeepSeek V4 Flash** | DeepSeek | $0.14 | $0.28 | No batch API; off-peak ~50%; cache-hit in $0.0028 | **Paid API: not by default** (since Mar-2026 policy): but **trains on free tier**, data stored **in China** | No fixed period; "as long as necessary" |
 
 Sources (all accessed 2026-07-12):
 [OpenAI pricing](https://developers.openai.com/api/docs/pricing) ·
@@ -76,7 +76,7 @@ Sources (all accessed 2026-07-12):
   Cleanest fit for a privacy-first product. ([retention docs](https://platform.claude.com/docs/en/manage-claude/api-and-data-retention))
 - **Google (Gemini Flash-Lite):** On the **paid** Gemini API / Vertex AI, prompts and responses
   are **not used to train** and are logged only briefly for abuse/legal; ZDR by approval.
-  **Critical:** the **free AI Studio tier trains on your data and humans may review it** — HopIt
+  **Critical:** the **free AI Studio tier trains on your data and humans may review it**: HopIt
   must use a billed project. ([Gemini ZDR](https://ai.google.dev/gemini-api/docs/zdr),
   [paid-tier confirmation thread](https://discuss.ai.google.dev/t/is-my-data-used-for-training-or-retained-with-gemini-paid-api-calls/64837))
 - **DeepSeek:** Per the Feb/Mar-2026 policy, paid API conversations are **not used for training
@@ -96,7 +96,7 @@ Sources (all accessed 2026-07-12):
 - Solo dev = **300 episodes/mo**; heavy team = **3,000 episodes/mo**.
 
 Cost/episode below is at **standard** rates; per-user-month columns show **standard** and
-(**batch**, 50% off — the recommended async default). Gemini/DeepSeek are so cheap the numbers
+(**batch**, 50% off: the recommended async default). Gemini/DeepSeek are so cheap the numbers
 round hard; figures carry enough digits to be meaningful.
 
 ### 2a. Metadata mode (the DEFAULT)
@@ -133,7 +133,7 @@ Observations:
 
 ## 3. Recommendation
 
-**At HopIt's default scale, the choice barely matters on cost — decide on quality and data policy.**
+**At HopIt's default scale, the choice barely matters on cost: decide on quality and data policy.**
 
 The default is metadata-only, opt-in. For a solo dev that's **≤ $0.14/user-month on any model
 with batch**, and even a heavy team in default mode tops out under **$1.40/user-month**. That's
@@ -146,11 +146,11 @@ with **Gemini 2.5 Flash-Lite as the pre-wired cheap fallback**.
 Why Haiku for the default:
 
 - **Policy is the cleanest.** Anthropic's Commercial Terms flatly bar training on customer
-  content, ~30-day retention, ZDR by contract — the least-caveated fit for a privacy-first
+  content, ~30-day retention, ZDR by contract: the least-caveated fit for a privacy-first
   product with no "make sure you're on the paid tier" footgun (unlike Gemini's free/paid split).
 - **Instruction-following pedigree.** Haiku-class models are well-benchmarked for terse,
   schema-constrained output; a ≤25-token label is trivially within range. (Task-specific evals
-  for *this exact* labeling job are unverified — see quality notes — but the task is easy enough
+  for *this exact* labeling job are unverified: see quality notes: but the task is easy enough
   that all five candidates clear the bar.)
 - Cost delta vs the cheapest option is **cents per user-month** in default mode.
 
@@ -162,11 +162,11 @@ Why keep Gemini 2.5 Flash-Lite wired as fallback:
 
 On the owner's two picks specifically:
 
-- **GPT-5.4 mini** is the strongest of the sub-$1 OpenAI options and a fine choice — best
+- **GPT-5.4 mini** is the strongest of the sub-$1 OpenAI options and a fine choice: best
   instruction-following reputation in that price band, same clean OpenAI no-train policy.
   It's ~20% cheaper than Luna in metadata mode with no quality downside for this task.
 - **GPT-5.6 Luna** works but is the **priciest option in the table for this workload** ($6/M
-  output) with **no quality edge** at ≤25-token labeling, and it's 3 days old — availability
+  output) with **no quality edge** at ≤25-token labeling, and it's 3 days old: availability
   and stability are unproven. If you want an OpenAI model, prefer **GPT-5.4 mini** over Luna
   for trail summaries. Reach for Luna only if you're already standardizing on the GPT-5.6 family
   elsewhere.
@@ -182,11 +182,11 @@ owner prefers OpenAI. Only revisit on cost if heavy teams turn diff mode on by d
 ### Quality notes (instruction-following for terse structured labels)
 
 - **GPT-5.6 Luna:** OpenAI reports **82.5%** on its instruction-following benchmark (vs Terra
-  84.3, Sol 88.8), the family's cheap tier — more than adequate for one-line labels.
+  84.3, Sol 88.8), the family's cheap tier: more than adequate for one-line labels.
   ([Vellum](https://www.vellum.ai/blog/gpt-5-6-benchmarks-explained), accessed 2026-07-12)
 - **GPT-5.4 mini:** OpenAI positions it for "high-throughput workloads and subagent
   orchestration," "approaching GPT-5.4 on reasoning/coding." No published head-to-head IF score
-  vs the others for *this* task — **quality for terse labeling is unverified** but expected strong.
+  vs the others for *this* task: **quality for terse labeling is unverified** but expected strong.
   ([BenchLM](https://benchlm.ai/compare/gemini-2-5-flash-vs-gpt-5-4-mini), accessed 2026-07-12)
 - **Claude Haiku 4.5:** Anthropic's current small model; Haiku-class is well-regarded for
   structured/tool output. Task-specific eval unverified but the job is easy.
@@ -203,9 +203,9 @@ differences at this task are unlikely to be user-visible, which reinforces decid
 
 ## 4. Abstraction note (one paragraph)
 
-HopIt should call the summarizer through a **thin, provider-agnostic interface** — a single
+HopIt should call the summarizer through a **thin, provider-agnostic interface**: a single
 `SummarizerProvider` with one method (`label(episode) -> {label, expansion?}`) plus a capability
-flag for batch support — and keep all vendor specifics (model id, endpoint, auth, batch-job
+flag for batch support: and keep all vendor specifics (model id, endpoint, auth, batch-job
 submission/polling, price metadata) behind concrete adapters (`AnthropicProvider`,
 `OpenAIProvider`, `GeminiProvider`). The prompt/response contract (input schema for metadata vs
 diff mode, strict output shape, token caps) lives in the interface, not the adapter, so switching
@@ -220,18 +220,18 @@ swap path is exercised, not theoretical.
 
 ## Sources (all accessed 2026-07-12)
 
-- OpenAI API pricing — https://developers.openai.com/api/docs/pricing
-- OpenAI GPT-5.6 launch — https://openai.com/index/gpt-5-6/
-- OpenAI data controls — https://developers.openai.com/api/docs/guides/your-data
-- OpenAI enterprise privacy — https://openai.com/enterprise-privacy/
-- Simon Willison, GPT-5.6 family — https://simonwillison.net/2026/Jul/9/gpt-5-6/
-- Vellum GPT-5.6 benchmarks — https://www.vellum.ai/blog/gpt-5-6-benchmarks-explained
-- VentureBeat GPT-5.6 availability — https://venturebeat.com/technology/openai-unveils-gpt-5-6-sol-terra-and-luna-models-but-only-accessible-to-limited-preview-partners-for-now-per-us-gov
-- Anthropic pricing — https://platform.claude.com/docs/en/about-claude/pricing
-- Anthropic API & data retention — https://platform.claude.com/docs/en/manage-claude/api-and-data-retention
-- Google Gemini API pricing — https://ai.google.dev/gemini-api/docs/pricing
-- Google Gemini ZDR — https://ai.google.dev/gemini-api/docs/zdr
-- Gemini paid-tier training confirmation — https://discuss.ai.google.dev/t/is-my-data-used-for-training-or-retained-with-gemini-paid-api-calls/64837
-- DeepSeek API pricing — https://api-docs.deepseek.com/quick_start/pricing/
-- DeepSeek privacy policy — https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html
-- BenchLM Gemini 2.5 Flash vs GPT-5.4 mini — https://benchlm.ai/compare/gemini-2-5-flash-vs-gpt-5-4-mini
+- OpenAI API pricing: https://developers.openai.com/api/docs/pricing
+- OpenAI GPT-5.6 launch: https://openai.com/index/gpt-5-6/
+- OpenAI data controls: https://developers.openai.com/api/docs/guides/your-data
+- OpenAI enterprise privacy: https://openai.com/enterprise-privacy/
+- Simon Willison, GPT-5.6 family: https://simonwillison.net/2026/Jul/9/gpt-5-6/
+- Vellum GPT-5.6 benchmarks: https://www.vellum.ai/blog/gpt-5-6-benchmarks-explained
+- VentureBeat GPT-5.6 availability: https://venturebeat.com/technology/openai-unveils-gpt-5-6-sol-terra-and-luna-models-but-only-accessible-to-limited-preview-partners-for-now-per-us-gov
+- Anthropic pricing: https://platform.claude.com/docs/en/about-claude/pricing
+- Anthropic API & data retention: https://platform.claude.com/docs/en/manage-claude/api-and-data-retention
+- Google Gemini API pricing: https://ai.google.dev/gemini-api/docs/pricing
+- Google Gemini ZDR: https://ai.google.dev/gemini-api/docs/zdr
+- Gemini paid-tier training confirmation: https://discuss.ai.google.dev/t/is-my-data-used-for-training-or-retained-with-gemini-paid-api-calls/64837
+- DeepSeek API pricing: https://api-docs.deepseek.com/quick_start/pricing/
+- DeepSeek privacy policy: https://cdn.deepseek.com/policies/en-US/deepseek-privacy-policy.html
+- BenchLM Gemini 2.5 Flash vs GPT-5.4 mini: https://benchlm.ai/compare/gemini-2-5-flash-vs-gpt-5-4-mini

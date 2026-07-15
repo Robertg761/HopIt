@@ -153,7 +153,7 @@ export function applyEnvPairs(pairs, env = process.env) {
 
 // Autoload the deployed production env file into process.env early in CLI startup.
 // Silent no-op when disabled ($HOPIT_NO_ENV_FILE), when no file exists, or when the
-// file cannot be read. Never throws — a bad env file must not break the CLI.
+// file cannot be read. Never throws: a bad env file must not break the CLI.
 export function autoloadEnvFile(env = process.env) {
   try {
     const filePath = resolveEnvFilePath(env)

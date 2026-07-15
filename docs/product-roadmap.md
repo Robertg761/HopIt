@@ -6,12 +6,12 @@ lives in [docs/remediation-plan-2026-07.md](remediation-plan-2026-07.md).
 
 ## Vision
 
-HopIt's goal is to replace GitHub — by being much better and much easier to use.
+HopIt's goal is to replace GitHub: by being much better and much easier to use.
 It is a multi-tenant SaaS product at `hopit.dev`.
 
 HopIt is a clean break from git, not a friendlier git. HopIt's graph is the real
 format. Git import (already implemented) and git export/publish are escape
-hatches, not a live bridge — you can get code in and get code out, but day-to-day
+hatches, not a live bridge: you can get code in and get code out, but day-to-day
 work never touches git and never surfaces a git concept.
 
 The flagship experience is the invisible sync: a normal folder that is present on
@@ -21,14 +21,14 @@ on every device you own.
 
 The target audience is everyone, eventually. The narrow starting point (the owner
 as the sole daily driver) is a sequencing tactic to force the product to be real
-before it is broad — not a statement about who HopIt is for.
+before it is broad: not a statement about who HopIt is for.
 
 Platforms: macOS and Linux agents first; Windows later.
 
 AI agents are a core differentiator. HopIt is the code host built for the AI era:
 first-class scoped agent sessions and tokens, AI-readable APIs, and agents treated
 as collaborators whose work arrives as reviewable change sets rather than as
-opaque commits. Simple built-in CI — "run this command on every change or merge" —
+opaque commits. Simple built-in CI: "run this command on every change or merge" -
 is part of the core promise, not a later add-on.
 
 The eventual product is a full public platform: public project pages, profiles,
@@ -58,7 +58,7 @@ ceremony.
 
 2. **Presence, not surprise ("toe detection").** The hub knows which files each
    change set touches within seconds of any save. When two people's in-progress
-   work overlaps the same file, both see it — on the dashboard, in the menu bar,
+   work overlaps the same file, both see it: on the dashboard, in the menu bar,
    and later as editor hints. This is informational only; nothing blocks. v1 is
    presence-only: no claims, no locks. Hard locks for unmergeable binary assets
    are deferred and revisited only if real teams need them.
@@ -79,16 +79,16 @@ ceremony.
 
 6. **Sandboxes: parallel work is a second folder, never a switch in place.** "New
    sandbox" creates a second folder such as
-   `~/HopIt/myproject (experiment)/` — the same codebase with a separate change
+   `~/HopIt/myproject (experiment)/`: the same codebase with a separate change
    set. Delete it or propose it when done. A sandbox can be flagged as an
    experiment so its edits do not generate presence warnings for teammates.
 
 7. **Vocabulary is PR-familiar but branch-free.** propose → review → merge, with
    reviewers. No branch, fork, rebase, or worktree concepts appear anywhere. For
-   public codebases, outsiders get a **remix** — their own linked copy — and can
+   public codebases, outsiders get a **remix**: their own linked copy: and can
    propose changes back. A project's automatically recorded revision history is
    its **trail**: every save leaves a step on the trail (timestamp, device,
-   changed paths). Users never author history — they leave it by walking, so
+   changed paths). Users never author history: they leave it by walking, so
    there is nothing to write, squash, or amend.
 
 8. **Live-shared change sets** (a Google-Docs-style mode for real-time pairing)
@@ -99,7 +99,7 @@ ceremony.
 Phases are strictly sequenced. Each one gates the next; do not start a phase
 before its predecessor's exit criterion is met.
 
-### Phase 1 — Daily driver (current)
+### Phase 1: Daily driver (current)
 
 HopIt becomes the place where all of the owner's projects live.
 
@@ -107,7 +107,7 @@ Work items:
 
 - Migrate every project in.
 - Eliminate the restart full-rehydration window (~4,491 files / ~15 minutes
-  before push reconnects — see the 2026-07-11 section of
+  before push reconnects: see the 2026-07-11 section of
   [docs/progress.md](progress.md)).
 - Add retry-with-backoff inside `hop hydrate`.
 - Run a real backup/restore drill.
@@ -116,7 +116,7 @@ Work items:
 
 Exit criterion: two weeks without touching GitHub.
 
-### Phase 2 — Sync you can show off
+### Phase 2: Sync you can show off
 
 Deliver WS7b demand hydration and WS7c object-backed diffs/history from the
 remediation plan (designs approved in `docs/ws7b-*` and `docs/ws7c-*`), plus a
@@ -126,7 +126,7 @@ dashboard where "what changed while I was away" is instantly legible.
 too fine-grained to browse one by one, so they are clustered into **episodes** by
 a time-gap-plus-device heuristic: a run of steps from the same device with no long
 pause becomes one episode. A cheap AI model then writes a one-line label per
-episode — the commit message nobody had to write. Episodes, not individual steps,
+episode: the commit message nobody had to write. Episodes, not individual steps,
 become the primary browsing and rollback unit in both the dashboard and the
 desktop app, and nightly backups reference the nearest episode label so a restore
 point reads as a sentence rather than a revision number.
@@ -135,7 +135,7 @@ The summarization is bounded by hard privacy rules:
 
 - **Opt-in per codebase.** No trail is summarized unless its codebase has
   explicitly turned summarization on. Off is the default.
-- **Metadata-only by default.** The default mode sends the model only metadata —
+- **Metadata-only by default.** The default mode sends the model only metadata -
   changed paths, per-step counts, timestamps. File contents never leave the box
   in this mode.
 - **Full-diff summaries are a separate, explicit opt-in.** Feeding actual diff
@@ -148,17 +148,17 @@ The summarization is bounded by hard privacy rules:
 Exit criterion: the invisible-sync demo, plus a legible history/compare view and a
 trail view showing labeled episodes, all working on real projects.
 
-### Phase 3 — Real tenants
+### Phase 3: Real tenants
 
 Stand up true multi-tenant signup at `hopit.dev`: per-user isolation and quotas,
 flat-subscription billing plumbing, and security hardening. Hardening includes
 properly wiring the `hst_` agent-token API path that is currently dead behind the
-Clerk middleware in `src/proxy.ts` — it becomes load-bearing for the AI story.
+Clerk middleware in `src/proxy.ts`: it becomes load-bearing for the AI story.
 
 Exit criterion: a stranger can sign up, pay, and sync, and their data is provably
 isolated.
 
-### Phase 4 — Collaboration + CI + AI collaborators
+### Phase 4: Collaboration + CI + AI collaborators
 
 Ship invitations, presence/toe-detection, propose/review/merge queue, sandboxes,
 the simple CI runner (`packages/actions-runner` is the seed), and agents as scoped
@@ -167,7 +167,7 @@ first-class collaborators.
 Exit criterion: one real team (2–5 people) uses HopIt daily without git knowledge,
 and an AI agent lands a reviewed change.
 
-### Phase 5 — Public platform
+### Phase 5: Public platform
 
 Ship public project pages, profiles, stars, remixes, and search, with free
 browsing.

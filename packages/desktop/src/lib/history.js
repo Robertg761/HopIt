@@ -3,7 +3,7 @@
 // (projectHistory, deriveHistory, history.js) stay as-is on purpose.
 // Derive a per-project revision history from the agent's event journal (the
 // /events endpoint `recent` array). We only surface what the events actually
-// carry — the endpoint returns a bounded recent window, so this is an honest
+// carry: the endpoint returns a bounded recent window, so this is an honest
 // "recent revisions" view, not a complete log. Fields are read from the real
 // event detail shapes:
 //   sync.complete      -> { trigger, path, writes, revision }
@@ -12,7 +12,7 @@
 //   remote-push.applied-> { trigger, fromRevision, toRevision } (no path detail)
 //   remote-pull.applied-> { revision }
 // When an event does not carry a changed-path count we record null so the UI can
-// render "—" rather than fabricate a number.
+// render "Not available" rather than fabricate a number.
 
 const SAMPLE_CAP = 12
 

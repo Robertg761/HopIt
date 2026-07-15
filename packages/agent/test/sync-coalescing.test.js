@@ -72,7 +72,7 @@ async function waitFor(predicate, timeoutMs = 4000) {
 }
 
 // A burst of rapid saves to the SAME path collapses into one journaled sync that
-// carries the final content — one cloud revision instead of one per keystroke.
+// carries the final content: one cloud revision instead of one per keystroke.
 test('same-path save burst coalesces into one cloud revision with the final content', async (t) => {
   const state = await makeState()
   await runCli('init', [...stateArgs(state), '--force'])

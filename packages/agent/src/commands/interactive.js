@@ -17,7 +17,7 @@ import { accent, bold, caution, muted, success, danger, writeLine } from '../out
 
 // ---------------------------------------------------------------------------
 // Pure menu model (unit-tested). `state` is a plain snapshot of device state so
-// which options appear — and how they are labeled — is a pure function of state.
+// Which options appear, and how they are labeled, is a pure function of state.
 // ---------------------------------------------------------------------------
 
 /** @typedef {{ setUp: boolean, codebases: Array<{id:string,name?:string}>, serviceRunning: boolean, envFilePath: string|null }} InteractiveState */
@@ -156,7 +156,7 @@ async function showStatus() {
     const connected = connectionIds.has(entry.id) || entry.id === options['codebase-id']
     const dot = connected ? success('●') : muted('○')
     const hydration = entry.hydration?.state ?? entry.materialization ?? 'unknown'
-    writeLine(`  ${dot} ${bold(entry.id)} ${muted(`— ${entry.name ?? entry.id}`)}`)
+    writeLine(`  ${dot} ${bold(entry.id)} ${muted(`· ${entry.name ?? entry.id}`)}`)
     writeLine(`     ${muted('workspace')} ${entry.workspace?.path ?? 'n/a'}`)
     writeLine(`     ${muted('state')}     ${hydration}`)
   }

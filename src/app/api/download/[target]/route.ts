@@ -31,12 +31,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ targ
   }
 
   try {
-    const response = await fetch(`${RELEASE_BASE_URL}/latest/manifest.json`, {
-      next: { revalidate: 300 },
-    })
-    if (!response.ok) throw new Error(`Release manifest returned ${response.status}.`)
-
-    const manifest = await response.json() as ReleaseManifest
+    const manifest = await releaseManifest()
     const key = downloadKey(manifest, target, wantsDmg ? 'dmg' : 'archive')
     if (!key) {
       throw new Error(wantsDmg
@@ -51,6 +46,28 @@ export async function GET(request: Request, { params }: { params: Promise<{ targ
     return NextResponse.json({
       error: error instanceof Error ? error.message : 'HopIt download is temporarily unavailable.',
     }, { status: 503 })
+  }
+}
+
+export async function HEAD(request: Request, { params }: { params: Promise<{ target: string }> }) {
+  const { target } = await params
+  if (!TARGETS.has(target)) return new NextResponse(null, { status: 404 })
+
+  const format = new URL(request.url).searchParams.get('format')
+  const wantsDmg = target === 'macos' || format === 'dmg'
+  if (wantsDmg && await hasLocalDmg()) {
+    return new NextResponse(null, { status: 204, headers: { 'Cache-Control': 'no-store' } })
+  }
+
+  try {
+    const manifest = await releaseManifest()
+    const key = downloadKey(manifest, target, wantsDmg ? 'dmg' : 'archive')
+    return new NextResponse(null, {
+      status: key ? 204 : 404,
+      headers: { 'Cache-Control': 'public, max-age=300, must-revalidate' },
+    })
+  } catch {
+    return new NextResponse(null, { status: 502, headers: { 'Cache-Control': 'no-store' } })
   }
 }
 
@@ -89,4 +106,21 @@ async function localDmgResponse() {
     if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return null
     throw error
   }
+}
+
+async function hasLocalDmg() {
+  try {
+    return (await fs.stat(LOCAL_DMG_PATH)).isFile()
+  } catch (error) {
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') return false
+    throw error
+  }
+}
+
+async function releaseManifest() {
+  const response = await fetch(`${RELEASE_BASE_URL}/latest/manifest.json`, {
+    next: { revalidate: 300 },
+  })
+  if (!response.ok) throw new Error(`Release manifest returned ${response.status}.`)
+  return await response.json() as ReleaseManifest
 }

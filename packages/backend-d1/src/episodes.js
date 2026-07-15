@@ -1,6 +1,6 @@
 // Trail-episode clustering. Raw trail steps (one per graph revision) are too
 // fine-grained to browse one by one, so a run of steps from the same device
-// with no long pause collapses into a single "episode" — the browse/rollback
+// with no long pause collapses into a single "episode": the browse/rollback
 // unit that a cheap model later labels. This module is PURE: it takes the
 // file-version rows the WS7c history layer already records (path, device,
 // timestamp per revision) and returns deterministic episodes. No I/O, no model.

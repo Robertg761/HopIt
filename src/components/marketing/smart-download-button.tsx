@@ -87,11 +87,12 @@ async function detectDevice(): Promise<DeviceChoice> {
   }
 
   if (/Mac|macOS/i.test(platform)) {
+    const dmgAvailable = await isAvailable('/api/download/macos?format=dmg')
     return {
       state: 'download',
-      label: 'Download for macOS',
-      href: '/api/download/macos?format=dmg',
-      filename: 'HopIt-macOS.dmg',
+      label: dmgAvailable ? 'Download for macOS' : 'Install on macOS',
+      href: dmgAvailable ? '/api/download/macos?format=dmg' : '/install.sh',
+      filename: dmgAvailable ? 'HopIt-macOS.dmg' : 'hopit-install.sh',
     }
   }
 
@@ -110,6 +111,14 @@ async function detectDevice(): Promise<DeviceChoice> {
     state: 'web',
     label: 'this device',
     detail: 'HopIt could not identify a supported local agent for this device.',
+  }
+}
+
+async function isAvailable(href: string) {
+  try {
+    return (await fetch(href, { method: 'HEAD' })).ok
+  } catch {
+    return false
   }
 }
 

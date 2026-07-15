@@ -31,7 +31,7 @@ export function createSummarizerProvider(config = {}) {
 }
 
 // -------------------------------------------------------------------------
-// Deterministic stub — no network, used in every test. Produces a readable
+// Deterministic stub: no network, used in every test. Produces a readable
 // label purely from episode metadata.
 // -------------------------------------------------------------------------
 
@@ -53,7 +53,7 @@ function stubLabel(payload) {
   const files = `${payload.changedPathCount} file${payload.changedPathCount === 1 ? '' : 's'}`
   const steps = `${payload.stepCount} step${payload.stepCount === 1 ? '' : 's'}`
   const scope = area ? `under ${area}` : 'across the workspace'
-  return `Worked ${scope} — ${files}, ${steps}`
+  return `Worked ${scope}: ${files}, ${steps}`
 }
 
 function commonArea(samplePaths) {

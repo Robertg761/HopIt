@@ -74,7 +74,7 @@ test('cross-tenant: user_b scoped session cannot read or mutate user_a codebase 
     'user_b must not write codebase-a',
   )
 
-  // Attack 3: raw transport — hit the Worker directly with user_b's token and a
+  // Attack 3: raw transport: hit the Worker directly with user_b's token and a
   // statement byte-identical to A's own read. The response must be a 403 and
   // must not carry A's secret anywhere in its body.
   const raw = await fetch(`${server.baseUrl}/query`, {

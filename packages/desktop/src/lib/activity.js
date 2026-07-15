@@ -60,7 +60,7 @@ export function describeEvent(eventName, detail = {}) {
     case 'remote-push.disconnected':
       return 'Disconnected from the sync hub'
     case 'remote-push.fallback_polling':
-      return 'Sync hub offline — polling instead'
+      return 'Sync hub offline: polling instead'
     case 'remote-push.applied':
       return `Applied a pushed change${revSuffix}`
     case 'remote-push.failed':

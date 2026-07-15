@@ -663,22 +663,33 @@ before publishing the one mutable channel pointer. A failure can therefore leave
 unreferenced immutable objects, but it cannot advance `latest` to a mixed set.
 Targeted plans publish only their versioned objects and never replace the
 multi-platform `latest` pointer.
-Do not remove the unsigned gate until real signing and macOS notarization are in
-place.
+Unsigned publication remains blocked by default. Until signing and macOS
+notarization are available, an owner-approved public dogfood release requires
+both explicit controls:
+
+```bash
+HOPIT_ACKNOWLEDGE_UNSIGNED_PUBLIC_RELEASE=I_ACCEPT_UNSIGNED_PUBLIC_DISTRIBUTION \
+  npm run release:hop -- --allow-unsigned
+```
+
+The acknowledgement is intentionally verbose so a normal release command
+cannot publish unsigned artifacts by accident. Remove this temporary path when
+signed and notarized packages are available.
 
 `npm run package:hop:dmg` builds a local unsigned
 `artifacts/HopIt-macOS.dmg` containing both Mac runtimes. Its
 `Install HopIt.command` chooses Apple silicon or Intel on the Mac itself,
 installs into the current user account, and starts `hop setup`. Future release
-manifests and upload plans include the DMG, but the existing unsigned
-publication gate still prevents upload until signing and notarization are
-intentionally enabled.
+manifests and upload plans include the DMG. Public upload remains blocked unless
+the guarded owner-approved unsigned path above is used, or signing and
+notarization are implemented.
 
 This section describes the checked-in publication contract. No release was
 uploaded while adding these gates, and the live bucket should be inspected for
 a schema-v2 manifest before treating it as migrated. Do not publish merely to
-exercise the flow; use the local tests and `--dry-run` until signing/notarization
-is implemented. Local dogfood builds use `package:hop` instead.
+exercise the flow. Use the local tests and `--dry-run` unless a public dogfood
+release has been deliberately approved. Local dogfood builds use `package:hop`
+instead.
 
 - Bucket: `hopit-releases` (public, wrangler-authed on the release machine).
 - Public base URL: `https://pub-3d89002dcb6c4d71b6d1188f39cc7731.r2.dev`.

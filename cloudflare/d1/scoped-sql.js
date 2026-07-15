@@ -37,7 +37,7 @@ export function assertScopedSessionStatementAllowed(session, statement) {
 // lets a statement touch ONLY codebases that user owns or is an active member of
 // (a user listing THEIR OWN codebases is allowed; a statement touching a codebase
 // the user neither owns nor belongs to fails closed). This function is the static
-// half of the check — it validates statement shape and reports which codebase ids
+// half of the check: it validates statement shape and reports which codebase ids
 // the Worker must then confirm the actor is entitled to (dynamic half lives in
 // api-worker.js). Deny-by-default: anything it cannot classify as codebase-anchored
 // or actor-user-anchored is rejected.
@@ -359,8 +359,8 @@ function isOwnAgentSessionRead(sql, params, session) {
 }
 
 // Per-codebase settings (trail-summaries opt-in, metadata/diff mode) are
-// codebase-level configuration — a privacy-posture change, not routine work
-// data — so mutations require admin, matching how non-guarded codebases-row
+// codebase-level configuration: a privacy-posture change, not routine work
+// data: so mutations require admin, matching how non-guarded codebases-row
 // mutations are treated. Reads stay at read capability so agents can honor the
 // opt-in. Episode rows in trail_episodes remain ordinary write-capability data.
 function settingsMutationRequiresAdmin(operation, table) {

@@ -1,11 +1,11 @@
 // Adversarial cross-tenant isolation for two surfaces that the end-to-end
 // worker/visibility suites do not reach:
 //
-//   Surface 4 — Blob storage key derivation (packages/agent/src/blob-stores).
+//   Surface 4: Blob storage key derivation (packages/agent/src/blob-stores).
 //     Prove that one tenant's managed blob keys are codebase-namespaced and can
 //     neither be computed as, mistaken for, nor deleted as another tenant's.
 //
-//   Surface 3 — Agent-session capability boundary (packages/backend-d1).
+//   Surface 3: Agent-session capability boundary (packages/backend-d1).
 //     Prove that an hst_ session scoped to codebase A cannot drive the
 //     administrative session/key surfaces of codebase B: it can neither revoke
 //     B's sessions, enumerate them, pass its access checks, nor read B's keys.

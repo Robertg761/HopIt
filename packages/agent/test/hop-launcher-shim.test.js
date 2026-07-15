@@ -22,7 +22,7 @@ function resolveTemplate(name) {
   assert.ok(start > 0 && end > start, `expected a template literal for ${name}`)
   const raw = packagerSource.slice(start, end)
   // The templates contain only escape sequences (no ${} interpolation reaches
-  // JS — literal ${...} is written as \${...}), so this is a pure string.
+  // JS: literal ${...} is written as \${...}), so this is a pure string.
   return Function('return `' + raw + '`')()
 }
 

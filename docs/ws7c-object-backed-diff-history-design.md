@@ -231,7 +231,7 @@ confirms owner-visible `.private/` reconstruction.
 ### Tests
 
 Fixture-backed coverage lives in `packages/agent/test/d1-backend.test.js`
-("D1 backend records file versions and compares retained revisions" — owner vs
+("D1 backend records file versions and compares retained revisions": owner vs
 collaborator visibility, `missing_blob`, integrity rejection) and
 `packages/agent/test/agent-cli.test.js` ("demo creates object-backed revision
 chain and compare reads README blobs lazily", "compare reports binary metadata

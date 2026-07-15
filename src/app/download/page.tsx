@@ -22,10 +22,10 @@ export const metadata: Metadata = {
 const installCommand = 'curl -fsSL https://hopit.dev/install | sh'
 
 const platforms = [
-  { name: 'Apple silicon', target: 'macOS · M1 or newer', architecture: 'darwin-arm64', available: true },
-  { name: 'Intel Mac', target: 'macOS · Intel processor', architecture: 'darwin-x64', available: true },
-  { name: 'Linux x64', target: 'Most Intel and AMD PCs', architecture: 'linux-x64', available: true },
-  { name: 'Linux ARM', target: 'ARM64 workstations and servers', architecture: 'linux-arm64', available: true },
+  { name: 'Apple silicon', target: 'macOS · M1 or newer', architecture: 'darwin-arm64' },
+  { name: 'Intel Mac', target: 'macOS · Intel processor', architecture: 'darwin-x64' },
+  { name: 'Linux x64', target: 'Most Intel and AMD PCs', architecture: 'linux-x64' },
+  { name: 'Linux ARM', target: 'ARM64 workstations and servers', architecture: 'linux-arm64' },
 ] as const
 
 export default function DownloadPage() {
@@ -76,10 +76,7 @@ export default function DownloadPage() {
           <div className="grid gap-px overflow-hidden rounded-2xl border border-border bg-border sm:grid-cols-2">
             {platforms.map((platform) => (
               <article key={platform.architecture} className="bg-card p-5 sm:p-6">
-                <div className="flex items-start justify-between gap-4">
-                  <span className="grid size-10 place-items-center rounded-lg border border-border bg-muted/55"><Laptop className="size-5 text-hop" /></span>
-                  <span className="text-xs font-medium text-hop">Available</span>
-                </div>
+                <span className="grid size-10 place-items-center rounded-lg border border-border bg-muted/55"><Laptop className="size-5 text-hop" /></span>
                 <h3 className="mt-6 font-semibold">{platform.name}</h3>
                 <p className="mt-1 text-sm text-muted-foreground">{platform.target}</p>
                 <p className="mt-4 font-mono text-[11px] text-muted-foreground">{platform.architecture}</p>
@@ -91,9 +88,9 @@ export default function DownloadPage() {
 
       <section className="border-y border-border bg-muted/35">
         <div className="mx-auto grid w-full max-w-[1180px] gap-px px-4 py-16 sm:px-6 lg:grid-cols-3 lg:px-8 lg:py-20">
-          <SetupStep number="01" icon={Terminal} title="Install" detail="Open the disk image and double-click Install HopIt. Node and npm are not required." />
-          <SetupStep number="02" icon={LockKeyhole} title="Approve" detail="Sign in when your browser opens and grant this device a scoped session." />
-          <SetupStep number="03" icon={Cloud} title="Attach" detail="Choose your cloud project and local workspace folder. Sync starts in the background." />
+          <SetupStep icon={Terminal} title="Install" detail="Open the disk image and double-click Install HopIt. Node and npm are not required." />
+          <SetupStep icon={LockKeyhole} title="Approve" detail="Sign in when your browser opens and grant this device a scoped session." />
+          <SetupStep icon={Cloud} title="Attach" detail="Choose your cloud project and local workspace folder. Sync starts in the background." />
         </div>
       </section>
 
@@ -118,13 +115,10 @@ export default function DownloadPage() {
   )
 }
 
-function SetupStep({ number, icon: Icon, title, detail }: { number: string; icon: typeof Terminal; title: string; detail: string }) {
+function SetupStep({ icon: Icon, title, detail }: { icon: typeof Terminal; title: string; detail: string }) {
   return (
     <article className="relative border-border px-1 py-6 lg:border-r lg:px-8 lg:py-2 last:lg:border-r-0">
-      <div className="flex items-center justify-between">
-        <span className="grid size-10 place-items-center rounded-lg border border-border bg-background"><Icon className="size-5 text-hop" /></span>
-        <span className="font-mono text-xs text-muted-foreground">{number}</span>
-      </div>
+      <span className="grid size-10 place-items-center rounded-lg border border-border bg-background"><Icon className="size-5 text-hop" /></span>
       <h3 className="mt-8 text-lg font-semibold">{title}</h3>
       <p className="mt-2 text-sm leading-6 text-muted-foreground">{detail}</p>
     </article>

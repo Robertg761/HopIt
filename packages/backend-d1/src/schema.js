@@ -506,7 +506,7 @@ export const d1SchemaStatements = [
     primary key (codebase_id, episode_id)
   )`,
   `create index if not exists idx_trail_episodes_codebase_from on trail_episodes(codebase_id, from_revision)`,
-  // Phase 3 Stage 2-3 (HOPIT_MULTITENANT) — per-tenant usage meter + plan. One
+  // Phase 3 Stage 2-3 (HOPIT_MULTITENANT): per-tenant usage meter + plan. One
   // indexed row per tenant (tenant == user in v1; tenant_id == owner_id). Holds a
   // maintained storage-bytes tally and a rolling daily D1-rows-written counter
   // (reset when write_day rolls to a new UTC day), plus the tenant's plan so a

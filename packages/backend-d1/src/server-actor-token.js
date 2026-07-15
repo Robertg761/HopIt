@@ -4,7 +4,7 @@ import { createHmac } from 'node:crypto'
 // HOPIT_MULTITENANT is on, replacing the omnipotent proxy token on the tenant
 // request path. The token carries the authenticated Clerk user id and an HMAC
 // (keyed by the shared HOPIT_D1_SERVER_ACTOR_SECRET) so the Worker can re-derive
-// a trusted user id and enforce per-codebase entitlement — see
+// a trusted user id and enforce per-codebase entitlement: see
 // cloudflare/d1/api-worker.js verifyServerActorToken. Format:
 //   hsa_<base64url(payloadJson)>.<base64url(hmac-sha256(secret, payloadPart))>
 export const serverActorTokenPrefix = 'hsa_'

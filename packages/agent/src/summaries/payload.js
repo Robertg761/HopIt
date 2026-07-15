@@ -1,5 +1,5 @@
 // The prompt/response CONTRACT lives here, not in the vendor adapters, so
-// switching models is a config change rather than a code change — and, crucially,
+// switching models is a config change rather than a code change. Crucially,
 // the metadata-vs-diff privacy boundary is enforced at this single point.
 //
 // Metadata mode sends ONLY paths / counts / timestamps / device. There is no
@@ -33,7 +33,7 @@ export function buildEpisodePayload(episode, { mode = 'metadata', diffText = nul
 
 // A terse instruction: one short line, trail vocabulary, no git/commit metaphors.
 const SYSTEM_PROMPT = [
-  'You label one episode from a project\'s trail — a run of edits from one device.',
+  'You label one episode from a project\'s trail: a run of edits from one device.',
   'Write ONE terse line (at most 25 tokens) describing what the work touched.',
   'Use plain trail vocabulary. Do NOT use commit/PR/branch metaphors or the words',
   '"commit", "commit message", "changelog". No trailing punctuation. Output only the label.',

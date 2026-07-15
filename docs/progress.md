@@ -112,7 +112,7 @@ Current verified result:
 
 ## 2026-07-12 WS7c Closed: Trail Diffs In The Desktop App And Dashboard, Plus A Reliability Sweep
 
-WS7c is now closed end to end: the object-backed compare engine was verified as already built and passing, and both the desktop app and the dashboard grew real trail-step diffs on top of it — the compare/history surfaces are no longer dashboard-pending. A reliability sweep landed alongside: merged CI, human-readable sync copy, an events-journal rotation, connection-fault resilience, and scheduled nightly backups. All work is live — commits pushed, dashboard deployed to `hopit.dev`, desktop app relaunched.
+WS7c is now closed end to end: the object-backed compare engine was verified as already built and passing, and both the desktop app and the dashboard grew real trail-step diffs on top of it: the compare/history surfaces are no longer dashboard-pending. A reliability sweep landed alongside: merged CI, human-readable sync copy, an events-journal rotation, connection-fault resilience, and scheduled nightly backups. All work is live: commits pushed, dashboard deployed to `hopit.dev`, desktop app relaunched.
 
 Reliability sweep (`25247aa`, `04d6ae7`, `ccbc883`, `d4823df`):
 
@@ -129,17 +129,17 @@ WS7c engine verification (`d681765`):
 
 Desktop Trail consumer (`c4603dc`):
 
-- Trail steps remain event-derived (real revisions/timestamps/triggers — no revision-list surface exists in the engine), but expanding a step now runs a real metadata-only directory compare for the step's revision span (`fromRevision` → `revision` when present), filtered of unchanged files.
+- Trail steps remain event-derived (real revisions/timestamps/triggers: no revision-list surface exists in the engine), but expanding a step now runs a real metadata-only directory compare for the step's revision span (`fromRevision` → `revision` when present), filtered of unchanged files.
 - Each file row opens a real unified line diff via `hop compare --path`; failure states read in plain language; a fetch-once-per-pair session cache avoids re-fetching; revision args are validated as safe integers before spawn.
 - Desktop suite grew 90 → 112.
 
 Dashboard compare consumer (`7c7f787`):
 
-- `/api/codebases/compare` exposes three modes: revision enumeration (distinct `file_versions` revisions after a fail-closed authorization probe — revision numbers only), metadata-only directory compare, and single-file line diff.
+- `/api/codebases/compare` exposes three modes: revision enumeration (distinct `file_versions` revisions after a fail-closed authorization probe: revision numbers only), metadata-only directory compare, and single-file line diff.
 - The compare page has step pickers with swap, summary chips, a per-file change list, expandable unified diffs, and client caches (directory per revision-pair, file per pair+path) so nothing re-fetches. Trail vocabulary is used throughout, and the status-snapshot shell (`compare-view.tsx`) is deleted.
 - Web suite grew 20 → 47 (a new `vitest.config.ts` supplies the `@/` alias). Deployed to `hopit.dev`.
 
-Suite totals after all of the above: agent 262, worker 23, web 47, desktop 112 — all green locally and in CI.
+Suite totals after all of the above: agent 262, worker 23, web 47, desktop 112: all green locally and in CI.
 
 Honest ops note: an intermediate commit (`c4603dc`) accidentally swept a staged deletion from concurrent in-progress work, briefly breaking HEAD's web build; it was healed by `f201e8e` (restore) and the deletion re-landed properly in `7c7f787`. Process lesson recorded: stage explicitly when multiple work streams share a tree.
 
@@ -153,13 +153,13 @@ A one-command `hop add` onboarding path landed, a live wrong-codebase incident d
 - Option resolution transparently uses the stored connection entries for non-primary codebases, so later commands against an added codebase reuse its scoped token without re-approval.
 - The additive D1 columns `requested_codebase_id`/`requested_codebase_name` were migrated on production with `wrangler` to carry the requested project through device authorization.
 
-Wrong-codebase incident during the first live `hop add` (LunarLog) — local-only damage, zero cloud data loss:
+Wrong-codebase incident during the first live `hop add` (LunarLog): local-only damage, zero cloud data loss:
 
 - The browser approval returned the EXISTING primary codebase `hopit` instead of creating the requested `lunarlog` (the page made approving an existing project too easy), and `runAdd` proceeded with the approved id. It mirrored LunarLog into the primary `hopit` managed workspace (the mirror step took its designed pre-wipe backup) and journaled roughly 14,879 pending deletes/creates against `cs_hopit_local`.
 - The process was killed before any journal entry was acknowledged to cloud, so cloud and R2 were never touched. Damage was local only.
 - Recovery: the poisoned journal and the bad connection entry were quarantined, the contaminated workspace was removed and re-hydrated from the intact cloud (revision 4437, 4,491 files, scan-clean afterward, all `hop doctor` checks pass), and the mis-issued session was revoked directly in D1 because `hop session revoke` itself was broken (fixed below). Zero data loss.
 
-Hardening so the same misroute fails closed (`cfd5d57`; all deployed — runtime reinstalled, worker redeployed, dashboard deployed to hopit.dev):
+Hardening so the same misroute fails closed (`cfd5d57`; all deployed: runtime reinstalled, worker redeployed, dashboard deployed to hopit.dev):
 
 - `hop add` hard-fails before ANY side effect when the approved codebase differs from the requested one, with a louder variant when the approval matches the device's primary codebase; there is no override flag.
 - `importLocalProject` and `mirrorLocalProject` each independently fail closed before wiping a workspace directory that the index says belongs to a different codebase.
@@ -195,7 +195,7 @@ The 2026-07-10 self-heal/guard commits were repackaged into the deployed runtime
 Runtime reinstall:
 
 - `npm run package:hop` rebuilt the runtime and the bundled `support/install-macos-launch-agent.sh` installed it to `~/Library/Application Support/HopIt/Runtime/hop-darwin-arm64` with `HOPIT_LAUNCHD_LABEL=com.hopit.agent.hopit`; the previous runtime was backed up alongside as `hop-darwin-arm64.pre-guards-20260710233509.bak`. The deployed agent now carries the self-heal/guard commits (`0492579`, `2955f8e`, `6a1f7a7`) and the per-codebase port fix (`c916def`).
-- With launchd owning the process, `hop service status --profile production` reports `running: true` with `source: "health-probe"` (pid null) — launchd-owned detection works.
+- With launchd owning the process, `hop service status --profile production` reports `running: true` with `source: "health-probe"` (pid null): launchd-owned detection works.
 - `hop doctor --profile production` passes all checks: cloud, workspace, hydration, journal, remote-cursor, requester-identity, service. Negative test: unsetting `HOPIT_REQUESTER_ID` flips the requester-identity check to a failure warning that visibility-filtered reads would run as guest and see zero files.
 
 Live `push-applied` proof (closes the last open cross-device handoff item):
@@ -213,7 +213,7 @@ Per-codebase service ports (`c916def`):
 Follow-up issues found during verification (recorded, not fixed):
 
 - Every service restart re-runs a full hydration pass over all 4,491 workspace files (~15 minutes at ~5 files/sec) before the remote-push client starts, so a restarted device has no push connection during that window.
-- The Clerk middleware in `src/proxy.ts` blocks the agent-session-token (`hst_`) auth path supported by `src/lib/request-cloud-actor.ts` for all `/api` routes — verified live against `https://hopit.dev/api/codebase-files` (307 → `/sign-in`) — so that API auth path is currently dead code.
+- The Clerk middleware in `src/proxy.ts` blocks the agent-session-token (`hst_`) auth path supported by `src/lib/request-cloud-actor.ts` for all `/api` routes: verified live against `https://hopit.dev/api/codebase-files` (307 → `/sign-in`): so that API auth path is currently dead code.
 - `hop hydrate` of a fresh large workspace failed once mid-run with a dropped TLS socket (`UND_ERR_SOCKET`, "other side closed") and needed a retry to complete; hydrate is resumable, but the failure is worth a retry-with-backoff inside the command.
 
 ## 2026-07-10 Product-Goal Hardening Proof Ledger
@@ -258,7 +258,7 @@ Still external or deliberately incomplete:
 
 The push-blocking "workspace drift" was diagnosed against live production and closed with three fixes plus two data/config repairs.
 
-Diagnosis: a manual `hop sync` on 2026-07-09 committed 24 files to D1 (revision 4412 → 4436, all journal entries acknowledged), but the workspace content manifest is only rebuilt on materialize/refresh/hydrate, and the service restart preserved the pre-sync manifest. The local-changes scan diffs disk against the manifest, so it reported 24 phantom "added" files, which marked the workspace dirty and blocked refresh — the only operation that rebuilds the manifest. Every push apply skipped with `workspace_has_unjournaled_changes` while cloud, journal, and disk were fully consistent.
+Diagnosis: a manual `hop sync` on 2026-07-09 committed 24 files to D1 (revision 4412 → 4436, all journal entries acknowledged), but the workspace content manifest is only rebuilt on materialize/refresh/hydrate, and the service restart preserved the pre-sync manifest. The local-changes scan diffs disk against the manifest, so it reported 24 phantom "added" files, which marked the workspace dirty and blocked refresh: the only operation that rebuilds the manifest. Every push apply skipped with `workspace_has_unjournaled_changes` while cloud, journal, and disk were fully consistent.
 
 Implemented:
 
@@ -356,7 +356,7 @@ Current result:
 
 ## 2026-07-08 WS7c Object-Backed Diff History Log
 
-WS7c from [HopIt Remediation Plan — July 2026](remediation-plan-2026-07.md) implements the owner-approved Option 2 model from [WS7c Object-Backed Diff And History Reconstruction Design](ws7c-object-backed-diff-history-design.md): per-file version rows, snapshot reconstruction by latest version at or before a graph revision, and full content-addressed blobs rather than delta chains.
+WS7c from [HopIt Remediation Plan: July 2026](remediation-plan-2026-07.md) implements the owner-approved Option 2 model from [WS7c Object-Backed Diff And History Reconstruction Design](ws7c-object-backed-diff-history-design.md): per-file version rows, snapshot reconstruction by latest version at or before a graph revision, and full content-addressed blobs rather than delta chains.
 
 Implemented:
 
@@ -402,7 +402,7 @@ Known follow-up:
 
 ## 2026-07-03 WS6 Frontend Hardening Log
 
-WS6 from [HopIt Remediation Plan — July 2026](remediation-plan-2026-07.md) hardens frontend failure handling, centralizes client API envelope parsing, fixes the command-refresh race, and adds web-focused normalization tests.
+WS6 from [HopIt Remediation Plan: July 2026](remediation-plan-2026-07.md) hardens frontend failure handling, centralizes client API envelope parsing, fixes the command-refresh race, and adds web-focused normalization tests.
 
 Implemented:
 
@@ -426,7 +426,7 @@ Proof commands:
 
 ## 2026-07-03 WS5 Auth Hardening Log
 
-WS5 from [HopIt Remediation Plan — July 2026](remediation-plan-2026-07.md) hardens the Cloudflare D1 Worker proxy-token path and makes emergency Basic Auth fallback noisy and explicitly acknowledged in production.
+WS5 from [HopIt Remediation Plan: July 2026](remediation-plan-2026-07.md) hardens the Cloudflare D1 Worker proxy-token path and makes emergency Basic Auth fallback noisy and explicitly acknowledged in production.
 
 Implemented:
 
@@ -451,7 +451,7 @@ Proof commands:
 
 ## 2026-07-03 WS4 Agent CLI Split Log
 
-WS4 from [HopIt Remediation Plan — July 2026](remediation-plan-2026-07.md) splits the monolithic agent CLI into focused modules while keeping `packages/agent/src/cli.js` as the package/bin entrypoint.
+WS4 from [HopIt Remediation Plan: July 2026](remediation-plan-2026-07.md) splits the monolithic agent CLI into focused modules while keeping `packages/agent/src/cli.js` as the package/bin entrypoint.
 
 Implemented:
 
@@ -477,7 +477,7 @@ Proof commands:
 
 ## 2026-07-03 WS3 D1 Backend Split Log
 
-WS3 from [HopIt Remediation Plan — July 2026](remediation-plan-2026-07.md) splits the monolithic `@hopit/backend-d1` implementation into focused modules without changing the package root public API.
+WS3 from [HopIt Remediation Plan: July 2026](remediation-plan-2026-07.md) splits the monolithic `@hopit/backend-d1` implementation into focused modules without changing the package root public API.
 
 Implemented:
 
@@ -500,7 +500,7 @@ Proof commands:
 
 ## 2026-07-03 WS2 Workspaces and Core Package Log
 
-WS2 from [HopIt Remediation Plan — July 2026](remediation-plan-2026-07.md) converts the repo into npm workspaces and extracts shared contracts into package boundaries.
+WS2 from [HopIt Remediation Plan: July 2026](remediation-plan-2026-07.md) converts the repo into npm workspaces and extracts shared contracts into package boundaries.
 
 Implemented:
 
@@ -525,7 +525,7 @@ Proof commands:
 
 ## 2026-07-03 WS1 Legacy Backend Removal Log
 
-WS1 from [HopIt Remediation Plan — July 2026](remediation-plan-2026-07.md) removes the retired hosted backend implementation while keeping the historical export migration script.
+WS1 from [HopIt Remediation Plan: July 2026](remediation-plan-2026-07.md) removes the retired hosted backend implementation while keeping the historical export migration script.
 
 Implemented:
 
@@ -618,7 +618,7 @@ Still open:
 | Git compatibility | In progress | Safe export/publish now creates clean Git repos while omitting `.private/` from publish, but ancestry preservation and remote publishing are still not started. |
 | Real accounts/auth | In progress | The repo now has Clerk sign-in routes, middleware, `/api/me`, provider-token forwarding, owner email config, and D1-backed account sync. The production Clerk instance, DNS, SSL, Vercel live env, `HOPIT_AUTH_PROVIDER=clerk`, production Google OAuth, owner sign-in, and D1 owner claim are active for `hopit.dev`; Basic Auth fallback is no longer needed for production owner access. |
 | Permissions and invitations | In progress | Durable memberships, invitation tables, requester-aware dashboard filtering, owner claim, member management, invite create/accept/revoke UI, and scoped agent-session token groundwork are in place; complete permission coverage remains. |
-| Code browsing/reviews/issues/releases | In progress | The dashboard now has a read-only code-review browser slice, review-linked follow-up issue comments, D1-backed issue/discussion/release/project-board UI, durable issue/discussion comments, project card movement, and object-backed compare/history wired through to real UI. As of 2026-07-12 the compare page renders live trail-step directory compares and unified per-file diffs from the WS7c engine (via `/api/codebases/compare`), and the desktop app's Trail expands the same real diffs — so diff UI is no longer pending. Snapshot-anchored inline review comments, richer routeable history, and immutable release publishing remain. |
+| Code browsing/reviews/issues/releases | In progress | The dashboard now has a read-only code-review browser slice, review-linked follow-up issue comments, D1-backed issue/discussion/release/project-board UI, durable issue/discussion comments, project card movement, and object-backed compare/history wired through to real UI. As of 2026-07-12 the compare page renders live trail-step directory compares and unified per-file diffs from the WS7c engine (via `/api/codebases/compare`), and the desktop app's Trail expands the same real diffs: so diff UI is no longer pending. Snapshot-anchored inline review comments, richer routeable history, and immutable release publishing remain. |
 | Native mount/FUSE/RAM-only cache | Later | Explicitly not the first v1 implementation path. Revisit only after the managed-folder Workspace Root proves core value. |
 
 ## Milestone Tracker
@@ -1441,7 +1441,7 @@ node --test --test-name-pattern "adversarial|crash-left|skewed|racing refresh|st
 
 WS7c implementation remains intentionally gated on owner approval of the design doc. WS7a Stage 2 was local-only at this gate; it has since been deployed to personal production, with a successful clean-workspace live apply still awaiting proof.
 
-### 2026-07-08 WS7a Stage 1 — Agent Push Delivery
+### 2026-07-08 WS7a Stage 1: Agent Push Delivery
 
 Implemented:
 
@@ -1464,7 +1464,7 @@ Deferred to Stage 2:
 - D1 mutation route notification after commit.
 - Production push rollout/default policy beyond the opt-in agent flag.
 
-### 2026-07-08 WS7a Stage 2 — Cloudflare Push Hub And WebSocket Transport
+### 2026-07-08 WS7a Stage 2: Cloudflare Push Hub And WebSocket Transport
 
 Implemented:
 
@@ -1492,7 +1492,7 @@ Follow-up:
 - Owner-side Cloudflare deployment is now complete. The installed service reports push enabled, but a successful clean-workspace live same-owner apply remains to be verified.
 - Default enabling policy remains opt-in through `--remote-push` / `HOPIT_REMOTE_PUSH=1`.
 
-### 2026-07-08 WS7b — Open-Time And Intent-Driven Demand Hydration
+### 2026-07-08 WS7b: Open-Time And Intent-Driven Demand Hydration
 
 Implemented:
 
@@ -1518,7 +1518,7 @@ Deferred:
 - True read-triggered hydration remains deferred until HopIt chooses a native filesystem provider such as macOS File Provider, FSKit, or FUSE. The v1 managed-folder adapter does not create source-code placeholder files and cannot intercept arbitrary OS reads.
 - Editor-specific signals, production dogfood of the opt-in pruning policy, and production rollout of open-time hydration remain follow-up work.
 
-### 2026-07-13 Phase 3 — isolated staging rehearsal
+### 2026-07-13 Phase 3: isolated staging rehearsal
 
 Completed against isolated infrastructure with `HOPIT_MULTITENANT=1`,
 `HOPIT_ENFORCE_QUOTA=1`, and `HOPIT_BILLING=1`:
@@ -1568,7 +1568,7 @@ and repeat the checklist against the intended go-live environment. Monitor the
 20,000-row paid allowance during the first 30–60 days of real usage as already
 decided.
 
-### 2026-07-13 Phase 3 — production launch preparation
+### 2026-07-13 Phase 3: production launch preparation
 
 - Added an unauthenticated HopIt homepage plus public privacy and terms pages at
   `/`, `/privacy`, and `/terms`. The signed-in dashboard moved to `/overview`,
@@ -1602,7 +1602,7 @@ no-charge rehearsal below. The only intentionally unexecuted billing proof is a
 real paid subscription; the rehearsal stopped at live Checkout before card entry
 or charge.
 
-### 2026-07-14 Phase 3 — production launch and no-charge rehearsal
+### 2026-07-14 Phase 3: production launch and no-charge rehearsal
 
 - Deployed production Vercel release `dpl_3sA6MnsvWgPBa42SKAt7X4t9Uuba`, now
   aliased to `https://hopit.dev`. `/`, `/privacy`, and `/terms` return `200`,

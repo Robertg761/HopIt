@@ -62,7 +62,7 @@ test('quota: codebase-count gate rejects the 2nd free codebase and the paid plan
   const second = await backend.createCodebase({ name: 'beta', actor })
   assert.ok(second)
 
-  // A different tenant is unaffected by user_a's usage — its own first codebase
+  // A different tenant is unaffected by user_a's usage: its own first codebase
   // is still free.
   const otherActor = { userId: 'user_b', primaryEmail: 'b@example.com' }
   assert.ok(await backend.createCodebase({ name: 'gamma', actor: otherActor }))

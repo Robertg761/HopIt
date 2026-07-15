@@ -175,7 +175,7 @@ test('hop trail summarize --dry-run prints the exact metadata payload and sends 
   const payload = result.payloads[0].payload
   assert.equal(payload.mode, 'metadata')
   assert.equal('diff' in payload, false)
-  // No file contents in metadata mode — the payload never references file bodies.
+  // No file contents in metadata mode: the payload never references file bodies.
   assert.equal(JSON.stringify(payload).includes('export const'), false)
 
   // Nothing was labeled or persisted.

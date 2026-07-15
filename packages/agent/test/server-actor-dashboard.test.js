@@ -33,7 +33,7 @@ test('mintServerActorToken round-trips through the Worker and gates by flag/secr
 test('server-actor dashboard: user_a reads only its own codebase; codebase-b fails closed at the Worker', async (t) => {
   const server = await startD1ApiServer(t)
 
-  // Seed two tenants with the proxy (admin) path — the residual proxy use.
+  // Seed two tenants with the proxy (admin) path: the residual proxy use.
   const backendA = proxyBackend(server.baseUrl, 'codebase-a')
   const backendB = proxyBackend(server.baseUrl, 'codebase-b')
   await backendA.initialize(graphFor('codebase-a', 'user_a', { 'README.md': fileEntry('alpha') }))
@@ -54,7 +54,7 @@ test('server-actor dashboard: user_a reads only its own codebase; codebase-b fai
   assert.equal(ownGraph.codebase.id, 'codebase-a')
   assert.ok(ownGraph.files['README.md'])
 
-  // Reading user_b's codebase is refused at the Worker — the server-actor is not
+  // Reading user_b's codebase is refused at the Worker: the server-actor is not
   // entitled to codebase-b, so no row of B leaks.
   await assert.rejects(
     () => dashboardA.readGraph('codebase-b'),
