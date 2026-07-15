@@ -14,6 +14,7 @@ export function PublicShell({ children }: { children: React.ReactNode }) {
           <nav aria-label="Public" className="ml-auto hidden items-center gap-1 sm:flex">
             <Link className="rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground" href="/#how-it-works">How it works</Link>
             <Link className="rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground" href="/#pricing">Pricing</Link>
+            <Link className="rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground" href="/download">Download</Link>
             <Link className="rounded-md px-3 py-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground" href="/privacy">Privacy</Link>
           </nav>
           <Button asChild variant="ghost" className="ml-auto sm:ml-0">
@@ -32,6 +33,7 @@ export function PublicShell({ children }: { children: React.ReactNode }) {
           <HopItLogo size={20} />
           <p>Cloud workspaces with local control.</p>
           <nav aria-label="Legal" className="flex flex-wrap gap-x-5 gap-y-2 sm:ml-auto">
+            <Link className="hover:text-foreground" href="/download">Download</Link>
             <Link className="hover:text-foreground" href="/privacy">Privacy</Link>
             <Link className="hover:text-foreground" href="/terms">Terms</Link>
             <a className="hover:text-foreground" href="mailto:support@hopit.dev">Support</a>

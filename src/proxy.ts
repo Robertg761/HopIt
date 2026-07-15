@@ -15,6 +15,7 @@ const AUTH_HEADER = 'WWW-Authenticate'
 const REALM = 'Basic realm="HopIt"'
 const isPublicRoute = createRouteMatcher([
   '/',
+  '/download',
   '/privacy',
   '/terms',
   '/sign-in(.*)',

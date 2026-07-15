@@ -159,7 +159,7 @@ describe('proxy() unchanged pass-throughs (Clerk mode)', () => {
     expect(isPassThrough(response)).toBe(true)
   })
 
-  it.each(['/', '/privacy', '/terms'])('keeps the public launch route %s open', (path) => {
+  it.each(['/', '/download', '/privacy', '/terms'])('keeps the public launch route %s open', (path) => {
     const response = run(path)
     expect(isPassThrough(response)).toBe(true)
     expect(isClerkRedirect(response)).toBe(false)

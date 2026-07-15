@@ -49,7 +49,7 @@ export default function MarketingPage() {
                 <Link href="/sign-up">Create a free workspace <ArrowRight /></Link>
               </Button>
               <Button asChild size="lg" variant="outline" className="h-11 px-5">
-                <Link href="/sign-in">Sign in</Link>
+                <Link href="/download"><Download /> Download HopIt</Link>
               </Button>
             </div>
             <p className="mt-4 text-xs text-muted-foreground">No card required · 2 GB free · hard caps, never surprise overages</p>
