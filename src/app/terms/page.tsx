@@ -2,15 +2,18 @@ import type { Metadata } from 'next'
 
 import { LegalPage } from '@/components/marketing/legal-page'
 import { PublicShell } from '@/components/marketing/public-shell'
+import { publicSessionSignedIn } from '@/lib/public-session'
 
 export const metadata: Metadata = {
   title: 'Terms of Service | HopIt',
   description: 'The terms governing HopIt accounts, synchronized workspaces, subscriptions, acceptable use, and exports.',
 }
 
-export default function TermsPage() {
+export default async function TermsPage() {
+  const signedIn = await publicSessionSignedIn()
+
   return (
-    <PublicShell>
+    <PublicShell signedIn={signedIn}>
       <LegalPage
         title="Terms of Service"
         summary="These terms describe the agreement between you and HopIt when you create an account, synchronize code, or purchase a subscription."

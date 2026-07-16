@@ -14,6 +14,15 @@ test('production config check fails when basic auth fallback lacks explicit risk
   assert.ok(body.warnings.some((warning) => warning.includes('HOPIT_ALLOW_BASIC_AUTH_FALLBACK=1 is enabled')))
 })
 
+test('production config check requires the canonical public app URL', () => {
+  const result = runCheck({ NEXT_PUBLIC_APP_URL: '' })
+
+  assert.notEqual(result.status, 0)
+  const body = JSON.parse(result.stdout)
+  assert.equal(body.ok, false)
+  assert.ok(body.failures.some((failure) => failure.includes('NEXT_PUBLIC_APP_URL')))
+})
+
 test('production config check accepts acknowledged temporary basic auth fallback', () => {
   const result = runCheck({
     HOPIT_ALLOW_BASIC_AUTH_FALLBACK: '1',
@@ -32,6 +41,7 @@ function runCheck(overrides) {
     HOME: process.env.HOME,
     VERCEL_ENV: 'production',
     HOPIT_CODEBASE_ID: 'hopit',
+    NEXT_PUBLIC_APP_URL: 'https://hopit.dev',
     HOPIT_AUTH_PROVIDER: 'clerk',
     HOPIT_CLOUD_BACKEND: 'd1',
     HOPIT_D1_ACCOUNT_ID: 'account-id',

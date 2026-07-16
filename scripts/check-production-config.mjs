@@ -9,6 +9,8 @@ const authProvider = env.HOPIT_AUTH_PROVIDER || 'clerk'
 const cloudBackend = normalizeCloudBackend(env.HOPIT_CLOUD_BACKEND)
 const checks = [
   required('HOPIT_CODEBASE_ID'),
+  required('NEXT_PUBLIC_APP_URL'),
+  urlCheck('NEXT_PUBLIC_APP_URL'),
 ]
 
 const warnings = []

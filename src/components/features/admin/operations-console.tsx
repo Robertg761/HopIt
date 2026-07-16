@@ -8,7 +8,6 @@ import {
   CircleDollarSign,
   Database,
   Download,
-  ExternalLink,
   GitBranch,
   HardDrive,
   KeyRound,
@@ -31,6 +30,7 @@ import { Badge, type BadgeTone } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog } from '@/components/ui/dialog'
+import { ExternalLink as AccessibleExternalLink } from '@/components/ui/external-link'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -472,7 +472,7 @@ function TenantActions({ tenant, onAction }: { tenant: Json; onAction: (action: 
               ? 'Stripe will resume renewal at the next billing period. No immediate charge is created by this action.'
               : 'Stripe will cancel this subscription at the end of its paid period. Access remains active until then.',
           })}><CircleDollarSign />{subscription.cancelAtPeriodEnd ? 'Resume renewal' : 'Cancel at period end'}</DropdownMenuItem>
-          <DropdownMenuItem asChild><a href={stripeSubscriptionUrl(subscription.providerSubscriptionId)} target="_blank" rel="noreferrer"><ExternalLink />Open in Stripe</a></DropdownMenuItem>
+          <DropdownMenuItem asChild><AccessibleExternalLink href={stripeSubscriptionUrl(subscription.providerSubscriptionId)}>Open in Stripe</AccessibleExternalLink></DropdownMenuItem>
         </> : null}
       </DropdownMenuContent>
     </DropdownMenu>
@@ -545,7 +545,7 @@ function ConfigurationPanel({ data }: { data: Json }) {
   return <Card><CardHeader className="flex-row items-center justify-between"><div><CardTitle>Runtime configuration</CardTitle><p className="mt-1 text-xs text-muted-foreground">Presence and feature state only. Secret values never reach the browser.</p></div><Badge tone="outline">{runtime.environment || 'unknown'}</Badge></CardHeader><CardContent className="grid gap-3 pt-3 md:grid-cols-2 xl:grid-cols-4">
     {entries.map(([label, active]) => <div key={String(label)} className="flex items-center justify-between rounded-md border border-border p-3"><span className="text-sm">{String(label)}</span><Badge tone={active ? 'hop' : 'danger'}>{active ? 'On' : 'Off'}</Badge></div>)}
     <div className="md:col-span-2 xl:col-span-4 flex flex-wrap gap-2 border-t border-border pt-3">
-      {Object.entries(runtime.links ?? {}).filter(([, href]) => href).map(([label, href]) => <Button key={label} asChild variant="outline" size="sm"><a href={String(href)} target="_blank" rel="noreferrer"><ExternalLink/>{label}</a></Button>)}
+      {Object.entries(runtime.links ?? {}).filter(([, href]) => href).map(([label, href]) => <Button key={label} asChild variant="outline" size="sm"><AccessibleExternalLink href={String(href)}>{label}</AccessibleExternalLink></Button>)}
       <span className="ml-auto self-center font-mono text-[11px] text-muted-foreground">{runtime.deployment?.commitSha?.slice(0, 8) || 'commit unknown'} · {runtime.deployment?.region || 'region unknown'}</span>
     </div>
   </CardContent></Card>
@@ -577,7 +577,7 @@ function TenantDetailDialog({ tenant, data, onClose, onAction }: { tenant: Json 
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4"><Metric label="Plan" value={planName(tenant.plan)}/><Metric label="Storage" value={`${bytes(number(tenant.quota?.storage?.used))} / ${bytes(number(tenant.quota?.storage?.limit))}`}/><Metric label="Writes today" value={`${compact(tenant.quota?.dailyWrites?.used)} / ${compact(tenant.quota?.dailyWrites?.limit)}`}/><Metric label="Member since" value={tenant.userCreatedAt ? absoluteDate(tenant.userCreatedAt) : 'Unknown'}/></div>
       {tenant.writesPaused ? <InlineNotice tone="danger" title="Cloud writes paused" detail={tenant.pauseReason || 'No operator note was recorded.'}/> : null}
       <div className="grid gap-4 lg:grid-cols-3"><DetailList title="Repositories" rows={repos.map((repo: Json) => ({ title: repo.name, detail: `${repo.fileCount} files · revision ${repo.revision} · ${relative(repo.updatedAt)}` }))}/><DetailList title="Sessions" rows={sessions.map((session: Json) => ({ title: session.deviceName || session.sessionId, detail: `${session.status} · ${session.codebaseName} · ${relative(session.lastSeenAt)}` }))}/><DetailList title="Devices" rows={devices.map((device: Json) => ({ title: device.displayName || device.deviceId, detail: `${device.status} · ${device.platform || 'unknown'} · ${device.lastSeenAt ? relative(device.lastSeenAt) : 'never seen'}` }))}/></div>
-      {tenant.subscription ? <div className="rounded-md border border-border p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-semibold">Stripe subscription</p><p className="font-mono text-[11px] text-muted-foreground">{tenant.subscription.providerSubscriptionId}</p></div><div className="flex gap-2"><Badge tone={tenant.subscription.entitlementActive ? 'hop' : 'danger'}>{tenant.subscription.status}</Badge>{tenant.subscription.providerSubscriptionId ? <Button asChild variant="outline" size="sm"><a href={stripeSubscriptionUrl(tenant.subscription.providerSubscriptionId)} target="_blank" rel="noreferrer"><ExternalLink/>Stripe</a></Button> : null}</div></div></div> : null}
+      {tenant.subscription ? <div className="rounded-md border border-border p-4"><div className="flex flex-wrap items-center justify-between gap-3"><div><p className="text-sm font-semibold">Stripe subscription</p><p className="font-mono text-[11px] text-muted-foreground">{tenant.subscription.providerSubscriptionId}</p></div><div className="flex gap-2"><Badge tone={tenant.subscription.entitlementActive ? 'hop' : 'danger'}>{tenant.subscription.status}</Badge>{tenant.subscription.providerSubscriptionId ? <Button asChild variant="outline" size="sm"><AccessibleExternalLink href={stripeSubscriptionUrl(tenant.subscription.providerSubscriptionId)}>Stripe</AccessibleExternalLink></Button> : null}</div></div></div> : null}
     </div>
   </Dialog>
 }

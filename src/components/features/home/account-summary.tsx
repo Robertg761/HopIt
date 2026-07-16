@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { FolderGit2, HardDrive, Layers3 } from 'lucide-react'
 
 import { Skeleton } from '@/components/ui/skeleton'
+import { planShortName } from '@/lib/billing-plans'
 import { apiFetch } from '@/lib/client/api'
 import { cn } from '@/lib/utils'
 
@@ -124,14 +125,14 @@ function SummaryCard({
 
 function planName(status: BillingStatus) {
   if (!status.ok) return 'View plans'
-  if (status.subscription?.entitlementActive) {
-    return status.subscription.planKey === 'plus_storage' ? 'Plus Storage' : 'Plus'
-  }
-  return status.usage?.plan === 'paid_storage'
-    ? 'Plus Storage'
-    : status.usage?.plan === 'paid'
-      ? 'Plus'
-      : 'Free'
+  if (status.subscription?.entitlementActive) return planShortName(status.subscription.planKey)
+  return planShortName(
+    status.usage?.plan === 'paid_storage'
+      ? 'plus_storage'
+      : status.usage?.plan === 'paid'
+        ? 'plus'
+        : 'free',
+  )
 }
 
 function meterDetail(meter: Meter | undefined, noun: string) {

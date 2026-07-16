@@ -35,7 +35,7 @@ export function SmartDownloadButton() {
 
   if (choice.state === 'loading') {
     return (
-      <div className="mt-8">
+      <div className="mt-8" aria-live="polite">
         <Button size="lg" disabled className="h-11 bg-[#238636] px-5 text-white">
           Checking this device
         </Button>
@@ -45,23 +45,29 @@ export function SmartDownloadButton() {
 
   if (choice.state === 'web') {
     return (
-      <div className="mt-8">
+      <div className="mt-8" aria-live="polite">
         <Button asChild size="lg" className="h-11 bg-[#238636] px-5 text-white hover:bg-[#2ea043]">
-          <Link href="/overview">Use HopIt in your browser <MonitorSmartphone /></Link>
+          <Link href="/overview">Use HopIt in your browser <MonitorSmartphone aria-hidden /></Link>
         </Button>
         <p className="mt-3 text-sm text-[#8b949e]">{choice.detail}</p>
+        <Link href="#manual-downloads" className="mt-3 inline-block rounded-sm text-sm text-[#58a6ff] underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-[#58a6ff]">
+          Choose a macOS or Linux download manually
+        </Link>
       </div>
     )
   }
 
   return (
-    <div className="mt-8">
+    <div className="mt-8 flex flex-wrap items-center gap-3" aria-live="polite">
       <Button asChild size="lg" className="h-11 bg-[#238636] px-5 text-white hover:bg-[#2ea043]">
         <a href={choice.href} download={choice.filename}>
           {choice.label}
-          <Download />
+          <Download aria-hidden />
         </a>
       </Button>
+      <Link href="#manual-downloads" className="inline-block rounded-sm text-sm text-[#58a6ff] underline underline-offset-4 outline-none focus-visible:ring-2 focus-visible:ring-[#58a6ff]">
+        Other platforms
+      </Link>
     </div>
   )
 }

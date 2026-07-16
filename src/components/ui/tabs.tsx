@@ -50,9 +50,28 @@ function Tabs({
 }
 
 function TabsList({ className, children }: { className?: string; children: React.ReactNode }) {
+  function onKeyDown(event: React.KeyboardEvent<HTMLDivElement>) {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return
+    const triggers = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]:not(:disabled)'))
+    const currentIndex = triggers.indexOf(document.activeElement as HTMLButtonElement)
+    if (currentIndex === -1 || triggers.length === 0) return
+
+    event.preventDefault()
+    const nextIndex = event.key === 'Home'
+      ? 0
+      : event.key === 'End'
+        ? triggers.length - 1
+        : event.key === 'ArrowRight'
+          ? (currentIndex + 1) % triggers.length
+          : (currentIndex - 1 + triggers.length) % triggers.length
+    triggers[nextIndex].focus()
+    triggers[nextIndex].click()
+  }
+
   return (
     <div
       role="tablist"
+      onKeyDown={onKeyDown}
       className={cn("flex w-full max-w-full items-center gap-0 overflow-x-auto border-b border-border", className)}
     >
       {children}
@@ -81,6 +100,7 @@ function TabsTrigger({
       id={`${tabs.idBase}-tab-${value}`}
       aria-selected={active}
       aria-controls={`${tabs.idBase}-panel-${value}`}
+      tabIndex={active ? 0 : -1}
       onClick={() => tabs.setValue(value)}
       className={cn(
         "inline-flex items-center gap-1.5 border-b-2 px-3 py-2 text-sm font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",

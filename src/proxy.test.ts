@@ -5,9 +5,9 @@ import { NextRequest } from 'next/server'
 // `shouldBypassClerkForAgentToken` predicate stays unmocked (that IS the logic
 // under test); everything Clerk-shaped is mocked so the suite runs without a
 // live Clerk environment. The guarantee: an hst_-bearing /api request is let
-// through to its route handler (NextResponse.next()), while every other request
-// keeps its pre-fix treatment. Pages redirect to Clerk, tokenless /api requests
-// redirect to Clerk, and the basic-auth / public-route pass-throughs are intact.
+// through to its route handler (NextResponse.next()), while protected pages and
+// tokenless /api requests still redirect to Clerk. Public and unknown page routes
+// pass through so public content and branded 404s remain reachable.
 
 const shouldUseClerkAuth = vi.fn(() => true)
 const isClerkServerConfigured = vi.fn(() => true)
@@ -92,7 +92,7 @@ describe('proxy() agent-session-token pass-through (Clerk mode)', () => {
   })
 
   it('does NOT bypass Clerk for a page request carrying an hst_ header', () => {
-    const response = run('/dashboard', { 'x-hopit-agent-session-token': 'hst_abc' })
+    const response = run('/overview', { 'x-hopit-agent-session-token': 'hst_abc' })
     expect(isClerkRedirect(response)).toBe(true)
     expect(isPassThrough(response)).toBe(false)
   })
@@ -128,7 +128,7 @@ describe('proxy() unchanged pass-throughs (Clerk mode)', () => {
 
   it('keeps the basic-auth fallback pass-through for pages', () => {
     hasValidBasicAuthFallbackCredentials.mockReturnValue(true)
-    const response = run('/dashboard')
+    const response = run('/overview')
     expect(isPassThrough(response)).toBe(true)
   })
 
@@ -179,9 +179,63 @@ describe('proxy() unchanged pass-throughs (Clerk mode)', () => {
     expect(isClerkRedirect(response)).toBe(false)
   })
 
+  it.each(['/robots.txt', '/sitemap.xml'])('keeps public metadata route %s outside Clerk', (path) => {
+    const response = run(path)
+    expect(isPassThrough(response)).toBe(true)
+    expect(response.headers.get('x-clerk-session')).toBeNull()
+  })
+
+  it('passes unknown page routes through so Next can return a 404', () => {
+    const response = run('/does-not-exist')
+    expect(isPassThrough(response)).toBe(true)
+    expect(isClerkRedirect(response)).toBe(false)
+  })
+
+  it.each([
+    '/activity',
+    '/admin',
+    '/codebases',
+    '/device',
+    '/files',
+    '/members',
+    '/overview',
+    '/pricing',
+    '/review',
+    '/settings',
+    '/status',
+    '/team',
+    '/work-items',
+  ])('keeps authenticated app route %s protected', (path) => {
+    expect(isClerkRedirect(run(path))).toBe(true)
+  })
+
   it('returns 503 when Clerk is selected but not configured', () => {
     isClerkServerConfigured.mockReturnValue(false)
-    const response = run('/dashboard')
+    const response = run('/overview')
     expect(response.status).toBe(503)
+  })
+})
+
+describe('proxy() explicit protection in Basic Auth mode', () => {
+  beforeEach(() => {
+    shouldUseClerkAuth.mockReturnValue(false)
+    shouldAllowBasicAuthFallback.mockReturnValue(true)
+  })
+
+  it('returns a Basic Auth challenge for protected pages', () => {
+    const previous = process.env.HOPIT_DASHBOARD_PASSWORD
+    process.env.HOPIT_DASHBOARD_PASSWORD = 'test-password'
+    try {
+      const response = run('/overview')
+      expect(response.status).toBe(401)
+      expect(response.headers.get('www-authenticate')).toContain('Basic')
+    } finally {
+      if (previous === undefined) delete process.env.HOPIT_DASHBOARD_PASSWORD
+      else process.env.HOPIT_DASHBOARD_PASSWORD = previous
+    }
+  })
+
+  it('passes unknown pages through to the branded 404', () => {
+    expect(isPassThrough(run('/does-not-exist'))).toBe(true)
   })
 })

@@ -4,6 +4,7 @@ import * as React from 'react'
 import { DownloadCloud, FilePlus2, FileText, Files, GitBranch } from 'lucide-react'
 
 import { PageScaffold } from '@/components/shell/page-scaffold'
+import { useUnsavedChanges } from '@/components/shell/unsaved-changes-provider'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
@@ -44,12 +45,18 @@ export function FilesPage() {
     runningCommand,
   } = useWorkspace()
   const { toast } = useToast()
+  const { confirmOrRun } = useUnsavedChanges()
   const [query, setQuery] = React.useState('')
   const [scope, setScope] = React.useState<ScopeFilter>('all')
   const [locality, setLocality] = React.useState<LocalityFilter>('all')
   const [selectedPath, setSelectedPath] = React.useState<string | null>(null)
   const [newFileOpen, setNewFileOpen] = React.useState(false)
   const [importOpen, setImportOpen] = React.useState(false)
+
+  const selectPath = React.useCallback((path: string | null) => {
+    if (path === selectedPath) return
+    confirmOrRun(() => setSelectedPath(path))
+  }, [confirmOrRun, selectedPath])
 
   const codebaseId = selectedCodebaseId ?? status.codebaseId
   const files = status.files
@@ -190,7 +197,7 @@ export function FilesPage() {
                 options={LOCALITY_OPTIONS}
               />
             </div>
-            <FileList files={filtered} selectedPath={selectedPath} onSelect={setSelectedPath} />
+            <FileList files={filtered} selectedPath={selectedPath} onSelect={selectPath} />
           </div>
           <div className="lg:col-span-3">
             {selectedFile ? (
@@ -212,7 +219,7 @@ export function FilesPage() {
         onOpenChange={setNewFileOpen}
         codebaseId={codebaseId}
         onCreated={(path) => {
-          setSelectedPath(path)
+          selectPath(path)
           void refresh()
         }}
       />

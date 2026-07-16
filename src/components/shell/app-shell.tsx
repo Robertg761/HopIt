@@ -4,7 +4,9 @@ import * as React from 'react'
 
 import { Topbar } from '@/components/shell/topbar'
 import { CommandPalette } from '@/components/shell/command-palette'
+import { UnsavedChangesProvider } from '@/components/shell/unsaved-changes-provider'
 import { WorkspaceProvider } from '@/components/workspace/workspace-provider'
+import { SkipLink } from '@/components/ui/skip-link'
 
 export function AppShell({ children, serviceAdmin = false }: { children: React.ReactNode; serviceAdmin?: boolean }) {
   const [paletteOpen, setPaletteOpen] = React.useState(false)
@@ -22,14 +24,17 @@ export function AppShell({ children, serviceAdmin = false }: { children: React.R
 
   return (
     <WorkspaceProvider>
-      <div className="relative flex min-h-dvh flex-col">
-        <Topbar serviceAdmin={serviceAdmin} onOpenPalette={() => setPaletteOpen(true)} />
-        <main id="page-main" className="relative flex-1">
-          {children}
-        </main>
-      </div>
+      <UnsavedChangesProvider>
+        <div className="relative flex min-h-dvh flex-col">
+          <SkipLink href="#page-main" />
+          <Topbar serviceAdmin={serviceAdmin} onOpenPalette={() => setPaletteOpen(true)} />
+          <main id="page-main" className="relative flex-1">
+            {children}
+          </main>
+        </div>
 
-      <CommandPalette serviceAdmin={serviceAdmin} open={paletteOpen} onOpenChange={setPaletteOpen} />
+        <CommandPalette serviceAdmin={serviceAdmin} open={paletteOpen} onOpenChange={setPaletteOpen} />
+      </UnsavedChangesProvider>
     </WorkspaceProvider>
   )
 }

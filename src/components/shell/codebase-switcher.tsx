@@ -13,6 +13,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { Button } from '@/components/ui/button'
+import { useUnsavedChanges } from '@/components/shell/unsaved-changes-provider'
 import { useWorkspace } from '@/components/workspace/workspace-provider'
 import { codebaseIdFromPath, repoPath, repoPathPreservingTab } from '@/components/shell/repo-nav'
 
@@ -20,6 +21,7 @@ export function CodebaseSwitcher() {
   const router = useRouter()
   const pathname = usePathname() ?? ''
   const { status, codebases, selectedCodebaseId, selectCodebase } = useWorkspace()
+  const { confirmOrRun } = useUnsavedChanges()
 
   const pathId = codebaseIdFromPath(pathname)
   const currentId = pathId ?? selectedCodebaseId ?? status.codebaseId
@@ -27,18 +29,20 @@ export function CodebaseSwitcher() {
   const currentLabel = current?.name ?? status.codebaseName ?? currentId ?? 'No repository'
 
   function openCodebase(codebaseId: string) {
-    selectCodebase(codebaseId)
-    if (codebaseIdFromPath(pathname)) {
-      router.push(repoPathPreservingTab(pathname, codebaseId))
-    } else {
-      router.push(repoPath(codebaseId))
-    }
+    confirmOrRun(() => {
+      selectCodebase(codebaseId)
+      if (codebaseIdFromPath(pathname)) {
+        router.push(repoPathPreservingTab(pathname, codebaseId))
+      } else {
+        router.push(repoPath(codebaseId))
+      }
+    })
   }
 
   if (codebases.length === 0) {
     return (
       <span className="inline-flex h-8 max-w-52 items-center gap-2 truncate rounded-md border border-border bg-muted/40 px-2.5 text-sm text-muted-foreground">
-        <BookMarked className="size-3.5 shrink-0" />
+        <BookMarked className="size-3.5 shrink-0" aria-hidden />
         <span className="truncate font-medium">{currentLabel}</span>
       </span>
     )
@@ -48,9 +52,9 @@ export function CodebaseSwitcher() {
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="outline" className="h-8 max-w-60 gap-1.5 px-2 font-medium">
-          <BookMarked className="size-3.5 shrink-0 text-muted-foreground" />
+          <BookMarked className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
           <span className="truncate">{currentLabel}</span>
-          <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" />
+          <ChevronsUpDown className="size-3.5 shrink-0 text-muted-foreground" aria-hidden />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-64">
@@ -63,7 +67,7 @@ export function CodebaseSwitcher() {
             className="gap-2"
           >
             <span className="flex-1 truncate">{codebase.name}</span>
-            {codebase.id === currentId ? <Check className="size-4 text-hop" /> : null}
+            {codebase.id === currentId ? <Check className="size-4 text-hop" aria-hidden /> : null}
           </DropdownMenuItem>
         ))}
       </DropdownMenuContent>

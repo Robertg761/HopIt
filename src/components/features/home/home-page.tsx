@@ -26,7 +26,7 @@ export function HomePage() {
             <div className="flex size-9 items-center justify-center rounded-lg bg-hop/10 text-hop">
               <Download className="size-4" aria-hidden />
             </div>
-            <CardTitle className="pt-2">HopIt on your devices</CardTitle>
+            <CardTitle as="h2" className="pt-2">HopIt on your devices</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4 pt-0">
             <p className="text-sm leading-6 text-muted-foreground">
@@ -35,7 +35,7 @@ export function HomePage() {
             <Button asChild variant="outline">
               <Link href="/download">
                 View downloads
-                <ArrowRight className="size-4" />
+                <ArrowRight className="size-4" aria-hidden />
               </Link>
             </Button>
           </CardContent>

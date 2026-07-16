@@ -10,6 +10,7 @@ import {
   signInPath,
 } from '@/lib/auth-config'
 import { hasValidBasicAuthFallbackCredentials } from '@/lib/basic-auth-fallback'
+import { signInUrlForRequest } from '@/lib/safe-redirect'
 
 const AUTH_HEADER = 'WWW-Authenticate'
 const REALM = 'Basic realm="HopIt"'
@@ -21,6 +22,24 @@ const isPublicRoute = createRouteMatcher([
   '/sign-in(.*)',
   '/sign-up(.*)',
 ])
+const isPublicMetadataRoute = createRouteMatcher(['/robots.txt', '/sitemap.xml'])
+const isProtectedPageRoute = createRouteMatcher([
+  '/activity(.*)',
+  '/admin(.*)',
+  '/codebases(.*)',
+  '/device(.*)',
+  '/files(.*)',
+  '/members(.*)',
+  '/overview(.*)',
+  '/pricing(.*)',
+  '/review(.*)',
+  '/settings(.*)',
+  '/status(.*)',
+  '/team(.*)',
+  '/work-items(.*)',
+])
+const isApiRoute = createRouteMatcher(['/api(.*)'])
+const isClerkInternalRoute = createRouteMatcher(['/__clerk(.*)'])
 // The one-liner installer (`curl -fsSL https://hopit.dev/install | sh`) must
 // return the raw script to unauthenticated clients in every auth mode, so it is
 // always public. `/install` is rewritten to the static `/install.sh` file.
@@ -38,7 +57,7 @@ const isServerAuthenticatedBillingRoute = createRouteMatcher([
 ])
 
 const clerkProxy = clerkMiddleware(async (auth, request) => {
-  await auth.protect({ unauthenticatedUrl: new URL(signInPath, request.url).toString() })
+  await auth.protect({ unauthenticatedUrl: signInUrlForRequest(request.url, signInPath).toString() })
   return NextResponse.next()
 })
 
@@ -48,15 +67,23 @@ const clerkPublicProxy = clerkMiddleware(() => NextResponse.next())
 
 export function proxy(request: NextRequest, event: NextFetchEvent) {
   if (
-    isInstallRoute(request)
+    isPublicMetadataRoute(request)
+    || isInstallRoute(request)
     || isPublicDownloadRoute(request)
     || isPublicDeviceAuthorizationRoute(request)
     || isServerAuthenticatedBillingRoute(request)
   ) return NextResponse.next()
 
+  const publicPage = isPublicRoute(request)
+  const clerkInternal = isClerkInternalRoute(request)
+  const protectedRequest = isProtectedPageRoute(request) || isApiRoute(request)
+
   if (shouldUseClerkAuth()) {
-    if (!isClerkServerConfigured()) return authProviderMissing()
-    if (isPublicRoute(request)) return clerkPublicProxy(request, event)
+    if (!isClerkServerConfigured()) {
+      return publicPage || clerkInternal || protectedRequest ? authProviderMissing() : NextResponse.next()
+    }
+    if (publicPage || clerkInternal) return clerkPublicProxy(request, event)
+    if (!protectedRequest) return NextResponse.next()
     if (hasValidBasicAuthFallbackCredentials(request.headers)) {
       return NextResponse.next()
     }
@@ -75,7 +102,7 @@ export function proxy(request: NextRequest, event: NextFetchEvent) {
     return clerkProxy(request, event)
   }
 
-  if (!shouldRequireDashboardAuth()) return NextResponse.next()
+  if (!protectedRequest || !shouldRequireDashboardAuth()) return NextResponse.next()
   if (!shouldAllowBasicAuthFallback()) return authProviderMissing()
 
   if (!process.env.HOPIT_DASHBOARD_PASSWORD) {

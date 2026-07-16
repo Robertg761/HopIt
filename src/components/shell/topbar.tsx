@@ -86,7 +86,7 @@ export function Topbar({ onOpenPalette, serviceAdmin = false }: { onOpenPalette:
           onClick={onOpenPalette}
           className="hidden h-8 w-52 items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 text-sm text-muted-foreground transition-colors hover:bg-muted lg:flex outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <Search className="size-3.5" />
+          <Search className="size-3.5" aria-hidden />
           <span className="flex-1 text-left text-xs">Search or jump to…</span>
           <Kbd>⌘K</Kbd>
         </button>
@@ -97,7 +97,7 @@ export function Topbar({ onOpenPalette, serviceAdmin = false }: { onOpenPalette:
           onClick={onOpenPalette}
           className="text-muted-foreground lg:hidden"
         >
-          <Search />
+          <Search aria-hidden />
         </Button>
 
         <ThemeToggle />

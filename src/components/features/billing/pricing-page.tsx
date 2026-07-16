@@ -5,10 +5,10 @@ import { ArrowRight, Check, Database, HardDrive, ShieldCheck } from 'lucide-reac
 
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
+import { planCatalog, type PlanKey } from '@/lib/billing-plans'
 import { apiFetch, apiErrorFromUnknown } from '@/lib/client/api'
+import { useVisibilityAwarePoll } from '@/hooks/use-visibility-aware-poll'
 import { cn } from '@/lib/utils'
-
-type PlanKey = 'free' | 'plus' | 'plus_storage'
 
 type BillingStatus = {
   ok: boolean
@@ -17,50 +17,70 @@ type BillingStatus = {
   usage?: { plan?: string } | null
 }
 
-const plans = [
-  {
-    key: 'free' as const,
-    name: 'Free',
-    price: 0,
-    storage: '2 GB',
-    writes: '2,000 writes / day',
-    projects: '1 cloud project',
-    note: 'A real, permanent workspace. No card.',
-  },
-  {
-    key: 'plus' as const,
-    name: 'Plus',
-    price: 10,
-    storage: '30 GB',
-    writes: '20,000 writes / day',
-    projects: 'Unlimited projects',
-    note: 'For active solo work across devices.',
-    featured: true,
-  },
-  {
-    key: 'plus_storage' as const,
-    name: 'Plus Storage',
-    price: 15,
-    storage: '100 GB',
-    writes: '20,000 writes / day',
-    projects: 'Unlimited projects',
-    note: 'For larger histories and more working sets.',
-  },
-]
+const planDetails: Record<PlanKey, { note: string; featured?: boolean }> = {
+  free: { note: 'A real, permanent workspace. No card.' },
+  plus: { note: 'For active solo work across devices.', featured: true },
+  plus_storage: { note: 'For larger histories and more working sets.' },
+}
+
+const plans = (Object.keys(planCatalog) as PlanKey[]).map((key) => {
+  const plan = planCatalog[key]
+  return {
+    key,
+    name: plan.shortName,
+    price: plan.priceUsd,
+    storage: `${plan.storageGb} GB`,
+    writes: `${plan.dailyWrites.toLocaleString('en-US')} writes / day`,
+    projects: plan.codebases === null ? 'Unlimited projects' : `${plan.codebases} cloud project`,
+    ...planDetails[key],
+  }
+})
 
 export function PricingPage() {
   const [status, setStatus] = React.useState<BillingStatus | null>(null)
   const [busy, setBusy] = React.useState<PlanKey | 'portal' | null>(null)
   const [error, setError] = React.useState<string | null>(null)
   const [checkoutState, setCheckoutState] = React.useState<'success' | 'canceled' | null>(null)
+  const [reconciliationTimedOut, setReconciliationTimedOut] = React.useState(false)
+  const checkoutPollRuns = React.useRef(0)
+
+  const refreshStatus = React.useCallback(async () => {
+    try {
+      const next = await apiFetch<BillingStatus>('/api/billing/status', { allowErrorEnvelope: true })
+      setStatus(next)
+      return next
+    } catch {
+      const next: BillingStatus = { ok: false }
+      setStatus(next)
+      return next
+    }
+  }, [])
 
   React.useEffect(() => {
     const checkout = new URLSearchParams(window.location.search).get('checkout')
-    if (checkout === 'success' || checkout === 'canceled') setCheckoutState(checkout)
-    apiFetch<BillingStatus>('/api/billing/status', { allowErrorEnvelope: true })
-      .then(setStatus)
-      .catch(() => setStatus({ ok: false }))
-  }, [])
+    if (checkout === 'success' || checkout === 'canceled') {
+      setCheckoutState(checkout)
+      checkoutPollRuns.current = 0
+      setReconciliationTimedOut(false)
+    }
+    void refreshStatus()
+  }, [refreshStatus])
+
+  useVisibilityAwarePoll(async () => {
+    const next = await refreshStatus()
+    if (next.subscription?.entitlementActive) return false
+    checkoutPollRuns.current += 1
+    if (checkoutPollRuns.current >= 10) {
+      setReconciliationTimedOut(true)
+      return false
+    }
+    return true
+  }, {
+    enabled: checkoutState === 'success'
+      && status?.subscription?.entitlementActive !== true
+      && !reconciliationTimedOut,
+    intervalMs: 3000,
+  })
 
   const currentPlan: PlanKey = status?.subscription?.entitlementActive
     ? status.subscription.planKey === 'plus_storage' ? 'plus_storage' : 'plus'
@@ -108,12 +128,20 @@ export function PricingPage() {
       </section>
 
       {checkoutState ? (
-        <div className={cn(
-          'mt-6 rounded-xl border px-4 py-3 text-sm',
-          checkoutState === 'success' ? 'border-hop/30 bg-hop/10 text-foreground' : 'border-border bg-muted/40 text-muted-foreground',
-        )}>
+        <div
+          role="status"
+          aria-live="polite"
+          className={cn(
+            'mt-6 rounded-xl border px-4 py-3 text-sm',
+            checkoutState === 'success' ? 'border-hop/30 bg-hop/10 text-foreground' : 'border-border bg-muted/40 text-muted-foreground',
+          )}
+        >
           {checkoutState === 'success'
-            ? 'Payment received. Your plan will update as soon as Stripe confirms the subscription.'
+            ? status?.subscription?.entitlementActive
+              ? 'Your HopIt plan is active.'
+              : reconciliationTimedOut
+                ? 'Payment received. Stripe confirmation is taking longer than expected; refresh this page in a moment.'
+                : 'Payment received. Your plan will update as soon as Stripe confirms the subscription.'
             : 'Checkout was canceled. Nothing was charged.'}
         </div>
       ) : null}
@@ -142,7 +170,7 @@ export function PricingPage() {
               <ul className="space-y-3 text-sm text-foreground">
                 {[plan.storage, plan.writes, plan.projects, 'Reads and full export always open'].map((feature) => (
                   <li key={feature} className="flex items-center gap-2.5">
-                    <span className="grid size-5 place-items-center rounded-full bg-hop/10 text-hop"><Check className="size-3" /></span>
+                    <span className="grid size-5 place-items-center rounded-full bg-hop/10 text-hop"><Check className="size-3" aria-hidden /></span>
                     {feature}
                   </li>
                 ))}
@@ -165,10 +193,10 @@ export function PricingPage() {
                   <Button
                     className="w-full"
                     variant={plan.featured ? 'default' : 'outline'}
-                    onClick={() => beginCheckout(plan.key)}
+                    onClick={() => beginCheckout(plan.key as 'plus' | 'plus_storage')}
                     disabled={busy !== null || status?.billingEnabled === false}
                   >
-                    {busy === plan.key ? <Spinner className="size-4" /> : <ArrowRight className="size-4" />}
+                    {busy === plan.key ? <Spinner className="size-4" /> : <ArrowRight className="size-4" aria-hidden />}
                     Upgrade to {plan.name}
                   </Button>
                 )}
@@ -178,12 +206,13 @@ export function PricingPage() {
         })}
       </section>
 
-      {error ? <p className="mt-5 text-sm text-destructive">{error}</p> : null}
+      {error ? <p role="alert" className="mt-5 text-sm text-destructive">{error}</p> : null}
       {status?.billingEnabled === false ? (
         <p className="mt-5 text-sm text-muted-foreground">Checkout is being prepared. Free sync remains available while billing is off.</p>
       ) : null}
 
-      <section className="mt-8 grid gap-4 rounded-2xl border border-border bg-muted/25 p-5 sm:grid-cols-3 sm:p-6">
+      <section className="mt-8 grid gap-4 rounded-2xl border border-border bg-muted/25 p-5 sm:grid-cols-3 sm:p-6" aria-labelledby="plan-facts-heading">
+        <h2 id="plan-facts-heading" className="sr-only">How HopIt plans work</h2>
         <PlanFact icon={HardDrive} title="Storage is a hard cap" detail="Upgrade before you need more; HopIt never creates an overage bill." />
         <PlanFact icon={Database} title="Writes reset daily" detail="We’ll monitor the 20,000-write allowance during early real-world testing." />
         <PlanFact icon={ShieldCheck} title="Your work stays yours" detail="A downgrade never deletes cloud data or touches the local journal." />
@@ -195,7 +224,7 @@ export function PricingPage() {
 function PlanFact({ icon: Icon, title, detail }: { icon: typeof HardDrive; title: string; detail: string }) {
   return (
     <div className="flex gap-3">
-      <div className="grid size-9 shrink-0 place-items-center rounded-lg border border-border bg-background text-iris"><Icon className="size-4" /></div>
+      <div className="grid size-9 shrink-0 place-items-center rounded-lg border border-border bg-background text-iris"><Icon className="size-4" aria-hidden /></div>
       <div>
         <h3 className="text-sm font-semibold text-foreground">{title}</h3>
         <p className="mt-1 text-xs leading-5 text-muted-foreground">{detail}</p>

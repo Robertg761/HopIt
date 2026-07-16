@@ -3,7 +3,7 @@
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 
-const tracked = spawnSync('git', ['ls-files', '-z'], { encoding: 'buffer' })
+const tracked = spawnSync('git', ['ls-files', '-co', '--exclude-standard', '-z'], { encoding: 'buffer' })
 if (tracked.status !== 0) {
   throw new Error(`Unable to list tracked files: ${tracked.stderr.toString('utf8')}`)
 }
@@ -13,6 +13,7 @@ const violations = tracked.stdout
   .toString('utf8')
   .split('\0')
   .filter(Boolean)
+  .filter((filePath) => fs.existsSync(filePath))
   .filter((filePath) => fs.readFileSync(filePath).includes(prohibitedMark))
 
 if (violations.length > 0) {

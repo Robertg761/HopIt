@@ -15,7 +15,7 @@ export function CodebasesPreviewCard({ codebases, loading }: { codebases: Codeba
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between border-b border-border pb-3">
-        <CardTitle>Repositories</CardTitle>
+        <CardTitle as="h2">Repositories</CardTitle>
         <Link href="/codebases" className="text-xs font-medium text-iris hover:underline">
           View all
         </Link>
