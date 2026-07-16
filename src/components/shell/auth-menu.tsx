@@ -14,8 +14,10 @@ export function AuthMenu() {
       <span
         className="grid size-8 place-items-center rounded-full text-muted-foreground ring-1 ring-border"
         title="Authentication is not configured for this runtime"
+        role="img"
+        aria-label="Authentication is not configured for this runtime"
       >
-        <ShieldAlert className="size-4" />
+        <ShieldAlert className="size-4" aria-hidden />
       </span>
     )
   }
@@ -34,7 +36,7 @@ function ConfiguredAuthMenu() {
     return (
       <SignInButton mode="modal">
         <Button size="sm">
-          <LogIn />
+          <LogIn aria-hidden />
           Sign in
         </Button>
       </SignInButton>

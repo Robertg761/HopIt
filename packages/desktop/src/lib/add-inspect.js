@@ -27,7 +27,7 @@ export const DEFAULT_SKIP_DIRS = new Set([
 
 /**
  * Pure classification of a picked folder against the workspace root and the
- * known projects. No filesystem access — callers pass the walk result in.
+ * known projects. No filesystem access: callers pass the walk result in.
  * @param {{
  *   folderPath: string,
  *   workspaceRoot: string,
@@ -137,7 +137,7 @@ function isInside(child, parent) {
 
 /** Human byte size, e.g. "1.2 MB". */
 export function formatBytes(bytes) {
-  if (typeof bytes !== 'number' || bytes < 0) return '—'
+  if (typeof bytes !== 'number' || bytes < 0) return 'Not available'
   const units = ['B', 'KB', 'MB', 'GB', 'TB']
   let value = bytes
   let unit = 0

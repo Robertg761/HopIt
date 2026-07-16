@@ -95,7 +95,7 @@ export default async function DeviceAuthorizationPage({
   )
 }
 
-// Shared, friendly explanation for a link that can no longer be used — a stale
+// Shared, friendly explanation for a link that can no longer be used. A stale
 // tab (expired/consumed code) or the bare /device page with no code. Codes are
 // single-use and short-lived, and every re-run of the command opens a fresh tab,
 // so the most common cause is an older tab left open.
@@ -104,7 +104,7 @@ const staleLinkGuidance = (
     <p>Authorization links are single-use and expire about 10 minutes after they are created.</p>
     <p className="mt-2">
       Each time you run <span className="font-mono">hop setup</span> or <span className="font-mono">hop add</span> a fresh
-      link opens in a new tab. If you re-ran the command, this is likely an older tab — close it and use the newest one.
+      link opens in a new tab. If you re-ran the command, this is likely an older tab. Close it and use the newest one.
     </p>
     <p className="mt-2">Otherwise, return to your terminal and run the command again to get a new link.</p>
   </>

@@ -1,7 +1,7 @@
 /**
  * Client-facing shapes for the WS7c-backed compare surface. These mirror the
  * `/api/codebases/compare` route envelopes. The route is a thin wrapper over the
- * backend `compareRevisions` engine, so these types describe *its* output — we
+ * backend `compareRevisions` engine, so these types describe its output. We
  * never invent fields the engine does not produce.
  */
 

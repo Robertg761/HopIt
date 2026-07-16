@@ -103,7 +103,7 @@ export function FileInspector({
             </ol>
             <p className="mt-2 text-xs text-muted-foreground">
               {file.contentPreviewTruncated
-                ? 'Preview truncated — showing the first part of the file.'
+                ? 'Preview truncated. Showing the first part of the file.'
                 : 'Click a line to anchor an inline thread.'}
             </p>
           </>

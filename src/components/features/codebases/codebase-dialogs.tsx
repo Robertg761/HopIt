@@ -13,6 +13,10 @@ import { useToast } from '@/hooks/use-toast'
 import { useWorkspace, type CodebaseSummary } from '@/components/workspace/workspace-provider'
 import { createCodebase, deleteCodebase, renameCodebase, type ApiError } from './codebases-api'
 
+export function confirmsCodebaseDeletion(codebaseName: string | undefined, confirmation: string) {
+  return Boolean(codebaseName) && confirmation === codebaseName
+}
+
 function DialogActions({
   busy,
   busyLabel,
@@ -203,7 +207,7 @@ export function ImportGitDialog({
             required
           />
         </Field>
-        <Field label="Branch" htmlFor="import-git-branch" hint="Optional — defaults to the repository default branch.">
+        <Field label="Branch" htmlFor="import-git-branch" hint="Optional. Defaults to the repository default branch.">
           <Input
             id="import-git-branch"
             value={branch}
@@ -302,10 +306,15 @@ export function DeleteCodebaseDialog({
   const { toast } = useToast()
   const showApiError = useApiErrorToast()
   const [busy, setBusy] = React.useState(false)
+  const [confirmation, setConfirmation] = React.useState('')
+
+  React.useEffect(() => {
+    setConfirmation('')
+  }, [codebase?.id])
 
   const submit = async (event: React.FormEvent<HTMLFormElement>) => {
     event.preventDefault()
-    if (!codebase || busy) return
+    if (!codebase || !confirmsCodebaseDeletion(codebase.name, confirmation) || busy) return
     setBusy(true)
     const result = await deleteCodebase({ codebaseId: codebase.id })
     setBusy(false)
@@ -333,11 +342,24 @@ export function DeleteCodebaseDialog({
           (<span className="font-mono text-xs">{codebase?.id}</span>) and its cloud files for every
           member.
         </p>
+        <Field
+          label={`Type “${codebase?.name ?? ''}” to confirm`}
+          htmlFor="delete-codebase-confirmation"
+          hint="The name must match exactly."
+        >
+          <Input
+            id="delete-codebase-confirmation"
+            value={confirmation}
+            onChange={(event) => setConfirmation(event.target.value)}
+            autoComplete="off"
+          />
+        </Field>
         <DialogActions
           busy={busy}
           busyLabel="Deleting…"
           submitLabel="Delete codebase"
           destructive
+          disabled={!codebase || !confirmsCodebaseDeletion(codebase.name, confirmation)}
           onCancel={onClose}
         />
       </form>

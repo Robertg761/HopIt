@@ -66,7 +66,7 @@ describe('GET /api/codebase-files agent-session-token path', () => {
       authorization: 'Bearer hst_forged_deadbeef',
     })
 
-    // A JSON 4xx envelope — the critical contrast with the pre-fix behavior,
+    // A JSON 4xx envelope is the critical contrast with the pre-fix behavior,
     // which was a 307 redirect to /sign-in.
     expect(response.status).toBeGreaterThanOrEqual(400)
     expect(response.status).toBeLessThan(500)

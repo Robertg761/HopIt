@@ -1,5 +1,5 @@
 // @ts-check
-// HopIt desktop — a thin windowed shell over the local `hop` agent.
+// HopIt desktop: a thin windowed shell over the local `hop` agent.
 //
 // It reads state from the agent's loopback status/events endpoints and performs
 // every side effect by spawning the installed `hop` CLI. It contains no agent
@@ -61,7 +61,7 @@ function envForPaths() {
       env[key] = value
     }
   } catch {
-    // no env file — defaults are correct for the standard install
+    // no env file: defaults are correct for the standard install
   }
   return env
 }
@@ -172,9 +172,9 @@ function trayIcon(trayState) {
 function updateTray() {
   if (!tray) return
   tray.setImage(trayIcon(lastView.trayState))
-  tray.setToolTip(`HopIt — ${lastView.label.text}`)
+  tray.setToolTip(`HopIt: ${lastView.label.text}`)
   const menu = Menu.buildFromTemplate([
-    { label: `HopIt — ${lastView.label.text}`, enabled: false },
+    { label: `HopIt: ${lastView.label.text}`, enabled: false },
     { type: 'separator' },
     { label: 'Open HopIt', click: () => showWindow() },
     {
@@ -355,7 +355,7 @@ function registerIpc() {
   // Trail episodes: the top-level browse unit. Read-only spawn of `hop trail
   // episodes --json`, on tab open only (the renderer caches per session; the 5s
   // poll never touches it). Returns the raw engine result for the view-model
-  // mapper in lib/trail.js — no logic is duplicated here.
+  // mapper in lib/trail.js: no logic is duplicated here.
   ipcMain.handle('trailEpisodes', async (_event, codebaseId) => {
     try {
       const { json, code, stderr } = await runHopJson(requireHop(), trailEpisodesArgs(codebaseId), { env: process.env })
@@ -390,7 +390,7 @@ function registerIpc() {
   })
 
   // The "Summarize now" action: a real `hop trail summarize --json`. Server-gated
-  // and honest — when summaries are off or a key is missing, the CLI fails closed
+  // and honest: when summaries are off or a key is missing, the CLI fails closed
   // and we surface its message (stderr when it threw, or the JSON reason).
   ipcMain.handle('trailSummarize', async (_event, codebaseId) => {
     try {

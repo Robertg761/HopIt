@@ -79,7 +79,7 @@ export function FileDetail({ file, codebaseId }: { file: AgentFile; codebaseId: 
           </Meta>
           <Meta label="Scope">{file.scope === 'owner-private' ? 'Private to you' : 'Shared'}</Meta>
           <Meta label="Revision">
-            {file.revision !== null ? <span className="font-mono">{file.revision}</span> : '—'}
+            {file.revision !== null ? <span className="font-mono">{file.revision}</span> : 'Not available'}
           </Meta>
           <Meta label="Size">{formatBytes(file.size)}</Meta>
           <Meta label="Hash">
@@ -88,7 +88,7 @@ export function FileDetail({ file, codebaseId }: { file: AgentFile; codebaseId: 
                 {file.hash.slice(0, 12)}…
               </span>
             ) : (
-              '—'
+              'Not available'
             )}
           </Meta>
           <Meta label="Pinned">{file.local.pinned ? 'Yes' : 'No'}</Meta>
@@ -165,6 +165,6 @@ function Meta({ label, children }: { label: string; children: React.ReactNode })
 }
 
 function Timestamp({ value }: { value: string | null }) {
-  if (!value) return <>—</>
+  if (!value) return <>Not available</>
   return <span title={formatAbsoluteTime(value)}>{formatRelativeTime(value)}</span>
 }

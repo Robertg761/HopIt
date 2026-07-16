@@ -108,7 +108,7 @@ async function runTrailSummarize(options) {
 
   reportResult(options, result, ({ line, accent, muted, success }) => {
     if (dryRun) {
-      line(`  ${accent('•')} Dry run — payloads that WOULD be sent (${result.payloads.length}, mode ${result.mode}):`)
+      line(`  ${accent('•')} Dry run: payloads that WOULD be sent (${result.payloads.length}, mode ${result.mode}):`)
       for (const item of result.payloads) {
         line(`    ${muted(item.episodeId)}`)
         writeLine(JSON.stringify(item.payload, null, 2))
@@ -117,7 +117,7 @@ async function runTrailSummarize(options) {
     }
     line(`  ${success('✓')} Labeled ${result.labeled} episode${result.labeled === 1 ? '' : 's'} ${muted(`(${result.provider}/${result.model}, mode ${result.mode})`)}`)
     if (result.skippedByCap > 0) {
-      line(`    ${muted(`${result.skippedByCap} more unlabeled — raise --limit or HOPIT_SUMMARY_MAX_EPISODES to continue`)}`)
+      line(`    ${muted(`${result.skippedByCap} more unlabeled: raise --limit or HOPIT_SUMMARY_MAX_EPISODES to continue`)}`)
     }
   })
   return result

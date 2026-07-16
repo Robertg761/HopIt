@@ -1,5 +1,6 @@
 export const signInPath = '/sign-in'
 export const signUpPath = '/sign-up'
+export const signedInHomePath = '/overview'
 
 export function isClerkPublicConfigured() {
   return Boolean(process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY)

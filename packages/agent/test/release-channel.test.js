@@ -44,6 +44,14 @@ const built = [
   },
 ]
 
+const dmg = {
+  fileName: 'HopIt-macOS.dmg',
+  dmgPath: '/tmp/HopIt-macOS.dmg',
+  checksumPath: '/tmp/HopIt-macOS.dmg.sha256',
+  sha256: 'dmg123',
+  verified: true,
+}
+
 test('release manifest pins every target to immutable versioned objects', () => {
   const manifest = buildReleaseManifest({
     version: '0.0.1+abc1234',
@@ -77,6 +85,30 @@ test('release upload plan publishes the mutable channel pointer last', () => {
   assert.equal(plan.some((upload) => /latest\/hop-/.test(upload.key)), false)
 })
 
+test('release manifest and upload plan include the universal macOS DMG', () => {
+  const manifest = buildReleaseManifest({
+    version: '0.0.1+abc1234',
+    gitSha: 'abc1234',
+    builtAt: '2026-07-10T00:00:00.000Z',
+    built,
+    dmg,
+  })
+  assert.equal(manifest.downloads.macos.key, 'releases/0.0.1+abc1234/HopIt-macOS.dmg')
+  assert.equal(manifest.downloads.macos.sha256, 'dmg123')
+  assert.equal(manifest.downloads.macos.signed, false)
+  assert.equal(manifest.downloads.macos.notarized, false)
+
+  const plan = buildReleaseUploadPlan({
+    version: '0.0.1+abc1234',
+    built,
+    dmg,
+    manifestPath: '/tmp/manifest.json',
+  })
+  assert.equal(plan.some((upload) => upload.key.endsWith('/HopIt-macOS.dmg')), true)
+  assert.equal(plan.some((upload) => upload.key.endsWith('/HopIt-macOS.dmg.sha256')), true)
+  assert.equal(plan.at(-1).key, 'latest/manifest.json')
+})
+
 test('targeted release plans never replace the multi-platform channel pointer', () => {
   const plan = buildReleaseUploadPlan({
     version: '0.0.1+abc1234.20260710000000000',
@@ -96,12 +128,16 @@ test('release versions use a unique build timestamp instead of reusing one SHA k
   assert.match(first, /^0\.0\.1\+[a-f0-9]+\.20260710000000001$/)
 })
 
-test('public release publication fails closed with no unsigned escape hatch', () => {
+test('public release publication requires explicit unsigned approval', () => {
   assert.doesNotThrow(() => assertReleasePublicationAllowed({ dryRun: true }))
   assert.throws(
     () => assertReleasePublicationAllowed({ allowUnsigned: true }),
-    /targets HopIt public release storage/,
+    /requires HOPIT_ACKNOWLEDGE_UNSIGNED_PUBLIC_RELEASE/,
   )
+  assert.doesNotThrow(() => assertReleasePublicationAllowed({
+    allowUnsigned: true,
+    unsignedAcknowledgement: 'I_ACCEPT_UNSIGNED_PUBLIC_DISTRIBUTION',
+  }))
   assert.throws(
     () => assertReleasePublicationAllowed(),
     /not signed or notarized/,

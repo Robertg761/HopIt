@@ -28,15 +28,17 @@ export function Topbar({ onOpenPalette, serviceAdmin = false }: { onOpenPalette:
   const active = activeNavId(pathname)
   const { status } = useWorkspace()
   const navItems = accountNavItems(serviceAdmin)
+  const inRepository = /^\/codebases\/[^/]+/.test(pathname)
 
   return (
     <header className="sticky top-0 z-30 border-b border-border bg-background/95 backdrop-blur-sm">
       <div className="mx-auto flex h-14 w-full max-w-[1280px] items-center gap-3 px-4 sm:px-6 lg:px-8">
         <Link
           href="/overview"
+          aria-label="HopIt home"
           className="shrink-0 rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <HopItLogo size={22} />
+          <HopItLogo size={22} showWordmark={false} />
         </Link>
 
         <nav aria-label="Account" className="hidden items-center gap-0.5 sm:flex">
@@ -60,26 +62,31 @@ export function Topbar({ onOpenPalette, serviceAdmin = false }: { onOpenPalette:
           })}
         </nav>
 
-        <div className="mx-1 h-5 w-px shrink-0 bg-border max-sm:hidden" aria-hidden />
-
-        <CodebaseSwitcher />
+        {inRepository ? (
+          <>
+            <div className="mx-1 h-5 w-px shrink-0 bg-border max-sm:hidden" aria-hidden />
+            <CodebaseSwitcher />
+          </>
+        ) : null}
 
         <div className="flex-1" />
 
-        <span
-          className="hidden items-center gap-1.5 text-xs text-muted-foreground md:inline-flex"
-          title={status.healthLabel || 'Agent status'}
-        >
-          <StatusDot tone={stateTone[status.state] ?? 'neutral'} pulse={status.state === 'online'} />
-          <span className="max-w-36 truncate">{status.healthLabel || 'Agent offline'}</span>
-        </span>
+        {inRepository ? (
+          <span
+            className="hidden items-center gap-1.5 text-xs text-muted-foreground md:inline-flex"
+            title={status.healthLabel || 'Agent status'}
+          >
+            <StatusDot tone={stateTone[status.state] ?? 'neutral'} pulse={status.state === 'online'} />
+            <span className="max-w-36 truncate">{status.healthLabel || 'Agent offline'}</span>
+          </span>
+        ) : null}
 
         <button
           type="button"
           onClick={onOpenPalette}
           className="hidden h-8 w-52 items-center gap-2 rounded-md border border-border bg-muted/40 px-2.5 text-sm text-muted-foreground transition-colors hover:bg-muted lg:flex outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
-          <Search className="size-3.5" />
+          <Search className="size-3.5" aria-hidden />
           <span className="flex-1 text-left text-xs">Search or jump to…</span>
           <Kbd>⌘K</Kbd>
         </button>
@@ -90,7 +97,7 @@ export function Topbar({ onOpenPalette, serviceAdmin = false }: { onOpenPalette:
           onClick={onOpenPalette}
           className="text-muted-foreground lg:hidden"
         >
-          <Search />
+          <Search aria-hidden />
         </Button>
 
         <ThemeToggle />

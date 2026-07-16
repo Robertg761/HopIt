@@ -1,7 +1,7 @@
 // @ts-check
 // Translate the agent's per-file cache state (the /status `workspace.files` map)
 // into a friendly, plain-language file browser model. Every badge is derived
-// strictly from the agent's own fields — when a field is absent we say so ("—")
+// strictly from the agent's own fields. When a field is absent we say so
 // rather than guess. The directory listing is built one level at a time so the
 // UI can lazily expand folders instead of shipping thousands of nodes at once.
 //
@@ -18,7 +18,7 @@
  * @returns {Badge}
  */
 export function translateFileBadge(entry) {
-  if (!entry || typeof entry !== 'object') return { code: 'unknown', label: '—', tone: 'muted' }
+  if (!entry || typeof entry !== 'object') return { code: 'unknown', label: 'Unknown', tone: 'muted' }
   if (entry.blocked || entry.state === 'blocked') return { code: 'issue', label: 'Issue', tone: 'danger' }
   if (entry.dirty || entry.state === 'dirty') return { code: 'editing', label: 'Editing… syncing', tone: 'active' }
   if (entry.pending || entry.state === 'pending') return { code: 'syncing', label: 'Syncing…', tone: 'active' }
@@ -28,7 +28,7 @@ export function translateFileBadge(entry) {
   if (entry.state === 'cloud-only' || entry.hydrated === false) {
     return { code: 'cloud', label: 'Cloud only', tone: 'muted' }
   }
-  return { code: 'unknown', label: '—', tone: 'muted' }
+  return { code: 'unknown', label: 'Unknown', tone: 'muted' }
 }
 
 /** Priority order for aggregating a folder's mixed child states. */
@@ -112,11 +112,11 @@ export function aggregateFolderBadge(counts) {
         case 'local':
           return { code: 'local', label: 'On this Mac', tone: 'ok' }
         default:
-          return { code: 'unknown', label: '—', tone: 'muted' }
+          return { code: 'unknown', label: 'Unknown', tone: 'muted' }
       }
     }
   }
-  return { code: 'unknown', label: '—', tone: 'muted' }
+  return { code: 'unknown', label: 'Unknown', tone: 'muted' }
 }
 
 function normalizeSubpath(subpath) {

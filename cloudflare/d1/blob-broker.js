@@ -1,4 +1,4 @@
-// R2 blob broker — Phase 3 Stage 1b (HOPIT_MULTITENANT / Front 2)
+// R2 blob broker: Phase 3 Stage 1b (HOPIT_MULTITENANT / Front 2)
 //
 // Today the agent writes/reads R2 object blobs CLIENT-SIDE with ACCOUNT-LEVEL S3
 // credentials (packages/agent/src/blob-stores). Blob keys are codebase-namespaced
@@ -17,7 +17,7 @@
 // The Worker holds the only copy of the R2 credentials (as Worker secrets); no
 // tenant client does. GC / usage enumeration (which need a bucket-wide LIST) stay
 // an admin/server-side operation on the direct-credential path, off the tenant
-// client path — see the design §2d addendum.
+// client path: see the design §2d addendum.
 
 export const brokerPresignPath = '/blob-presign'
 export const brokerAllowedMethods = new Set(['GET', 'PUT', 'HEAD'])
@@ -68,7 +68,7 @@ export function isBrokerKeyForCodebase(key, codebaseId, prefix) {
 export function assertBrokerKeyForCodebase(key, codebaseId, prefix) {
   if (!codebaseId) throw new Error('Broker requires an entitled codebase.')
   if (!isBrokerKeyForCodebase(key, codebaseId, prefix)) {
-    // Never echo the requested key back verbatim — it can be attacker-chosen.
+    // Never echo the requested key back verbatim: it can be attacker-chosen.
     throw new Error('Broker refuses a blob key outside the entitled codebase prefix.')
   }
 }
@@ -128,7 +128,7 @@ async function signingKey(secretAccessKey, dateStamp, region, service) {
 }
 
 function objectPath(bucket, key, forcePathStyle) {
-  // R2 presigned URLs use path-style (forcePathStyle) — the agent's direct S3
+  // R2 presigned URLs use path-style (forcePathStyle): the agent's direct S3
   // client does too (blob-stores index.js forcePathStyle: true).
   if (forcePathStyle) return awsUriEncode(`/${bucket}/${key}`, false)
   return awsUriEncode(`/${key}`, false)

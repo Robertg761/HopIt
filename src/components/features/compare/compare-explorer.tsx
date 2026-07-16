@@ -346,7 +346,7 @@ function FileDiffBody({ body }: { body: CompareFileBody }) {
     case 'binary_changed':
       return (
         <NoteCard icon={FileQuestion} tone="iris">
-          Binary file changed. HopIt shows binary changes by metadata only — no line-by-line diff.
+          Binary file changed. HopIt shows binary changes by metadata only, with no line-by-line diff.
         </NoteCard>
       )
     case 'requiresLocalKey':

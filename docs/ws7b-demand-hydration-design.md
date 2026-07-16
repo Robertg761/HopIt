@@ -204,7 +204,7 @@ simplest option consistent with the design's constraints:
    `client_encryption_key_missing`, and reports the per-file `blocked` state plus
    key health through status. Other blocked paths (missing object, fetch failure)
    are independent and do not fail the whole open.
-8. **Automatic-open trigger and its rate limit — deferred.** `hop workspace open`
+8. **Automatic-open trigger and its rate limit: deferred.** `hop workspace open`
    is an explicit command invoked by the CLI, the dashboard, or a service action;
    it is not auto-fired on every editor restart. Because no automatic per-restart
    trigger exists in v1, the design's "rate-limit automatic open hydration per

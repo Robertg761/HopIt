@@ -12,7 +12,6 @@ const execFileAsync = promisify(execFile)
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const cliPath = path.join(repoRoot, 'packages/agent/src/cli.js')
 
-// eslint-disable-next-line no-control-regex
 const ANSI = /\u001b\[/
 
 async function makeSource() {

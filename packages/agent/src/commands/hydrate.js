@@ -27,8 +27,8 @@ export async function hydrateWorkspace(options) {
   const codebaseId = cloud.codebase?.id ?? options['codebase-id'] ?? 'hopit'
   // Cheap local verify pass: on a restart of an already-materialized workspace
   // most files are byte-identical to cloud. Reading the disk graph once (local
-  // hash/size, no per-file cloud reads) lets us skip the slow path — fetch +
-  // rewrite + `file.hydrated` — for every clean file, so a large clean workspace
+  // hash/size, no per-file cloud reads) lets us skip the slow path: fetch +
+  // rewrite + `file.hydrated`: for every clean file, so a large clean workspace
   // reaches `workspace.ready` (and the watcher/remote-push start) in seconds
   // instead of re-downloading thousands of files. Files that are missing, stale,
   // or dirty on disk still take the slow path below. The content manifest is

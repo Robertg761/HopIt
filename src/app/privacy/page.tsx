@@ -2,15 +2,18 @@ import type { Metadata } from 'next'
 
 import { LegalPage } from '@/components/marketing/legal-page'
 import { PublicShell } from '@/components/marketing/public-shell'
+import { publicSessionSignedIn } from '@/lib/public-session'
 
 export const metadata: Metadata = {
-  title: 'Privacy Policy — HopIt',
+  title: 'Privacy Policy | HopIt',
   description: 'How HopIt collects, uses, stores, and protects account, workspace, and billing information.',
 }
 
-export default function PrivacyPage() {
+export default async function PrivacyPage() {
+  const signedIn = await publicSessionSignedIn()
+
   return (
-    <PublicShell>
+    <PublicShell signedIn={signedIn}>
       <LegalPage
         title="Privacy Policy"
         summary="This policy explains what HopIt receives when you create an account and synchronize a workspace, why we use it, and the controls you retain."

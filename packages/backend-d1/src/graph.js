@@ -648,7 +648,7 @@ export function attachGraphMethods(Backend) {
   // Tenant auto-provision (Phase 3 §2e signup funnel). Called on a new tenant's
   // first authenticated request (the /api/me hook and dashboard first load) so a
   // stranger who just signed up with Clerk gets a free tenant with no card and no
-  // owner-email gate — the universal replacement for the owner-only bootstrap
+  // owner-email gate: the universal replacement for the owner-only bootstrap
   // throw. Idempotent (insert ... on conflict do nothing on the tenant_id primary
   // key), so repeated requests never duplicate the row or reset a plan billing set
   // to 'paid'. Flag off => a no-op that never touches D1, preserving byte-for-byte

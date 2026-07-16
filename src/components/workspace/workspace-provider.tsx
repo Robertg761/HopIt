@@ -8,6 +8,7 @@ import {
 } from '@/lib/client/agent-status'
 import { apiErrorFromUnknown, apiFetch } from '@/lib/client/api'
 import { humanizeApiError } from '@/lib/client/errors'
+import { useVisibilityAwarePoll } from '@/hooks/use-visibility-aware-poll'
 
 const LOCAL_POLL_MS = 2500
 const HOSTED_POLL_MS = 30_000
@@ -208,20 +209,12 @@ export function WorkspaceProvider({
   )
 
   React.useEffect(() => {
-    let cancelled = false
-    const load = () => {
-      if (!cancelled) void refresh()
-    }
-    load()
-    const interval = window.setInterval(
-      load,
-      status.backend === 'd1' ? HOSTED_POLL_MS : LOCAL_POLL_MS,
-    )
-    return () => {
-      cancelled = true
-      window.clearInterval(interval)
-    }
-  }, [refresh, status.backend])
+    void refresh()
+  }, [refresh])
+
+  useVisibilityAwarePoll(refresh, {
+    intervalMs: status.backend === 'd1' ? HOSTED_POLL_MS : LOCAL_POLL_MS,
+  })
 
   React.useEffect(() => {
     void refreshCodebases()

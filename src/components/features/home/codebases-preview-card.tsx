@@ -1,8 +1,8 @@
 'use client'
 
 import Link from 'next/link'
+import { ArrowRight } from 'lucide-react'
 
-import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { CodebaseSummary } from '@/components/workspace/workspace-provider'
@@ -15,7 +15,7 @@ export function CodebasesPreviewCard({ codebases, loading }: { codebases: Codeba
   return (
     <Card>
       <CardHeader className="flex-row items-center justify-between border-b border-border pb-3">
-        <CardTitle>Repositories</CardTitle>
+        <CardTitle as="h2">Repositories</CardTitle>
         <Link href="/codebases" className="text-xs font-medium text-iris hover:underline">
           View all
         </Link>
@@ -39,13 +39,11 @@ export function CodebasesPreviewCard({ codebases, loading }: { codebases: Codeba
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-iris hover:underline">{codebase.name}</p>
                     <p className="mt-0.5 text-xs text-muted-foreground">
-                      {formatCount(codebase.fileCount)} files ·{' '}
-                      {codebase.behindByRevisions > 0
-                        ? `${formatCount(codebase.behindByRevisions)} rev${codebase.behindByRevisions === 1 ? '' : 's'} behind`
-                        : 'Up to date'}
+                      {formatCount(codebase.fileCount + codebase.privateFileCount)} files ·{' '}
+                      {formatCount(codebase.memberCount)} {codebase.memberCount === 1 ? 'member' : 'members'}
                     </p>
                   </div>
-                  <Badge tone="outline">{codebase.attached ? 'Attached' : 'Cloud'}</Badge>
+                  <ArrowRight className="size-4 shrink-0 text-muted-foreground" aria-hidden />
                 </Link>
               </li>
             ))}

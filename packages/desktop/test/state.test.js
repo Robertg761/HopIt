@@ -163,5 +163,5 @@ test('projectSummaryLine renders a one-liner with revision', () => {
     { codebaseId: 'hopit', name: 'HopIt', reachable: true, status: realStatus },
   ])
   const line = projectSummaryLine(view.projects[0])
-  assert.match(line, /^HopIt — Synced · rev \d+$/)
+  assert.match(line, /^HopIt · Synced · rev \d+$/)
 })

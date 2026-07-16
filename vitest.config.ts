@@ -9,6 +9,9 @@ import { defineConfig } from 'vitest/config'
  * the `--dir src` flag in the `test:web` script.
  */
 export default defineConfig({
+  test: {
+    setupFiles: ['./vitest.setup.ts'],
+  },
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),

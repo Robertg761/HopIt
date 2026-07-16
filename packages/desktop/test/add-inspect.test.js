@@ -73,6 +73,6 @@ test('formatBytes is human friendly', () => {
   assert.equal(formatBytes(0), '0 B')
   assert.equal(formatBytes(1536), '1.5 KB')
   assert.equal(formatBytes(5 * 1024 * 1024), '5.0 MB')
-  assert.equal(formatBytes(-1), '—')
-  assert.equal(formatBytes(null), '—')
+  assert.equal(formatBytes(-1), 'Not available')
+  assert.equal(formatBytes(null), 'Not available')
 })

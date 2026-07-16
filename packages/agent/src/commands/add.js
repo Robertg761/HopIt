@@ -100,7 +100,7 @@ async function loadLaunchAgent(installOptions, launchAgent) {
 }
 
 /**
- * `hop add` — connect any local folder as a new HopIt codebase in one command.
+ * `hop add`: connect any local folder as a new HopIt codebase in one command.
  *
  * @param {Record<string, any>} options
  * @param {{ authorize?: typeof authorizeDeviceWithBrowser }} [inject]
@@ -245,7 +245,7 @@ export async function runAdd(options, inject = {}) {
   // The import owns file movement only; the launchd service lifecycle is handled
   // in step 8 (or left to the printed enable command), so keep the mirror path
   // from stopping/restarting a service mid-add. `internal: true` keeps the
-  // import/mirror step from printing its own human summary — hop add prints one.
+  // import/mirror step from printing its own human summary: hop add prints one.
   const importOptions = {
     ...installOptions,
     source,

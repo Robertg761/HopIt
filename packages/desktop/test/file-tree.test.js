@@ -16,7 +16,7 @@ test('badge translation covers the agent file states', () => {
   assert.equal(translateFileBadge({ dirty: true }).label, 'Editing… syncing')
   assert.equal(translateFileBadge({ pending: true }).label, 'Syncing…')
   assert.equal(translateFileBadge({ blocked: true }).label, 'Issue')
-  assert.equal(translateFileBadge(null).label, '—')
+  assert.equal(translateFileBadge(null).label, 'Unknown')
 })
 
 test('issue outranks editing which outranks plain local', () => {

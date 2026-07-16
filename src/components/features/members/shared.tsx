@@ -29,7 +29,7 @@ export function MonoId({
   value: string | null | undefined
   className?: string
 }) {
-  if (!value) return <span className="text-xs text-muted-foreground">—</span>
+  if (!value) return <span className="text-xs text-muted-foreground">Not available</span>
   return (
     <span
       className={cn('inline-block max-w-44 truncate align-bottom font-mono text-xs', className)}

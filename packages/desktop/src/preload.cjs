@@ -1,6 +1,6 @@
 // @ts-check
 // Minimal, typed IPC bridge. The renderer gets exactly this surface and nothing
-// else — no Node, no ipcRenderer, no remote module. Every method maps to a
+// else: no Node, no ipcRenderer, no remote module. Every method maps to a
 // single main-process handler.
 
 // Sandboxed Electron preloads must be CommonJS; ESM imports are unavailable here.

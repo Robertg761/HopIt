@@ -16,7 +16,7 @@ export function LegalPage({
         <p className="mt-5 max-w-2xl text-base leading-7 text-muted-foreground sm:text-lg">{summary}</p>
         <p className="mt-6 text-xs text-muted-foreground">Effective and last updated {updated}</p>
       </header>
-      <div className="legal-copy py-10 text-[15px] leading-7 text-muted-foreground [&_a]:font-medium [&_a]:text-iris [&_a]:underline-offset-4 hover:[&_a]:underline [&_h2]:mt-10 [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:tracking-tight [&_h2]:text-foreground [&_li]:pl-1 [&_p]:mt-4 [&_ul]:mt-4 [&_ul]:list-disc [&_ul]:space-y-2 [&_ul]:pl-6">
+      <div className="legal-copy py-10 text-[15px] leading-7 text-muted-foreground [&_a]:rounded-sm [&_a]:font-medium [&_a]:text-iris [&_a]:underline [&_a]:underline-offset-4 [&_a]:outline-none [&_a:focus-visible]:ring-2 [&_a:focus-visible]:ring-ring [&_h2]:mt-10 [&_h2]:text-xl [&_h2]:font-semibold [&_h2]:tracking-tight [&_h2]:text-foreground [&_li]:pl-1 [&_p]:mt-4 [&_ul]:mt-4 [&_ul]:list-disc [&_ul]:space-y-2 [&_ul]:pl-6">
         {children}
       </div>
     </article>

@@ -5,8 +5,8 @@
 // never hammers the engine.
 //
 // Nothing here re-implements diffing: it only reshapes what `hop compare` already
-// returns. The event journal (history.js) supplies the step list — real revision
-// numbers, timestamps, and triggers — and this module enriches a step on demand
+// returns. The event journal (history.js) supplies the step list: real revision
+// numbers, timestamps, and triggers: and this module enriches a step on demand
 // with the real per-file change set, and a single file with its real line diff.
 //
 // The compare contract this maps (see docs/ws7c-object-backed-diff-history-design.md):
@@ -28,7 +28,7 @@
 
 /**
  * Per-file change states and how the Trail speaks about them. Language is
- * step/episode-flavored — no commit metaphors.
+ * step/episode-flavored: no commit metaphors.
  * @type {Record<string, { label: string, tone: string, plain: string, diffable: boolean }>}
  */
 export const FILE_STATE_META = {
@@ -39,13 +39,13 @@ export const FILE_STATE_META = {
   binary_changed: {
     label: 'Binary changed',
     tone: 'binary',
-    plain: 'A non-text file changed — HopIt shows its size, not a line diff.',
+    plain: 'A non-text file changed: HopIt shows its size, not a line diff.',
     diffable: true,
   },
   requiresLocalKey: {
     label: 'Encrypted',
     tone: 'locked',
-    plain: 'Encrypted on this Mac only — its contents can’t be shown here.',
+    plain: 'Encrypted on this Mac only: its contents can’t be shown here.',
     diffable: false,
   },
   missing_blob: {
@@ -220,15 +220,15 @@ export function mapSummarizeResult(json, errorText = null) {
     mode: typeof json.mode === 'string' ? json.mode : null,
     skippedByCap,
     message: labeled > 0
-      ? `Labeled ${labeled} episode${labeled === 1 ? '' : 's'}${skippedByCap > 0 ? ` (${skippedByCap} more remain — run again)` : ''}.`
+      ? `Labeled ${labeled} episode${labeled === 1 ? '' : 's'}${skippedByCap > 0 ? ` (${skippedByCap} more remain: run again)` : ''}.`
       : 'Every episode is already labeled.',
   }
 }
 
 /**
  * Split event-derived recent steps (history.js rows) into those newer than the
- * newest episodized revision — episodes are clustered from cloud history and can
- * lag the local event window — so they can be shown in a "recent, not yet
+ * newest episodized revision: episodes are clustered from cloud history and can
+ * lag the local event window: so they can be shown in a "recent, not yet
  * episodized" section. With no episodes (or no max), every recent step qualifies.
  * @param {Array<{ revision?: unknown }>} rows
  * @param {number|null} maxEpisodizedRevision
@@ -255,7 +255,7 @@ const EMPTY_SUMMARY = Object.freeze({
 
 /**
  * Turn a directory-compare JSON result into the expansion view model for one
- * Trail step: a list of changed files (unchanged omitted — a directory compare
+ * Trail step: a list of changed files (unchanged omitted: a directory compare
  * lists every visible path, and the Trail only shows what moved) plus honest
  * loading/expired/error status.
  * @param {any} compareJson
@@ -402,7 +402,7 @@ export function buildFileDiffView(compareJson, path) {
       return {
         status: 'metadata',
         state: entry.state,
-        message: `This is a ${body.reason ?? entry.kind ?? 'non-file'} — there’s no line diff to show.`,
+        message: `This is a ${body.reason ?? entry.kind ?? 'non-file'}: there’s no line diff to show.`,
       }
     default:
       return { status: 'unknown', state: entry.state, message: 'This file’s change can’t be displayed as a line diff.' }
@@ -413,7 +413,7 @@ export function buildFileDiffView(compareJson, path) {
  * Build renderable unified-diff rows from the compare engine's line-diff summary.
  * The engine reports common prefix/suffix line *counts* (not the surrounding text)
  * plus the exact removed/added line slices, so we render the changed region and
- * mark how many unchanged lines sit above/below — honest about what we do and
+ * mark how many unchanged lines sit above/below: honest about what we do and
  * don't have.
  * @param {any} diff
  */
@@ -454,7 +454,7 @@ function normalizeSummary(summary) {
 
 /**
  * A fetch-once cache keyed by (codebaseId, from, to, path?). The Trail fetches a
- * step's compare on expand and a file's diff on click, once per session — the 5s
+ * step's compare on expand and a file's diff on click, once per session: the 5s
  * status poll never touches it. In-flight promises are memoized so a double-click
  * cannot spawn two `hop compare` processes; a rejected fetch is evicted so the
  * user can retry.

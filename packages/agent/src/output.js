@@ -4,7 +4,7 @@ import { isTruthyEnv } from './paths.js'
 
 // Shared human/JSON output layer for the CLI. Bulk commands (add/import/mirror/
 // sync/hydrate) historically streamed one raw NDJSON event line to stdout per
-// journaled write — thousands of `write.journaled ...` lines for a real import.
+// journaled write: thousands of `write.journaled ...` lines for a real import.
 // This module renders concise, styled human progress instead, while `--json` /
 // `HOPIT_JSON=1` restores the exact raw event stream that machine consumers and
 // the test suite depend on. The events journal file still records everything.
@@ -158,7 +158,7 @@ export function reportEvent(options, event, detail = {}) {
   switch (event) {
     case 'cloud.initialized':
       finishActivePhase()
-      writeLine(`  ${success('✓')} Initialized cloud graph ${muted(`— ${detail.files ?? 0} files`)}`)
+      writeLine(`  ${success('✓')} Initialized cloud graph${muted(`: ${detail.files ?? 0} files`)}`)
       break
     case 'local.imported':
       finishActivePhase()
@@ -179,13 +179,13 @@ export function reportEvent(options, event, detail = {}) {
     case 'sync.complete': {
       finishActivePhase()
       const writes = detail.writes ?? detail.committed ?? null
-      writeLine(`  ${success('✓')} Sync complete${writes != null ? muted(` — ${writes} change${writes === 1 ? '' : 's'}`) : ''}`)
+      writeLine(`  ${success('✓')} Sync complete${writes != null ? muted(`: ${writes} change${writes === 1 ? '' : 's'}`) : ''}`)
       break
     }
     case 'workspace.ready':
       finishActivePhase()
       writeLine(
-        `  ${success('✓')} Workspace ready ${muted(`— ${detail.materializedFileCount ?? 0} new, ${detail.verifiedFileCount ?? 0} unchanged (rev ${detail.revision ?? '?'})`)}`,
+        `  ${success('✓')} Workspace ready${muted(`: ${detail.materializedFileCount ?? 0} new, ${detail.verifiedFileCount ?? 0} unchanged (rev ${detail.revision ?? '?'})`)}`,
       )
       break
     case 'workspace.attached':

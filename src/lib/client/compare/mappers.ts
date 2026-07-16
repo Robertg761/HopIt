@@ -9,8 +9,8 @@ import type {
 
 /**
  * Pure view-model mappers for the compare surface. Everything user-facing about
- * a compare — the plain-language state copy, the summary chips, the unified diff
- * lines — is derived here so it can be unit-tested without React and stays in the
+ * a compare, including the plain-language state copy, the summary chips, and the unified diff
+ * lines, is derived here so it can be unit-tested without React and stays in the
  * roadmap's trail vocabulary (steps on a trail, never commits).
  */
 
@@ -194,7 +194,7 @@ function contextLabel(count: number, noun: string, where: string): string {
 /**
  * Which revisions the pickers may offer. Prefers the exact distinct revisions
  * enumerated from file-version rows; falls back to the retained integer range
- * when only bounds are known. Honest either way — it never invents revisions
+ * when only bounds are known. Honest either way, it never invents revisions
  * outside the retention window.
  */
 export function revisionOptions(

@@ -52,21 +52,29 @@ export function RepoShell({
       <div className="border-b border-border bg-background">
         <div className="mx-auto w-full max-w-[1280px] px-4 pt-4 sm:px-6 lg:px-8">
           <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
-            <Link
-              href="/codebases"
-              className="inline-flex items-center gap-1.5 text-muted-foreground hover:text-iris hover:underline"
-            >
-              <BookMarked className="size-4" />
-              Repositories
-            </Link>
-            <ChevronRight className="size-3.5 text-muted-foreground" aria-hidden />
-            <span className="inline-flex items-center gap-2 font-semibold">
-              <BookMarked className="size-4 text-muted-foreground" />
-              {name}
-            </span>
-            <Badge tone="outline" className="capitalize">
-              {visibility}
-            </Badge>
+            <nav aria-label="Breadcrumb">
+              <ol className="flex flex-wrap items-center gap-2">
+                <li>
+                  <Link
+                    href="/codebases"
+                    className="inline-flex items-center gap-1.5 rounded-sm text-muted-foreground outline-none hover:text-iris hover:underline focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    <BookMarked className="size-4" aria-hidden />
+                    Repositories
+                  </Link>
+                </li>
+                <li aria-hidden>
+                  <ChevronRight className="size-3.5 text-muted-foreground" aria-hidden />
+                </li>
+                <li aria-current="page" className="inline-flex items-center gap-2 font-semibold">
+                  <BookMarked className="size-4 text-muted-foreground" aria-hidden />
+                  {name}
+                  <Badge tone="outline" className="capitalize">
+                    {visibility}
+                  </Badge>
+                </li>
+              </ol>
+            </nav>
             {status.codebaseId === codebaseId ? (
               <span className="ml-auto inline-flex items-center gap-1.5 text-xs text-muted-foreground">
                 <StatusDot tone={repoStatus.tone} pulse={repoStatus.pulse} />
@@ -91,7 +99,7 @@ export function RepoShell({
                       : 'border-transparent text-muted-foreground hover:border-border hover:text-foreground',
                   )}
                 >
-                  <tab.icon className="size-4" strokeWidth={1.75} />
+                  <tab.icon className="size-4" strokeWidth={1.75} aria-hidden />
                   {tab.label}
                 </Link>
               )

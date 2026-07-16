@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/hooks/use-toast'
+import { useUnsavedChanges, useUnsavedChangesBlocker } from '@/components/shell/unsaved-changes-provider'
 import { useWorkspace } from '@/components/workspace/workspace-provider'
 import type { AgentFile } from '@/lib/client/agent-status'
 import { formatBytes } from '@/lib/client/format'
@@ -16,12 +17,17 @@ import { fetchCodebaseFile, saveCodebaseFile, type FileApiFailure } from './file
 export function FileEditor({ file, codebaseId }: { file: AgentFile; codebaseId: string | null }) {
   const { refresh } = useWorkspace()
   const { toast } = useToast()
+  const { confirmOrRun } = useUnsavedChanges()
   const [editing, setEditing] = React.useState(false)
   const [opening, setOpening] = React.useState(false)
   const [saving, setSaving] = React.useState(false)
   const [content, setContent] = React.useState('')
+  const [savedContent, setSavedContent] = React.useState('')
   const [baseRevision, setBaseRevision] = React.useState<number | null>(null)
   const [selectedStateId, setSelectedStateId] = React.useState<string | null>(null)
+  const isDirty = editing && content !== savedContent
+
+  useUnsavedChangesBlocker(isDirty, `Unsaved changes to ${file.path} will be lost.`)
 
   const showFailure = (title: string, error: FileApiFailure) => {
     if (error.code === 'browser_auth_required') {
@@ -35,8 +41,8 @@ export function FileEditor({ file, codebaseId }: { file: AgentFile; codebaseId: 
     return (
       <p className="rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
         {file.kind === 'symlink'
-          ? `Symlink${file.target ? ` to ${file.target}` : ''} — nothing to edit.`
-          : 'Directory entry — nothing to edit.'}
+          ? `Symlink${file.target ? ` to ${file.target}` : ''}. Nothing to edit.`
+          : 'Directory entry. Nothing to edit.'}
       </p>
     )
   }
@@ -44,7 +50,7 @@ export function FileEditor({ file, codebaseId }: { file: AgentFile; codebaseId: 
   if (file.encoding === 'base64') {
     return (
       <p className="rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-        Binary file ({formatBytes(file.size)}) — editing is not available.
+        Binary file ({formatBytes(file.size)}). Editing is not available.
       </p>
     )
   }
@@ -59,6 +65,7 @@ export function FileEditor({ file, codebaseId }: { file: AgentFile; codebaseId: 
       return
     }
     setContent(result.content)
+    setSavedContent(result.content)
     setBaseRevision(result.revision ?? file.revision)
     setSelectedStateId(result.selectedStateId)
     setEditing(true)
@@ -81,6 +88,7 @@ export function FileEditor({ file, codebaseId }: { file: AgentFile; codebaseId: 
     }
     setBaseRevision(result.revision)
     setSelectedStateId(result.selectedStateId)
+    setSavedContent(content)
     toast({
       title: 'File saved',
       description:
@@ -99,7 +107,7 @@ export function FileEditor({ file, codebaseId }: { file: AgentFile; codebaseId: 
             </pre>
             {file.contentPreviewTruncated ? (
               <p className="mt-1.5 text-xs text-muted-foreground">
-                Preview truncated — open the file to see everything.
+                Preview truncated. Open the file to see everything.
               </p>
             ) : null}
           </div>
@@ -132,11 +140,16 @@ export function FileEditor({ file, codebaseId }: { file: AgentFile; codebaseId: 
         spellCheck={false}
       />
       <div className="flex flex-wrap items-center gap-2">
-        <Button size="sm" onClick={() => void save()} disabled={saving || !selectedStateId}>
+        <Button size="sm" onClick={() => void save()} disabled={saving || !selectedStateId || !isDirty}>
           {saving ? <Spinner className="size-3.5 text-primary-foreground" /> : <Save />}
           {saving ? 'Saving…' : 'Save'}
         </Button>
-        <Button variant="ghost" size="sm" onClick={() => setEditing(false)} disabled={saving}>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => confirmOrRun(() => setEditing(false))}
+          disabled={saving}
+        >
           Close editor
         </Button>
         {baseRevision !== null ? (

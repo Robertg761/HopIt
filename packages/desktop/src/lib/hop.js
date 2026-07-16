@@ -169,7 +169,7 @@ export function trailEpisodesArgs(codebaseId) {
  * Build a read-only probe of the per-codebase summaries setting via a dry-run
  * summarize: `hop trail summarize --dry-run --limit 1 --codebase-id <id>`. A dry
  * run enforces the opt-in gate (returns state:'disabled' when off) and, when on,
- * reports the mode WITHOUT contacting the provider or needing an API key — and
+ * reports the mode WITHOUT contacting the provider or needing an API key: and
  * `--limit 1` bounds the work it does to build a would-send payload. This is the
  * honest way to read on/off + mode without a GUI toggle or a real model call.
  * @param {string} codebaseId
@@ -179,7 +179,7 @@ export function trailSummariesProbeArgs(codebaseId) {
 }
 
 /**
- * Build `hop trail summarize --codebase-id <id>` — the real "Summarize now" run.
+ * Build `hop trail summarize --codebase-id <id>`: the real "Summarize now" run.
  * Server-gated: fails closed when summaries are off, and surfaces an honest error
  * (e.g. missing key) rather than sending anything. No GUI flip of the setting.
  * @param {string} codebaseId

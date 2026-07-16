@@ -27,7 +27,7 @@ export async function GET(request: Request) {
   try {
     const actor = await requireActor(request, { allowBasicFallback: true })
     // Tenant auto-provision (Phase 3 §2e): with tenancy on, ensure the caller has
-    // their own free tenant before listing — the universal replacement for the
+    // their own free tenant before listing. This is the universal replacement for the
     // owner-only bootstrap, so a stranger's dashboard first load provisions them
     // even if they never hit /api/me. Idempotent + best-effort; never blocks the
     // list. Flag off => skipped, byte-for-byte legacy behavior.

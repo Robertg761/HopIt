@@ -10,9 +10,9 @@ const RELATIVE_UNITS: Array<[Intl.RelativeTimeFormatUnit, number]> = [
 const relativeFormatter = new Intl.RelativeTimeFormat('en', { numeric: 'auto', style: 'narrow' })
 
 export function formatRelativeTime(value: string | number | Date | null | undefined): string {
-  if (value === null || value === undefined || value === '') return '—'
+  if (value === null || value === undefined || value === '') return 'Not available'
   const date = value instanceof Date ? value : new Date(value)
-  if (Number.isNaN(date.getTime())) return typeof value === 'string' ? value : '—'
+  if (Number.isNaN(date.getTime())) return typeof value === 'string' ? value : 'Not available'
 
   const delta = date.getTime() - Date.now()
   for (const [unit, ms] of RELATIVE_UNITS) {
@@ -31,7 +31,7 @@ export function formatAbsoluteTime(value: string | number | Date | null | undefi
 }
 
 export function formatBytes(bytes: number | null | undefined): string {
-  if (bytes === null || bytes === undefined) return '—'
+  if (bytes === null || bytes === undefined) return 'Not available'
   if (bytes < 1024) return `${bytes} B`
   const units = ['KB', 'MB', 'GB', 'TB']
   let value = bytes
@@ -45,6 +45,6 @@ export function formatBytes(bytes: number | null | undefined): string {
 }
 
 export function formatCount(value: number | null | undefined): string {
-  if (value === null || value === undefined) return '—'
+  if (value === null || value === undefined) return 'Not available'
   return new Intl.NumberFormat('en').format(value)
 }

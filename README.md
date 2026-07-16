@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/Robertg761/HopIt/actions/workflows/ci.yml/badge.svg)](https://github.com/Robertg761/HopIt/actions/workflows/ci.yml)
 
-HopIt is a cloud-native code workspace whose goal is to replace GitHub — by being much better and much easier to use. The core idea is that a codebase lives in the cloud, while each device gets a HopIt Workspace Root that exposes managed local folders and syncs edits back automatically. The authoritative product direction and phase plan is [docs/product-roadmap.md](docs/product-roadmap.md).
+HopIt is a cloud-native code workspace whose goal is to replace GitHub: by being much better and much easier to use. The core idea is that a codebase lives in the cloud, while each device gets a HopIt Workspace Root that exposes managed local folders and syncs edits back automatically. The authoritative product direction and phase plan is [docs/product-roadmap.md](docs/product-roadmap.md).
 
 The first product bet is simple: working on code should feel local, but live in the cloud. A developer should be able to open a HopIt codebase on any device, edit it with normal tools, and continue somewhere else without a clone to manage, stale checkout, push, pull, stash, or half-finished recovery flow.
 
@@ -57,9 +57,10 @@ If the account has no cloud codebase yet, the browser approval flow can create
 the first project before granting the device access. The dashboard then presents
 one setup checklist for choosing that cloud project, connecting the local agent,
 attaching its Workspace Root folder, and preparing the first working set. The
-bundle is not signed or notarized yet, so public release publication is blocked.
-Private dogfood artifacts are built locally with `npm run package:hop` and are
-never uploaded by an unsigned release escape hatch.
+bundle is not signed or notarized yet, so normal public release publication is
+blocked. Private dogfood artifacts are built locally with `npm run package:hop`.
+An owner-approved unsigned public dogfood release uses the guarded two-part
+acknowledgement documented in `docs/personal-production.md`.
 
 ## Initial Scope
 
@@ -197,9 +198,10 @@ immutable `releases/<version>/` keys. `latest/manifest.json` is the one mutable
 channel pointer it updates and is uploaded last. The installer resolves that
 manifest to one immutable version, fails closed when no checksum tool is
 available, verifies SHA-256, and runs the downloaded `hop help` before replacing
-the installed runtime. `npm run release:hop` refuses every unsigned public
-upload; use `--dry-run` to verify its plan, or `npm run package:hop` to build
-local/private dogfood artifacts.
+the installed runtime. `npm run release:hop` blocks unsigned public uploads by
+default. Use `--dry-run` to verify its plan, `npm run package:hop` to build
+local/private dogfood artifacts, or the documented two-part owner acknowledgement
+for a deliberately approved unsigned public dogfood release.
 
 ## Hosted Backend
 

@@ -4,7 +4,7 @@
 // A per-project probe is `{ codebaseId, reachable, status, error }` where
 // `status` is the parsed /status body (or null when unreachable). All functions
 // here are pure so the tray icon/label/menu are a deterministic function of the
-// probes — this is the unit-tested behavioural core of the shell.
+// probes: this is the unit-tested behavioural core of the shell.
 
 /** @typedef {'synced'|'syncing'|'attention'|'stopped'} ProjectState */
 /** @typedef {'all-synced'|'syncing'|'attention'|'service-stopped'} TrayState */
@@ -173,9 +173,9 @@ export function reconcileSelection({ selectedId, projects, missStreak, threshold
   return { selectedId, missStreak: nextStreak }
 }
 
-/** One-line summary text for a project, e.g. "HopIt — Synced · rev 4437". */
+/** One-line summary text for a project, e.g. "HopIt · Synced · rev 4437". */
 export function projectSummaryLine(project) {
-  const parts = [project.name ?? project.codebaseId, '—', project.stateLabel]
+  const parts = [project.name ?? project.codebaseId, '·', project.stateLabel]
   const detail = []
   if (project.revision != null) detail.push(`rev ${project.revision}`)
   if (project.pendingCount) detail.push(`${project.pendingCount} pending`)

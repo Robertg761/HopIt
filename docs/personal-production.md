@@ -249,7 +249,7 @@ The "workspace drift" that skipped every push apply through 2026-07-10 was
 diagnosed as a stale content manifest, not real drift: a manual `hop sync`
 committed 24 files to D1 (revision 4436, all acknowledged), but the manifest is
 only rebuilt on materialize/refresh/hydrate, and the scan that gates refresh
-compares disk against the manifest — so the stale manifest blocked the one
+compares disk against the manifest, so the stale manifest blocked the one
 operation that would rebuild it. Refresh and the remote-push decision now
 exonerate scan findings that already match the cloud graph byte-for-byte and
 self-heal the manifest (`manifestSelfHealed` in `refresh.complete`); genuine
@@ -258,7 +258,7 @@ repo-checkout `hop refresh --profile production` (0 written, 0 deleted, 24
 exonerated) and the LaunchAgent was restarted with a clean scan at revision
 4436. The live push-applied proof landed on 2026-07-11: a second isolated
 device synced revision 4436 → 4437 and the production service applied it over
-the hub (trigger `remote-push`, ~8s later) — see "Verified 2026-07-11" below.
+the hub (trigger `remote-push`, ~8s later). See "Verified 2026-07-11" below.
 
 Two related hardenings from the same investigation:
 
@@ -401,7 +401,7 @@ Current no-charge R2 posture:
 - Public `r2.dev` access: disabled
 - HopIt-managed stored objects: `0` under the configured `production/codebases/hopit/blobs/sha256/` prefix as verified by `hop storage status`
 - HopIt-managed stored bytes: `0 B` under the configured HopIt prefix
-- Lifecycle: only the default rule aborting incomplete multipart uploads after 7 days. The former `free-only-auto-delete` rule (expire all objects after 1 day) was removed on 2026-07-08 — it deleted referenced blob bodies out from under D1 metadata. Verified at removal time: production D1 had `0` object-backed file rows (all 58 files `content_storage='inline'`), so no referenced blobs were lost while the rule was active.
+- Lifecycle: only the default rule aborting incomplete multipart uploads after 7 days. The former `free-only-auto-delete` rule (expire all objects after 1 day) was removed on 2026-07-08. It deleted referenced blob bodies out from under D1 metadata. Verified at removal time: production D1 had `0` object-backed file rows (all 58 files `content_storage='inline'`), so no referenced blobs were lost while the rule was active.
 - Agent credentials: configured locally in `.env.local` and `~/.config/hopit/production.env` as a scoped account token with Object Read & Write access to `hopit-blobs` only
 - Verification: a 44-byte HopIt object-blob smoke file was uploaded through the R2 adapter, hydrated back through HopIt, and deleted; `hop storage status --profile production` and dry-run `hop storage gc --profile production` both report the HopIt-managed prefix at `0` objects / `0 B`
 
@@ -470,7 +470,7 @@ requeue, Stripe end-of-period cancellation/resume, and billing reconciliation.
 Renewal changes require an explicit boolean and never default to resuming a
 subscription. Billing reconciliation reports per-tenant failures and continues
 past an isolated tenant error. Once an external or D1 mutation commits, a later
-snapshot-refresh failure is returned as an applied operation with warnings—not
+snapshot-refresh failure is returned as an applied operation with warnings, not
 as a false mutation failure.
 The browser can export the current redacted operations snapshot; it never
 receives secret values, approval codes, raw key material, storage credentials,
@@ -663,23 +663,42 @@ before publishing the one mutable channel pointer. A failure can therefore leave
 unreferenced immutable objects, but it cannot advance `latest` to a mixed set.
 Targeted plans publish only their versioned objects and never replace the
 multi-platform `latest` pointer.
-Do not remove the unsigned gate until real signing and macOS notarization are in
-place.
+Unsigned publication remains blocked by default. Until signing and macOS
+notarization are available, an owner-approved public dogfood release requires
+both explicit controls:
+
+```bash
+HOPIT_ACKNOWLEDGE_UNSIGNED_PUBLIC_RELEASE=I_ACCEPT_UNSIGNED_PUBLIC_DISTRIBUTION \
+  npm run release:hop -- --allow-unsigned
+```
+
+The acknowledgement is intentionally verbose so a normal release command
+cannot publish unsigned artifacts by accident. Remove this temporary path when
+signed and notarized packages are available.
+
+`npm run package:hop:dmg` builds a local unsigned
+`artifacts/HopIt-macOS.dmg` containing both Mac runtimes. Its
+`Install HopIt.command` chooses Apple silicon or Intel on the Mac itself,
+installs into the current user account, and starts `hop setup`. Future release
+manifests and upload plans include the DMG. Public upload remains blocked unless
+the guarded owner-approved unsigned path above is used, or signing and
+notarization are implemented.
 
 This section describes the checked-in publication contract. No release was
 uploaded while adding these gates, and the live bucket should be inspected for
 a schema-v2 manifest before treating it as migrated. Do not publish merely to
-exercise the flow; use the local tests and `--dry-run` until signing/notarization
-is implemented. Local dogfood builds use `package:hop` instead.
+exercise the flow. Use the local tests and `--dry-run` unless a public dogfood
+release has been deliberately approved. Local dogfood builds use `package:hop`
+instead.
 
 - Bucket: `hopit-releases` (public, wrangler-authed on the release machine).
 - Public base URL: `https://pub-3d89002dcb6c4d71b6d1188f39cc7731.r2.dev`.
 - Layout:
-  - `releases/<version>/hop-<target>.tar.gz` and `.sha256` sidecars — immutable
-    target artifacts.
-  - `releases/<version>/manifest.json` — immutable schema-v2 manifest whose
+  - `releases/<version>/hop-<target>.tar.gz` and `.sha256` sidecars. These are
+    immutable target artifacts.
+  - `releases/<version>/manifest.json`, an immutable schema-v2 manifest whose
     `key` and `checksumKey` fields point only to the same version prefix.
-  - `latest/manifest.json` — the only mutable short-cache channel pointer; it is
+  - `latest/manifest.json`, the only mutable short-cache channel pointer. It is
     uploaded last. The publisher no longer writes mutable `latest/hop-*`
     artifacts, and the installer ignores any legacy objects at those keys.
 

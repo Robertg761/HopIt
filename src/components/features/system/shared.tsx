@@ -61,7 +61,7 @@ export function MonoId({
   value: string | null | undefined
   className?: string
 }) {
-  if (!value) return <span className="text-xs text-muted-foreground">—</span>
+  if (!value) return <span className="text-xs text-muted-foreground">Not available</span>
   return (
     <span className={cn('inline-block max-w-full truncate align-bottom font-mono text-xs', className)} title={value}>
       {value}
@@ -73,7 +73,7 @@ export function MonoId({
 export function ManagedCaption({ children }: { children?: React.ReactNode }) {
   return (
     <p className="text-xs text-muted-foreground/80">
-      {children ?? 'Managed by the agent and backend — read-only here.'}
+      {children ?? 'Managed by the agent and backend. This view is read-only.'}
     </p>
   )
 }

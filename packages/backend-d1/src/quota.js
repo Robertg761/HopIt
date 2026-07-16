@@ -1,4 +1,4 @@
-// Backend (Plane A) quota gate — Phase 3 Stage 3.
+// Backend (Plane A) quota gate: Phase 3 Stage 3.
 //
 // The Next backend owns the subscription/seat/codebase-count gate (the counts
 // the tenant CAN influence through the dashboard); the Cloudflare Worker owns the
@@ -42,7 +42,7 @@ export function resolveCodebaseLimit(env = {}, plan = 'free') {
 
 // Storage + daily-write caps mirror the Worker's quota.js so the dashboard can
 // surface the SAME limits the Worker enforces. (The Worker runs in a separate
-// Cloudflare bundle and cannot import this Node module — the same reason
+// Cloudflare bundle and cannot import this Node module: the same reason
 // server-actor-token logic is mirrored on both sides.) The Worker remains the
 // authoritative enforcement point; this is display-only on Plane A.
 const STORAGE_DAILY_DEFAULTS = {
@@ -127,7 +127,7 @@ export function assertSubscriptionActive() {
 
 // Tenant auto-provision (Phase 3 §2e / Stage 6 signup funnel). On a new tenant's
 // first authenticated request the backend ensures exactly one tenant_usage row
-// exists with the free plan — no card, no owner-email gate. Idempotent by the
+// exists with the free plan: no card, no owner-email gate. Idempotent by the
 // tenant_id primary key: `on conflict do nothing` so a second request never
 // duplicates the row NOR resets a plan billing later set to 'paid'. Mirrors the
 // Worker's buildMeterUpsertStatement column shape (plan defaults 'free' on

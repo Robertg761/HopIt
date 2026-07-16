@@ -213,7 +213,7 @@ export async function assertRefreshDeletionSafe(options, cloud, cloudService, co
 
   // When the read looks like a guest (or the visible graph is empty while files
   // are hidden), the most likely cause is a missing requester identity rather
-  // than a genuine cloud-side deletion — surface that so the operator can fix it.
+  // than a genuine cloud-side deletion: surface that so the operator can fix it.
   const guestHint =
     guestLike || (emptyGraphWipe && hiddenFileCount > 0)
       ? ` This device is reading the cloud as ${requesterRole ?? 'a guest'} and likely has no requester identity configured; set HOPIT_REQUESTER_ID to the codebase owner id (or re-run connected setup) so visibility-filtered reads see the codebase.`
@@ -262,7 +262,7 @@ export async function materializeCloudEntry(root, relativePath, file, cloudServi
     await fs.writeFile(absolutePath, body)
   } catch (error) {
     // Read-only targets (git stores object files as mode 444) are replaced,
-    // not edited in place — the same way git itself rewrites them.
+    // not edited in place: the same way git itself rewrites them.
     if (error?.code !== 'EACCES' && error?.code !== 'EPERM') throw error
     await fs.rm(absolutePath, { force: true })
     await fs.writeFile(absolutePath, body)

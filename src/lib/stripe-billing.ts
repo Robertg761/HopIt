@@ -1,6 +1,8 @@
 import Stripe from 'stripe'
 
-export type BillingPlanKey = 'plus' | 'plus_storage'
+import { billingPlans, type BillingPlanKey } from '@/lib/billing-plans'
+
+export { billingPlans, type BillingPlanKey } from '@/lib/billing-plans'
 
 export type BillingEntitlementEvent = {
   eventId: string
@@ -24,24 +26,10 @@ export type StoredBillingSubscription = {
   status?: unknown
 }
 
-export const billingPlans = {
-  plus: {
-    key: 'plus',
-    name: 'HopIt Plus',
-    priceUsd: 10,
-    storageGb: 30,
-    dailyWrites: 20_000,
-    priceEnv: 'STRIPE_PRICE_PLUS',
-  },
-  plus_storage: {
-    key: 'plus_storage',
-    name: 'HopIt Plus Storage',
-    priceUsd: 15,
-    storageGb: 100,
-    dailyWrites: 20_000,
-    priceEnv: 'STRIPE_PRICE_PLUS_STORAGE',
-  },
-} as const
+const billingPriceEnv: Record<BillingPlanKey, 'STRIPE_PRICE_PLUS' | 'STRIPE_PRICE_PLUS_STORAGE'> = {
+  plus: 'STRIPE_PRICE_PLUS',
+  plus_storage: 'STRIPE_PRICE_PLUS_STORAGE',
+}
 
 const managedPaymentsApiVersion = '2026-03-04.preview'
 
@@ -66,7 +54,7 @@ export function stripeWebhookSecret() {
 }
 
 export function priceIdForPlan(planKey: BillingPlanKey) {
-  return requiredEnv(billingPlans[planKey].priceEnv)
+  return requiredEnv(billingPriceEnv[planKey])
 }
 
 export function billingPlanKey(value: unknown): BillingPlanKey | null {

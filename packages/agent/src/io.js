@@ -125,8 +125,8 @@ export async function appendEventNdjson(filePath, value) {
 // Read the events journal including the one rotated generation, oldest first,
 // for readers that need history deeper than the current file (e.g. resuming
 // remote-push cursors: the last push event may sit in the rotated generation
-// right after a rotation). Recent-window readers do NOT need this — the newest
-// events always live in the current file — and can keep using readNdjson.
+// right after a rotation). Recent-window readers do NOT need this. The newest
+// events always live in the current file, so they can keep using readNdjson.
 export async function readEventsWithHistory(filePath) {
   const [rotated, current] = await Promise.all([
     readNdjson(rotatedNdjsonPath(filePath)),

@@ -5,9 +5,9 @@ import type { TrailEpisode } from './types'
 
 /**
  * Pure view-model mappers for the trail-episode surface. Everything user-facing
- * about an episode — its label (or the honest "not yet labeled" state), its
+ * about an episode: its label (or the honest "not yet labeled" state), its
  * duration, its step/file counts, and the deep-link into the existing compare
- * page — is derived here so it can be unit-tested without React and stays in the
+ * page is derived here so it can be unit-tested without React and stays in the
  * roadmap's trail vocabulary (episodes and steps on a trail, never commits).
  */
 
@@ -40,12 +40,12 @@ export function episodeModelBadge(episode: TrailEpisode): string | null {
 /**
  * Human duration between an episode's first and last step. Deterministic and
  * timezone-independent (a millisecond delta, not a wall-clock render), so it is
- * safe to unit-test. Honest "—" when either bound is missing or unparseable.
+ * safe to unit-test. Returns "Not available" when either bound is missing or unparseable.
  */
 export function episodeDurationLabel(episode: TrailEpisode): string {
   const start = timestampMs(episode.startedAt)
   const end = timestampMs(episode.endedAt)
-  if (start === null || end === null) return '—'
+  if (start === null || end === null) return 'Not available'
   const delta = Math.max(0, end - start)
   if (delta < 60_000) return 'under a minute'
   const totalMinutes = Math.round(delta / 60_000)
@@ -55,7 +55,7 @@ export function episodeDurationLabel(episode: TrailEpisode): string {
   return minutes === 0 ? `${hours} hr` : `${hours} hr ${minutes} min`
 }
 
-/** "12 steps · 5 files" — the compact activity summary shown on a card. */
+/** "12 steps · 5 files" is the compact activity summary shown on a card. */
 export function episodeStepSummary(episode: TrailEpisode): string {
   const steps = plural(episode.stepCount, 'step')
   const files = plural(episode.changedPathCount, 'file')

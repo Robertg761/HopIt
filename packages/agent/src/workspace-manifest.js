@@ -70,7 +70,7 @@ export function contentManifestSummary(manifest) {
 
 // Returns a compact scan shape safe to embed in events and status output:
 // counts + samplePaths (max 10). Pass scanOptions.includePaths to also get the
-// full addedPaths/modifiedPaths/deletedPaths arrays — internal use only (the
+// full addedPaths/modifiedPaths/deletedPaths arrays: internal use only (the
 // exoneration flow); full arrays must never reach events.ndjson or CLI JSON,
 // where a large dirty workspace would write multi-thousand-element payloads.
 export async function workspaceLocalChanges(options, indexedCodebase, scanOptions = {}) {
@@ -142,8 +142,8 @@ export async function workspaceLocalChanges(options, indexedCodebase, scanOption
 // Anything that genuinely differs from cloud keeps blocking (fail-closed).
 //
 // The input scan must carry the full path arrays (workspaceLocalChanges with
-// includePaths). The returned object is deliberately compact — counts,
-// samplePaths (≤10), exoneratedCount, exoneratedSamplePaths (≤10) — because
+// includePaths). The returned object is deliberately compact: counts,
+// samplePaths (≤10), exoneratedCount, exoneratedSamplePaths (≤10). This is compact
 // callers embed it verbatim in event and status payloads.
 export function exoneratedLocalChanges(changes, cloud, diskEntries = {}) {
   if (!changes || changes.safe) return changes
@@ -519,7 +519,7 @@ export async function sortedDirEntries(dir) {
 }
 
 // Generated/dependency directories the sync scan never uploads. Unlike
-// shouldSkipImportPath this deliberately keeps `.git/` — Git internals are
+// shouldSkipImportPath this deliberately keeps `.git/`: Git internals are
 // part of the owner-private mirror contract; node_modules and build output
 // are reproducible junk that would flood the cloud graph (a 2026-07-08 scan
 // journaled 26k node_modules files before this guard existed).

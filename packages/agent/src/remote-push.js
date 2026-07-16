@@ -313,7 +313,7 @@ async function runRemotePushFallbackPoll(options, state, streamOptions) {
   // When it applies/skips/fails it emits a terminal event that truthfully
   // becomes the latest state. But when the poll finds nothing to do it emits
   // NOTHING, leaving `remote-push.fallback_polling` as the journal's latest
-  // remote-push event — so /status would report `push-fallback-polling` (and
+  // remote-push event: so /status would report `push-fallback-polling` (and
   // the desktop app "Polling") even though the socket is healthily connected.
   // Emit `remote-push.resumed` so the latest event reflects the live socket.
   // `push-fallback-polling` then only lingers as latest when we are genuinely

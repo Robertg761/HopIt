@@ -55,7 +55,7 @@ export function clampToWorkArea(bounds, workArea) {
 
 /**
  * Resolve the bounds to open with, given persisted raw state and the current
- * work area. Pure — the composition tested end-to-end.
+ * work area. Pure: the composition tested end-to-end.
  * @param {any} rawPersisted
  * @param {{x:number,y:number,width:number,height:number}} workArea
  */

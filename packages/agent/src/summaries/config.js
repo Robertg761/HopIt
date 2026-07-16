@@ -3,8 +3,8 @@ import { DEFAULT_DIFF_MAX_CHARS } from './payload.js'
 
 // Model ids and endpoints are CONFIG, not constants: the pricing/availability
 // landscape moves weekly, and the roadmap's "local model later" is just another
-// adapter. Defaults below reflect the owner's 2026-07-12 decision — OpenAI
-// gpt-5.4-mini default, Gemini 2.5 flash-lite pre-wired fallback — but every one
+// adapter. Defaults below reflect the owner's 2026-07-12 decision: OpenAI
+// gpt-5.4-mini default and Gemini 2.5 flash-lite pre-wired fallback. Every value
 // is overridable by env or CLI flag.
 
 export const DEFAULT_PROVIDER = 'openai'

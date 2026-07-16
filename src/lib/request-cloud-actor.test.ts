@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // Phase 3 §1.4 / decision 10: the basic-auth fallback resolves to an empty
 // wildcard actor ({}) that downstream visibility code treats as an unscoped
 // bypass. These tests prove that path is byte-for-byte unchanged with tenancy
-// OFF and structurally unreachable with tenancy ON — even when the credential
+// OFF and structurally unreachable with tenancy ON, even when the credential
 // check is (mis)configured to pass.
 
 const authMock = vi.fn()

@@ -33,7 +33,7 @@ export const navGroups: NavGroup[] = [
         id: 'home',
         href: '/overview',
         label: 'Dashboard',
-        description: 'Overview of your workspace and repositories.',
+        description: 'Overview of your HopIt account.',
         icon: House,
         keywords: ['home', 'overview', 'dashboard', 'summary'],
       },

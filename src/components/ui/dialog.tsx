@@ -1,16 +1,12 @@
 'use client'
 
-import * as React from "react"
-import { createPortal } from "react-dom"
-import { X } from "lucide-react"
+import * as DialogPrimitive from '@radix-ui/react-dialog'
+import * as React from 'react'
+import { X } from 'lucide-react'
 
-import { cn } from "@/lib/utils"
-import { Button } from "@/components/ui/button"
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
-/**
- * Lightweight modal dialog. Controlled via `open` / `onOpenChange`.
- * Closes on Esc and overlay click; focuses the panel on open.
- */
 function Dialog({
   open,
   onOpenChange,
@@ -28,78 +24,59 @@ function Dialog({
   children?: React.ReactNode
   footer?: React.ReactNode
 }) {
-  const panelRef = React.useRef<HTMLDivElement>(null)
-  const titleId = React.useId()
-  const [mounted, setMounted] = React.useState(false)
-
-  React.useEffect(() => setMounted(true), [])
+  const previouslyFocused = React.useRef<HTMLElement | null>(null)
 
   React.useEffect(() => {
-    if (!open) return
-    const previous = document.activeElement as HTMLElement | null
-    panelRef.current?.focus()
+    if (open) previouslyFocused.current = document.activeElement as HTMLElement | null
+  }, [open])
 
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") onOpenChange(false)
-    }
-    document.addEventListener("keydown", onKeyDown)
-    document.body.style.overflow = "hidden"
-    return () => {
-      document.removeEventListener("keydown", onKeyDown)
-      document.body.style.overflow = ""
-      previous?.focus?.()
-    }
-  }, [open, onOpenChange])
-
-  if (!mounted || !open) return null
-
-  return createPortal(
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 pt-[10vh]">
-      <button
-        type="button"
-        aria-label="Close dialog"
-        onClick={() => onOpenChange(false)}
-        className="fixed inset-0 bg-black/50 backdrop-blur-[2px] animate-in fade-in duration-150"
-        tabIndex={-1}
-      />
-      <div
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
-        className={cn(
-          "relative z-10 w-full max-w-lg rounded-md border border-border bg-popover text-popover-foreground shadow-lg outline-none",
-          "animate-in fade-in zoom-in-95 duration-150",
-          className
-        )}
-      >
-        <div className="flex items-start justify-between gap-4 px-5 pt-5">
-          <div className="flex flex-col gap-1">
-            <h2 id={titleId} className="text-base font-semibold">
-              {title}
-            </h2>
-            {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
+  return (
+    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
+      <DialogPrimitive.Portal>
+        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/50 backdrop-blur-[2px] data-[state=open]:animate-in data-[state=open]:fade-in data-[state=closed]:animate-out data-[state=closed]:fade-out data-[state=closed]:duration-100 data-[state=open]:duration-150" />
+        <DialogPrimitive.Content
+          {...(!description ? { 'aria-describedby': undefined } : {})}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault()
+            previouslyFocused.current?.focus()
+          }}
+          className={cn(
+            'fixed left-1/2 top-[10vh] z-50 max-h-[80dvh] w-[calc(100%-2rem)] max-w-lg -translate-x-1/2 overflow-y-auto rounded-md border border-border bg-popover text-popover-foreground shadow-lg outline-none',
+            'data-[state=open]:animate-in data-[state=open]:fade-in data-[state=open]:zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out data-[state=closed]:zoom-out-95 data-[state=closed]:duration-100 data-[state=open]:duration-150',
+            className,
+          )}
+        >
+          <div className="flex items-start justify-between gap-4 px-5 pt-5">
+            <div className="flex flex-col gap-1">
+              <DialogPrimitive.Title className="text-base font-semibold">
+                {title}
+              </DialogPrimitive.Title>
+              {description ? (
+                <DialogPrimitive.Description className="text-sm text-muted-foreground">
+                  {description}
+                </DialogPrimitive.Description>
+              ) : null}
+            </div>
+            <DialogPrimitive.Close asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                aria-label="Close"
+                className="-mr-1.5 -mt-1.5 text-muted-foreground"
+              >
+                <X aria-hidden />
+              </Button>
+            </DialogPrimitive.Close>
           </div>
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            aria-label="Close"
-            onClick={() => onOpenChange(false)}
-            className="-mr-1.5 -mt-1.5 text-muted-foreground"
-          >
-            <X />
-          </Button>
-        </div>
-        <div className="px-6 py-5">{children}</div>
-        {footer ? (
-          <div className="flex items-center justify-end gap-2 border-t border-border px-6 py-4">
-            {footer}
-          </div>
-        ) : null}
-      </div>
-    </div>,
-    document.body
+          <div className="px-6 py-5">{children}</div>
+          {footer ? (
+            <div className="flex items-center justify-end gap-2 border-t border-border px-6 py-4">
+              {footer}
+            </div>
+          ) : null}
+        </DialogPrimitive.Content>
+      </DialogPrimitive.Portal>
+    </DialogPrimitive.Root>
   )
 }
 

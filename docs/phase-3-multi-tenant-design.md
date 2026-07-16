@@ -1,4 +1,4 @@
-# Phase 3 — Real Tenants: Multi-Tenant Signup, Isolation, Quotas & Billing
+# Phase 3: Real Tenants: Multi-Tenant Signup, Isolation, Quotas & Billing
 
 > **Consolidated 2026-07-13 from two parallel design drafts.**
 
@@ -7,7 +7,7 @@ This document is the design-first gate for **Phase 3 of
 multi-tenant signup at `hopit.dev`: per-user isolation and quotas, flat-subscription
 billing plumbing, and the security hardening that makes a stranger's sign-up safe.
 Following the WS7-era convention, implementation starts only after the owner approves
-this doc — no schema change, billing integration, or worker change lands before that
+this doc: no schema change, billing integration, or worker change lands before that
 approval, and this doc contains **no implementation**.
 
 **Exit criterion (from the roadmap):** *a stranger can sign up, pay, and sync, and
@@ -23,7 +23,7 @@ behavior is grounded in named files and lines, and ends with a single **Decision
 needed from owner** section that lists each choice as a crisp question plus a
 recommendation.
 
-## Stage 0 — work already underway (do not re-plan here)
+## Stage 0: work already underway (do not re-plan here)
 
 Two workstreams are running in parallel; this doc treats their output as
 prerequisites, not new work:
@@ -33,12 +33,12 @@ prerequisites, not new work:
    307-redirects unauthenticated requests to `/sign-in`. That blocks the
    agent-session-token (`hst_`) auth path that
    [`src/lib/request-cloud-actor.ts:21-30`](../src/lib/request-cloud-actor.ts)
-   already implements — so today that path is dead code for hosted requests
+   already implements: so today that path is dead code for hosted requests
    (confirmed in `docs/progress.md:216`, a live 307 against
    `https://hopit.dev/api/codebase-files`). An agent presenting a `Bearer hst_...`
    token to `/api/*` is redirected to sign-in before the route runs, so
    `cloudActorFromRequest`'s agent-token branch is unreachable from the Next app.
-   (Agents still reach D1 through the Cloudflare Worker — see §1 — so this only
+   (Agents still reach D1 through the Cloudflare Worker: see §1: so this only
    blocks programmatic *dashboard-API* access, which Phase 3 needs for the AI
    story.) Stage-0 makes the `hst_` bearer path load-bearing (a public-but-token-gated
    matcher alongside the existing `isPublicDeviceAuthorizationRoute`). Phase 3
@@ -59,7 +59,7 @@ prerequisites, not new work:
 
 ## 1. Current-state audit (read, not assumed)
 
-HopIt is already *shaped* like a multi-tenant system — every table is keyed by a
+HopIt is already *shaped* like a multi-tenant system: every table is keyed by a
 global `codebase_id`, ownership and membership are modeled, and the worker enforces
 a per-session scope. What is missing is everything that turns "one owner with several
 codebases" into "many strangers who never trust each other": a real
@@ -77,7 +77,7 @@ limiting. Several findings below were surprising; file paths are exact.
   (`auth()` + `currentUser()` → `{ userId, sessionId, primaryEmail, displayName,
   currentAuthEmailVerified }`). `src/lib/auth-config.ts` decides Clerk-vs-basic by
   env (`HOPIT_AUTH_PROVIDER`, presence of `CLERK_SECRET_KEY`). Clerk sign-*up*
-  already works — the constraint is what happens *after* signup, not signup itself.
+  already works: the constraint is what happens *after* signup, not signup itself.
   Whether strangers can register today is a Clerk-dashboard toggle, not code.
 
 - **A signed-in Clerk user becomes an owner by creating a codebase, and that path
@@ -86,9 +86,9 @@ limiting. Several findings below were surprising; file paths are exact.
   [`graph.js` `createCodebase`](../packages/backend-d1/src/graph.js#L604) from
   `actor.userId` (`graph.js:612`), which also inserts an `owner`-role row into
   `codebase_members`; `allocateCodebaseId` (`graph.js:17-22`) appends a full UUID so
-  *"two accounts can safely choose the same common name"* — codebase ids are already
+  *"two accounts can safely choose the same common name"*: codebase ids are already
   global tenant keys. **Any authenticated user can already create and own a codebase.**
-  Multi-tenant codebase creation is mechanically live today — the biggest surprise.
+  Multi-tenant codebase creation is mechanically live today: the biggest surprise.
 
 - **`codebase_members` + roles.** `codebase_members(codebase_id, user_id, role,
   status, …)` (`schema.sql:115-128`) drives membership; `owner_id` is the tenant
@@ -116,28 +116,28 @@ limiting. Several findings below were surprising; file paths are exact.
   [`device-authorizations.js`](../packages/backend-d1/src/device-authorizations.js)
   implement RFC-8628-style device flow: create (public, `proxy.ts:22`/`30`), approve
   (Clerk-gated, same-origin, and requiring the approver already have access to the
-  target `codebaseId` — `src/app/api/device-authorizations/approve/route.ts:27-30`),
+  target `codebaseId`: `src/app/api/device-authorizations/approve/route.ts:27-30`),
   poll. `hop add` (`packages/agent/src/commands/add.js`) requests a *new* codebase
   id/name (`device-authorizations.js:44` `requestedCodebaseId`) and hard-fails if the
   approved codebase differs from the requested one (`add.js:183-196`), so a misrouted
   approval cannot overwrite another workspace. The session token is wrapped to the
   device public key (`device-authorizations.js:142-147`). This is clean and already
-  per-user scoped — it needs a billing/quota gate added, not a redesign.
+  per-user scoped: it needs a billing/quota gate added, not a redesign.
 
-### 1.2 Trust boundaries — two enforcement planes, not equally strong
+### 1.2 Trust boundaries: two enforcement planes, not equally strong
 
-- **Plane A — the Next.js backend (`@hopit/backend-d1`) reached with the trusted
+- **Plane A: the Next.js backend (`@hopit/backend-d1`) reached with the trusted
   proxy token.** The hosted Next API builds its D1 client with **no session token**
   (`cloud-backend.ts:277-279` `createD1Backend({})`), so `d1AuthorizationToken` falls
   back to `HOPIT_D1_API_TOKEN` (`config.js:31-33`, `11`) as the worker bearer. **In
   production that env var is set to the proxy-token value** (`docs/personal-production.md:107`
-  — `HOPIT_D1_API_TOKEN=<…-or-hopit-d1-proxy-token>`), which the worker matches
+ : `HOPIT_D1_API_TOKEN=<…-or-hopit-d1-proxy-token>`), which the worker matches
   against its own `env.HOPIT_D1_PROXY_TOKEN` secret (`api-worker.js:73`). On match,
   that token short-circuits *all* scoping: `authorizeRequest` returns
   `{ kind: 'proxy' }` and **skips `assertScopedSessionStatementAllowed`,
   `assertScopedMutationBatch`, and `enforceScopedResultVisibility` entirely**
   (`api-worker.js:73-74`, `89-97`, `180-183`). (The client env var and the worker
-  secret carry the same value under different names — `HOPIT_D1_API_TOKEN` vs
+  secret carry the same value under different names: `HOPIT_D1_API_TOKEN` vs
   `HOPIT_D1_PROXY_TOKEN`.) Per-user access is then enforced *only in application
   code*: `readAccessContext` / `requireGraphCapability`
   ([`access.js`](../packages/backend-d1/src/access.js)) load `codebase_members` and
@@ -149,12 +149,12 @@ limiting. Several findings below were surprising; file paths are exact.
   isolation liability for the "provably isolated" bar. This plane is only as strong
   as every route remembering to pass the real actor and call a capability check.
 
-- **Plane B — the Cloudflare Worker scoped-SQL policy, reached by agents with `hst_`
+- **Plane B: the Cloudflare Worker scoped-SQL policy, reached by agents with `hst_`
   tokens.** This is the strong boundary. [`cloudflare/d1/scoped-sql.js`](../cloudflare/d1/scoped-sql.js)
   is a deny-by-default SQL firewall: the session token is bound to exactly one
   `codebase_id`; every statement must be select/insert/update/delete, must carry an
   **exact `codebase_id = ?` equality** predicate matching the session (no `OR`, `IN`,
-  `LIKE`, `!=`, `UNION`, or subqueries beyond one whitelisted revision guard —
+  `LIKE`, `!=`, `UNION`, or subqueries beyond one whitelisted revision guard -
   `scoped-sql.js:281-283`), uses anonymous params, cannot touch admin tables without
   `admin` capability, and file writes must match byte-for-byte "guarded journal"
   templates. The worker independently re-checks the session's codebase
@@ -162,13 +162,13 @@ limiting. Several findings below were surprising; file paths are exact.
   `api-worker.js:100-122`, `assertScopedMutationAccess`, `enforceScopedResultVisibility`
   `api-worker.js:180-232`). **Cross-codebase access is structurally impossible on
   Plane B** because the token's `codebase_id` is the scope and every predicate is
-  checked against it — but it only applies to the `hst_` path, not the proxy-token
+  checked against it: but it only applies to the `hst_` path, not the proxy-token
   path.
 
 The net: agent sync (the stranger's daily driver) is well-isolated at the D1 layer.
 The dashboard API relies on discipline in route handlers.
 
-### 1.3 R2 blob storage — the client-side-credential isolation gap
+### 1.3 R2 blob storage: the client-side-credential isolation gap
 
 - **Blob keys are already codebase-namespaced:**
   `{prefix}/codebases/{codebaseId}/blobs/sha256/{hh}/{hash}` (`blobKeyForHash`,
@@ -177,7 +177,7 @@ The dashboard API relies on discipline in route handlers.
   credentials** (`HOPIT_R2_ACCESS_KEY_ID` / `HOPIT_R2_SECRET_ACCESS_KEY`), and the
   agent chooses the key path. D1 stores only the `blob_key` reference; the Worker
   never proxies blob bytes. **So today any client holding the shared sync R2
-  credentials can read or overwrite *any* codebase's blob prefix — cross-tenant blob
+  credentials can read or overwrite *any* codebase's blob prefix: cross-tenant blob
   access.** Shared (non-owner-private) content is stored **plaintext** unless a
   client-encryption zone covers it. For a single trusted operator this is fine (there
   is one client); for strangers, possession of the sync credentials would grant
@@ -190,11 +190,11 @@ The dashboard API relies on discipline in route handlers.
   points at a single D1 (`database_id: "5447007f-…"`,
   `cloudflare/d1/wrangler.proxy.jsonc:22-28`) and a single R2 bucket `hopit-blobs`
   (`docs/personal-production.md:27`, `137-144`). Every tenant's rows and blobs share
-  **account-wide free-tier ceilings** — 10 GB R2, 5 GB / 100k writes-per-day D1
+  **account-wide free-tier ceilings**: 10 GB R2, 5 GB / 100k writes-per-day D1
   (`storage-pricing-research-2026-07.md §2`). One tenant's growth is subtracted from
   everyone's free ceiling.
 
-- **`HOPIT_OWNER_EMAIL` semantics — narrower than the roadmap implies.** The
+- **`HOPIT_OWNER_EMAIL` semantics: narrower than the roadmap implies.** The
   single-tenant gate is *not* on the create/own path; it is only the owner-claim
   adoption path. `requireOwnerClaimActor` (`helpers/actors.js:24-34`) throws unless
   the authenticated verified email equals `process.env.HOPIT_OWNER_EMAIL`, and it
@@ -203,7 +203,7 @@ The dashboard API relies on discipline in route handlers.
   (agent/import-created before a browser login) into a real Clerk user.
   `GET /api/codebases` calls `bootstrapAccountForCodebaseList` on *every* request
   (`src/app/api/codebases/route.ts:27`, `164-178`); for a non-owner email it throws,
-  is caught, and returns an error summary — **but the same stranger can still create
+  is caught, and returns an error summary: **but the same stranger can still create
   and list *their own* codebases.** So the app is "single-tenant" only in the adoption
   path and in operator intent, not in the create/own data path.
 
@@ -215,14 +215,14 @@ The dashboard API relies on discipline in route handlers.
 - **Basic-auth fallback returns an empty actor `{}`.** `cloudActorFromRequest`
   (`src/lib/request-cloud-actor.ts`) resolves, in order: (1) an `hst_` token → agent
   access; (2) a Clerk session; (3) a basic-auth fallback that returns an **empty
-  actor `{}`** when `allowBasicFallback` is set — a wildcard that downstream
+  actor `{}`** when `allowBasicFallback` is set: a wildcard that downstream
   visibility code treats specially. Acceptable for a locked-down single operator;
   **it is a tenant bypass in true multi-tenant and must be disabled** (Decision 2e).
 
 - **Quotas are nonexistent.** `createCodebase` (`graph.js:604-691`) performs **no
-  per-user codebase-count check, no storage check, no plan check** — it only rejects
+  per-user codebase-count check, no storage check, no plan check**: it only rejects
   a duplicate id (`graph.js:611`). There is no `subscriptions`, `usage`, `plan`, or
-  `quota` table anywhere (schema has 31 tables; `packages/backend-d1/src/schema.js` —
+  `quota` table anywhere (schema has 31 tables; `packages/backend-d1/src/schema.js` -
   none meter anything; grep confirms no `quota`/`usage`/`meter`/`stripe`/`subscription`/`billing`
   symbols in `src`, `packages`, `cloudflare`). A signed-in Clerk user can create
   unlimited codebases via `POST /api/codebases` (`src/app/api/codebases/route.ts:45-71`,
@@ -236,12 +236,12 @@ The dashboard API relies on discipline in route handlers.
   lives in [`blob-stores/index.js:80-98`](../packages/agent/src/blob-stores/index.js)
   and reads `HOPIT_BLOB_STORAGE_BUDGET_BYTES` / `HOPIT_BLOB_FREE_ONLY` from *one
   process env* (default `r2DefaultFreeOnlyBudgetBytes = 8_000_000_000`, i.e. 8 GB, vs
-  the `r2FreeStorageTierBytes = 10_000_000_000` free ceiling —
+  the `r2FreeStorageTierBytes = 10_000_000_000` free ceiling -
   `packages/agent/src/constants.js:93-94`). It is enforced by the *uploading agent*
-  (`assertWithinBudget`, `index.js:422-433`) against a bucket-wide prefix scan — it is
+  (`assertWithinBudget`, `index.js:422-433`) against a bucket-wide prefix scan: it is
   **not per-tenant**, and a tenant running their own agent config can simply raise it.
   It protects the *operator from themselves*, not any one user's fair share. There is
-  **no server-side meter** for storage, and **none at all** for D1 writes — which the
+  **no server-side meter** for storage, and **none at all** for D1 writes: which the
   pricing research names as the binding cost constraint.
 
 - **Rate limiting is almost absent.** The only limiter on the worker is an in-memory
@@ -276,8 +276,8 @@ already-tenant-shaped schema.
 
 ## 2. Design overview and decisions
 
-Introduce one new first-class entity — the **tenant** (a billing account, 1:1 with a
-Clerk user in v1) — and hang three things off it: a **subscription**, a **usage
+Introduce one new first-class entity: the **tenant** (a billing account, 1:1 with a
+Clerk user in v1): and hang three things off it: a **subscription**, a **usage
 meter**, and an **entitlement** (the plan's limits). Sync and quota enforcement
 consult the entitlement; billing webhooks keep the subscription fresh; the meter is
 written on the same paths that already journal to D1.
@@ -293,23 +293,23 @@ v1 keeps `tenant == user` to avoid an org model this phase (orgs are Phase 4). C
 addresses tenants through a `tenant_id` indirection so a later org tenant is an
 additive change, not a rewrite.
 
-### (a) Tenant boundary — where does one tenant's data physically live?
+### (a) Tenant boundary: where does one tenant's data physically live?
 
 **Options.**
 
-- **A1 — Shared D1 tables keyed by owner (current shape), hardened.** Keep the one
+- **A1: Shared D1 tables keyed by owner (current shape), hardened.** Keep the one
   `hopit` database; every row stays keyed by `codebase_id`/`owner_id`. Close the
   proxy-token hole so isolation is *enforced*, not just *filtered*.
-- **A2 — Per-tenant D1 database.** One D1 database per tenant (or per codebase),
+- **A2: Per-tenant D1 database.** One D1 database per tenant (or per codebase),
   provisioned at signup via the Cloudflare D1 API. Physical isolation; a tenant's
   worst case is their own database.
-- **A3 — Hybrid.** Shared control-plane tables (`users`, `subscriptions`,
+- **A3: Hybrid.** Shared control-plane tables (`users`, `subscriptions`,
   `device_authorizations`) in one D1; per-tenant *data* databases for
   `codebases/files/file_versions/…`.
 
 **Weighing.** D1 is **10 GB per database** with 5 GB free
 (`storage-pricing-research-2026-07.md §2`). Under A1 all tenants share one 10 GB
-database — a single ceiling and a single hot database, but at 31 tables of *metadata*
+database: a single ceiling and a single hot database, but at 31 tables of *metadata*
 (blob bytes live in R2) that is thousands of tenants. A2/A3 give each tenant their own
 10 GB (effectively unlimited per tenant) but multiply operational surface. A1's
 isolation blast radius is "one bad query = cross-tenant read"; correctness rests on
@@ -318,7 +318,7 @@ bypass. A2/A3 make the "provably isolated" proof almost trivial (different
 `database_id`), but require dynamic provisioning (create D1 + apply schema at signup),
 a `codebase_id → database_id` routing layer, the Cloudflare D1 REST API (Workers
 cannot bind DBs dynamically without a deploy), and application-level fan-out for
-control-plane joins — a multi-week worker re-architecture.
+control-plane joins: a multi-week worker re-architecture.
 
 **Recommendation: A1 (shared tables, hardened) for Phase 3, with A3 as the documented
 escape hatch.** At Phase-3 scale (first handful-to-hundreds of paying strangers) a
@@ -327,13 +327,13 @@ the two-front hardening in Decision (d). **Record the A3 split trigger explicitl
 when the shared metadata database approaches ~7 GB (70% of the 10 GB cap) or any
 single tenant exceeds ~1 GB of D1 metadata, split data tables to per-tenant
 databases.** Until then, A1 is correct and cheap. *(This is surfaced as an
-either/or in the Decisions list — both drafts leaned shared/hardened; the dissent is
+either/or in the Decisions list: both drafts leaned shared/hardened; the dissent is
 per-tenant DBs for structural isolation at the cost of the re-architecture above.)*
 
-### (b) Billing provider — one person selling flat subscriptions
+### (b) Billing provider: one person selling flat subscriptions
 
 The seller is a **solo founder** (`docs/product-roadmap.md:23-24`). The dominant
-concern is **not** API ergonomics but **who is the merchant of record (MoR)** — who is
+concern is **not** API ergonomics but **who is the merchant of record (MoR)**: who is
 legally responsible for collecting and remitting sales tax/VAT across every
 jurisdiction a stranger might sign up from.
 
@@ -341,22 +341,22 @@ jurisdiction a stranger might sign up from.
 
 | Option | Model | Tax / VAT | Fees | Notes |
 |---|---|---|---|---|
-| **B1 — Stripe Billing** | You are merchant of record | *You* register, collect, file, remit (Stripe Tax computes only) | ~2.9% + 30¢ (lowest) | Industry default; best API/docs; Customer Portal; SCA handled; test mode + Stripe CLI `trigger` + fixtures |
-| **B2 — Paddle (MoR)** | Paddle is reseller/MoR | Paddle handles global registration/collection/remittance; first-line on chargebacks | ~5% + 50¢ | Solid API/webhooks; subscriptions first-class; heavier redirect UX; sandbox |
-| **B3 — Lemon Squeezy (MoR)** | LS is MoR | Same tax offload as Paddle | MoR band (~5%) | Developer-friendly, indie-SaaS focused; now Stripe-owned (small roadmap/continuity risk); test mode |
-| Roll-your-own | — | — | — | Rejected: PCI + dunning + tax is not our product |
+| **B1: Stripe Billing** | You are merchant of record | *You* register, collect, file, remit (Stripe Tax computes only) | ~2.9% + 30¢ (lowest) | Industry default; best API/docs; Customer Portal; SCA handled; test mode + Stripe CLI `trigger` + fixtures |
+| **B2: Paddle (MoR)** | Paddle is reseller/MoR | Paddle handles global registration/collection/remittance; first-line on chargebacks | ~5% + 50¢ | Solid API/webhooks; subscriptions first-class; heavier redirect UX; sandbox |
+| **B3: Lemon Squeezy (MoR)** | LS is MoR | Same tax offload as Paddle | MoR band (~5%) | Developer-friendly, indie-SaaS focused; now Stripe-owned (small roadmap/continuity risk); test mode |
+| Roll-your-own |: |: |: | Rejected: PCI + dunning + tax is not our product |
 
 **This is the primary owner decision and the two drafts disagreed** (draft A: MoR;
 draft B: Stripe now). It is surfaced as an explicit either/or in §9. The billing
 plumbing is deliberately **provider-agnostic**: a `subscriptions` table fed by signed
-webhooks, so B1/B2/B3 differ only in the webhook adapter — the choice is reversible.
+webhooks, so B1/B2/B3 differ only in the webhook adapter: the choice is reversible.
 At $7/mo flat with ~83% gross margin (`storage-pricing-research-2026-07.md §4.b`) the
 fee delta between Stripe (~$0.50) and an MoR (~$0.85) is **~$0.35/user/mo**.
 
 **Recommendation: a merchant-of-record provider (Paddle or Lemon Squeezy).** For one
 person, ~$0.35/user is cheap insurance against global tax compliance becoming a second
 job; between the two, pick on onboarding friction. **Dissenting view (draft B): start
-on raw Stripe** — simplest integration, lowest fee, we are low-volume, and since the
+on raw Stripe**: simplest integration, lowest fee, we are low-volume, and since the
 plumbing is provider-agnostic, switching to an MoR before broad EU marketing is a cheap
 later change. Either way the entitlement the agent enforces against is *our own row*,
 refreshed by webhook and a daily reconcile job, so a missed webhook degrades to a
@@ -415,45 +415,45 @@ in staging and any added fee is included in the margin review.
 - Store the Stripe API key, two price ids, webhook signing secret, and cron secret in
   Vercel secrets (never in repo/docs, matching `docs/personal-production.md:39`).
 - Add the public **privacy policy and terms pages** the roadmap already flags
-  (`docs/personal-production.md:71`) — MoRs and Google OAuth verification both require
+  (`docs/personal-production.md:71`): MoRs and Google OAuth verification both require
   them.
 
-### (c) Quota model — what is metered, and where is it enforced?
+### (c) Quota model: what is metered, and where is it enforced?
 
 Per the pricing research, **the cost driver is D1 rows written at $1.00/M**
-(`storage-pricing-research-2026-07.md §2`, `§4.c`), *not* storage — one active heavy
+(`storage-pricing-research-2026-07.md §2`, `§4.c`), *not* storage: one active heavy
 user's journal writes ($5/mo at 5M rows) can exceed their storage cost and turn the
 flat sub margin-negative. Meter three things, in priority order:
 
-1. **D1 rows written per rolling (UTC) day** — the binding cost constraint. Free
+1. **D1 rows written per rolling (UTC) day**: the binding cost constraint. Free
    ceiling is 100,000 rows/day **account-wide**; ~7 rows/save after coalescing
-   (backed by the already-shipped write-coalescing work — `HOPIT_SYNC_DEBOUNCE_MS`
+   (backed by the already-shipped write-coalescing work: `HOPIT_SYNC_DEBOUNCE_MS`
    collapses same-path bursts ~10×). The daily budget is a backstop for the
    pathological case, not the common path.
-2. **Storage bytes (R2 + D1)** — the user-legible number and the natural upgrade
+2. **Storage bytes (R2 + D1)**: the user-legible number and the natural upgrade
    lever; the plan's headline included-GB figure (30 GB, `§4.b`), overage protection
    beyond it.
-3. **Seats / codebase count** — always 1 seat in v1 (tenant == user; metered now so
+3. **Seats / codebase count**: always 1 seat in v1 (tenant == user; metered now so
    Phase 4 orgs inherit the plumbing) plus a cheap codebase-count abuse bound.
 
 Worker requests and Durable Object connections are **observed but not gated** in v1
 (research: not the binding constraint; the 10M/mo request bundle is generous).
 
-**Where enforced — server-side, because the agent's env is tenant-controlled (§1.4):**
+**Where enforced: server-side, because the agent's env is tenant-controlled (§1.4):**
 
-- **Storage bytes + D1 writes/day — enforced in the Cloudflare Worker (Plane B,
+- **Storage bytes + D1 writes/day: enforced in the Cloudflare Worker (Plane B,
   authoritative).** The Worker already re-reads `readScopedFileAccess` per mutating
   batch; extend that read to also load the tenant's current usage meter + entitlement
   and reject the guarded head update when the write would exceed the hard cap. The
   daily-write meter is incremented **atomically as part of the same batch** (the
   Worker counts the rows it is about to write), so a tenant cannot journal without
   also incrementing their meter. This is the trustworthy point because the agent
-  cannot bypass it — the token is bound to the codebase, which resolves to a tenant. A
+  cannot bypass it: the token is bound to the codebase, which resolves to a tenant. A
   per-tenant running counter (a `usage` row, or a Durable Object counter reusing the
-  existing `HOPIT_PUSH_HUB` per-codebase DO — `wrangler.proxy.jsonc:8-15`) is the
+  existing `HOPIT_PUSH_HUB` per-codebase DO: `wrangler.proxy.jsonc:8-15`) is the
   natural home; kept as one indexed row per tenant per day to stay cheap (reads ~free,
   §2).
-- **Subscription-active / seat / codebase-count gate — enforced in the Next backend
+- **Subscription-active / seat / codebase-count gate: enforced in the Next backend
   (Plane A)** at session issuance (`hop add` device approval) and at codebase create:
   refuse to mint a new writing agent session, or create an additional codebase beyond
   the free allowance, without an active entitlement.
@@ -465,17 +465,17 @@ Worker requests and Durable Object connections are **observed but not gated** in
 **Behavior at the limit (never data loss, never read lockout)**, matching the roadmap
 "soft warn → hard block on writes but never data loss or lockout of reads":
 
-1. **80% of any limit** — dashboard + menu-bar warning; a `usage.warning` event.
+1. **80% of any limit**: dashboard + menu-bar warning; a `usage.warning` event.
    Nothing blocks.
-2. **100% storage** — new object-blob writes that would grow storage are rejected at
+2. **100% storage**: new object-blob writes that would grow storage are rejected at
    the Worker with a typed `quota_exceeded` error; the agent surfaces it and **holds
-   the change on local disk** (the existing coalescing-window durability contract —
+   the change on local disk** (the existing coalescing-window durability contract -
    the file on disk is untouched, re-attempted after the next scan). Reads, hydration,
    compare, export, and delete/GC (which *reduce* storage) always remain allowed.
-3. **100% D1 writes/day** — the Worker returns `quota_exceeded_daily`, the agent backs
+3. **100% D1 writes/day**: the Worker returns `quota_exceeded_daily`, the agent backs
    off and retries after the UTC day rolls, edits accumulate on disk. Reads
    unaffected.
-4. **Subscription lapsed (past_due beyond grace / canceled)** — the tenant drops to
+4. **Subscription lapsed (past_due beyond grace / canceled)**: the tenant drops to
    the **free entitlement**: writes gated to the free storage cap, but **all reads and
    full data export stay open indefinitely** (git export is the escape hatch). Never
    hold a paying-lapsed tenant's data hostage; **never** an automated hard-delete (a
@@ -484,11 +484,11 @@ Worker requests and Durable Object connections are **observed but not gated** in
 Metering data model: a `subscriptions` table (plan, status, provider ids,
 current-period bounds) and a `usage`/`usage_meter` table or per-codebase DO counter
 (stored bytes, rows-written-today, seats/codebase-count), refreshed on mutation and
-reconciled nightly against an R2 prefix scan (the agent already scans a prefix —
+reconciled nightly against an R2 prefix scan (the agent already scans a prefix -
 `readUsage`, `blob-stores/index.js:435-459`; the meter increment is in the same
 guarded batch as the write so it cannot skew).
 
-#### Addendum — quota metering + enforcement, **implemented behind flag** (Stage 2-3, 2026-07-13)
+#### Addendum: quota metering + enforcement, **implemented behind flag** (Stage 2-3, 2026-07-13)
 
 The per-tenant **usage meter and quota enforcement** are now implemented and gated
 by `HOPIT_MULTITENANT` (default **off** ⇒ zero metering overhead and byte-for-byte
@@ -496,21 +496,21 @@ single-tenant behavior) with the hard-block layer additionally gated by
 `HOPIT_ENFORCE_QUOTA` (Stage-3 sub-gate: the master flag meters, this flag blocks).
 Of the model options above, the choices made:
 
-- **Metering model — MAINTAINED tally folded into the write batch (chosen over
+- **Metering model: MAINTAINED tally folded into the write batch (chosen over
   computed-on-read).** A new additive table `tenant_usage(tenant_id PK, plan,
   storage_bytes, write_day, rows_written_today, …)` in
-  [`packages/backend-d1/src/schema.js`](../packages/backend-d1/src/schema.js) — one
+  [`packages/backend-d1/src/schema.js`](../packages/backend-d1/src/schema.js): one
   indexed row per tenant (v1 `tenant_id == owner_id`), so a **single indexed read
   resolves both the plan AND current usage**. The Worker counts the mutating
   statements it is about to run and folds **exactly one** meter upsert into the same
   tenant batch (`cloudflare/d1/quota.js` `buildMeterUpsertStatement`), so a tenant
   cannot journal without also incrementing its meter (they commit/roll back
   together). **Measured added write cost: +1 D1 row written per mutating save batch**
-  (the meter row itself, which is *not* counted against the tenant's own budget) — no
+  (the meter row itself, which is *not* counted against the tenant's own budget): no
   5-counter amplification. The rolling daily counter resets inside the upsert when
   `write_day` rolls to a new UTC day, so no scheduled reset job is needed. Storage is
-  an additive tally of guarded file sizes (approximate — a re-save re-adds a path's
-  size — and reconciled nightly against a prefix scan; the exact-delta alternative
+  an additive tally of guarded file sizes (approximate: a re-save re-adds a path's
+  size: and reconciled nightly against a prefix scan; the exact-delta alternative
   would cost a read-before-write on every save). **Codebase count is computed on read**
   at create time (a cold path), never maintained, so the hot path stays at +1 row.
 - **Enforcement points (matching Decision c).** Storage bytes + daily D1 writes are
@@ -518,7 +518,7 @@ Of the model options above, the choices made:
   tenant (`hst_` session OR `hsa_` server-actor) mutating batch, the Worker reads the
   tenant's meter + plan and **rejects a cap-crossing write with a typed `429`
   `quota_exceeded_daily` / `quota_exceeded_storage`** (error code `1008`, carrying
-  `{code, kind, limit, used, requested, plan}`) BEFORE any statement runs — so no data
+  `{code, kind, limit, used, requested, plan}`) BEFORE any statement runs: so no data
   is written and the agent holds the change on local disk. **Reads, exports, hydrate,
   compare, and deletes are never routed through the gate.** The subscription / seat /
   **codebase-count** gate is enforced in the **Next backend** (Plane A) at
@@ -535,7 +535,7 @@ Of the model options above, the choices made:
   desktop agent, and a `readTenantUsage` backend method (server-actor may read its
   *own* `tenant_usage` row on Plane A) for the dashboard.
 - **Plan resolution.** `tenant_usage.plan` (`free|paid`, default `free` on first
-  insert and never overwritten by the meter path — billing owns it) is the single
+  insert and never overwritten by the meter path: billing owns it) is the single
   indexed lookup; caps derive from that plan via **owner-tunable env knobs** so
   retuning never needs a data migration.
 - **Free-tier default → caps** (Decision 4): **2 GB storage, 2,000 D1 rows/day,
@@ -552,33 +552,33 @@ display), all with the free/paid defaults above:
 `HOPIT_ENFORCE_QUOTA` (off). The new `tenant_usage` table is owner-applied to the
 production D1 per the migration procedure in `docs/personal-production.md:191-193`.
 
-Proven by tests (`cloudflare/d1/api-worker.test.js` — quota helpers, meter fold,
+Proven by tests (`cloudflare/d1/api-worker.test.js`: quota helpers, meter fold,
 over-daily/over-storage hard block with nothing written, reads-still-work, free vs
 paid, `/usage` surface + flag-off 404; `packages/agent/test/quota-enforcement.test.js`
-— end-to-end against a real SQLite Worker: codebase-count gate at create, meter
+- end-to-end against a real SQLite Worker: codebase-count gate at create, meter
 accumulation + UTC day-roll reset in real SQLite, `readTenantUsage` warn state):
 flag-off appends no meter and leaves the batch byte-for-byte; flag-on folds exactly
 one meter row; an over-cap write is rejected at the Worker (429) with no data written
 while a read of the same codebase still succeeds; the isolation and proxy/`hst_`/`hsa_`
 paths are unchanged with the flag on.
 
-### (d) Tenant isolation hardening — the two-front change that makes strangers safe
+### (d) Tenant isolation hardening: the two-front change that makes strangers safe
 
 **Every data access resolves to a `tenant_id`, and every enforcement point checks it.**
 The two liabilities from §1.2–1.3 are independent and **both** must close for "provably
 isolated":
 
-**Front 1 — D1 dashboard path (retire the proxy super-token).** The hosted dashboard
+**Front 1: D1 dashboard path (retire the proxy super-token).** The hosted dashboard
 must call D1 as a **per-request scoped principal**, not the omnipotent proxy token.
 Give the Next API a worker auth mode that carries `actor.userId` and is re-checked by
-the worker against `codebase_members`/`owner_id` — i.e. extend the scoped-session model
+the worker against `codebase_members`/`owner_id`: i.e. extend the scoped-session model
 to a "server-actor" token that still passes through `readScopedFileAccess`
 (`api-worker.js:100-122`) rather than bypassing it. Add a lint/test that **every**
 `/api/*` handler routes through `requireGraphCapability` or an explicit public marker
 (close the "discipline-only" gap in §1.2). The proxy super-token survives only for rare
 admin/migration jobs, out of the tenant request path.
 
-**Front 2 — R2 blobs (remove account credentials from clients).** Options:
+**Front 2: R2 blobs (remove account credentials from clients).** Options:
 
 - **(d-i) Per-tenant scoped R2 credentials via a blob-broker Worker (recommended).**
   The agent stops holding account R2 keys; it asks a Worker endpoint (authed by its
@@ -600,7 +600,7 @@ under the isolation suite as a regression gate. Stripe/MoR customer ids and webh
 payloads live on the tenant row; never place tenant data in URLs; the webhook endpoint
 verifies signatures.
 
-#### Addendum — Front 1 mechanism, **implemented behind flag** (Stage 1a, 2026-07-13)
+#### Addendum: Front 1 mechanism, **implemented behind flag** (Stage 1a, 2026-07-13)
 
 The Front-1 **server-actor** principal is now implemented and gated by
 `HOPIT_MULTITENANT` (default **off**, so single-tenant production is byte-for-byte
@@ -614,7 +614,7 @@ section:
   `HOPIT_D1_SERVER_ACTOR_SECRET` (HMAC-SHA256): `hsa_<base64url(payload)>.<sig>`,
   `payload = {u:userId, iat, exp}` (`packages/backend-d1/src/server-actor-token.js`).
   The Worker re-derives the user id from the signature
-  (`cloudflare/d1/api-worker.js` `verifyServerActorToken`) — a forged/absent/expired
+  (`cloudflare/d1/api-worker.js` `verifyServerActorToken`): a forged/absent/expired
   token fails closed.
 - **New policy tier BETWEEN `proxy` and `session`.** `authorizeRequest` returns a new
   `{kind:'server-actor'}`. Each statement passes `assertServerActorStatementAllowed`
@@ -628,7 +628,7 @@ section:
   or is an active member of (`assertServerActorEntitlement`, a
   `codebases`⋈`codebase_members` lookup) before executing anything.
 - **What flips when the flag flips.** Flag **off**: an `hsa_` token is not accepted
-  at all (falls through to the auth error), and the client never mints one — proxy +
+  at all (falls through to the auth error), and the client never mints one: proxy +
   `hst_` paths are identical to today. Flag **on**: `cloud-backend.ts` threads the
   authenticated actor into every tenant-data call so the client presents an `hsa_`
   token; a statement touching a codebase the user neither owns nor belongs to is
@@ -639,7 +639,7 @@ section:
   data).** DDL/migrations, the owner-claim `bootstrapAccount`/`claimCodebaseOwner`
   paths (`HOPIT_OWNER_EMAIL`, off the hot path), the public device-authorization
   create/poll/read flow, invitation **accept-by-token**, and
-  `approveDeviceAuthorization` still use the proxy token — each is gated by an
+  `approveDeviceAuthorization` still use the proxy token: each is gated by an
   unguessable secret (token/user-code) rather than by user id, so it is not a
   cross-tenant enumeration surface. Migrating these secret-keyed lookups onto the
   server-actor tier (e.g. by pinning a known `codebase_id`) is a documented Stage-1b
@@ -651,7 +651,7 @@ SQLite Worker): flag-off refuses `hsa_`; flag-on rejects a cross-tenant statemen
 and allows a user reading their own multiple codebases; forged/expired tokens are
 refused; proxy and `hst_` behavior is unchanged with the flag on.
 
-#### Addendum — Front 2 mechanism (R2 blob broker), **implemented behind flag** (Stage 1b, 2026-07-13)
+#### Addendum: Front 2 mechanism (R2 blob broker), **implemented behind flag** (Stage 1b, 2026-07-13)
 
 The Front-2 **R2 blob broker** is now implemented and gated by `HOPIT_MULTITENANT`
 (default **off**, so the direct-S3-credential blob path is byte-for-byte unchanged
@@ -663,7 +663,7 @@ until the owner flips it). Mechanism chosen, of the options in §2d Front 2:
   `cloudflare/d1/blob-broker.js`). The Worker already has no R2 binding; the broker
   **holds the R2 S3 credentials as Worker secrets** and mints SigV4 **query-string
   presigned URLs** (WebCrypto HMAC, `UNSIGNED-PAYLOAD`, path-style, short TTL
-  default 120 s). Presign — not byte-proxying — keeps R2 egress on-Cloudflare
+  default 120 s). Presign: not byte-proxying: keeps R2 egress on-Cloudflare
   (research §4.c risk 2). The route only exists when the flag is on; with the flag
   off it falls through to the Worker's 404, so nothing about single-tenant changes.
 - **Same principals as the D1 firewall.** The broker authenticates the caller with
@@ -673,12 +673,12 @@ until the owner flips it). Mechanism chosen, of the options in §2d Front 2:
   admin proxy token (migration/GC tooling; key-scoped but not membership-checked). A
   forged/expired/absent principal fails closed before anything is signed.
 - **Prefix-scoping is the isolation invariant.** The broker refuses any key that is
-  not the managed blob key of the caller's entitled codebase —
+  not the managed blob key of the caller's entitled codebase -
   `assertBrokerKeyForCodebase` requires an exact match of
   `{HOPIT_BLOB_PREFIX}/codebases/{encoded-id}/blobs/sha256/{hh}/{hash}` (mirrors the
   agent's `isManagedBlobKey`; rejects `..`/`//`/`\`). A caller entitled to codebase A
   therefore (a) cannot name codebase B (refused at entitlement) and (b) cannot pass a
-  B-key under an A entitlement (refused at the prefix check) — and because the
+  B-key under an A entitlement (refused at the prefix check): and because the
   signature covers the exact object path + method, a **returned URL cannot be widened**
   to another key or a different verb.
 - **Agent gains a `broker` blob-store mode** (`BrokerBlobStore`,
@@ -697,7 +697,7 @@ until the owner flips it). Mechanism chosen, of the options in §2d Front 2:
 
 **Owner secrets/bindings to set before flipping the flag** (parallel to Stage 1a's
 `HOPIT_D1_SERVER_ACTOR_SECRET` note): the Worker needs the R2 S3 signing
-credentials as **Wrangler secrets** — `HOPIT_R2_ACCESS_KEY_ID`,
+credentials as **Wrangler secrets**: `HOPIT_R2_ACCESS_KEY_ID`,
 `HOPIT_R2_SECRET_ACCESS_KEY`, `HOPIT_R2_BUCKET`, and either `HOPIT_R2_ACCOUNT_ID`
 (endpoint derived as `https://<account>.r2.cloudflarestorage.com`) or an explicit
 `HOPIT_R2_ENDPOINT`; optional `HOPIT_R2_REGION` (default `auto`),
@@ -709,7 +709,7 @@ The agent gets `HOPIT_BLOB_BROKER=1` plus a broker URL
 reach blobs through the broker. These are set as Vercel + Cloudflare secrets, never
 in repo/docs (matching `docs/personal-production.md:39`).
 
-Proven by tests (`cloudflare/d1/api-worker.test.js` broker block —
+Proven by tests (`cloudflare/d1/api-worker.test.js` broker block -
 key-scope/presign/entitlement; `packages/agent/test/blob-broker-store.test.js`
 end-to-end against a real SQLite Worker broker + a fake R2): flag-off makes the
 endpoint 404 and `createObjectBlobStore` returns the direct S3 store unchanged;
@@ -733,22 +733,22 @@ hopit.dev → Clerk sign-up (open) → tenant auto-provisioned on first authed r
 
 1. **Tenant auto-provision.** On the first authenticated request from a new Clerk user,
    upsert a `users` row (already via `upsertUser`, `graph.js:567-602`) and a `tenant`
-   row with the `free` entitlement — **no card, no owner-email gate.** This replaces
+   row with the `free` entitlement: **no card, no owner-email gate.** This replaces
    the owner-only `bootstrapAccountForCodebaseList` throw with a *universal* "provision
    this user's own tenant" step. The `HOPIT_OWNER_EMAIL` path is retained only as an
    optional *migration* switch for adopting legacy `local-owner` codebases, behind a
    flag, off the hot path. Upsert is idempotent on `user_id` (race-safe).
 2. **Free entitlement / no-card path.** A stranger can sign up, create one codebase,
-   `hop add`, and sync **on the free entitlement** up to the free cap — the "aha" that
+   `hop add`, and sync **on the free entitlement** up to the free cap: the "aha" that
    earns the subscription, and what satisfies the exit criterion's "sign up … and sync"
    *before* "and pay." The free tier is deliberately small so an abandoned free account
    cannot hoard the shared free ceiling (Decision c cost math). *(Open sub-question in
-   §9: whether "free" is a permanent free entitlement or a time-boxed no-card trial —
+   §9: whether "free" is a permanent free entitlement or a time-boxed no-card trial -
    the two drafts framed it both ways; the caps are the same either way.)*
 3. **Workspace provisioning stays quota-gated.** On codebase create, `createCodebase`
    (`graph.js:604`) now **checks the subscription/quota** first (codebase-count,
    entitlement-active). The device-authorization "create-requested codebase" path
-   (`add.js`, `device-authorizations.js:44`) is the primary provisioning entry — note
+   (`add.js`, `device-authorizations.js:44`) is the primary provisioning entry: note
    the approve route requires the codebase to *already* be visible to the approver
    (`approve/route.ts:27-30`), so the browser approval page must create the tenant
    codebase (via `POST /api/codebases`) *before* approving. That two-step stays, gated
@@ -757,31 +757,31 @@ hopit.dev → Clerk sign-up (open) → tenant auto-provisioned on first authed r
    approve mints a scoped `hst_` token wrapped to the device key
    (`device-authorizations.js:135-163`), the agent connects, push/pull sync begins.
 5. **Where the billing wall sits: after first sync.** The wall triggers on the *second*
-   value ask — a second codebase, a seat/invite (Phase 4), or crossing the free
+   value ask: a second codebase, a seat/invite (Phase 4), or crossing the free
    storage/write cap. This maximizes activation while capping free cost.
 6. **Trial→paid conversion.** Checkout (hosted page) flips the `subscriptions` row to
    `active` on webhook; quota ceilings rise from free/trial to the 30 GB plan.
    **Cancellation** flips to `canceled`/free at period end; the tenant goes read-only
-   (never silently deleted — see §7).
+   (never silently deleted: see §7).
 7. **Disable the basic-auth fallback and empty-actor path in the multi-tenant runtime**
    (`HOPIT_ALLOW_BASIC_AUTH_FALLBACK` off; ensure `cloudActorFromRequest` never returns
-   `{}` when tenancy is on) — §1.4.
+   `{}` when tenancy is on): §1.4.
 
-#### Addendum — signup → first-sync funnel, **implemented behind flag** (Stage 2 + 6, 2026-07-13)
+#### Addendum: signup → first-sync funnel, **implemented behind flag** (Stage 2 + 6, 2026-07-13)
 
 The open-signup onboarding funnel is now implemented and gated by `HOPIT_MULTITENANT`
 (default **off**, so single-tenant production is byte-for-byte unchanged until the owner
 flips it). This is the funnel diagram above, made real; the billing wall (step 5–6) is
-still deferred to Stage 5 per Decision 5 (free-sync-first — **no wall before first
+still deferred to Stage 5 per Decision 5 (free-sync-first: **no wall before first
 sync**). What each numbered item became:
 
-- **1 — Tenant auto-provision (chosen mechanism: idempotent upsert on the first authed
+- **1: Tenant auto-provision (chosen mechanism: idempotent upsert on the first authed
   request via the admin proxy).** A new backend method
   `CloudflareD1HopBackend.ensureTenant({ tenantId })`
   (`packages/backend-d1/src/graph.js`) upserts exactly one `tenant_usage` row with
   `plan='free'` using a pure builder `buildTenantProvisionStatement`
   (`packages/backend-d1/src/quota.js`) whose SQL is `insert … on conflict(tenant_id) do
-  nothing` — idempotent by the primary key and, critically, **carrying no update clause**,
+  nothing`: idempotent by the primary key and, critically, **carrying no update clause**,
   so a later `plan='paid'` set by billing is never reset (billing owns the plan column,
   matching the Worker meter upsert's invariant). It runs on the **admin proxy token**, not
   the `hsa_` server-actor tier, because the server-actor scoped-SQL firewall
@@ -794,34 +794,34 @@ sync**). What each numbered item became:
   `GET /api/codebases` load. The **owner-email `bootstrapAccount` path is untouched** and
   retained only for the legacy `local-owner` adoption; a stranger no longer needs
   `HOPIT_OWNER_EMAIL`.
-- **2 — First codebase + device (verified, no code change needed).** `createCodebase`'s
+- **2: First codebase + device (verified, no code change needed).** `createCodebase`'s
   Stage-3 Plane-A gate (`assertCodebaseCreationWithinQuota`, free = 1 codebase) already
   gives a fresh tenant an honest typed `quota_exceeded_codebases` wall at the 2nd
   codebase ("…Upgrade to add more codebases."), and the device-approval page
   (`src/app/device/device-approval.tsx`) already creates the requested codebase via `POST
-  /api/codebases` **before** approving — so `hop add` works end-to-end for a non-owner
+  /api/codebases` **before** approving: so `hop add` works end-to-end for a non-owner
   tenant, create-first succeeds, second blocks.
-- **3 — Free entitlement / no-card path.** Provisioning sets `plan='free'`; the free caps
+- **3: Free entitlement / no-card path.** Provisioning sets `plan='free'`; the free caps
   (2 GB / 2,000 writes-day / 1 codebase, reads & export always open) come from the
   Stage-3 env knobs. Sign up → create 1 codebase → `hop add` → sync, all with no card.
-- **4/5/6 — Billing seam filled 2026-07-13.** A public `/pricing` surface connects the
+- **4/5/6: Billing seam filled 2026-07-13.** A public `/pricing` surface connects the
   second-codebase quota wall to Stripe-hosted Managed Payments Checkout. Signed Stripe
   webhooks atomically claim an idempotency event, upsert the tenant subscription, and
   derive `tenant_usage.plan`; a daily authenticated reconciliation route repairs missed
   events. Plus maps to the 30 GB `paid` quota profile and Plus Storage to the distinct
   100 GB `paid_storage` profile. Checkout and all entitlement writes remain behind
   `HOPIT_BILLING`; no wall appears before the first free sync.
-- **7 — Basic-auth / empty-actor closed under the flag.** `shouldAllowBasicAuthFallback()`
+- **7: Basic-auth / empty-actor closed under the flag.** `shouldAllowBasicAuthFallback()`
   (`src/lib/auth-config.ts`) is forced **false** whenever `HOPIT_MULTITENANT` is on
   (regardless of `HOPIT_ALLOW_BASIC_AUTH_FALLBACK`), and `cloudActorFromRequest`
   (`src/lib/request-cloud-actor.ts`) carries an explicit belt-and-suspenders guard so it
-  **cannot return the empty wildcard actor `{}`** with tenancy on — proven unreachable by
+  **cannot return the empty wildcard actor `{}`** with tenancy on: proven unreachable by
   test even when the credential check is forced to pass. A new `isMultiTenant()` helper
   mirrors the backend's truthy parsing so both ends agree on when tenancy is on. (Flag
   off: the `{}` path is byte-for-byte the legacy behavior.)
 
 **Owner must configure before flipping `HOPIT_MULTITENANT` on (Clerk side):** open signups
-in the **Clerk dashboard** — *Configure → Restrictions* (set sign-up mode to **Public**;
+in the **Clerk dashboard**: *Configure → Restrictions* (set sign-up mode to **Public**;
 remove any allowlist that currently limits registration to the owner's email). App-side
 signup is already open (`src/app/sign-up/[[...sign-up]]/page.tsx` renders Clerk's
 `<SignUp>`); whether strangers can actually register is purely that dashboard toggle. The
@@ -850,7 +850,7 @@ not durable. Phase 3 needs three layers:
   per-tenant request/statement budget, held in the per-codebase Durable Object (the
   `HOPIT_PUSH_HUB` DO already exists per codebase and survives across isolates, unlike
   the in-memory map). This is the layer that stops *one valid tenant* from exhausting
-  the shared D1 write ceiling — the noisy-neighbor case the in-memory limiter cannot
+  the shared D1 write ceiling: the noisy-neighbor case the in-memory limiter cannot
   see.
 - **Statement-count / batch-size caps.** The worker already counts statements
   (`statementCountForBody`, `api-worker.js:326-329`); add a hard cap per request and
@@ -869,12 +869,12 @@ byte-for-byte unchanged until each stage is proven. "Blocked" = needs an owner a
 | Stage | Deliverable | Flag | Gate (testable) | Blocked on |
 |---|---|---|---|---|
 | **0** (underway + spine) | `hst_` middleware wired; cross-tenant isolation suite; add `tenants`/`entitlements`/`usage_meters` tables (in `schema.js`); auto-provision tenant == user; denormalize `tenant_id` onto codebases; **meter recorded, not enforced** | `HOPIT_MULTITENANT` | A hosted `hst_` request succeeds; a tenant row appears + meter counts rows with enforcement off; suite proves tenant B cannot read/mutate tenant A | Buildable now (new tables owner-applied to prod per `personal-production.md:191-193`) |
-| **1 — Isolation hardening** | Front 1: retire proxy super-token from the tenant path; dashboard calls D1 as a per-request scoped/server-actor principal re-checked by the worker + every `/api/*` handler routes through a capability check. Front 2: R2 blob broker/presign — remove account R2 keys from the agent | `HOPIT_BLOB_BROKER` (+ scoped-server-actor) | Isolation suite passes with the dashboard path AND blobs included; a forged/absent `user_id` yields zero cross-tenant rows; a tenant-B client cannot presign/read a tenant-A blob | Buildable now — **this stage is the "provably isolated" gate** |
-| **2 — Account & subscription model** | `subscriptions` + `usage` tables (or per-codebase DO counter); universal user upsert on signup (Clerk webhook or first request); replace owner-only bootstrap with universal account-ensure; disable basic-auth empty-actor when tenancy on | `HOPIT_MULTITENANT` | New signup gets a `free`/`trialing` entitlement; `HOPIT_OWNER_EMAIL` no longer required for a stranger to have an account | Buildable now |
-| **3 — Quota enforcement** | Storage-byte + daily-write + codebase-count checks in `createCodebase` (pre-flight) and the worker mutation path (authoritative); soft-warn→hard-block ladder; per-tenant budget served to the agent | `HOPIT_ENFORCE_QUOTA` | Over-quota create/sync fails closed with a legible error; at-limit holds on disk, reads open; under-quota unaffected; free cap < paid cap | Buildable now |
-| **4 — Rate limiting** | Durable per-token/per-tenant request+write limiter in the codebase DO; statement-count caps; Cloudflare edge rule | (per-stage) | A single token cannot exceed its rolling budget (survives across isolates); batch bomb rejected | Worker code buildable now; edge rule + Workers Paid plan for DO billing = **owner action** |
-| **5 — Billing plumbing** | Provider-agnostic checkout link + webhook route (`/api/billing/webhook`) that writes `subscriptions`; entitlement derivation; reconcile cron; trial→active→canceled drives quota + read-only | `HOPIT_BILLING` | Webhook fixture flips subscription state; signature-verified; unsigned/replayed rejected; canceled tenant goes read-only, not deleted | Test-mode/sandbox buildable now; **live: MoR/Stripe account, product/price id, webhook secret (owner)** |
-| **6 — Open signup + onboarding UX** | Open Clerk signup; no-card free/trial signup → auto-provisioned first tenant → device authorization → first sync → billing wall → paid, end to end | `HOPIT_OPEN_SIGNUP` | A brand-new Clerk user reaches a synced workspace with no card; hits the wall; pays in test mode; quota rises | Stages 2–5 |
+| **1: Isolation hardening** | Front 1: retire proxy super-token from the tenant path; dashboard calls D1 as a per-request scoped/server-actor principal re-checked by the worker + every `/api/*` handler routes through a capability check. Front 2: R2 blob broker/presign: remove account R2 keys from the agent | `HOPIT_BLOB_BROKER` (+ scoped-server-actor) | Isolation suite passes with the dashboard path AND blobs included; a forged/absent `user_id` yields zero cross-tenant rows; a tenant-B client cannot presign/read a tenant-A blob | Buildable now: **this stage is the "provably isolated" gate** |
+| **2: Account & subscription model** | `subscriptions` + `usage` tables (or per-codebase DO counter); universal user upsert on signup (Clerk webhook or first request); replace owner-only bootstrap with universal account-ensure; disable basic-auth empty-actor when tenancy on | `HOPIT_MULTITENANT` | New signup gets a `free`/`trialing` entitlement; `HOPIT_OWNER_EMAIL` no longer required for a stranger to have an account | Buildable now |
+| **3: Quota enforcement** | Storage-byte + daily-write + codebase-count checks in `createCodebase` (pre-flight) and the worker mutation path (authoritative); soft-warn→hard-block ladder; per-tenant budget served to the agent | `HOPIT_ENFORCE_QUOTA` | Over-quota create/sync fails closed with a legible error; at-limit holds on disk, reads open; under-quota unaffected; free cap < paid cap | Buildable now |
+| **4: Rate limiting** | Durable per-token/per-tenant request+write limiter in the codebase DO; statement-count caps; Cloudflare edge rule | (per-stage) | A single token cannot exceed its rolling budget (survives across isolates); batch bomb rejected | Worker code buildable now; edge rule + Workers Paid plan for DO billing = **owner action** |
+| **5: Billing plumbing** | Provider-agnostic checkout link + webhook route (`/api/billing/webhook`) that writes `subscriptions`; entitlement derivation; reconcile cron; trial→active→canceled drives quota + read-only | `HOPIT_BILLING` | Webhook fixture flips subscription state; signature-verified; unsigned/replayed rejected; canceled tenant goes read-only, not deleted | Test-mode/sandbox buildable now; **live: MoR/Stripe account, product/price id, webhook secret (owner)** |
+| **6: Open signup + onboarding UX** | Open Clerk signup; no-card free/trial signup → auto-provisioned first tenant → device authorization → first sync → billing wall → paid, end to end | `HOPIT_OPEN_SIGNUP` | A brand-new Clerk user reaches a synced workspace with no card; hits the wall; pays in test mode; quota rises | Stages 2–5 |
 
 **Exit-criterion decomposition:** Stage 1 = *provably isolated*; Stage 6 (over 2+5) =
 *sign up, pay, and sync*. Met when a fresh stranger account runs Stage 6 end to end
@@ -909,7 +909,7 @@ stored, 300k journal writes/mo, 3M reads/mo, 300k Worker requests/mo):
 | **Marginal / user** | | | **≈ $1.00–1.20** |
 
 Plus one **$5/mo Workers Paid account minimum**, amortized to ~$0 past a handful of
-tenants. The **D1 rows written line is the one to watch** — a heavy user (200 GB,
+tenants. The **D1 rows written line is the one to watch**: a heavy user (200 GB,
 5M writes/mo) costs ~$8.40/mo and goes margin-negative under the superseded
 $7/no-hard-cap proposal. The selected fixed storage tiers and daily-write fair-use cap
 prevent that shape (`§4.b` sensitivity table: 5M writes/mo = $5 > storage $3).
@@ -935,20 +935,20 @@ consumed by the *sum* of tenants):
 
 - **R2 storage 10 GB free → paid ($0.015/GB):** holds until the sum of tenant blobs
   exceeds 10 GB. With the owner's 7.2 GB already resident (`§1.3`), the **very first
-  additional paying tenant likely crosses it** — but overage is trivial, so this is a
+  additional paying tenant likely crosses it**: but overage is trivial, so this is a
   billing-hygiene transition, not a scaling wall.
 - **D1 writes 100k/day free → Workers Paid ($1.00/M):** ~14k saves/day across all
   tenants. A few active tenants reach it; this is the **first real forcing function**
   and the reason Stage 4 assumes Workers Paid.
 - **Workers requests 100k/day free → 10M/mo Paid:** same order of magnitude; crossed
   at roughly the same tenant count.
-- **D1 storage 10 GB/database:** the **A1→A3 split trigger** — metadata only, so
+- **D1 storage 10 GB/database:** the **A1→A3 split trigger**: metadata only, so
   thousands of tenants, but a single hard ceiling (Decision a: split at ~7 GB shared or
   ~1 GB/tenant).
 
 **Bottom line:** the marginal tenant costs ~$1/mo against $7 revenue; the binding
 constraint that forces the $5/mo Workers Paid plan is **D1 daily writes**, reached at
-only a handful of active tenants — budget the Workers Paid transition as a Phase-3
+only a handful of active tenants: budget the Workers Paid transition as a Phase-3
 launch cost, not a "later" cost.
 
 ---
@@ -959,7 +959,7 @@ launch cost, not a "later" cost.
   proxy super-token bypasses all worker scoping (`api-worker.js:73-74`), so D1
   isolation rests on every `backend-d1` method's predicate; and R2 blobs are written
   client-side with account-level credentials (§1.3), so the shared sync keys reach any
-  tenant's blob prefix. *Mitigation:* Stage 1's two fronts (Decision d) — retire the
+  tenant's blob prefix. *Mitigation:* Stage 1's two fronts (Decision d): retire the
   proxy token from the tenant path + move R2 behind a per-codebase presign broker; the
   isolation suite is the regression gate; the scoped-SQL policy already forbids
   `OR`/`IN`/`!=` on `codebase_id` (`scoped-sql.js:281-283`).
@@ -988,7 +988,7 @@ launch cost, not a "later" cost.
   rotate it (`docs/personal-production.md:180-190`); never log tokens/SQL/params
   (`api-worker.js:344-357` already omits them).
 - **Noisy-neighbor exhaustion of shared free tiers.** One tenant's write storm consumes
-  the account-wide 100k-writes/day D1 ceiling, degrading sync for *every* tenant — and
+  the account-wide 100k-writes/day D1 ceiling, degrading sync for *every* tenant: and
   the in-memory failed-auth limiter (`api-worker.js:27-29`) cannot see *successful*
   request volume and is per-isolate. *Mitigation:* Decision (f)'s durable per-tenant DO
   limiter + statement-count caps + shipped write-coalescing; move to Workers Paid so
@@ -1013,7 +1013,7 @@ launch cost, not a "later" cost.
 
 Extend the Stage-0 isolation suite and the worker tests
 (`cloudflare/d1/api-worker.test.js`, `scoped-sql`) and the fixture backend
-(`FixtureJsonCloudGraphService`), plus billing **test-mode/sandbox** fixtures — no live
+(`FixtureJsonCloudGraphService`), plus billing **test-mode/sandbox** fixtures: no live
 account, no real card, no real R2 for the isolation cases. All gates run against a
 local fake worker/D1 fixture before touching production (mirroring WS7a). These cases
 contribute to the **adversarial isolation suite being built separately** (WS7d-style;
@@ -1023,17 +1023,17 @@ contribute to the **adversarial isolation suite being built separately** (WS7d-s
 1. First authenticated request for a new Clerk user provisions exactly one tenant with
    the `free` entitlement; a second request is idempotent (no duplicate).
 2. A stranger (email ≠ `HOPIT_OWNER_EMAIL`) can create a codebase, own it, and list
-   only their own codebases — never another tenant's.
+   only their own codebases: never another tenant's.
 
 **Isolation (Stage 0/1, adversarial)**
 3. Tenant B's `hst_` token cannot `select`/`insert`/`update`/`delete` any row with
-   tenant A's `codebase_id` — every attempt rejects at
+   tenant A's `codebase_id`: every attempt rejects at
    `assertScopedSessionStatementAllowed` (`scoped-sql.js`); a malformed predicate
    (`codebase_id != ?`, `OR`, `IN`) is rejected (`scoped-sql.js:278-283`).
-4. Tenant B's session cannot read tenant A's `files`/`file_versions`/`file_blobs` —
+4. Tenant B's session cannot read tenant A's `files`/`file_versions`/`file_blobs` -
    `enforceScopedResultVisibility` returns zero rows (`api-worker.js:180-232`).
 5. **Dashboard path (Front 1):** a request carrying tenant B's actor cannot list or
-   mutate tenant A's codebases even though it reaches the worker — proving the proxy
+   mutate tenant A's codebases even though it reaches the worker: proving the proxy
    super-token no longer grants cross-tenant access.
 6. **Blob path (Front 2):** a tenant-B client cannot obtain a presigned URL or proxy
    read/write for a tenant-A blob key; the broker signs only within the caller's
@@ -1051,7 +1051,7 @@ contribute to the **adversarial isolation suite being built separately** (WS7d-s
     write-coalescing keeps a normal editing burst well under the cap.
 11. 80% warning emits `usage.warning` and blocks nothing.
 12. A lapsed subscription drops the tenant to free limits but leaves **all reads and a
-    full export** working — no data deleted.
+    full export** working: no data deleted.
 
 **Billing (test mode/sandbox + webhook fixtures)**
 13. A provider webhook fixture (signed) transitions a subscription
@@ -1089,32 +1089,32 @@ blobs included) are green in CI.
 Each is a crisp question with a recommendation; the two open **either/or** choices are
 marked. These are the questions to bring to the owner before build.
 
-1. **Billing provider — DECIDED 2026-07-13.** Use **Stripe Managed Payments** as
+1. **Billing provider: DECIDED 2026-07-13.** Use **Stripe Managed Payments** as
    merchant of record so Stripe owns indirect-tax compliance and transaction/order
    support. Keep HopIt's entitlement table provider-agnostic so the adapter remains
    replaceable. (§2b.)
 
-2. **Tenant boundary — EITHER/OR.** **Shared D1 tables keyed by owner, hardened** (A1)
+2. **Tenant boundary: EITHER/OR.** **Shared D1 tables keyed by owner, hardened** (A1)
    **or** **per-tenant databases** (A2/A3) for structural isolation?
-   *Recommendation:* **A1 (shared, hardened)** for Phase 3 — a single 10 GB *metadata*
+   *Recommendation:* **A1 (shared, hardened)** for Phase 3: a single 10 GB *metadata*
    database is thousands of tenants and per-tenant DBs are a multi-week worker
    re-architecture. *Dissenting view:* per-tenant DBs make "provably isolated" trivial
    (different `database_id`). **Split trigger to A3:** when the shared metadata DB nears
    **~7 GB (70% of 10 GB)** or any single tenant exceeds **~1 GB** of D1 metadata, split
    data tables to per-tenant databases. (§2a.)
 
-3. **Plan shape — DECIDED 2026-07-12.** **Plus = $10 USD/mo, 30 GB hard cap**;
+3. **Plan shape: DECIDED 2026-07-12.** **Plus = $10 USD/mo, 30 GB hard cap**;
    **Plus Storage = $15 USD/mo, 100 GB hard cap**; no metered overage or surprise
    billing. Both paid plans use a 20,000-row daily write allowance, subject to the
    documented early-testing review and the 50% worst-case gross-margin floor. Launch
    with monthly billing only; reconsider annual billing after the 30–60 day review.
    (§2b.)
 
-   **Failed-payment behavior — UPDATED 2026-07-13.** Keep paid access while Stripe
+   **Failed-payment behavior: UPDATED 2026-07-13.** Keep paid access while Stripe
    reports `past_due` or `unpaid`; downgrade only on a signed deleted/canceled,
    refunded, disputed, or fraud-revoked state. Reads/export remain open.
 
-   **Plan changes — DECIDED 2026-07-12.** Upgrades are immediate and prorated;
+   **Plan changes: DECIDED 2026-07-12.** Upgrades are immediate and prorated;
    downgrades take effect at renewal. Above-limit downgrades pause storage-growing
    writes but never reads, exports, deletes, or local edits.
 
@@ -1123,11 +1123,11 @@ marked. These are the questions to bring to the owner before build.
    D1 rows/day (~285 saves), 1 codebase, reads/export always open.**
    *Recommendation:* adopt those caps (keeps ~5 free tenants inside the 10 GB R2 free
    ceiling and bounds D1-write cost); **a permanent small free entitlement** is cleaner
-   than a 14-day trial, but either works — the caps are identical. (§2c, §2e.)
+   than a 14-day trial, but either works: the caps are identical. (§2c, §2e.)
 
 5. **Where the billing wall sits.** Before first sync, or after (free sync, wall on the
    second codebase / cap crossing)?
-   *Recommendation:* **after first sync** — free sync is the activation "aha"; wall on
+   *Recommendation:* **after first sync**: free sync is the activation "aha"; wall on
    the second value ask. (§2e.)
 
 6. **R2 isolation mechanism.** Per-tenant **presigned URLs from a blob-broker Worker**
@@ -1140,43 +1140,43 @@ marked. These are the questions to bring to the owner before build.
 7. **Quota enforcement point.** Confirm **storage + daily-D1 enforced in the Cloudflare
    Worker** (Plane B, un-bypassable) and **subscription/seat/codebase-count gate in the
    Next backend** (Plane A)?
-   *Recommendation:* **Yes** — the Worker is the only point the tenant cannot bypass.
+   *Recommendation:* **Yes**: the Worker is the only point the tenant cannot bypass.
    (§2c.)
 
 8. **Retire the D1 proxy super-token from the tenant request path.** Confirm the
    dashboard calls D1 as a per-request scoped/server-actor principal re-checked by the
    worker, with the proxy token reserved for admin/migration only?
-   *Recommendation:* **Yes** — this closes the largest dashboard-path isolation
+   *Recommendation:* **Yes**: this closes the largest dashboard-path isolation
    liability. (§1.2, §2d.)
 
 9. **Tenant == user in v1?** Defer any org/team tenant to Phase 4 while addressing
    everything through a `tenant_id` indirection now?
-   *Recommendation:* **Yes** — 1:1 tenant/user this phase; org is additive later.
+   *Recommendation:* **Yes**: 1:1 tenant/user this phase; org is additive later.
    (§2.)
 
 10. **Disable basic-auth fallback + empty-actor in the multi-tenant runtime.** Confirm
     `HOPIT_ALLOW_BASIC_AUTH_FALLBACK` is forced off and the empty-actor path is closed
     once `HOPIT_MULTITENANT` is on?
-    *Recommendation:* **Yes** — it is a tenant bypass in a real multi-tenant world.
+    *Recommendation:* **Yes**: it is a tenant bypass in a real multi-tenant world.
     (§1.4, §2e.)
 
 11. **`hst_` dashboard-API path.** Fix the dead agent-token path in `src/proxy.ts` this
     phase (letting `Bearer hst_` reach route handlers for programmatic/AI access)?
-    *Recommendation:* **Yes**, in Stage 0/6 — it becomes load-bearing for the AI story.
+    *Recommendation:* **Yes**, in Stage 0/6: it becomes load-bearing for the AI story.
     (Stage 0.)
 
 12. **Data-retention policy on lapse/close.** How long are reads/export kept open after
     a subscription lapses or a Clerk account is deleted before GC?
     *Recommendation:* **reads/export open indefinitely on lapse; a 30-day grace then GC
-    on account close** — never hold data hostage, never automated hard-delete. (§2c,
+    on account close**: never hold data hostage, never automated hard-delete. (§2c,
     §5.)
 
 13. **Workers Paid plan.** Approve moving to the **$5/mo Workers Paid minimum** to
     unblock the durable DO rate limiter (Stage 4) and remove the 100k/day free ceilings?
-    *Recommendation:* **Yes** — budget it as a Phase-3 launch cost; D1 daily writes force
+    *Recommendation:* **Yes**: budget it as a Phase-3 launch cost; D1 daily writes force
     it at a handful of active tenants. (§3, §4.)
 
-14. **Staging billing — APPROVED / REHEARSED 2026-07-13.** Webhook/entitlement
+14. **Staging billing: APPROVED / REHEARSED 2026-07-13.** Webhook/entitlement
     fixtures prove signature, replay, dunning, cancellation, full-refund/dispute
     revocation, and the 30/100 GB plan mapping. The live Stripe products are eligible,
     Managed Payments is `Ready to use`, and the Customer Portal is configured. An
@@ -1218,7 +1218,7 @@ required the two requested-codebase columns on `device_authorizations`.
 
 ---
 
-## 8. Appendix — key file map
+## 8. Appendix: key file map
 
 | Concern | File(s) |
 |---|---|

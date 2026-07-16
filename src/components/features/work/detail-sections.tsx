@@ -1,11 +1,12 @@
 'use client'
 
 import * as React from 'react'
-import { Archive, ExternalLink } from 'lucide-react'
+import { Archive } from 'lucide-react'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { ExternalLink } from '@/components/ui/external-link'
 import { formatBytes } from '@/lib/client/format'
 import {
   updateCollaborationItem,
@@ -105,22 +106,19 @@ export function ReleaseDetailSection({
                             {asset.checksum.length > 16 ? `${asset.checksum.slice(0, 16)}…` : asset.checksum}
                           </span>
                         ) : (
-                          <span className="text-xs text-muted-foreground">—</span>
+                          <span className="text-xs text-muted-foreground">Not available</span>
                         )}
                       </td>
                       <td className="py-2">
                         {asset.url ? (
-                          <a
+                          <ExternalLink
                             href={asset.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center gap-1 rounded-sm text-xs text-iris outline-none hover:underline focus-visible:ring-2 focus-visible:ring-ring/40"
+                            className="rounded-sm text-xs text-iris hover:underline"
                           >
                             Open
-                            <ExternalLink className="size-3" aria-hidden />
-                          </a>
+                          </ExternalLink>
                         ) : (
-                          <span className="text-xs text-muted-foreground">—</span>
+                          <span className="text-xs text-muted-foreground">Not available</span>
                         )}
                       </td>
                     </tr>

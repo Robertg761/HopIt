@@ -1,7 +1,8 @@
 import { auth, currentUser } from '@clerk/nextjs/server'
 import { mintServerActorToken } from '@hopit/backend-d1'
 
-import { billingPlans, isBillingEnabled } from '@/lib/stripe-billing'
+import { planCatalog } from '@/lib/billing-plans'
+import { isBillingEnabled } from '@/lib/stripe-billing'
 
 export type ServiceAdminActor = {
   userId: string
@@ -108,9 +109,9 @@ export function serviceAdminRuntimeConfig() {
       plusStoragePrice: Boolean(process.env.STRIPE_PRICE_PLUS_STORAGE?.trim()),
     },
     plans: {
-      free: { priceUsd: 0, storageGb: 2, dailyWrites: 2_000, codebases: 1 },
-      plus: billingPlans.plus,
-      plusStorage: billingPlans.plus_storage,
+      free: planCatalog.free,
+      plus: planCatalog.plus,
+      plusStorage: planCatalog.plus_storage,
     },
     links: {
       stripe: 'https://dashboard.stripe.com/',

@@ -99,8 +99,8 @@ describe('episodeDurationLabel', () => {
   })
 
   it('returns a dash when a timestamp is missing or unparseable', () => {
-    expect(episodeDurationLabel(episode({ endedAt: null }))).toBe('—')
-    expect(episodeDurationLabel(episode({ startedAt: 'not-a-date' }))).toBe('—')
+    expect(episodeDurationLabel(episode({ endedAt: null }))).toBe('Not available')
+    expect(episodeDurationLabel(episode({ startedAt: 'not-a-date' }))).toBe('Not available')
   })
 })
 

@@ -15,9 +15,9 @@ permissions:
 
 jobs:
   verify:
-    name: Verify (lint, typecheck, test, build)
+    name: Verify, test, build, and package
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 35
     # No secrets/env are needed: the Next.js build degrades gracefully when
     # Clerk keys are absent (see src/lib/auth-config.ts), and the agent test
     # suite runs hermetically via HOPIT_NO_ENV_FILE=1/HOPIT_JSON=1 (see the
@@ -34,51 +34,36 @@ jobs:
       - run: npm run typecheck
       - run: npm run typecheck:agent
       - run: npm run test:all
-      - run: npm run build
-
-  desktop:
-    name: Desktop tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 25
-          cache: npm
-      - run: npm ci
-      # Pure node:test logic tests; the script does not launch Electron, so no
-      # display/xvfb is required.
       - run: npm run test:desktop
-
-  agent-and-package:
-    name: Agent and package (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-    runs-on: ${{ matrix.os }}
-    # Packaging builds all 4 hop targets (downloads Node runtimes from
-    # nodejs.org), so this job gets a longer timeout than verify/desktop.
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 25
-          cache: npm
-      - run: npm ci
-      # npm test = the agent suite; hermetic via HOPIT_NO_ENV_FILE=1 in the
-      # agent:test script. package:hop's host smoke checks likewise inject
-      # HOPIT_NO_ENV_FILE=1 (scripts/package-hop.mjs, verifyHostRelease), and
-      # cross-target verification is structural, so both pass on clean runners.
-      - run: npm test
+      - run: npm run build
       - run: npm run package:hop -- --target all
       - uses: actions/upload-artifact@v4
         with:
-          name: hop-${{ runner.os }}-${{ runner.arch }}
+          name: hop-runtimes
           path: |
             artifacts/hop-*.tar.gz
             artifacts/hop-*.tar.gz.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  macos-dmg:
+    name: Build macOS DMG
+    if: github.event_name == 'push'
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 25
+          cache: npm
+      - run: npm ci
+      - run: npm run package:hop:dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hop-macos-dmg
+          path: |
+            artifacts/HopIt-macOS.dmg
+            artifacts/HopIt-macOS.dmg.sha256
           if-no-files-found: error
           retention-days: 7
