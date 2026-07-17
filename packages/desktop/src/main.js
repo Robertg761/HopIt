@@ -13,7 +13,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { deriveServicePort, eventsUrlForCodebase, statusUrlForCodebase } from './lib/ports.js'
-import { defaultAgentStateRoot, defaultWorkspaceRoot, resolveHopBinary, assertSafeAbsolutePath, assertPathWithin } from './lib/paths.js'
+import { defaultAgentStateRoot, defaultWorkspaceRoot, resolveHopBinary, bundledHopBinary, assertSafeAbsolutePath, assertPathWithin } from './lib/paths.js'
 import { readProjects } from './lib/projects.js'
 import { fetchStatus, fetchEvents } from './lib/status-client.js'
 import { deriveViewModel } from './lib/state.js'
@@ -67,6 +67,10 @@ function envForPaths() {
 }
 
 const runtimeEnv = envForPaths()
+const packagedHopBinary = app.isPackaged ? bundledHopBinary(process.resourcesPath) : null
+if (!runtimeEnv.HOPIT_HOP_BIN && packagedHopBinary && fs.existsSync(packagedHopBinary)) {
+  runtimeEnv.HOPIT_HOP_BIN = packagedHopBinary
+}
 const stateRoot = defaultAgentStateRoot(runtimeEnv)
 const workspaceRootFallback = defaultWorkspaceRoot(runtimeEnv)
 const hopBinary = resolveHopBinary({ env: runtimeEnv })

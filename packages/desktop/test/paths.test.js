@@ -7,6 +7,7 @@ import {
   resolveHopBinary,
   hopBinaryCandidates,
   defaultAgentStateRoot,
+  bundledHopBinary,
   assertSafeAbsolutePath,
   assertPathWithin,
   assertSafeCodebaseId,
@@ -45,6 +46,19 @@ test('resolver honors the HOPIT_HOP_BIN override before install locations', () =
 
 test('resolver returns null when nothing exists', () => {
   assert.equal(resolveHopBinary({ env: {}, platform: 'darwin', fileExists: () => false }), null)
+})
+
+test('bundled runtime selects the matching universal-app architecture', () => {
+  assert.equal(
+    bundledHopBinary('/Applications/HopIt.app/Contents/Resources', 'arm64', 'darwin'),
+    path.join('/Applications/HopIt.app/Contents/Resources', 'agent', 'hop-darwin-arm64', 'bin', 'hop'),
+  )
+  assert.equal(
+    bundledHopBinary('/Applications/HopIt.app/Contents/Resources', 'x64', 'darwin'),
+    path.join('/Applications/HopIt.app/Contents/Resources', 'agent', 'hop-darwin-x64', 'bin', 'hop'),
+  )
+  assert.equal(bundledHopBinary('/tmp/resources', 'arm64', 'linux'), null)
+  assert.equal(bundledHopBinary('/tmp/resources', 'ia32', 'darwin'), null)
 })
 
 test('linux candidates use the linux runtime layout', () => {

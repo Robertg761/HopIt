@@ -21,13 +21,17 @@ The current setup source of truth is [docs/personal-production.md](docs/personal
 
 ## Install
 
-Install the HopIt command-line agent on macOS or Linux with one line:
+On macOS, download `HopIt-macOS.dmg`, open it, and drag `HopIt.app` into
+Applications. The universal app includes Apple silicon and Intel agent runtimes,
+so a separate Node, npm, or command-line installation is not required.
+
+For a terminal-only install on macOS or Linux, use:
 
 ```sh
 curl -fsSL https://hopit.dev/install | sh
 ```
 
-This downloads the prebuilt bundle for your platform from the public release
+This downloads the prebuilt command-line bundle for your platform from the public release
 channel, verifies its checksum, installs it under `~/.hopit`, and links the
 `hop` launcher into `~/.local/bin`. The bundle ships its own Node runtime, so
 Node and npm are not required on the target machine.
@@ -202,6 +206,10 @@ the installed runtime. `npm run release:hop` blocks unsigned public uploads by
 default. Use `--dry-run` to verify its plan, `npm run package:hop` to build
 local/private dogfood artifacts, or the documented two-part owner acknowledgement
 for a deliberately approved unsigned public dogfood release.
+
+`npm run package:hop:dmg` builds a universal macOS DMG with `HopIt.app` and an
+Applications shortcut. The app embeds the matching agent runtime and receives
+an ad hoc integrity signature. It is not Developer ID signed or notarized yet.
 
 ## Hosted Backend
 

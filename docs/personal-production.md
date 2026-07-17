@@ -676,13 +676,13 @@ The acknowledgement is intentionally verbose so a normal release command
 cannot publish unsigned artifacts by accident. Remove this temporary path when
 signed and notarized packages are available.
 
-`npm run package:hop:dmg` builds a local unsigned
-`artifacts/HopIt-macOS.dmg` containing both Mac runtimes. Its
-`Install HopIt.command` chooses Apple silicon or Intel on the Mac itself,
-installs into the current user account, and starts `hop setup`. Future release
-manifests and upload plans include the DMG. Public upload remains blocked unless
-the guarded owner-approved unsigned path above is used, or signing and
-notarization are implemented.
+`npm run package:hop:dmg` builds `artifacts/HopIt-macOS.dmg` with a universal
+`HopIt.app` and an Applications shortcut. The app bundle contains both Mac agent
+runtimes and selects the matching runtime when it launches. The packager applies
+an ad hoc integrity signature, but the app is not Developer ID signed or
+notarized. Release manifests and upload plans include the DMG. Public upload
+remains blocked unless the guarded owner-approved unsigned path above is used,
+or signing and notarization are implemented.
 
 This section describes the checked-in publication contract. No release was
 uploaded while adding these gates, and the live bucket should be inspected for
@@ -931,13 +931,13 @@ If you are using the manual pid-file debug service instead of LaunchAgent, use
 `npm run hop:service:status -- --codebase-id "$HOPIT_CODEBASE_ID"` instead.
 
 
-## Desktop App (dogfood)
+## Desktop App
 
 `packages/desktop` is a menu-bar-first Electron app that is a THIN shell over the
 existing local engine: it reads live state from each codebase's loopback
 `/status` and `/events` endpoints (default port 4785 for `hopit`, derived
 per-codebase ports for everything else, matching the agent's FNV-1a derivation)
-and performs every action by spawning the installed `hop` CLI. It contains no
+and performs every action by spawning the bundled or installed `hop` CLI. It contains no
 agent logic; if the desktop app and the CLI ever disagree, the CLI is right and
 the shell has a bug.
 
@@ -957,18 +957,20 @@ Run and test:
 ```bash
 npm run desktop:dev        # launch from the repo (electron .)
 npm run test:desktop       # node:test suite for the pure logic modules
-npm run desktop:package    # unsigned .app under artifacts/desktop/ (local dogfood only)
+npm run desktop:package    # universal .app under artifacts/desktop/
 ```
 
-The packaged app is unsigned and deliberately NOT wired into any release
-publication (that stays blocked pending signing, same as the CLI). Electron and
-@electron/packager are devDependencies of `packages/desktop` only, so
-`npm run package:hop` and the agent runtime artifact are unaffected.
+The packaged app is wired into the macOS DMG release and embeds both agent
+runtimes under `Contents/Resources/agent`. It receives an ad hoc integrity
+signature, but public release still requires the guarded unsigned acknowledgement
+until Developer ID signing and notarization are available. Electron and
+@electron/packager are devDependencies of `packages/desktop` only.
 `HOPIT_DESKTOP_SMOKE=1 electron . --no-window` boots to tray creation, prints a
 one-line readiness marker, and exits 0 after ~2.5 s (used as a headless smoke
 check). `HOPIT_HOP_BIN` overrides hop binary discovery (default order:
 `~/.local/bin/hop`, `/opt/homebrew/bin/hop`, `/usr/local/bin/hop`, the packaged
-Application Support runtime).
+Application Support runtime). A packaged app prefers its matching embedded
+runtime before those external locations.
 
 
 ## Current Limits
@@ -988,7 +990,7 @@ Application Support runtime).
 - The current R2 setup is no-charge/private dogfood storage, not a public-release storage commitment. It has a free-only app budget; the former 1-day object-expiry lifecycle rule was removed on 2026-07-08 so stored blobs now persist, but the posture is still not a permanent customer repository storage commitment.
 - Full literal cloud sync of the current HopIt repository should be performed through the production-safe import/mirror flow, not by raw copying. Treat `/Users/robert/HopIt Workspaces/hopit` as the local managed workspace and verify cloud object counts before assuming large file bodies are uploaded.
 - Git export/publish creates a clean local Git repo; it does not push to a remote.
-- The standalone artifact includes start-on-login support scripts and the release channel now publishes immutable objects before its manifest pointer, but it is not signed, notarized, or packaged as a native installer. Public unsigned publication is blocked with no escape hatch; private dogfood stays local through `package:hop`.
+- The release channel publishes immutable objects before its manifest pointer. The macOS DMG now contains a universal drag-to-Applications app with embedded agent runtimes and an ad hoc integrity signature, but it is not Developer ID signed or notarized. Public unsigned publication requires the guarded owner acknowledgement.
 - LaunchAgent health is verified with `launchctl print` plus the loopback `/status` endpoint. `hop service status` now also trusts a codebase-verified loopback `/status` probe, so direct supervisor-owned `service run` installs without a pid file report `running: true` with `source: "health-probe"`.
 - Token rotation is CLI/runbook driven; there is no dashboard UX for device credential recovery yet.
 - The dashboard now has first-project device approval, a four-step Workspace Root checklist, a first read-only code browser, plus issue, discussion, release, project-board, durable comment, member/invite, and key-grant status surfaces. Web compare UI wiring, richer release artifacts, key approval/rotation UX, and a successful clean-workspace live push-apply proof remain future work.

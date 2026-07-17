@@ -84,6 +84,14 @@ export function resolveHopBinary(deps = {}) {
   return null
 }
 
+/** Resolve the agent runtime embedded in a packaged universal macOS app. */
+export function bundledHopBinary(resourcesPath, arch = process.arch, platform = process.platform) {
+  if (platform !== 'darwin' || typeof resourcesPath !== 'string' || resourcesPath.trim() === '') return null
+  const runtimeArch = arch === 'x64' ? 'x64' : arch === 'arm64' ? 'arm64' : null
+  if (!runtimeArch) return null
+  return path.join(resourcesPath, 'agent', `hop-darwin-${runtimeArch}`, 'bin', 'hop')
+}
+
 /**
  * Validate an absolute directory path received over IPC before it is handed to
  * shell.openPath or `hop add`. Rejects relative paths, null bytes, and other

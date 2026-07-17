@@ -69,7 +69,7 @@ export default async function DownloadPage() {
         <div className="grid gap-12 lg:grid-cols-[.7fr_1.3fr] lg:gap-20">
           <div>
             <h2 className="text-balance text-3xl font-semibold tracking-[-0.035em] sm:text-4xl">The right build, automatically.</h2>
-            <p className="mt-5 leading-7 text-muted-foreground">The macOS disk image includes Apple silicon and Intel runtimes, then installs only the correct one. The terminal installer provides the same automatic selection for Linux.</p>
+            <p className="mt-5 leading-7 text-muted-foreground">The macOS disk image contains a universal HopIt app for Apple silicon and Intel Macs. Linux uses the terminal installer to select the correct runtime automatically.</p>
           </div>
           <div className="grid gap-px overflow-hidden rounded-2xl border border-border bg-border sm:grid-cols-2">
             {downloadPlatforms.map((platform) => (
@@ -93,7 +93,7 @@ export default async function DownloadPage() {
       <section className="border-y border-border bg-muted/35" aria-labelledby="setup-heading">
         <h2 id="setup-heading" className="sr-only">Set up HopIt on this device</h2>
         <div className="mx-auto grid w-full max-w-[1180px] gap-px px-4 py-16 sm:px-6 lg:grid-cols-3 lg:px-8 lg:py-20">
-          <SetupStep icon={Terminal} title="Install" detail="Open the disk image and double-click Install HopIt. Node and npm are not required." />
+          <SetupStep icon={Terminal} title="Install" detail="Open the disk image and drag HopIt into Applications. Node and npm are not required." />
           <SetupStep icon={LockKeyhole} title="Approve" detail="Sign in when your browser opens and grant this device a scoped session." />
           <SetupStep icon={Cloud} title="Attach" detail="Choose your cloud project and local workspace folder. Sync starts in the background." />
         </div>
