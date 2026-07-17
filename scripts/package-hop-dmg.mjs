@@ -3,9 +3,10 @@
 import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+
+import appdmg from 'appdmg'
 
 import { packageTargets, parseTargets } from './package-hop.mjs'
 import { buildDesktopApp } from '../packages/desktop/scripts/package-desktop.mjs'
@@ -14,75 +15,58 @@ const __filename = fileURLToPath(import.meta.url)
 const repoRoot = path.resolve(path.dirname(__filename), '..')
 const artifactsRoot = path.join(repoRoot, 'artifacts')
 const MAC_TARGETS = ['darwin-arm64', 'darwin-x64']
+const DMG_BACKGROUND = path.join(repoRoot, 'packages', 'desktop', 'assets', 'dmg', 'HopIt-dmg-background.png')
 
 export async function buildMacDmg({ built, version = localVersion() }) {
   assertMacPackages(built)
   requireMacTool('hdiutil')
 
-  const stagingRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hopit-dmg-'))
-  const volumeRoot = path.join(stagingRoot, 'HopIt')
   const dmgPath = path.join(artifactsRoot, 'HopIt-macOS.dmg')
   const checksumPath = `${dmgPath}.sha256`
 
-  try {
-    const desktop = await buildDesktopApp({ built })
-    await fs.mkdir(volumeRoot, { recursive: true })
-    copyMacBundle(desktop.appPath, path.join(volumeRoot, 'HopIt.app'))
-    await fs.symlink('/Applications', path.join(volumeRoot, 'Applications'))
-    await fs.writeFile(path.join(volumeRoot, 'README.txt'), renderDmgReadme(), 'utf8')
+  const desktop = await buildDesktopApp({ built })
+  await fs.rm(dmgPath, { force: true })
+  await createDmg({
+    target: dmgPath,
+    specification: buildDmgSpecification({ appPath: desktop.appPath }),
+  })
 
-    await fs.rm(dmgPath, { force: true })
-    const create = spawnSync('hdiutil', [
-      'create',
-      '-volname', 'HopIt',
-      '-srcfolder', volumeRoot,
-      '-format', 'UDZO',
-      '-imagekey', 'zlib-level=9',
-      '-ov',
-      dmgPath,
-    ], { cwd: repoRoot, encoding: 'utf8' })
-    if (create.status !== 0) {
-      throw new Error(`Unable to create HopIt DMG: ${create.stderr || create.stdout}`)
-    }
+  const verify = spawnSync('hdiutil', ['verify', dmgPath], { cwd: repoRoot, encoding: 'utf8' })
+  if (verify.status !== 0) {
+    throw new Error(`HopIt DMG verification failed: ${verify.stderr || verify.stdout}`)
+  }
 
-    const verify = spawnSync('hdiutil', ['verify', dmgPath], { cwd: repoRoot, encoding: 'utf8' })
-    if (verify.status !== 0) {
-      throw new Error(`HopIt DMG verification failed: ${verify.stderr || verify.stdout}`)
-    }
+  const sha256 = await sha256File(dmgPath)
+  await fs.writeFile(checksumPath, `${sha256}  ${path.basename(dmgPath)}\n`, 'utf8')
+  const stat = await fs.stat(dmgPath)
 
-    const sha256 = await sha256File(dmgPath)
-    await fs.writeFile(checksumPath, `${sha256}  ${path.basename(dmgPath)}\n`, 'utf8')
-    const stat = await fs.stat(dmgPath)
-
-    return {
-      fileName: path.basename(dmgPath),
-      dmgPath,
-      checksumPath,
-      sha256,
-      size: stat.size,
-      version,
-      verified: true,
-      appPath: desktop.appPath,
-    }
-  } finally {
-    await fs.rm(stagingRoot, { recursive: true, force: true })
+  return {
+    fileName: path.basename(dmgPath),
+    dmgPath,
+    checksumPath,
+    sha256,
+    size: stat.size,
+    version,
+    verified: true,
+    appPath: desktop.appPath,
   }
 }
 
-export function renderDmgReadme() {
-  return `HopIt for macOS
-
-1. Drag HopIt into the Applications folder.
-2. Open HopIt from Applications.
-3. Add a project and approve this Mac when HopIt opens your browser.
-
-HopIt is a universal app for Apple silicon and Intel Macs. It includes the
-matching agent runtime inside the application, so Node, npm, and a separate
-terminal installer are not required.
-
-This build is not signed or notarized yet. If macOS blocks the first launch,
-Control-click HopIt in Applications, choose Open, then confirm Open.
-`
+export function buildDmgSpecification({ appPath }) {
+  return {
+    title: 'HopIt',
+    icon: path.join(repoRoot, 'packages', 'desktop', 'assets', 'HopIt.icns'),
+    background: DMG_BACKGROUND,
+    'icon-size': 128,
+    window: {
+      position: { x: 180, y: 120 },
+      size: { width: 660, height: 420 },
+    },
+    contents: [
+      { x: 170, y: 235, type: 'file', path: appPath },
+      { x: 490, y: 235, type: 'link', path: '/Applications' },
+    ],
+  }
 }
 
 function assertMacPackages(built) {
@@ -93,18 +77,16 @@ function assertMacPackages(built) {
 }
 
 function requireMacTool(tool) {
-  const result = spawnSync(tool, ['help'], { encoding: 'utf8' })
+  const result = spawnSync('/usr/bin/which', [tool], { encoding: 'utf8' })
   if (result.status !== 0) throw new Error(`${tool} is required to build a macOS disk image.`)
 }
 
-function copyMacBundle(source, destination) {
-  const result = spawnSync('ditto', ['--rsrc', '--extattr', '--acl', source, destination], {
-    cwd: repoRoot,
-    encoding: 'utf8',
+function createDmg({ target, specification }) {
+  return new Promise((resolve, reject) => {
+    const emitter = appdmg({ target, basepath: repoRoot, specification })
+    emitter.once('finish', resolve)
+    emitter.once('error', reject)
   })
-  if (result.status !== 0) {
-    throw new Error(`Unable to stage HopIt.app: ${result.stderr || result.stdout}`)
-  }
 }
 
 function localVersion() {

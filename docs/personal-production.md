@@ -677,12 +677,14 @@ cannot publish unsigned artifacts by accident. Remove this temporary path when
 signed and notarized packages are available.
 
 `npm run package:hop:dmg` builds `artifacts/HopIt-macOS.dmg` with a universal
-`HopIt.app` and an Applications shortcut. The app bundle contains both Mac agent
-runtimes and selects the matching runtime when it launches. The packager applies
-an ad hoc integrity signature, but the app is not Developer ID signed or
-notarized. Release manifests and upload plans include the DMG. Public upload
-remains blocked unless the guarded owner-approved unsigned path above is used,
-or signing and notarization are implemented.
+`HopIt.app` and an Applications shortcut. The disk image saves a branded Finder
+window with a fixed icon layout and no visible support files, so opening it shows
+the standard drag-to-Applications installation surface. The app bundle contains
+both Mac agent runtimes and selects the matching runtime when it launches. The
+packager applies an ad hoc integrity signature, but the app is not Developer ID
+signed or notarized. Release manifests and upload plans include the DMG. Public
+upload remains blocked unless the guarded owner-approved unsigned path above is
+used, or signing and notarization are implemented.
 
 This section describes the checked-in publication contract. No release was
 uploaded while adding these gates, and the live bucket should be inspected for

@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="hopit-icon-fill" x1="160" y1="128" x2="864" y2="928" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#238636" />
+      <stop offset="1" stop-color="#1a7f37" />
+    </linearGradient>
+    <filter id="hopit-icon-shadow" x="42" y="48" width="940" height="956" filterUnits="userSpaceOnUse">
+      <feDropShadow dx="0" dy="28" stdDeviation="28" flood-color="#000000" flood-opacity="0.3" />
+    </filter>
+    <clipPath id="hopit-icon-clip">
+      <rect x="96" y="96" width="832" height="832" rx="184" />
+    </clipPath>
+  </defs>
+  <g filter="url(#hopit-icon-shadow)">
+    <rect x="96" y="96" width="832" height="832" rx="184" fill="url(#hopit-icon-fill)" />
+    <g clip-path="url(#hopit-icon-clip)">
+      <g transform="translate(61.333 61.333) scale(17.3333)">
+        <path d="M-4 41L17 20" stroke="#ffffff" stroke-width="6" />
+        <path d="M16 32L30 18" stroke="#ffffff" stroke-width="6" />
+        <path d="M29 25L48 6" stroke="#ffffff" stroke-width="6" />
+        <circle cx="17" cy="20" r="3.2" fill="#ffffff" stroke="#0d1117" stroke-width="1.5" />
+        <circle cx="30" cy="18" r="3.2" fill="#ffffff" stroke="#0d1117" stroke-width="1.5" />
+      </g>
+    </g>
+  </g>
+</svg>
