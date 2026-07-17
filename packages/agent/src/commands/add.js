@@ -125,7 +125,7 @@ export async function runAdd(options, inject = {}) {
     options['state-root'] ?? process.env.HOPIT_AGENT_STATE_ROOT ?? defaultAgentStateRoot(),
   ))
   const workspaceRoot = path.resolve(expandHome(
-    options['workspace-root'] ?? process.env.HOPIT_WORKSPACE_ROOT ?? defaultWorkspaceRoot(),
+    options._defaultWorkspaceRoot ?? options['workspace-root'] ?? process.env.HOPIT_WORKSPACE_ROOT ?? defaultWorkspaceRoot(),
   ))
   const envFilePath = path.resolve(expandHome(
     options['env-path'] ?? path.join(os.homedir(), '.config', 'hopit', 'production.env'),

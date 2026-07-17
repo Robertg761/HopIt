@@ -20,13 +20,20 @@
       <nav id="project-list" aria-label="Projects"></nav>
       <button id="add-project-btn" class="btn btn-primary" type="button">＋ Add a project</button>
       <footer id="sidebar-footer">
-        <button id="workspace-root-btn" class="link-btn" type="button" title="Open the HopIt Workspaces folder in Finder">
-          <span class="muted">Workspace Root</span>
-          <span id="workspace-root-path" class="path-text">…</span>
-        </button>
+        <div class="root-shortcut">
+          <button id="workspace-root-btn" class="link-btn" type="button" title="Change the HopIt Workspace Root">
+            <span class="muted">Workspace Root</span>
+            <span id="workspace-root-path" class="path-text">…</span>
+          </button>
+          <button id="workspace-root-reveal-btn" class="icon-btn" type="button" title="Show the Workspace Root in Finder" aria-label="Show the Workspace Root in Finder">↗</button>
+        </div>
         <button id="dashboard-btn" class="link-btn" type="button" title="Open hopit.dev in your browser">
           <span class="muted">Dashboard</span>
           <span class="path-text">hopit.dev ↗</span>
+        </button>
+        <button id="update-btn" class="link-btn" type="button" title="Check for HopIt updates">
+          <span class="muted">App Updates</span>
+          <span id="update-status" class="path-text">Checking availability…</span>
         </button>
         <div id="hop-missing" class="warn hidden">The hop command was not found on this Mac. Install it, then reopen HopIt.</div>
       </footer>
@@ -113,6 +120,108 @@
             <button id="add-done-btn" class="btn btn-primary hidden" type="button">Open the project</button>
             <button id="add-retry-btn" class="btn hidden" type="button">Try again</button>
           </div>
+        </div>
+      </section>
+
+      <!-- Workspace Root migration -->
+      <section id="view-root" class="view hidden">
+        <header class="root-header">
+          <button id="root-back-btn" class="link-btn" type="button">← Back</button>
+          <h1>Change Workspace Root</h1>
+          <p class="muted">Choose the default location for HopIt projects on this Mac, then decide which existing projects should move there.</p>
+        </header>
+
+        <div class="root-current">
+          <span class="root-label">Current default</span>
+          <span id="root-current-path" class="root-path">…</span>
+        </div>
+
+        <div id="root-step-choose" class="root-card">
+          <div>
+            <div class="root-card-title">Choose a new folder</div>
+            <p class="muted">New projects will use this location. Existing projects move only when you select them below.</p>
+          </div>
+          <button id="root-pick-btn" class="btn btn-primary" type="button">Choose new location…</button>
+        </div>
+
+        <div id="root-step-projects" class="root-card hidden">
+          <div class="root-destination">
+            <span class="root-label">New default</span>
+            <span id="root-new-path" class="root-path"></span>
+            <button id="root-repick-btn" class="text-btn" type="button">Choose a different folder</button>
+          </div>
+          <div class="root-selection-head">
+            <div>
+              <div class="root-card-title">Projects to move</div>
+              <p id="root-selection-summary" class="muted"></p>
+            </div>
+            <div class="root-selection-actions">
+              <button id="root-select-all-btn" class="text-btn" type="button">Select all</button>
+              <button id="root-select-none-btn" class="text-btn" type="button">Select none</button>
+            </div>
+          </div>
+          <div id="root-project-list" class="root-project-list"></div>
+          <div class="root-actions">
+            <button id="root-review-btn" class="btn btn-primary" type="button">Review migration</button>
+          </div>
+        </div>
+
+        <div id="root-step-review" class="root-card root-review hidden">
+          <div class="root-card-title">Ready to move</div>
+          <p id="root-review-copy"></p>
+          <div id="root-review-list" class="root-review-list"></div>
+          <p class="muted small">HopIt briefly pauses the selected projects, moves their folders, updates the default root, then resumes any services that were running. Projects left behind continue using their current locations.</p>
+          <div class="root-actions">
+            <button id="root-confirm-btn" class="btn btn-primary" type="button">Move selected projects</button>
+            <button id="root-edit-btn" class="btn" type="button">Edit selection</button>
+          </div>
+        </div>
+
+        <div id="root-step-run" class="root-card hidden">
+          <div id="root-run-title" class="root-card-title">Preparing migration…</div>
+          <div class="root-progress" aria-hidden="true"><span id="root-progress-bar"></span></div>
+          <p id="root-run-copy" class="muted" aria-live="polite">Checking project services and destination folders.</p>
+        </div>
+
+        <div id="root-step-done" class="root-card hidden">
+          <div id="root-done-title" class="root-card-title">Workspace Root changed</div>
+          <p id="root-done-copy" class="muted"></p>
+          <div class="root-actions">
+            <button id="root-done-btn" class="btn btn-primary" type="button">Done</button>
+            <button id="root-show-btn" class="btn" type="button">Show new root in Finder</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- App updates -->
+      <section id="view-update" class="view hidden">
+        <header class="update-header">
+          <button id="update-back-btn" class="link-btn" type="button">← Back</button>
+          <h1>App Updates</h1>
+          <p class="muted">HopIt checks the verified release channel and can update itself without another DMG.</p>
+        </header>
+        <div class="update-card">
+          <div class="update-version-row">
+            <div>
+              <span class="root-label">Installed version</span>
+              <div id="update-current-version" class="root-path">…</div>
+            </div>
+            <div id="update-available-version-wrap" class="hidden">
+              <span class="root-label">Available version</span>
+              <div id="update-available-version" class="root-path">…</div>
+            </div>
+          </div>
+          <div>
+            <div id="update-title" class="root-card-title">Ready to check</div>
+            <p id="update-copy" class="muted">HopIt checks automatically, or you can check now.</p>
+          </div>
+          <div id="update-progress" class="root-progress hidden" aria-hidden="true"><span id="update-progress-bar"></span></div>
+          <div class="root-actions">
+            <button id="update-check-btn" class="btn" type="button">Check now</button>
+            <button id="update-download-btn" class="btn btn-primary hidden" type="button">Download update</button>
+            <button id="update-install-btn" class="btn btn-primary hidden" type="button">Restart to update</button>
+          </div>
+          <p class="muted small">Downloads are pinned to an immutable release, checked against its SHA-256 checksum, extracted to a staging folder, and verified before HopIt restarts.</p>
         </div>
       </section>
     </main>

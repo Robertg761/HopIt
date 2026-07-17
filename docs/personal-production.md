@@ -651,6 +651,7 @@ channel. The checked-in publisher blocks unsigned uploads by default:
 
 ```bash
 npm run release:hop -- --dry-run   # print the wrangler upload plan, no writes
+npm run release:desktop -- --dry-run # verify a fast macOS in-app update plan
 npm run package:hop                # local/private host artifact; no upload
 npm run package:hop -- --target all  # local verification for every target
 ```
@@ -675,6 +676,32 @@ HOPIT_ACKNOWLEDGE_UNSIGNED_PUBLIC_RELEASE=I_ACCEPT_UNSIGNED_PUBLIC_DISTRIBUTION 
 The acknowledgement is intentionally verbose so a normal release command
 cannot publish unsigned artifacts by accident. Remove this temporary path when
 signed and notarized packages are available.
+
+After the updater-enabled DMG has been installed once, routine desktop updates
+do not require another DMG. The fast path builds only the two universal-app Mac
+runtimes, packages and verifies `HopIt-macOS.zip`, uploads immutable artifacts,
+then advances `latest/desktop-manifest.json` last:
+
+```bash
+HOPIT_ACKNOWLEDGE_UNSIGNED_PUBLIC_RELEASE=I_ACCEPT_UNSIGNED_PUBLIC_DISTRIBUTION \
+  npm run release:desktop -- --allow-unsigned
+```
+
+The desktop app checks that channel automatically and also exposes App Updates
+in its sidebar. It downloads the immutable ZIP, enforces the published size and
+SHA-256 checksum, verifies the bundle id and ad hoc code signature, stages the
+candidate outside the live app, and offers Restart to update. The replacement
+helper keeps the previous app bundle until the new app reaches startup, so an
+interrupted replacement has a local rollback copy. An app launched directly
+from a mounted DMG cannot self-update; it must first be copied to Applications.
+The updater itself is delivered by the new app, so existing installations need
+this updater-enabled DMG once before future releases become in-app updates.
+
+Electron's built-in macOS autoUpdater is intentionally not used while HopIt is
+only ad hoc signed because Squirrel.Mac requires a properly signed application.
+When Developer ID signing and notarization are available, replace the temporary
+custom installer with the signed Electron update path while preserving the
+immutable channel and checksum gates.
 
 `npm run package:hop:dmg` builds `artifacts/HopIt-macOS.dmg` with a universal
 `HopIt.app` and an Applications shortcut. The disk image saves a branded Finder
@@ -701,8 +728,14 @@ instead.
   - `releases/<version>/manifest.json`, an immutable schema-v2 manifest whose
     `key` and `checksumKey` fields point only to the same version prefix.
   - `latest/manifest.json`, the only mutable short-cache channel pointer. It is
-    uploaded last. The publisher no longer writes mutable `latest/hop-*`
+    uploaded last for full releases. The publisher no longer writes mutable `latest/hop-*`
     artifacts, and the installer ignores any legacy objects at those keys.
+  - `latest/desktop-manifest.json`, the mutable short-cache pointer used by the
+    in-app macOS updater. Desktop-only releases advance this pointer without
+    changing the website's full-release manifest. Full releases advance both,
+    with `latest/manifest.json` still written last.
+  - `releases/<version>/HopIt-macOS.zip` and `.sha256`, the verified universal
+    app archive used for in-app updates. The DMG remains the first-install path.
 
 Each `.tar.gz.sha256` sidecar is written in `<hex>  <name>.tar.gz` format, so the
 installer resolves `latest/manifest.json` to one immutable release, validates

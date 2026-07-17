@@ -50,6 +50,14 @@ const dmg = {
   checksumPath: '/tmp/HopIt-macOS.dmg.sha256',
   sha256: 'dmg123',
   verified: true,
+  update: {
+    fileName: 'HopIt-macOS.zip',
+    archivePath: '/tmp/HopIt-macOS.zip',
+    checksumPath: '/tmp/HopIt-macOS.zip.sha256',
+    sha256: 'zip123',
+    size: 123456,
+    verified: true,
+  },
 }
 
 test('release manifest pins every target to immutable versioned objects', () => {
@@ -91,22 +99,43 @@ test('release manifest and upload plan include the universal macOS DMG', () => {
     gitSha: 'abc1234',
     builtAt: '2026-07-10T00:00:00.000Z',
     built,
-    dmg,
+    mac: dmg,
   })
   assert.equal(manifest.downloads.macos.key, 'releases/0.0.1+abc1234/HopIt-macOS.dmg')
   assert.equal(manifest.downloads.macos.sha256, 'dmg123')
   assert.equal(manifest.downloads.macos.signed, false)
   assert.equal(manifest.downloads.macos.notarized, false)
+  assert.equal(manifest.downloads.macos.update.key, 'releases/0.0.1+abc1234/HopIt-macOS.zip')
+  assert.equal(manifest.downloads.macos.update.sha256, 'zip123')
 
   const plan = buildReleaseUploadPlan({
     version: '0.0.1+abc1234',
     built,
-    dmg,
+    mac: dmg,
     manifestPath: '/tmp/manifest.json',
   })
   assert.equal(plan.some((upload) => upload.key.endsWith('/HopIt-macOS.dmg')), true)
   assert.equal(plan.some((upload) => upload.key.endsWith('/HopIt-macOS.dmg.sha256')), true)
+  assert.equal(plan.some((upload) => upload.key.endsWith('/HopIt-macOS.zip')), true)
+  assert.equal(plan.some((upload) => upload.key.endsWith('/HopIt-macOS.zip.sha256')), true)
+  assert.equal(plan.some((upload) => upload.key === 'latest/desktop-manifest.json'), true)
   assert.equal(plan.at(-1).key, 'latest/manifest.json')
+})
+
+test('desktop-only release advances only the in-app Mac channel', () => {
+  const plan = buildReleaseUploadPlan({
+    version: '0.0.1+abc1234',
+    built: built.filter((entry) => entry.target.startsWith('darwin-')),
+    mac: { update: dmg.update },
+    manifestPath: '/tmp/manifest.json',
+    publishChannel: false,
+    publishDesktopChannel: true,
+  })
+  assert.equal(plan.at(-1).key, 'latest/desktop-manifest.json')
+  assert.equal(plan.at(-1).phase, 'desktop-channel-pointer')
+  assert.equal(plan.some((upload) => upload.key === 'latest/manifest.json'), false)
+  assert.equal(plan.some((upload) => upload.key.endsWith('/HopIt-macOS.dmg')), false)
+  assert.equal(plan.some((upload) => upload.key.endsWith('/HopIt-macOS.zip')), true)
 })
 
 test('targeted release plans never replace the multi-platform channel pointer', () => {

@@ -130,6 +130,7 @@ export function deriveViewModel(probes) {
       codebaseId: probe.codebaseId,
       name: probe.name ?? status?.codebaseName ?? probe.codebaseId,
       workspacePath: probe.workspacePath ?? status?.workspace?.path ?? null,
+      workspaceRoot: probe.workspaceRoot ?? status?.workspace?.root ?? null,
       reachable: Boolean(probe.reachable),
       state: projectState,
       stateLabel: projectStateLabel(projectState),

@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 
 // Build every HopIt target and publish immutable archives/checksums first. The
-// single mutable `latest/manifest.json` pointer is uploaded last, so an aborted
-// release can leave only unreachable immutable objects, never a mixed channel.
+// mutable channel pointers are uploaded only after immutable artifacts. Full
+// releases keep `latest/manifest.json` last, so a failed build never exposes a
+// mixed release. Desktop-only releases advance only the Mac updater pointer.
 
 import fs from 'node:fs/promises'
 import path from 'node:path'
@@ -14,7 +15,7 @@ import {
   parseTargets,
   packageTargets,
 } from './package-hop.mjs'
-import { buildMacDmg } from './package-hop-dmg.mjs'
+import { buildMacDmg, buildMacUpdate } from './package-hop-dmg.mjs'
 
 const __filename = fileURLToPath(import.meta.url)
 const repoRoot = path.resolve(path.dirname(__filename), '..')
@@ -26,6 +27,7 @@ const PUBLIC_BASE_URL = 'https://pub-3d89002dcb6c4d71b6d1188f39cc7731.r2.dev'
 const CONTENT_TYPES = {
   '.tar.gz': 'application/gzip',
   '.dmg': 'application/x-apple-diskimage',
+  '.zip': 'application/zip',
   '.sha256': 'text/plain; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
 }
@@ -39,6 +41,7 @@ async function main() {
   const argv = process.argv.slice(2)
   const dryRun = argv.includes('--dry-run')
   const allowUnsigned = argv.includes('--allow-unsigned')
+  const desktopOnly = argv.includes('--desktop-only')
   assertReleasePublicationAllowed({
     dryRun,
     allowUnsigned,
@@ -49,7 +52,9 @@ async function main() {
   const hasExplicitTarget =
     argv.some((arg) => arg === '--target' || arg === '-t' || arg.startsWith('--target=')) ||
     Boolean(process.env.HOP_PACKAGE_TARGET)
-  const targets = hasExplicitTarget
+  const targets = desktopOnly
+    ? parseTargets({ argv: ['--target', 'darwin-arm64,darwin-x64'], env: {} })
+    : hasExplicitTarget
     ? parseTargets({ argv, env: process.env })
     : parseTargets({ argv: ['--target', 'all'], env: {} })
 
@@ -61,17 +66,22 @@ async function main() {
   const built = await packageTargets(targets)
   const hasBothMacTargets = ['darwin-arm64', 'darwin-x64']
     .every((target) => built.some((entry) => entry.target === target))
-  const dmg = hasBothMacTargets ? await buildMacDmg({ built, version }) : null
+  const mac = hasBothMacTargets
+    ? desktopOnly
+      ? await buildMacUpdate({ built, version, builtAt, gitSha })
+      : await buildMacDmg({ built, version, builtAt, gitSha })
+    : null
 
-  const manifest = buildReleaseManifest({ version, gitSha, builtAt, built, dmg })
+  const manifest = buildReleaseManifest({ version, gitSha, builtAt, built, mac })
   const publishChannel = hasCompleteReleaseTargetSet(built.map((result) => result.target))
+  const publishDesktopChannel = Boolean(mac?.update) && (publishChannel || desktopOnly)
 
   const manifestPath = path.join(artifactsRoot, `release-manifest-${version.replace(/[^\w.-]/g, '_')}.json`)
   await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8')
 
   // Assemble the full upload plan before touching the network. The mutable
   // channel pointer is deliberately the final item in this plan.
-  const uploads = buildReleaseUploadPlan({ version, built, dmg, manifestPath, publishChannel })
+  const uploads = buildReleaseUploadPlan({ version, built, mac, manifestPath, publishChannel, publishDesktopChannel })
 
   for (const upload of uploads) {
     uploadObject(upload, dryRun)
@@ -84,10 +94,16 @@ async function main() {
       sha256: `${PUBLIC_BASE_URL}/releases/${version}/${result.packageName}.tar.gz.sha256`,
     }
   }
-  if (dmg) {
+  if (mac) {
     publicUrls.macos = {
-      dmg: `${PUBLIC_BASE_URL}/releases/${version}/${dmg.fileName}`,
-      sha256: `${PUBLIC_BASE_URL}/releases/${version}/${dmg.fileName}.sha256`,
+      ...(mac.fileName
+        ? {
+          dmg: `${PUBLIC_BASE_URL}/releases/${version}/${mac.fileName}`,
+          sha256: `${PUBLIC_BASE_URL}/releases/${version}/${mac.fileName}.sha256`,
+        }
+        : {}),
+      update: `${PUBLIC_BASE_URL}/releases/${version}/${mac.update.fileName}`,
+      updateSha256: `${PUBLIC_BASE_URL}/releases/${version}/${mac.update.fileName}.sha256`,
     }
   }
 
@@ -96,6 +112,8 @@ async function main() {
     dryRun,
     signed: false,
     publishChannel,
+    publishDesktopChannel,
+    desktopOnly,
     version,
     gitSha,
     builtAt,
@@ -103,6 +121,7 @@ async function main() {
     baseUrl: PUBLIC_BASE_URL,
     manifest: {
       latest: `${PUBLIC_BASE_URL}/latest/manifest.json`,
+      desktopLatest: `${PUBLIC_BASE_URL}/latest/desktop-manifest.json`,
       release: `${PUBLIC_BASE_URL}/releases/${version}/manifest.json`,
     },
     targets: built.map((result) => ({
@@ -149,7 +168,7 @@ function uploadObject(upload, dryRun) {
   }
 }
 
-export function buildReleaseManifest({ version, gitSha, builtAt, built, dmg = null }) {
+export function buildReleaseManifest({ version, gitSha, builtAt, built, mac = null }) {
   const targets = {}
   for (const result of built) {
     const archiveName = `${result.packageName}.tar.gz`
@@ -167,15 +186,27 @@ export function buildReleaseManifest({ version, gitSha, builtAt, built, dmg = nu
     builtAt,
     targets,
   }
-  if (dmg) {
+  if (mac?.update) {
     manifest.downloads = {
       macos: {
-        key: `releases/${version}/${dmg.fileName}`,
-        checksumKey: `releases/${version}/${dmg.fileName}.sha256`,
-        sha256: dmg.sha256,
-        verified: dmg.verified,
+        ...(mac.fileName
+          ? {
+            key: `releases/${version}/${mac.fileName}`,
+            checksumKey: `releases/${version}/${mac.fileName}.sha256`,
+            sha256: mac.sha256,
+            verified: mac.verified,
+          }
+          : {}),
         signed: false,
         notarized: false,
+        update: {
+          key: `releases/${version}/${mac.update.fileName}`,
+          checksumKey: `releases/${version}/${mac.update.fileName}.sha256`,
+          sha256: mac.update.sha256,
+          size: mac.update.size,
+          verified: mac.update.verified,
+          format: 'zip',
+        },
       },
     }
   }
@@ -185,9 +216,10 @@ export function buildReleaseManifest({ version, gitSha, builtAt, built, dmg = nu
 export function buildReleaseUploadPlan({
   version,
   built,
-  dmg = null,
+  mac = null,
   manifestPath,
   publishChannel = hasCompleteReleaseTargetSet(built.map((result) => result.target)),
+  publishDesktopChannel = Boolean(mac?.update) && publishChannel,
 }) {
   const prefix = `releases/${version}`
   const uploads = []
@@ -206,16 +238,30 @@ export function buildReleaseUploadPlan({
       phase: 'immutable',
     })
   }
-  if (dmg) {
+  if (mac?.fileName) {
     uploads.push({
-      key: `${prefix}/${dmg.fileName}`,
-      file: dmg.dmgPath,
+      key: `${prefix}/${mac.fileName}`,
+      file: mac.dmgPath,
       cacheControl: CACHE_IMMUTABLE,
       phase: 'immutable',
     })
     uploads.push({
-      key: `${prefix}/${dmg.fileName}.sha256`,
-      file: dmg.checksumPath,
+      key: `${prefix}/${mac.fileName}.sha256`,
+      file: mac.checksumPath,
+      cacheControl: CACHE_IMMUTABLE,
+      phase: 'immutable',
+    })
+  }
+  if (mac?.update) {
+    uploads.push({
+      key: `${prefix}/${mac.update.fileName}`,
+      file: mac.update.archivePath,
+      cacheControl: CACHE_IMMUTABLE,
+      phase: 'immutable',
+    })
+    uploads.push({
+      key: `${prefix}/${mac.update.fileName}.sha256`,
+      file: mac.update.checksumPath,
       cacheControl: CACHE_IMMUTABLE,
       phase: 'immutable',
     })
@@ -226,6 +272,14 @@ export function buildReleaseUploadPlan({
     cacheControl: CACHE_IMMUTABLE,
     phase: 'immutable-manifest',
   })
+  if (publishDesktopChannel) {
+    uploads.push({
+      key: 'latest/desktop-manifest.json',
+      file: manifestPath,
+      cacheControl: CACHE_LATEST,
+      phase: 'desktop-channel-pointer',
+    })
+  }
   if (publishChannel) {
     uploads.push({
       key: 'latest/manifest.json',
@@ -263,6 +317,7 @@ export function hasCompleteReleaseTargetSet(targets = []) {
 function contentTypeFor(key) {
   if (key.endsWith('.tar.gz')) return CONTENT_TYPES['.tar.gz']
   if (key.endsWith('.dmg')) return CONTENT_TYPES['.dmg']
+  if (key.endsWith('.zip')) return CONTENT_TYPES['.zip']
   if (key.endsWith('.sha256')) return CONTENT_TYPES['.sha256']
   if (key.endsWith('.json')) return CONTENT_TYPES['.json']
   return 'application/octet-stream'

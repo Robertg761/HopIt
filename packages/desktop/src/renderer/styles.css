@@ -99,6 +99,12 @@ body {
 #add-project-btn { margin: 8px 12px; }
 
 #sidebar-footer { padding: 6px 12px 12px; border-top: 1px solid var(--border); display: grid; gap: 6px; }
+.root-shortcut { display: grid; grid-template-columns: minmax(0, 1fr) 26px; gap: 4px; align-items: end; }
+.icon-btn {
+  width: 26px; height: 26px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--text-muted); font: inherit; cursor: pointer;
+}
+.icon-btn:hover { color: var(--accent); background: var(--bg-hover); }
 
 /* ---------- Buttons, pills, common ---------- */
 
@@ -360,4 +366,66 @@ button.file-row:hover { background: var(--bg-hover); }
   min-height: 160px; max-height: 340px; overflow-y: auto;
   white-space: pre-wrap; word-break: break-word;
   user-select: text;
+}
+
+/* Workspace Root migration */
+#view-root { overflow-y: auto; display: block; padding: 46px 28px 34px; }
+.root-header { max-width: 680px; display: grid; gap: 8px; margin-bottom: 18px; }
+.root-header h1 { font-size: 23px; letter-spacing: -0.02em; }
+.root-header p { line-height: 1.5; max-width: 620px; }
+.root-current {
+  max-width: 680px; display: grid; gap: 4px; margin-bottom: 14px;
+  padding: 12px 14px; border-left: 3px solid var(--accent); background: var(--bg-hover);
+  border-radius: 0 9px 9px 0;
+}
+.root-label { color: var(--text-muted); font-size: 11px; font-weight: 600; }
+.root-path {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px;
+  overflow-wrap: anywhere; user-select: text;
+}
+.root-card {
+  max-width: 680px; background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 13px; padding: 18px; margin-bottom: 14px; display: grid; gap: 14px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.04);
+}
+.root-card-title { font-size: 16px; font-weight: 700; letter-spacing: -0.01em; }
+.root-card p { line-height: 1.45; }
+.root-destination { display: grid; gap: 4px; padding-bottom: 14px; border-bottom: 1px solid var(--border); }
+.text-btn {
+  width: fit-content; border: 0; padding: 0; background: transparent; color: var(--accent);
+  font: inherit; font-size: 11px; cursor: pointer;
+}
+.text-btn:hover { text-decoration: underline; }
+.root-selection-head { display: flex; justify-content: space-between; gap: 18px; align-items: start; }
+.root-selection-actions { display: flex; gap: 10px; flex: none; padding-top: 3px; }
+.root-project-list { display: grid; border-top: 1px solid var(--border); }
+.root-project-option {
+  display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; align-items: start;
+  padding: 11px 4px; border-bottom: 1px solid var(--border); cursor: pointer;
+}
+.root-project-option:hover { background: var(--bg-hover); }
+.root-project-option input { margin-top: 3px; accent-color: var(--accent); }
+.root-project-name { display: block; font-weight: 600; margin-bottom: 2px; }
+.root-project-path { display: block; color: var(--text-muted); font-size: 11px; overflow-wrap: anywhere; }
+.root-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.root-review { border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); }
+.root-review-list { display: grid; gap: 7px; }
+.root-review-row { display: grid; grid-template-columns: 18px minmax(0, 1fr); gap: 7px; font-size: 12px; }
+.root-review-row span:first-child { color: var(--accent); font-weight: 700; }
+.root-progress { height: 4px; overflow: hidden; border-radius: 4px; background: var(--bg-hover); }
+.root-progress span { display: block; width: 18%; height: 100%; background: var(--accent); border-radius: inherit; transition: width 0.25s ease; }
+
+/* App updates */
+#view-update { overflow-y: auto; display: block; padding: 46px 28px 34px; }
+.update-header { max-width: 680px; display: grid; gap: 8px; margin-bottom: 18px; }
+.update-header h1 { font-size: 23px; letter-spacing: -0.02em; }
+.update-header p { line-height: 1.5; }
+.update-card {
+  max-width: 680px; background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: 13px; padding: 18px; display: grid; gap: 16px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.04);
+}
+.update-version-row {
+  display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px;
+  padding-bottom: 14px; border-bottom: 1px solid var(--border);
 }

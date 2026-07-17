@@ -14,7 +14,7 @@ import { fileURLToPath } from 'node:url'
 
 import { deriveServicePort, eventsUrlForCodebase, statusUrlForCodebase } from './lib/ports.js'
 import { defaultAgentStateRoot, defaultWorkspaceRoot, resolveHopBinary, bundledHopBinary, assertSafeAbsolutePath, assertPathWithin } from './lib/paths.js'
-import { readProjects } from './lib/projects.js'
+import { readProjects, readWorkspaceOverview } from './lib/projects.js'
 import { fetchStatus, fetchEvents } from './lib/status-client.js'
 import { deriveViewModel } from './lib/state.js'
 import { renderTrayIconPng } from './lib/icon.js'
@@ -35,8 +35,10 @@ import {
   trailEpisodesArgs,
   trailSummariesProbeArgs,
   trailSummarizeArgs,
+  migrateWorkspaceRootArgs,
 } from './lib/hop.js'
 import { loadWindowState, saveWindowState, resolveInitialBounds } from './lib/window-state.js'
+import { cleanupPreviousApp, createDesktopUpdater, readUpdateInfo } from './lib/updater.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DASHBOARD_URL = 'https://hopit.dev'
@@ -80,7 +82,9 @@ let mainWindow = null
 /** @type {Tray|null} */
 let tray = null
 let pollTimer = null
+let updateTimer = null
 let isQuitting = false
+let desktopUpdater = null
 
 /** Last derived view model, served to the renderer on demand. */
 let lastView = { trayState: 'service-stopped', label: { glyph: '□', text: 'Service stopped' }, projects: [] }
@@ -181,6 +185,9 @@ function updateTray() {
     { label: `HopIt: ${lastView.label.text}`, enabled: false },
     { type: 'separator' },
     { label: 'Open HopIt', click: () => showWindow() },
+    ...(desktopUpdater?.getState().state === 'available' || desktopUpdater?.getState().state === 'ready'
+      ? [{ label: desktopUpdater.getState().state === 'ready' ? 'Restart to update' : 'Update available', click: () => showWindow() }]
+      : []),
     {
       label: 'Sync now',
       enabled: lastView.projects.length > 0 && Boolean(hopBinary),
@@ -209,7 +216,9 @@ function createTray() {
 async function pollOnce() {
   let projects
   try {
-    projects = await readProjects(stateRoot)
+    const overview = await readWorkspaceOverview(stateRoot)
+    projects = overview.projects
+    if (overview.workspaceRoot) lastWorkspaceRoot = overview.workspaceRoot
   } catch {
     projects = []
   }
@@ -218,7 +227,6 @@ async function pollOnce() {
       const result = await fetchStatus(statusUrlForCodebase(project.codebaseId), { timeoutMs: 4000 })
       if (result.reachable && result.status) {
         statusCache.set(project.codebaseId, result.status)
-        if (result.status.workspace?.root) lastWorkspaceRoot = result.status.workspace.root
       }
       return {
         codebaseId: project.codebaseId,
@@ -243,6 +251,7 @@ function broadcastState() {
       projects: lastView.projects,
       workspaceRoot: lastWorkspaceRoot,
       hopAvailable: Boolean(hopBinary),
+      update: desktopUpdater?.getState() ?? null,
     })
   }
 }
@@ -278,6 +287,7 @@ function registerIpc() {
     projects: lastView.projects,
     workspaceRoot: lastWorkspaceRoot,
     hopAvailable: Boolean(hopBinary),
+    update: desktopUpdater?.getState() ?? null,
   }))
 
   ipcMain.handle('projectStatus', async (_event, codebaseId) => {
@@ -510,6 +520,78 @@ function registerIpc() {
     return inspectFolder(safe, { workspaceRoot: lastWorkspaceRoot, projects })
   })
 
+  ipcMain.handle('pickWorkspaceRoot', async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      title: 'Choose a new HopIt Workspace Root',
+      defaultPath: lastWorkspaceRoot,
+      buttonLabel: 'Choose Workspace Root',
+      properties: ['openDirectory', 'createDirectory', 'promptToCreate'],
+    })
+    return result.canceled ? { canceled: true } : { canceled: false, path: result.filePaths[0] }
+  })
+
+  ipcMain.handle('migrateWorkspaceRoot', async (_event, payload) => {
+    if (!hopBinary) return { ok: false, error: 'The hop CLI was not found.' }
+    const newRoot = assertSafeAbsolutePath(payload?.newRoot)
+    const projectIds = Array.isArray(payload?.projectIds) ? payload.projectIds : []
+    const knownProjects = await readProjects(stateRoot)
+    const knownIds = new Set(
+      knownProjects.filter((project) => project.workspacePath).map((project) => project.codebaseId),
+    )
+    const args = migrateWorkspaceRootArgs({ newRoot, projectIds })
+    for (const id of projectIds) {
+      if (!knownIds.has(id)) return { ok: false, error: `Project ${id} has no local workspace folder to move.` }
+    }
+
+    const runningIds = []
+    const stoppedIds = []
+    const sendStage = (stage, detail = {}) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('root:migration-state', { stage, ...detail })
+    }
+    try {
+      sendStage('stopping', { total: projectIds.length })
+      for (const id of projectIds) {
+        const status = await fetchStatus(statusUrlForCodebase(id), { timeoutMs: 1200 })
+        if (!status.reachable) continue
+        runningIds.push(id)
+        const stopped = await streamHop(hopBinary, serviceArgs('stop', id), { env: runtimeEnv, humanMode: false })
+        if (stopped.code !== 0) throw new Error(`Could not pause ${id} before moving it.`)
+        stoppedIds.push(id)
+      }
+
+      sendStage('moving', { total: projectIds.length })
+      const migrated = await runHopJson(hopBinary, args, { env: runtimeEnv })
+      if (migrated.code !== 0 || !migrated.json?.ok) {
+        throw new Error(migrated.stderr.trim() || migrated.json?.error || 'The Workspace Root migration failed.')
+      }
+      lastWorkspaceRoot = newRoot
+      runtimeEnv.HOPIT_WORKSPACE_ROOT = newRoot
+
+      sendStage('restarting', { total: runningIds.length })
+      const restartFailures = []
+      for (const id of runningIds) {
+        const restarted = await streamHop(hopBinary, serviceArgs('start', id), { env: runtimeEnv, humanMode: false })
+        if (restarted.code !== 0) restartFailures.push(id)
+      }
+      await pollOnce()
+      sendStage('done', { restartFailures })
+      return { ...migrated.json, restartFailures }
+    } catch (error) {
+      for (const id of stoppedIds) {
+        await streamHop(hopBinary, serviceArgs('start', id), { env: runtimeEnv, humanMode: false }).catch(() => null)
+      }
+      await pollOnce()
+      const message = error instanceof Error ? error.message : String(error)
+      sendStage('failed', { error: message })
+      return { ok: false, error: message }
+    }
+  })
+
+  ipcMain.handle('getUpdateState', () => desktopUpdater?.getState() ?? { state: 'unavailable' })
+  ipcMain.handle('checkForUpdates', async () => desktopUpdater?.check() ?? { state: 'unavailable' })
+  ipcMain.handle('downloadUpdate', async () => desktopUpdater?.download() ?? { state: 'unavailable' })
+  ipcMain.handle('installUpdate', async () => desktopUpdater?.install() ?? { state: 'unavailable' })
+
   ipcMain.handle('addProject', async (event, payload = {}) => {
     const bin = requireHop()
     const args = addArgs({ source: payload.source, codebaseId: payload.codebaseId || undefined })
@@ -550,13 +632,38 @@ app.on('window-all-closed', () => {
 })
 
 app.on('activate', () => showWindow())
-app.on('before-quit', () => { isQuitting = true })
+app.on('before-quit', () => {
+  isQuitting = true
+  if (pollTimer) clearInterval(pollTimer)
+  if (updateTimer) clearInterval(updateTimer)
+})
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
+  const currentUpdate = await readUpdateInfo(process.resourcesPath, `${app.getVersion()}+dev`)
+  desktopUpdater = createDesktopUpdater({
+    isPackaged: app.isPackaged,
+    platform: process.platform,
+    current: currentUpdate,
+    userDataPath: app.getPath('userData'),
+    executablePath: process.execPath,
+    quit: () => {
+      isQuitting = true
+      app.quit()
+    },
+    onState: (update) => {
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('update:state', update)
+      updateTray()
+    },
+  })
+  await cleanupPreviousApp(process.execPath)
   registerIpc()
   createTray()
   createWindow()
   startPolling()
+  if (app.isPackaged && process.platform === 'darwin') {
+    setTimeout(() => desktopUpdater?.check(), 12000)
+    updateTimer = setInterval(() => desktopUpdater?.check(), 4 * 60 * 60 * 1000)
+  }
 
   // Headless self-test: boot far enough to prove tray + window + poll wiring,
   // then quit cleanly without needing a human. Used by the smoke script.
@@ -573,6 +680,7 @@ app.whenReady().then(() => {
     setTimeout(() => {
       isQuitting = true
       if (pollTimer) clearInterval(pollTimer)
+      if (updateTimer) clearInterval(updateTimer)
       app.quit()
     }, 2500)
   }

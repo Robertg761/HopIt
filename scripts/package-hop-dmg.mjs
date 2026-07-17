@@ -17,18 +17,17 @@ const artifactsRoot = path.join(repoRoot, 'artifacts')
 const MAC_TARGETS = ['darwin-arm64', 'darwin-x64']
 const DMG_BACKGROUND = path.join(repoRoot, 'packages', 'desktop', 'assets', 'dmg', 'HopIt-dmg-background.png')
 
-export async function buildMacDmg({ built, version = localVersion() }) {
-  assertMacPackages(built)
+export async function buildMacDmg({ built, version = localVersion(), builtAt = new Date().toISOString(), gitSha = null }) {
   requireMacTool('hdiutil')
 
   const dmgPath = path.join(artifactsRoot, 'HopIt-macOS.dmg')
   const checksumPath = `${dmgPath}.sha256`
 
-  const desktop = await buildDesktopApp({ built })
+  const mac = await buildMacUpdate({ built, version, builtAt, gitSha })
   await fs.rm(dmgPath, { force: true })
   await createDmg({
     target: dmgPath,
-    specification: buildDmgSpecification({ appPath: desktop.appPath }),
+    specification: buildDmgSpecification({ appPath: mac.appPath }),
   })
 
   const verify = spawnSync('hdiutil', ['verify', dmgPath], { cwd: repoRoot, encoding: 'utf8' })
@@ -41,14 +40,60 @@ export async function buildMacDmg({ built, version = localVersion() }) {
   const stat = await fs.stat(dmgPath)
 
   return {
+    ...mac,
     fileName: path.basename(dmgPath),
     dmgPath,
     checksumPath,
     sha256,
     size: stat.size,
+    verified: true,
+  }
+}
+
+export async function buildMacUpdate({ built, version = localVersion(), builtAt = new Date().toISOString(), gitSha = null }) {
+  assertMacPackages(built)
+  const desktop = await buildDesktopApp({ built, version, builtAt, gitSha })
+  const update = await buildMacUpdateArchive({ appPath: desktop.appPath })
+  return {
     version,
     verified: true,
     appPath: desktop.appPath,
+    update,
+  }
+}
+
+export async function buildMacUpdateArchive({ appPath }) {
+  requireMacTool('ditto')
+  const archivePath = path.join(artifactsRoot, 'HopIt-macOS.zip')
+  const checksumPath = `${archivePath}.sha256`
+  await fs.rm(archivePath, { force: true })
+  const packed = spawnSync('/usr/bin/ditto', ['-c', '-k', '--sequesterRsrc', '--keepParent', appPath, archivePath], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  })
+  if (packed.status !== 0) throw new Error(`Unable to create the macOS update archive: ${packed.stderr || packed.stdout}`)
+
+  const verifyRoot = await fs.mkdtemp(path.join(process.env.TMPDIR ?? '/tmp', 'hopit-update-verify-'))
+  try {
+    const extracted = spawnSync('/usr/bin/ditto', ['-x', '-k', archivePath, verifyRoot], { encoding: 'utf8' })
+    if (extracted.status !== 0) throw new Error(`Unable to extract the macOS update archive: ${extracted.stderr || extracted.stdout}`)
+    const candidate = path.join(verifyRoot, 'HopIt.app')
+    const signed = spawnSync('/usr/bin/codesign', ['--verify', '--deep', '--strict', candidate], { encoding: 'utf8' })
+    if (signed.status !== 0) throw new Error(`The macOS update archive failed app verification: ${signed.stderr || signed.stdout}`)
+  } finally {
+    await fs.rm(verifyRoot, { recursive: true, force: true })
+  }
+
+  const sha256 = await sha256File(archivePath)
+  await fs.writeFile(checksumPath, `${sha256}  ${path.basename(archivePath)}\n`, 'utf8')
+  const stat = await fs.stat(archivePath)
+  return {
+    fileName: path.basename(archivePath),
+    archivePath,
+    checksumPath,
+    sha256,
+    size: stat.size,
+    verified: true,
   }
 }
 

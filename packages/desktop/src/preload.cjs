@@ -55,4 +55,16 @@ contextBridge.exposeInMainWorld('hopit', {
   onAddLog: (callback) => subscribe('add:log', callback),
   onAddState: (callback) => subscribe('add:state', callback),
   onAddDone: (callback) => subscribe('add:done', callback),
+
+  // Workspace Root migration.
+  pickWorkspaceRoot: () => ipcRenderer.invoke('pickWorkspaceRoot'),
+  migrateWorkspaceRoot: (payload) => ipcRenderer.invoke('migrateWorkspaceRoot', payload),
+  onRootMigrationState: (callback) => subscribe('root:migration-state', callback),
+
+  // In-app updates.
+  getUpdateState: () => ipcRenderer.invoke('getUpdateState'),
+  checkForUpdates: () => ipcRenderer.invoke('checkForUpdates'),
+  downloadUpdate: () => ipcRenderer.invoke('downloadUpdate'),
+  installUpdate: () => ipcRenderer.invoke('installUpdate'),
+  onUpdateState: (callback) => subscribe('update:state', callback),
 })

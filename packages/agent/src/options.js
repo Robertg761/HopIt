@@ -1,6 +1,7 @@
 // @ts-check
 import os from 'node:os'
 import path from 'node:path'
+import { readFileSync } from 'node:fs'
 import { defaultOptions } from './constants.js'
 import { isTruthyEnv } from './paths.js'
 
@@ -197,13 +198,20 @@ export function applyRuntimeDefaults(options, provided) {
     const stateRoot = options['state-root'] ?? process.env.HOPIT_AGENT_STATE_ROOT ?? defaultAgentStateRoot()
     const workspaceRoot = options['workspace-root'] ?? process.env.HOPIT_WORKSPACE_ROOT ?? defaultWorkspaceRoot()
     options['state-root'] = stateRoot
-    options['workspace-root'] = workspaceRoot
+    options._defaultWorkspaceRoot = workspaceRoot
+    const indexedWorkspace = !provided.has('workspace') && !provided.has('workspace-root')
+      ? indexedWorkspaceDefaults({
+          codebaseId,
+          workspaceIndex: options['workspace-index'] ?? process.env.HOPIT_WORKSPACE_INDEX ?? path.join(stateRoot, 'workspaces.json'),
+        })
+      : null
+    options['workspace-root'] = indexedWorkspace?.root ?? workspaceRoot
 
     if (!provided.has('cloud')) {
       options.cloud = path.join(stateRoot, 'cloud', `${codebaseId}.json`)
     }
     if (!provided.has('workspace')) {
-      options.workspace = path.join(workspaceRoot, codebaseId)
+      options.workspace = indexedWorkspace?.workspace ?? path.join(workspaceRoot, codebaseId)
     }
     if (!provided.has('journal')) {
       options.journal = path.join(stateRoot, 'journal', `${codebaseId}.ndjson`)
@@ -217,6 +225,29 @@ export function applyRuntimeDefaults(options, provided) {
   }
 
   return options
+}
+
+/**
+ * Resolve a codebase's persisted path before applying the global workspace-root
+ * default. A root migration may intentionally leave some projects at their old
+ * locations, so the workspace index is the per-project source of truth.
+ */
+export function indexedWorkspaceDefaults({ codebaseId, workspaceIndex }) {
+  if (!codebaseId || !workspaceIndex) return null
+  try {
+    const index = JSON.parse(readFileSync(path.resolve(workspaceIndex), 'utf8'))
+    const entry = Array.isArray(index?.codebases)
+      ? index.codebases.find((candidate) => candidate?.id === codebaseId && candidate?.workspace?.path)
+      : null
+    if (!entry) return null
+    const workspace = path.resolve(entry.workspace.path)
+    return {
+      workspace,
+      root: path.resolve(entry.workspace.root ?? path.dirname(workspace)),
+    }
+  } catch {
+    return null
+  }
 }
 
 export function defaultAgentStateRoot() {

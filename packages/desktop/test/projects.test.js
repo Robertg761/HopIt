@@ -9,7 +9,7 @@ const indexJson = {
     {
       id: 'hopit',
       name: 'HopIt',
-      workspace: { path: '/Users/robert/HopIt Workspaces/hopit' },
+      workspace: { root: '/Users/robert/HopIt Workspaces', path: '/Users/robert/HopIt Workspaces/hopit' },
       activeChangeSetId: 'cs_hopit_local',
       mainId: 'main',
       hydration: { state: 'materialized' },
@@ -17,7 +17,7 @@ const indexJson = {
     {
       id: 'lunarlog',
       name: 'LunarLog',
-      workspace: { path: '/Users/robert/HopIt Workspaces/lunarlog' },
+      workspace: { root: '/Users/robert/HopIt Workspaces', path: '/Users/robert/HopIt Workspaces/lunarlog' },
       activeChangeSetId: 'cs_lunarlog_main',
       mainId: 'main',
       hydration: { state: 'materialized' },
@@ -32,6 +32,7 @@ test('index rows map to projects with derived ports and URLs', () => {
   assert.equal(hopit.port, 4785)
   assert.equal(hopit.statusUrl, 'http://127.0.0.1:4785/status')
   assert.equal(hopit.name, 'HopIt')
+  assert.equal(hopit.workspaceRoot, '/Users/robert/HopIt Workspaces')
   assert.equal(hopit.hydrationState, 'materialized')
   const lunarlog = projects.find((p) => p.codebaseId === 'lunarlog')
   assert.ok(lunarlog.port >= 4786 && lunarlog.port <= 5785)
@@ -43,6 +44,7 @@ test('connection-store ids missing from the index appear as bare projects', () =
   assert.ok(fresh)
   assert.equal(fresh.name, 'brand-new')
   assert.equal(fresh.workspacePath, null)
+  assert.equal(fresh.workspaceRoot, null)
 })
 
 test('duplicates dedupe with the index winning; output is sorted', () => {

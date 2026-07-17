@@ -81,6 +81,8 @@ Options:
   --state-root <path> Agent state root for production profile
   --workspace-root <path> Root that contains managed HopIt codebase folders
   --workspace-index <path> Optional workspace root index path
+  --new-root <path>  workspace migrate-root: new default Workspace Root
+  --projects <ids>   workspace migrate-root: comma-separated projects to move; omit to move none
   --cloud <path>      Cloud graph JSON path
   --cloud-backend <name> d1 or local. Defaults to D1 when HOPIT_D1_* is configured
   --d1-account-id <id> Cloudflare account id for D1

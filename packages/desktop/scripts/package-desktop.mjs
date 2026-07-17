@@ -17,7 +17,7 @@ const repoRoot = path.resolve(desktopRoot, '..', '..')
 const outDir = path.join(repoRoot, 'artifacts', 'desktop')
 const MAC_TARGETS = ['darwin-arm64', 'darwin-x64']
 
-export async function buildDesktopApp({ built = null } = {}) {
+export async function buildDesktopApp({ built = null, version = localDesktopVersion(), builtAt = new Date().toISOString(), gitSha = null } = {}) {
   if (process.platform !== 'darwin') {
     throw new Error('The universal HopIt desktop app must be packaged on macOS.')
   }
@@ -64,6 +64,14 @@ export async function buildDesktopApp({ built = null } = {}) {
     await fs.cp(runtime.releaseRoot, path.join(agentResources, runtime.packageName), { recursive: true })
   }
 
+  await fs.writeFile(path.join(appPath, 'Contents', 'Resources', 'update-info.json'), `${JSON.stringify({
+    schemaVersion: 1,
+    version,
+    builtAt,
+    gitSha,
+    channel: 'latest',
+  }, null, 2)}\n`, 'utf8')
+
   const sign = spawnSync('codesign', ['--force', '--deep', '--sign', '-', appPath], {
     encoding: 'utf8',
   })
@@ -72,6 +80,14 @@ export async function buildDesktopApp({ built = null } = {}) {
   }
 
   return { appPath, architecture: 'universal', adHocSigned: true, signed: false, notarized: false }
+}
+
+function localDesktopVersion() {
+  const pkg = JSON.parse(spawnSync(process.execPath, ['-e', 'console.log(JSON.stringify(require("./package.json")))'], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+  }).stdout)
+  return `${pkg.version}+dev`
 }
 
 function assertMacPackages(built) {

@@ -12,6 +12,7 @@ import { findIndexedCodebase, localCacheSummary, mergeIndexedCodebases, readWork
 import { manifestEntryChanged, readWorkspaceFiles, workspaceFilePath } from '../workspace-manifest.js'
 import { attachWorkspace, dehydrateWorkspace, discoverWorkspaces, hydrateWorkspaceFile, hydrateWorkspacePath, openWorkspace, pruneWorkspaceCache, setWorkspaceCachePin } from './hydrate.js'
 import { existsSync } from 'node:fs'
+import { migrateWorkspaceRoot } from './workspace-root.js'
 
 export async function runWorkspaceCommand(action, options) {
   const allowedActions = new Set([
@@ -28,6 +29,7 @@ export async function runWorkspaceCommand(action, options) {
     'pin',
     'unpin',
     'dehydrate',
+    'migrate-root',
   ])
   if (!allowedActions.has(action)) {
     throw new Error(`Unknown workspace action: ${action}`)
@@ -35,6 +37,11 @@ export async function runWorkspaceCommand(action, options) {
 
   if (action === 'discover' || action === 'list') {
     await discoverWorkspaces(options, { action })
+    return
+  }
+
+  if (action === 'migrate-root') {
+    console.log(JSON.stringify(await migrateWorkspaceRoot(options), null, 2))
     return
   }
 

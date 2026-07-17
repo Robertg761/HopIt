@@ -47,6 +47,7 @@
     "package:hop:dmg": "node scripts/package-hop-dmg.mjs",
     "prerelease:hop": "npm run build:core",
     "release:hop": "node scripts/release-hop.mjs",
+    "release:desktop": "node scripts/release-hop.mjs --desktop-only",
     "d1:migrate:convex-export": "node scripts/migrate-convex-export-to-d1.mjs",
     "agent:demo": "node packages/agent/src/cli.js demo",
     "agent:import": "node packages/agent/src/cli.js import",

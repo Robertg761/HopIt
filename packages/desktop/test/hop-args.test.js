@@ -15,6 +15,7 @@ import {
   trailEpisodesArgs,
   trailSummariesProbeArgs,
   trailSummarizeArgs,
+  migrateWorkspaceRootArgs,
   assertSafeRevision,
   assertSafeCloudPath,
 } from '../src/lib/hop.js'
@@ -40,6 +41,19 @@ test('service actions are allow-listed', () => {
 test('add args carry source and optional codebase id', () => {
   assert.deepEqual(addArgs({ source: '/Users/robert/Projects/App' }), ['add', '--source', '/Users/robert/Projects/App'])
   assert.deepEqual(addArgs({ source: '/p', codebaseId: 'my-app' }), ['add', '--source', '/p', '--codebase-id', 'my-app'])
+})
+
+test('workspace root migration args carry an explicit root and selected projects', () => {
+  assert.deepEqual(
+    migrateWorkspaceRootArgs({ newRoot: '/Volumes/Work/HopIt', projectIds: ['hopit', 'lunarlog', 'hopit'] }),
+    ['workspace', 'migrate-root', '--new-root', '/Volumes/Work/HopIt', '--projects', 'hopit,lunarlog'],
+  )
+  assert.deepEqual(
+    migrateWorkspaceRootArgs({ newRoot: '/Volumes/Work/HopIt', projectIds: [] }),
+    ['workspace', 'migrate-root', '--new-root', '/Volumes/Work/HopIt'],
+  )
+  assert.throws(() => migrateWorkspaceRootArgs({ newRoot: 'relative', projectIds: [] }), /absolute/)
+  assert.throws(() => migrateWorkspaceRootArgs({ newRoot: '/safe', projectIds: ['../bad'] }), /Unsafe/)
 })
 
 test('unsafe IPC values are rejected before they reach spawn', () => {

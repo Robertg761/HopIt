@@ -23,6 +23,7 @@ export function listProjectsFromIndex(indexJson, connectionIds = []) {
       codebaseId: entry.id,
       name: entry.name ?? entry.id,
       workspacePath: entry.workspace?.path ?? null,
+      workspaceRoot: entry.workspace?.root ?? indexJson?.root?.path ?? null,
       activeChangeSetId: entry.activeChangeSetId ?? null,
       mainId: entry.mainId ?? null,
       hydrationState: entry.hydration?.state ?? entry.materialization ?? null,
@@ -34,6 +35,7 @@ export function listProjectsFromIndex(indexJson, connectionIds = []) {
       codebaseId: id,
       name: id,
       workspacePath: null,
+      workspaceRoot: null,
       activeChangeSetId: null,
       mainId: null,
       hydrationState: null,
@@ -79,4 +81,16 @@ export async function readProjects(stateRoot) {
     readConnectionCodebaseIds(stateRoot),
   ])
   return listProjectsFromIndex(indexJson, connectionIds)
+}
+
+/** Read the global default root and project rows from one consistent index snapshot. */
+export async function readWorkspaceOverview(stateRoot) {
+  const [indexJson, connectionIds] = await Promise.all([
+    readWorkspaceIndexJson(stateRoot),
+    readConnectionCodebaseIds(stateRoot),
+  ])
+  return {
+    workspaceRoot: indexJson?.root?.path ?? null,
+    projects: listProjectsFromIndex(indexJson, connectionIds),
+  }
 }

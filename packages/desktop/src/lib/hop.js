@@ -112,6 +112,15 @@ export function addArgs({ source, codebaseId }) {
   return args
 }
 
+export function migrateWorkspaceRootArgs({ newRoot, projectIds }) {
+  const root = assertSafeAbsolutePath(newRoot)
+  if (!Array.isArray(projectIds)) throw new Error('Project selection must be a list.')
+  const ids = [...new Set(projectIds.map((id) => assertSafeCodebaseId(id)))]
+  const args = ['workspace', 'migrate-root', '--new-root', root]
+  if (ids.length > 0) args.push('--projects', ids.join(','))
+  return args
+}
+
 /**
  * Hydrate a single file or a path prefix. The agent verb differs (hydrate-file
  * vs hydrate-path); `recursive` only applies to hydrate-path.
