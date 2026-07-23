@@ -138,7 +138,7 @@ async function loadAppdmg() {
     const { default: appdmg } = await import('appdmg')
     return appdmg
   } catch (error) {
-    throw new Error('appdmg is unavailable — DMG packaging requires macOS with the appdmg optional dependency installed', { cause: error })
+    throw new Error('appdmg is unavailable: DMG packaging requires macOS with the appdmg optional dependency installed', { cause: error })
   }
 }
 
