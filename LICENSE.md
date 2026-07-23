@@ -6,7 +6,7 @@ FSL-1.1-Apache-2.0
 
 ## Notice
 
-Copyright 2026 Robertg761 <robertgordon761@gmail.com>
+Copyright 2026 Robert Gordon <robertgordon761@gmail.com>
 
 ## Terms and Conditions
 
