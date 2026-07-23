@@ -1697,10 +1697,16 @@ or charge.
 - Dependency security: `next` moved to 16.2.11 (newest stable; the open Next.js
   advisories, including a middleware-bypass class, have no patched stable 16.x
   release yet - watch for a 16.2.x patch or 16.3.0 stable), `sharp` to 0.35.3
-  (libvips CVEs), `@clerk/nextjs` to 7.5.22. A broader `npm update` of the
-  remaining within-range minors was attempted and reverted: something in that
-  batch breaks the production build during page-data collection
-  (`TypeError: e.createContext is not a function`); left for a future bisect.
+  (libvips CVEs), `@clerk/nextjs` to 7.5.22. A broader `npm update` initially
+  broke the production build during page-data collection (`TypeError:
+  e.createContext is not a function`); bisected to `@radix-ui/react-slot@1.3.1`,
+  which is broken for our direct server-rendered Slot usage. The direct
+  dependency is pinned to exactly `1.3.0` (no caret - a caret range would
+  re-admit the broken 1.3.1 on any fresh install), while the other in-range
+  minors (react 19.2.8, lucide-react 1.26.0, radix dialog 1.1.21, dropdown-menu
+  2.1.22, toast 1.2.21) are applied and verified. Nested slot 1.3.1 copies
+  inside the radix packages are unaffected. Revisit the pin when slot ships a
+  fixed release.
 - Verification on the final tree: lint, typecheck, typecheck:agent green; agent
   suite 328 pass / 0 fail (5 known sandbox-only socket cancellations); web 211,
   worker 87, config 3, desktop 132 all green; production build green;
