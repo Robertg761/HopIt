@@ -219,6 +219,14 @@ Watch-loop expectations:
 
 Recovery should be safe before it is clever. If the agent is unsure whether the cloud accepted a write, it should keep the journal entry pending and expose that uncertainty through status instead of silently discarding local state.
 
+One agent per workspace (GR-H3, decisions doc §12):
+
+- before touching the cloud service or journal, `watchWorkspace` takes an exclusive lock on the workspace folder at `<workspace>/.hopit-agent/lock.json` (`packages/agent/src/workspace-lock.js`)
+- the lock records the holder's pid, hostname, codebase id, and start time; a second `hop watch`, a second `hop service run`, or any other agent attaching to the same folder — regardless of profile, state-root, or session — refuses to start and names the current holder (pid, codebase, start time) instead of racing the existing watcher
+- a lock left behind by a process that has since died (crash, `kill -9`, power loss) is detected by a same-host pid liveness check and taken over automatically so a dead holder never permanently wedges the workspace; a lock recorded from a different hostname is never treated as stale, since liveness cannot be checked remotely
+- the lock is released on a clean shutdown (`hop watch` SIGINT/SIGTERM, `hop service stop`/`restart`) and on any startup failure after the lock was acquired, so a failed start never blocks a retry
+- `.hopit-agent/` inside a workspace folder is excluded from workspace scans (`shouldSkipWorkspacePath`, `shouldSkipLiteralMirrorPath`), so the lockfile is never journaled, synced, or mirrored as workspace content
+
 ### Safe Refresh Contract
 
 A refresh means making the managed workspace folder match the latest selected cloud state that is safe for this device/session to see. That selected state may be Main, the user's active change set, or a visible review change set. It is a cloud-to-local operation, not a Git pull, branch checkout, fork sync, worktree update, wiki fetch, star/social feed update, or ignore-file evaluation.
