@@ -189,6 +189,14 @@ create table if not exists device_authorizations (
   updated_at text not null
 );
 
+-- Requested-codebase approval columns land as additive migrations so they
+-- apply cleanly to databases created before the feature. They must not be
+-- declared in the create-table statement above, or the alter would fail with
+-- "duplicate column name" on a fresh database. ensureSchema still tolerates
+-- that error so the alters are safe to re-run on already-migrated databases.
+alter table device_authorizations add column requested_codebase_id text;
+alter table device_authorizations add column requested_codebase_name text;
+
 create index if not exists idx_device_authorizations_device_code on device_authorizations(device_code_hash);
 create index if not exists idx_device_authorizations_user_code on device_authorizations(user_code);
 create index if not exists idx_device_authorizations_fingerprint_created on device_authorizations(request_fingerprint, created_at);
@@ -361,6 +369,44 @@ create table if not exists notifications (
 
 create index if not exists idx_notifications_codebase_created on notifications(codebase_id, created_at);
 create index if not exists idx_notifications_recipient_created on notifications(recipient_user_id, created_at);
+
+-- Per-codebase agent settings. Trail summarization is opt-in and OFF by
+-- default: absence of a row means disabled. `trail_summaries_mode` carries the
+-- separate metadata/diff opt-in. New table (not an alter), so it applies
+-- cleanly to databases created before the feature.
+create table if not exists codebase_settings (
+  codebase_id text primary key,
+  trail_summaries_enabled integer not null default 0,
+  trail_summaries_mode text not null default 'metadata',
+  created_at text not null,
+  updated_at text not null
+);
+
+-- Clustered trail episodes and their model-written labels. from/to_revision,
+-- device, and timestamps come from clustering; label/label_model/label_mode
+-- are filled in by `hop trail summarize`. step_count, changed_path_count, and
+-- sample_paths_json are stored so the dashboard and backup manifest can render
+-- an episode without re-reading the full file-version history.
+create table if not exists trail_episodes (
+  codebase_id text not null,
+  episode_id text not null,
+  from_revision integer not null,
+  to_revision integer not null,
+  device text,
+  started_at text,
+  ended_at text,
+  step_count integer not null default 0,
+  changed_path_count integer not null default 0,
+  sample_paths_json text not null default '[]',
+  label text,
+  label_model text,
+  label_mode text,
+  created_at text not null,
+  updated_at text not null,
+  primary key (codebase_id, episode_id)
+);
+
+create index if not exists idx_trail_episodes_codebase_from on trail_episodes(codebase_id, from_revision);
 
 -- Phase 3 multi-tenant usage and billing. These are additive tables so the
 -- migration is safe to apply before the feature flags are enabled.
