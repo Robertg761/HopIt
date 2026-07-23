@@ -136,6 +136,7 @@ Options:
   --auto-prune         Opt in to safe cache pruning, or HOPIT_AUTO_PRUNE=1
   --auto-prune-interval-ms <ms> Schedule, default 6h; HOPIT_AUTO_PRUNE_INTERVAL_MS
   --auto-prune-inactive-ms <ms> Inactivity, default 7d; HOPIT_AUTO_PRUNE_INACTIVE_MS
+  --scan-interval-ms <ms> Periodic full workspace diff-scan cadence (heals missed watcher events), default 600000; HOPIT_SCAN_INTERVAL_MS
   --start-service      install: start the production service after preparing paths
   --write-env          install: write hopit.env.example under the agent state root
   --launch-agent       install: write a macOS LaunchAgent for start-on-login

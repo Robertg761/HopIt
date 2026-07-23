@@ -6,7 +6,7 @@ import { test } from 'node:test'
 
 import { parseOptions } from '../src/options.js'
 import { runtimeArgsFromOptions } from '../src/service.js'
-import { createAutoPruneScheduler, parseAutoPruneMs } from '../src/watch.js'
+import { createAutoPruneScheduler, createWorkspaceScanScheduler, parseAutoPruneMs, parseWorkspaceScanMs } from '../src/watch.js'
 
 async function makeState() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hopit-watch-scheduler-test-'))
@@ -123,4 +123,133 @@ test('auto-prune remains opt-in and survives service argument forwarding', () =>
       '604800000',
     ],
   )
+})
+
+// GR-H1: periodic full workspace diff-scan (decisions §12 — missed watcher
+// events are assumed, not exceptional).
+
+test('workspace scan cadence rejects sub-second intervals', () => {
+  assert.throws(
+    () => parseWorkspaceScanMs('999', 600_000, '--scan-interval-ms'),
+    /Use at least 1000ms/,
+  )
+})
+
+test('workspace scan interval defaults to 10 minutes and survives service argument forwarding', () => {
+  const options = parseOptions(['--scan-interval-ms', '120000'])
+  const serviceArgs = runtimeArgsFromOptions(options)
+
+  assert.deepEqual(
+    serviceArgs.slice(serviceArgs.indexOf('--scan-interval-ms'), serviceArgs.indexOf('--scan-interval-ms') + 2),
+    ['--scan-interval-ms', '120000'],
+  )
+
+  const defaulted = parseOptions([])
+  assert.equal(defaulted['scan-interval-ms'], undefined)
+})
+
+test('workspace scan interval can be set via HOPIT_SCAN_INTERVAL_MS', () => {
+  const previous = process.env.HOPIT_SCAN_INTERVAL_MS
+  process.env.HOPIT_SCAN_INTERVAL_MS = '90000'
+  try {
+    const options = parseOptions([])
+    assert.equal(options['scan-interval-ms'], '90000')
+  } finally {
+    if (previous === undefined) delete process.env.HOPIT_SCAN_INTERVAL_MS
+    else process.env.HOPIT_SCAN_INTERVAL_MS = previous
+  }
+})
+
+test('a missed watcher event heals on the next periodic scan', async (t) => {
+  const state = await makeState()
+  await fs.mkdir(state.workspace, { recursive: true })
+  await fs.writeFile(path.join(state.workspace, 'existing.txt'), 'seed', 'utf8')
+
+  const changes = []
+  const scanner = await createWorkspaceScanScheduler(state, {
+    intervalMs: 20,
+    onChange: (eventType, changedPath) => {
+      changes.push({ eventType, changedPath })
+    },
+  })
+  t.after(() => scanner?.close())
+
+  const startedAt = (await readEvents(state.events)).find((event) => event.event === 'watch.scan_started')
+  assert.equal(startedAt.detail.intervalMs, 20)
+
+  // Simulate the watcher missing this write entirely (no scheduleSync call) —
+  // the file lands on disk with nothing observing it until the next scan.
+  await fs.writeFile(path.join(state.workspace, 'missed-write.txt'), 'healed by scan', 'utf8')
+
+  await waitFor(() => changes.length > 0)
+  assert.equal(changes[0].eventType, 'scan')
+  assert.equal(changes[0].changedPath, 'missed-write.txt')
+
+  const healed = await waitFor(async () => {
+    return (await readEvents(state.events)).find((event) => event.event === 'watch.scan_healed')
+  })
+  assert.equal(healed.detail.path, 'missed-write.txt')
+
+  const completed = (await readEvents(state.events)).filter((event) => event.event === 'watch.scan_completed')
+  assert.ok(completed.some((event) => event.detail.changed === true))
+})
+
+test('the periodic scan skips derived directories (GR-C1) so cache output never triggers a heal', async (t) => {
+  const state = await makeState()
+  await fs.mkdir(path.join(state.workspace, 'node_modules', 'pkg'), { recursive: true })
+  await fs.writeFile(path.join(state.workspace, 'node_modules', 'pkg', 'index.js'), 'module.exports = {}', 'utf8')
+
+  let runs = 0
+  const scanner = await createWorkspaceScanScheduler(state, {
+    intervalMs: 20,
+    onChange: () => {
+      runs += 1
+    },
+  })
+  t.after(() => scanner?.close())
+
+  // Churn the derived directory repeatedly; none of it should ever surface as
+  // a change because shouldSkipWorkspacePath excludes it from the snapshot.
+  for (let i = 0; i < 3; i += 1) {
+    await fs.writeFile(path.join(state.workspace, 'node_modules', 'pkg', 'index.js'), `module.exports = { i: ${i} }`, 'utf8')
+    await scanner.runOnce()
+  }
+
+  assert.equal(runs, 0)
+  const completed = (await readEvents(state.events)).filter((event) => event.event === 'watch.scan_completed')
+  assert.ok(completed.length >= 3)
+  assert.ok(completed.every((event) => event.detail.changed === false))
+})
+
+test('a 5,000-file workspace scan completes within a generous bound', async (t) => {
+  const state = await makeState()
+  const dir = path.join(state.workspace, 'many-files')
+  await fs.mkdir(dir, { recursive: true })
+  const fileCount = 5000
+  const batchSize = 250
+  for (let start = 0; start < fileCount; start += batchSize) {
+    const batch = []
+    for (let i = start; i < Math.min(start + batchSize, fileCount); i += 1) {
+      batch.push(fs.writeFile(path.join(dir, `file-${i}.txt`), `content-${i}`, 'utf8'))
+    }
+    await Promise.all(batch)
+  }
+
+  const scanner = await createWorkspaceScanScheduler(state, {
+    intervalMs: 60_000,
+    onChange: () => {},
+  })
+  t.after(() => scanner?.close())
+
+  const startedAt = Date.now()
+  await scanner.runOnce()
+  const elapsedMs = Date.now() - startedAt
+
+  // Generous bound: stat-based scan of 5k files should stay well under this
+  // on any CI/dev machine; this guards against an accidental O(n^2) or
+  // content-hashing regression, not a tight performance target.
+  assert.ok(elapsedMs < 20_000, `scan of ${fileCount} files took ${elapsedMs}ms`)
+
+  const completed = (await readEvents(state.events)).filter((event) => event.event === 'watch.scan_completed')
+  assert.ok(completed.some((event) => typeof event.detail.durationMs === 'number'))
 })
