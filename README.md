@@ -423,3 +423,14 @@ docs/
   personal-production.md  one-person production setup and dogfood runbook
   progress.md  current milestone progress, evidence, and next work queue
 ```
+
+## License
+
+HopIt is licensed under the [Functional Source License, Version 1.1, with an
+Apache 2.0 future grant](LICENSE.md) (FSL-1.1-Apache-2.0).
+
+In practice: you can freely use, copy, modify, self-host, and redistribute
+HopIt for any purpose except offering it (or a derivative of it) as a
+commercial product or service that competes with HopIt. Internal commercial
+use is explicitly permitted. Each release automatically becomes available
+under the Apache License 2.0 two years after it is published.

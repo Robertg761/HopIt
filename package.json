@@ -2,6 +2,7 @@
   "name": "hopit",
   "version": "0.0.1",
   "private": true,
+  "license": "FSL-1.1-Apache-2.0",
   "type": "module",
   "workspaces": [
     "packages/*"
