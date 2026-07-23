@@ -482,6 +482,7 @@ export function attachGraphMethods(Backend) {
       'refresh.blocked',
       'refresh.complete',
       'remote-update',
+      'file.large',
     ]
     const latest = {}
     for (const eventName of eventNames) {
@@ -509,6 +510,9 @@ export function attachGraphMethods(Backend) {
         latest['refresh.complete'],
       ]),
       lastRemoteUpdate: latest['remote-update'],
+      // GR-G2: most recent large-file warning, so the dashboard can surface a
+      // storage-surprise note without scanning `recent` for the event type.
+      lastLargeFile: latest['file.large'],
       totalEntries: recentRows.length,
     }
 

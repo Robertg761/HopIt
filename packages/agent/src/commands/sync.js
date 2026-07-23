@@ -2,7 +2,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { canRequesterSeePath, createCloudGraphService, filterVisibleGraphForRequester, removeEmptyAncestorDirectories, summarizeGraphContract, summarizeRequester, visibilityContextForGraph, visibilityRequestFromOptions } from '../cloud/d1-graph-service.js'
-import { bulkJournalCommitChunkSize, bulkJournalCommitThreshold, ConflictError, entryKind, refreshMassDeleteFraction, refreshMassDeleteMinFiles, workspaceMode } from '../constants.js'
+import { bulkJournalCommitChunkSize, bulkJournalCommitThreshold, ConflictError, defaultLargeFileThresholdBytes, entryKind, refreshMassDeleteFraction, refreshMassDeleteMinFiles, workspaceMode } from '../constants.js'
 import { privacyZoneForPath } from '@hopit/core/crypto'
 import { appendNdjson, emit, findLastEventOf, readNdjson } from '../io.js'
 import { actorIdFromOptions, bufferFromCloudFileEntry, cloudEntryEquals, countCloudScopes, countEntryScopes, countPathScopes, ensureActiveChangeSet, journalContextForCloud, normalizeCloudFileEntry, recordChangeSetConflict } from '../journal.js'
@@ -230,6 +230,22 @@ export async function assertRefreshDeletionSafe(options, cloud, cloudService, co
   )
 }
 
+// GR-G2: per-codebase override of the large-file warning threshold, falling
+// back to the agent default (100 MB). Missing/misconfigured settings support
+// (e.g. a minimal test stub) degrades to the default rather than failing sync.
+export async function resolveLargeFileThresholdBytes(cloudService, cloud, options) {
+  if (typeof cloudService.readCodebaseSettings !== 'function') return defaultLargeFileThresholdBytes
+  try {
+    const codebaseId = cloud.codebase?.id ?? options['codebase-id']
+    const settings = await cloudService.readCodebaseSettings(codebaseId)
+    return Number.isInteger(settings?.largeFileThresholdBytes) && settings.largeFileThresholdBytes > 0
+      ? settings.largeFileThresholdBytes
+      : defaultLargeFileThresholdBytes
+  } catch {
+    return defaultLargeFileThresholdBytes
+  }
+}
+
 export async function materializeCloudEntry(root, relativePath, file, cloudService = null, context = {}) {
   const entry = normalizeCloudFileEntry(relativePath, file)
   const absolutePath = workspaceFilePath(root, relativePath)
@@ -336,6 +352,7 @@ export async function performSyncOnce(options, contextDetail = {}) {
   const now = new Date().toISOString()
   const plannedEntries = []
   const planningCloud = structuredClone(cloud)
+  const largeFileThresholdBytes = await resolveLargeFileThresholdBytes(cloudService, cloud, options)
 
   for (const [relativePath, rawEntry] of Object.entries(diskEntries)) {
     if (!canRequesterSeePath(visibilityContext, relativePath)) continue
@@ -348,6 +365,17 @@ export async function performSyncOnce(options, contextDetail = {}) {
     cloudPaths.delete(relativePath)
 
     if (current && cloudEntryEquals(current, entryPayload)) continue
+
+    // GR-G2: large files sync exactly like everything else (no cap, no gate) --
+    // this is a purely additive dashboard note, so it must never influence what
+    // gets journaled or committed below.
+    if (entryPayload.kind === entryKind.file && entryPayload.size > largeFileThresholdBytes) {
+      await emit(options, 'file.large', {
+        path: relativePath,
+        bytes: entryPayload.size,
+        thresholdBytes: largeFileThresholdBytes,
+      })
+    }
 
     const entry = {
       id: randomUUID(),

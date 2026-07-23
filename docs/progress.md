@@ -110,6 +110,42 @@ Current verified result:
 - Production Clerk sign-in and D1 owner claim were smoke-tested on `https://hopit.dev`; Basic Auth fallback is no longer needed for the owner handoff.
 - Google Auth Platform Audience for project `hopit-auth-prod-rg`: shows `1 user (1 test, 0 other) / 100 user cap` and the test-user row `robertgordon761@gmail.com`.
 
+## 2026-07-23 GR-G2: Large-File Warning Threshold
+
+- Per decisions doc §11 ("large files sync with a warning threshold, default
+  100 MB, per-codebase setting, no cap"): `hop sync` now checks each
+  create/write journal entry's size against an effective threshold
+  (`packages/agent/src/commands/sync.js:resolveLargeFileThresholdBytes`) and
+  emits a `file.large` event (`{ path, bytes, thresholdBytes }`) when it is
+  exceeded. The check is purely additive — it never gates, caps, or alters
+  what gets journaled/committed; over-threshold files sync byte-identically to
+  under-threshold ones.
+- New `codebase_settings.large_file_threshold_bytes` column (nullable; `NULL`
+  = use the 100 MB agent default `defaultLargeFileThresholdBytes` in
+  `packages/agent/src/constants.js`) in both `packages/backend-d1/src/schema.js`
+  and `cloudflare/d1/schema.sql`, plus migration
+  `cloudflare/d1/migrations/2026-07-23-large-file-threshold.sql` (not applied
+  to live D1). `CloudflareD1HopBackend.setLargeFileThreshold` (D1) and
+  `FixtureJsonCloudGraphService.setLargeFileThreshold` (local/dev JSON
+  backend) both expose the per-codebase override; `readCodebaseSettings` now
+  also returns `largeFileThresholdBytes` alongside the existing trail-summary
+  fields.
+- Dashboard/status surfaces gained `lastLargeFile` (D1 `readDashboard` and
+  local `hop status`), tracking the most recent `file.large` event the same
+  way `lastRemoteUpdate` etc. already do, while `readDashboard`'s existing
+  `recent` window already surfaces every event including `file.large`
+  generically.
+- `packages/agent/test/large-file-threshold.test.js` (7 tests, new) proves:
+  the 100 MB default with no override; a per-codebase override is read back
+  and respected; clearing an override restores the default; an
+  over-threshold file syncs normally and emits exactly one `file.large`
+  event; an under-threshold file emits none; changing the per-codebase
+  threshold changes which files get flagged on the next sync; and — the
+  task's core metric — cloud content (bytes, hash, size) and every non-`file.large`
+  event are byte-identical between a run where the warning fires and one
+  where it does not. All tests use ordinary small fixture files with a
+  dialed-down threshold instead of writing real large files.
+
 ## 2026-07-12 WS7c Closed: Trail Diffs In The Desktop App And Dashboard, Plus A Reliability Sweep
 
 WS7c is now closed end to end: the object-backed compare engine was verified as already built and passing, and both the desktop app and the dashboard grew real trail-step diffs on top of it: the compare/history surfaces are no longer dashboard-pending. A reliability sweep landed alongside: merged CI, human-readable sync copy, an events-journal rotation, connection-fault resilience, and scheduled nightly backups. All work is live: commits pushed, dashboard deployed to `hopit.dev`, desktop app relaunched.
@@ -1027,6 +1063,7 @@ Risks:
 | `change_set.conflict_detected` | Done for fixture | Emitted when stale selected-state, file/base, or Main revisions are detected. |
 | `cache.evicted` | Done for explicit prune | Emitted by `hop workspace prune --execute` after clean acknowledged local cached bodies are removed. |
 | `connection.changed` | Not started | Needed for online/offline/retry state. |
+| `file.large` | Done | Emitted at sync time when a create/write entry exceeds the large-file warning threshold (default 100 MB, per-codebase override). Purely additive: never gates or caps the sync. |
 
 ### Status Fields
 

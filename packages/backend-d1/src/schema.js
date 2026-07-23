@@ -338,10 +338,15 @@ export const d1SchemaStatements = [
   // default: absence of a row means disabled. `trail_summaries_mode` carries the
   // separate metadata/diff opt-in. New table (not an alter), so it applies
   // cleanly to databases created before the feature.
+  // large_file_threshold_bytes: per-codebase override for the large-file
+  // warning threshold (GR-G2). NULL means "use the agent default" (100 MB).
+  // Large files always sync — this only controls when the `file.large`
+  // dashboard note fires; there is no cap.
   `create table if not exists codebase_settings (
     codebase_id text primary key,
     trail_summaries_enabled integer not null default 0,
     trail_summaries_mode text not null default 'metadata',
+    large_file_threshold_bytes integer,
     created_at text not null,
     updated_at text not null
   )`,

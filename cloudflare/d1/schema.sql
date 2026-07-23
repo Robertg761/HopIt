@@ -362,6 +362,20 @@ create table if not exists notifications (
 create index if not exists idx_notifications_codebase_created on notifications(codebase_id, created_at);
 create index if not exists idx_notifications_recipient_created on notifications(recipient_user_id, created_at);
 
+-- Per-codebase agent settings. Trail summarization is opt-in and OFF by
+-- default: absence of a row means disabled. large_file_threshold_bytes is the
+-- GR-G2 per-codebase override for the large-file warning threshold; NULL
+-- means "use the agent default" (100 MB). Large files always sync — there is
+-- no cap, this only controls when the dashboard note fires.
+create table if not exists codebase_settings (
+  codebase_id text primary key,
+  trail_summaries_enabled integer not null default 0,
+  trail_summaries_mode text not null default 'metadata',
+  large_file_threshold_bytes integer,
+  created_at text not null,
+  updated_at text not null
+);
+
 -- Phase 3 multi-tenant usage and billing. These are additive tables so the
 -- migration is safe to apply before the feature flags are enabled.
 create table if not exists tenant_usage (
