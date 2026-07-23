@@ -7,7 +7,7 @@ import { privacyZoneForPath, validateClientEncryptionMetadata } from '@hopit/cor
 import { readJson, shouldUseD1Backend, writeJson } from '../io.js'
 import { countPathScopes, normalizeCloudFileEntry, normalizeCloudScopes } from '../journal.js'
 import { applyJournalEntryToCloud } from '../status-state.js'
-import { assertSafeCloudPath } from '../workspace-manifest.js'
+import { assertSafeCloudPath, normalizeDerivedPathOverrides } from '../workspace-manifest.js'
 import { CloudflareD1HopBackend, d1CloudServiceType, d1ConfigFromOptions } from '@hopit/backend-d1'
 import { attachTextDiff, buildFileVersionRowForEntry, buildFileVersionRows, compareVersionRows, createCompareBlobReader, retainedBlobKeysForVersions } from '@hopit/backend-d1'
 import { clusterEpisodes, normalizeSummaryMode } from '@hopit/backend-d1'
@@ -243,6 +243,7 @@ export class FixtureJsonCloudGraphService {
       codebaseId: cloud?.codebase?.id ?? null,
       trailSummariesEnabled: Boolean(stored?.trailSummariesEnabled),
       trailSummariesMode: normalizeSummaryMode(stored?.trailSummariesMode),
+      derivedPathOverrides: normalizeDerivedPathOverrides(stored?.derivedPathOverrides),
       updatedAt: stored?.updatedAt ?? null,
     }
   }
@@ -252,13 +253,38 @@ export class FixtureJsonCloudGraphService {
     const current = cloud.codebaseSettings ?? {}
     const now = new Date().toISOString()
     const next = {
+      ...current,
       trailSummariesEnabled: enabled === undefined ? Boolean(current.trailSummariesEnabled) : Boolean(enabled),
       trailSummariesMode: mode === undefined ? normalizeSummaryMode(current.trailSummariesMode) : normalizeSummaryMode(mode),
+      derivedPathOverrides: normalizeDerivedPathOverrides(current.derivedPathOverrides),
       updatedAt: now,
     }
     cloud.codebaseSettings = next
     await writeJson(this.path, cloud)
     return { codebaseId: cloud?.codebase?.id ?? codebaseId ?? null, ...next }
+  }
+
+  // GR-C1 (decisions §6): per-codebase derived-path add/remove overrides,
+  // mirroring setTrailSummaries above. `add`/`remove` undefined leaves that
+  // side unchanged (same partial-update contract as setTrailSummaries).
+  async setDerivedPathOverrides(codebaseId, { add, remove } = {}) {
+    const cloud = await readJson(this.path)
+    const current = cloud.codebaseSettings ?? {}
+    const currentOverrides = normalizeDerivedPathOverrides(current.derivedPathOverrides)
+    const now = new Date().toISOString()
+    const nextOverrides = {
+      add: add === undefined ? currentOverrides.add : normalizeDerivedPathOverrides({ add }).add,
+      remove: remove === undefined ? currentOverrides.remove : normalizeDerivedPathOverrides({ remove }).remove,
+    }
+    const next = {
+      trailSummariesEnabled: Boolean(current.trailSummariesEnabled),
+      trailSummariesMode: normalizeSummaryMode(current.trailSummariesMode),
+      derivedPathOverrides: nextOverrides,
+      updatedAt: now,
+    }
+    cloud.codebaseSettings = next
+    await writeJson(this.path, cloud)
+    return { codebaseId: cloud?.codebase?.id ?? codebaseId ?? null, derivedPathOverrides: nextOverrides, updatedAt: now }
   }
 
   async listTrailEpisodes(codebaseId, { limit } = {}) {

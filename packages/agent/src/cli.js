@@ -16,6 +16,7 @@ import { mergeChangeSet, openChangeSetReview, recoverJournal, refreshWorkspace, 
 import { manageStorage } from './commands/storage.js'
 import { runWorkspaceCommand } from './commands/workspace.js'
 import { runTrailCommand } from './commands/trail.js'
+import { runDerivedCommand } from './commands/derived.js'
 import { runDemo } from './commands/demo.js'
 import { normalizeCommand, parseOptions } from './options.js'
 import { autoloadEnvFile } from './env-file.js'
@@ -40,6 +41,7 @@ const HUMAN_OUTPUT_COMMANDS = new Set([
   'sync-once',
   'recover',
   'trail',
+  'derived',
 ])
 
 async function main() {
@@ -79,6 +81,12 @@ async function main() {
     command === 'trail' && trailAction === 'summaries' && args[0] && !args[0].startsWith('--')
       ? args.shift()
       : null
+  const derivedAction =
+    command === 'derived' && args[0] && !args[0].startsWith('--') ? args.shift() : 'list'
+  const derivedPath =
+    command === 'derived' && (derivedAction === 'add' || derivedAction === 'remove') && args[0] && !args[0].startsWith('--')
+      ? args.shift()
+      : null
   const parsedOptions = parseOptions(args)
   const options =
     command === 'keys' || command === 'setup' || command === 'add'
@@ -116,6 +124,7 @@ async function main() {
   if (command === 'add') return runAdd(options)
   if (command === 'workspace') return runWorkspaceCommand(workspaceAction, options)
   if (command === 'trail') return runTrailCommand(trailAction, trailState, options)
+  if (command === 'derived') return runDerivedCommand(derivedAction, derivedPath, options)
   if (command === 'session') return runSessionCommand(sessionAction, options)
   if (command === 'keys') return runKeysCommand(keysAction, options)
   if (command === 'service') return runServiceCommand(serviceAction, options)

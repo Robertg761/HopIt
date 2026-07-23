@@ -102,6 +102,36 @@ bytes still need repo/zone keys, per-file data-encryption keys, invite-time
 grants, recovery import, and revoke/rotate flows before this becomes the final
 model.
 
+### Derived / Local-Only Paths
+
+Generated/dependency directories (`node_modules/`, `.venv/`, build output, …)
+are a distinct classification from both privacy zones and any ignore file
+(decisions §6, GR-C1): they are never watched-through, never journaled, never
+synced, and never counted in presence. Each device regenerates them locally.
+
+- `packages/agent/src/constants.js` (`curatedDerivedPathRules`) holds the
+  curated built-in list. Rules are either a bare segment name (matches that
+  path segment anywhere, e.g. any nested `node_modules/`) or a `/`-joined
+  root-anchored subtree (`vendor/bundle` derives only that exact folder, not
+  a plain top-level `vendor/`).
+- `isDerivedWorkspacePath` in `packages/agent/src/workspace-manifest.js` is
+  the single classification function, called from `shouldSkipWorkspacePath`
+  (which every workspace scan — `readWorkspaceFiles`, `snapshotWorkspace`,
+  `diffWorkspaceAgainstManifest` — funnels through). It layers per-codebase
+  `{ add, remove }` overrides (`options.derivedPathOverrides`) on top of the
+  curated list; `remove` un-derives a built-in path, `add` derives a custom
+  one.
+- Overrides are persisted per-codebase in `codebase_settings.derived_path_overrides`
+  (same row trail-summarization opt-in uses), edited via `hop derived
+  list|add|remove <path>`. Sync-triggering flows (`syncOnce`,
+  `refreshWorkspace`, `recoverJournal`) resolve overrides once per call via
+  `withDerivedPathOverrides`, never per file, so the classification itself
+  stays a pure, sub-millisecond, in-memory check in the watch/scan hot path.
+- `hop status` reports the derived roots currently present in the workspace
+  under `workspace.derivedPaths.excludedRoots` (via
+  `listDerivedWorkspaceRoots`, which never descends into a derived directory
+  it finds, so it stays cheap even for a large `node_modules/`).
+
 ### Main And Active Change Sets
 
 Main is the accepted shared state of a codebase. It advances through explicit review/merge actions, not merely because an editor saved a file.

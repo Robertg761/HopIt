@@ -114,6 +114,39 @@ export const mirrorNonSecretEnvSuffixes = new Set([
 ])
 export const defaultLaunchAgentLabelPrefix = 'com.hopit.agent'
 
+// Derived/generated paths (decisions §6): local-only, never watched-through,
+// never journaled, never synced, never counted in presence, and distinct from
+// both `.private/` (owner-private but still synced) and an ignore file (there
+// is no config file in the repo). Each entry is either a bare directory name
+// (matches that segment anywhere in the relative path, e.g. any nested
+// `node_modules/`) or a `/`-joined relative prefix (matches only that exact
+// subtree, e.g. `vendor/bundle` does not derive a plain top-level `vendor/`).
+// Curated list; extend here as ecosystems are added. Per-codebase user
+// overrides live in `codebase_settings.derived_path_overrides`, layered on
+// top of this list at classification time (see `isDerivedWorkspacePath` in
+// workspace-manifest.js) rather than mutating it.
+export const curatedDerivedPathRules = [
+  'node_modules',
+  '.venv',
+  'venv',
+  'target',
+  'dist',
+  'build',
+  '.next',
+  '__pycache__',
+  '.cache',
+  '.turbo',
+  '.gradle',
+  'vendor/bundle',
+  // Carried over from the pre-classification `generatedWorkspaceDirectories`
+  // guard (2026-07-08 node_modules flood fix).
+  '.vercel',
+  'out',
+  'coverage',
+  'artifacts',
+  'DerivedData',
+]
+
 export class ConflictError extends Error {
   constructor(message, detail) {
     super(message)

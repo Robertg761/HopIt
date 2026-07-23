@@ -14,6 +14,23 @@ import { scopeForPath } from '@hopit/core/privacy-zone'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
 
+// GR-C1 (decisions §6): resolves the per-codebase derived-path add/remove
+// overrides once per sync-triggering call (never per file) and layers them
+// onto a shallow options copy for the workspace scan that follows. Best-effort:
+// a codebase-settings read failure must never block sync, so it falls back to
+// curated-only classification (no overrides) rather than throwing. Callers that
+// already resolved overrides (e.g. tests injecting `options.derivedPathOverrides`
+// directly) are passed through unchanged.
+export async function withDerivedPathOverrides(options, cloudService) {
+  if (options.derivedPathOverrides) return options
+  try {
+    const settings = await cloudService.readCodebaseSettings()
+    return { ...options, derivedPathOverrides: settings?.derivedPathOverrides }
+  } catch {
+    return options
+  }
+}
+
 export async function refreshWorkspace(options) {
   await assertWorkspacePathSafe(options)
   const cloudService = createCloudGraphService(options)
@@ -120,7 +137,11 @@ export async function refreshWorkspace(options) {
 export async function materializeCloudToWorkspace(options, cloud, cloudService = null) {
   await fs.mkdir(options.workspace, { recursive: true })
 
-  const diskEntries = await readWorkspaceFiles(options.workspace, options)
+  // cloudService is optional here (materializeCloudToWorkspace is also called
+  // with an already-fetched `cloud` graph and no live service); only resolve
+  // overrides when a service is actually available rather than forcing one.
+  const scanOptions = cloudService ? await withDerivedPathOverrides(options, cloudService) : options
+  const diskEntries = await readWorkspaceFiles(options.workspace, scanOptions)
   const cloudPaths = new Set(Object.keys(cloud.files ?? {}))
   const wouldDeletePaths = Object.keys(diskEntries).filter((relativePath) => !cloudPaths.has(relativePath))
 
@@ -317,7 +338,8 @@ export async function syncOnce(options, context = {}) {
 export async function performSyncOnce(options, contextDetail = {}) {
   const cloudService = createCloudGraphService(options)
   const cloud = await cloudService.readGraph()
-  const diskEntries = await readWorkspaceFiles(options.workspace, options)
+  const scanOptions = await withDerivedPathOverrides(options, cloudService)
+  const diskEntries = await readWorkspaceFiles(options.workspace, scanOptions)
   const visibilityContext = visibilityContextForGraph(cloud, visibilityRequestFromOptions(options))
   const visibleCloudPaths = Object.keys(cloud.files).filter((relativePath) =>
     canRequesterSeePath(visibilityContext, relativePath),
@@ -498,7 +520,8 @@ export async function recoverJournal(options) {
         cloud.codebase?.id ?? options['codebase-id'],
         options.workspace,
       )
-      const diskEntries = await readWorkspaceFiles(options.workspace, options)
+      const scanOptions = await withDerivedPathOverrides(options, cloudService)
+      const diskEntries = await readWorkspaceFiles(options.workspace, scanOptions)
       const hydrationState = workspaceIndexHydrationStateForSync(indexedCodebase)
       const visibleCloud = filterVisibleGraphForRequester(cloud, visibilityRequestFromOptions(options))
       await upsertWorkspaceIndexFromCloud(options, visibleCloud, {
@@ -566,7 +589,8 @@ export async function recoverJournal(options) {
       cloud.codebase?.id ?? options['codebase-id'],
       options.workspace,
     )
-    const diskEntries = await readWorkspaceFiles(options.workspace, options)
+    const scanOptions = await withDerivedPathOverrides(options, cloudService)
+    const diskEntries = await readWorkspaceFiles(options.workspace, scanOptions)
     const hydrationState = workspaceIndexHydrationStateForSync(indexedCodebase)
     const visibleCloud = filterVisibleGraphForRequester(cloud, visibilityRequestFromOptions(options))
     await upsertWorkspaceIndexFromCloud(options, visibleCloud, {

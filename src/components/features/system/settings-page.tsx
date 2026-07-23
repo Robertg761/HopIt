@@ -11,7 +11,13 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { useWorkspace } from '@/components/workspace/workspace-provider'
 import { formatCount } from '@/lib/client/format'
 
+import { DerivedPathsCard } from './derived-paths-card'
 import { InfoRow, ManagedCaption, MonoId } from './shared'
+
+// GR-C1 (decisions §6): the derived-paths settings surface stays behind this
+// flag until the dashboard settings surface graduates out of flag-gating
+// (see docs/git-replacement-implementation-plan.md, Track C).
+const DERIVED_PATHS_SETTINGS_ENABLED = process.env.NEXT_PUBLIC_DERIVED_PATHS_SETTINGS === '1'
 
 export function SettingsPage() {
   const { status, selectedCodebaseId } = useWorkspace()
@@ -143,6 +149,8 @@ export function SettingsPage() {
           <ManagedCaption>Visibility changes are made from the codebase settings on the backend.</ManagedCaption>
         </CardFooter>
       </Card>
+
+      {DERIVED_PATHS_SETTINGS_ENABLED ? <DerivedPathsCard codebaseId={codebaseId} /> : null}
 
       <Card>
         <CardHeader>

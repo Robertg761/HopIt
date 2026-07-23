@@ -12,8 +12,37 @@ export function normalizeCodebaseSettings(codebaseId, row) {
     codebaseId,
     trailSummariesEnabled: Boolean(row?.trail_summaries_enabled),
     trailSummariesMode: normalizeSummaryMode(row?.trail_summaries_mode),
+    derivedPathOverrides: normalizeDerivedPathOverridesJson(row?.derived_path_overrides),
     updatedAt: row?.updated_at ?? null,
   }
+}
+
+// GR-C1 (decisions §6): per-codebase add/remove overrides layered on top of
+// the agent's curated built-in derived-path list. Stored as one JSON column
+// on the same `codebase_settings` row trail-summaries already uses.
+export function normalizeDerivedPathOverridesJson(value) {
+  if (!value) return { add: [], remove: [] }
+  let parsed
+  try {
+    parsed = JSON.parse(value)
+  } catch {
+    return { add: [], remove: [] }
+  }
+  return {
+    add: normalizeDerivedPathRuleList(parsed?.add),
+    remove: normalizeDerivedPathRuleList(parsed?.remove),
+  }
+}
+
+function normalizeDerivedPathRuleList(list) {
+  if (!Array.isArray(list)) return []
+  const seen = new Set()
+  for (const value of list) {
+    if (typeof value !== 'string') continue
+    const cleaned = value.trim().replace(/^\/+/, '').replace(/\/+$/, '')
+    if (cleaned) seen.add(cleaned)
+  }
+  return [...seen]
 }
 
 export function mapTrailEpisodeRow(row) {
@@ -66,6 +95,37 @@ export function attachEpisodeMethods(Backend) {
         codebaseId,
         trailSummariesEnabled: nextEnabled,
         trailSummariesMode: nextMode,
+        updatedAt: now,
+      }
+    },
+
+    async setDerivedPathOverrides(codebaseId = this.codebaseId, { add, remove } = {}) {
+      await this.ensureSchema()
+      const now = new Date().toISOString()
+      const current = await this.readCodebaseSettings(codebaseId)
+      const nextOverrides = {
+        add: add === undefined ? current.derivedPathOverrides.add : normalizeDerivedPathRuleList(add),
+        remove: remove === undefined ? current.derivedPathOverrides.remove : normalizeDerivedPathRuleList(remove),
+      }
+      await this.query(
+        `insert into codebase_settings (
+          codebase_id, trail_summaries_enabled, trail_summaries_mode, derived_path_overrides, created_at, updated_at
+        ) values (?, ?, ?, ?, ?, ?)
+        on conflict(codebase_id) do update set
+          derived_path_overrides = excluded.derived_path_overrides,
+          updated_at = excluded.updated_at`,
+        [
+          codebaseId,
+          current.trailSummariesEnabled ? 1 : 0,
+          current.trailSummariesMode,
+          JSON.stringify(nextOverrides),
+          now,
+          now,
+        ],
+      )
+      return {
+        codebaseId,
+        derivedPathOverrides: nextOverrides,
         updatedAt: now,
       }
     },

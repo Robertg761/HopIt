@@ -53,6 +53,7 @@ Commands:
   version     Print the hop version and build target
   install     Prepare production state, workspace, env, and optional launch agent
   trail       Browse labeled trail episodes and manage summarization (episodes, summarize, summaries on|off)
+  derived     Show/edit derived (local-only, never-synced) path overrides (list, add <path>, remove <path>)
   workspace   Manage/list/discover/attach the configured HopIt workspace root and codebase
   session     Manage this device/session registration (alias: device)
   keys        Manage local encryption device keys and recovery exports

@@ -361,6 +361,14 @@ on conflict(codebase_id) do update set
   trail_summaries_enabled = excluded.trail_summaries_enabled,
   trail_summaries_mode = excluded.trail_summaries_mode,
   updated_at = excluded.updated_at`
+// GR-C1 (decisions §6): the exact statement shape
+// `setDerivedPathOverrides` in @hopit/backend-d1/episodes-store.js issues.
+const derivedPathOverridesUpsertSql = `insert into codebase_settings (
+  codebase_id, trail_summaries_enabled, trail_summaries_mode, derived_path_overrides, created_at, updated_at
+) values (?, ?, ?, ?, ?, ?)
+on conflict(codebase_id) do update set
+  derived_path_overrides = excluded.derived_path_overrides,
+  updated_at = excluded.updated_at`
 
 function trailEpisodeUpsertParams(codebaseId) {
   return [codebaseId, 'ep_1_3', 1, 3, 'Laptop', 'now', 'now', 3, 2, '["src/a.js"]', 'label', 'stub', 'metadata', 'now', 'now']
@@ -412,6 +420,25 @@ test('scoped SQL policy rejects cross-codebase and unscoped trail statements', (
       statement.name,
     )
   }
+})
+
+test('scoped SQL policy accepts a codebase-scoped derived-path-overrides upsert for an admin session', () => {
+  const admin = scopedSession({ capabilities_json: JSON.stringify(['read', 'write', 'admin']) })
+  assert.doesNotThrow(() => assertScopedSessionStatementAllowed(admin, {
+    sql: derivedPathOverridesUpsertSql,
+    params: ['codebase-1', 0, 'metadata', '{"add":["generated"],"remove":[]}', 'now', 'now'],
+  }))
+})
+
+test('scoped SQL policy rejects a cross-codebase derived-path-overrides upsert', () => {
+  const admin = scopedSession({ capabilities_json: JSON.stringify(['read', 'write', 'admin']) })
+  assert.throws(
+    () => assertScopedSessionStatementAllowed(admin, {
+      sql: derivedPathOverridesUpsertSql,
+      params: ['codebase-2', 0, 'metadata', '{"add":["generated"],"remove":[]}', 'now', 'now'],
+    }),
+    /Scoped agent session/,
+  )
 })
 
 test('codebase_settings writes require admin capability; write-only sessions are refused', () => {

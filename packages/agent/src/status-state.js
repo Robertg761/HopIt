@@ -8,7 +8,7 @@ import { cloudEntryEquals, countCloudScopes, countEntryScopes, normalizeCloudFil
 import { remotePullEnabled, remotePushEnabled, remotePushUrl, remoteRefreshIntervalMs } from './paths.js'
 import { isTimestampAtOrAfter } from './service.js'
 import { findIndexedCodebase, localCacheSnapshotForCloud, readWorkspaceIndex, workspaceIndexSummary } from './workspace-index.js'
-import { buildRemoteCursor, buildWorkspaceHydration, contentManifestSummary, readSingleWorkspaceEntry, workspaceFilePath, workspaceLocalChanges } from './workspace-manifest.js'
+import { buildRemoteCursor, buildWorkspaceHydration, contentManifestSummary, listDerivedWorkspaceRoots, normalizeDerivedPathOverrides, readSingleWorkspaceEntry, workspaceFilePath, workspaceLocalChanges } from './workspace-manifest.js'
 import { scopeForPath } from '@hopit/core/privacy-zone'
 import { existsSync, watch } from 'node:fs'
 
@@ -270,6 +270,7 @@ export async function readAgentState(options) {
   })
   const localChanges = await workspaceLocalChanges(options, indexedCodebase)
   const localCache = localCacheSnapshotForCloud(options, cloud, indexedCodebase)
+  const derivedPaths = workspaceExists ? await readDerivedPathsSummary(options, cloudService) : null
   remotePullHealth.cursor = buildRemoteCursor({
     cloudSummary,
     eventsSummary,
@@ -339,6 +340,7 @@ export async function readAgentState(options) {
         files: localCache.files,
         index: workspaceIndexSummary(options, workspaceIndex),
         virtualized: false,
+        derivedPaths,
       },
       cloud: cloudSummary,
       journal: {
@@ -927,4 +929,21 @@ export function visibleRevisionFromEvent(event) {
 
 export function workspaceRootFromOptions(options) {
   return options['workspace-root'] ?? path.dirname(path.resolve(options.workspace))
+}
+
+// GR-C1 (decisions §6): `hop status` surfaces which roots are currently
+// excluded from sync as derived (never journaled, never synced, never
+// counted in presence) so the owner can see it without a separate command.
+// Best-effort: a codebase-settings read failure (e.g. offline) must not make
+// `hop status` fail, so overrides fall back to none rather than throwing.
+export async function readDerivedPathsSummary(options, cloudService) {
+  let overrides = { add: [], remove: [] }
+  try {
+    const settings = await cloudService.readCodebaseSettings()
+    overrides = normalizeDerivedPathOverrides(settings?.derivedPathOverrides)
+  } catch {
+    // Fall back to curated-only classification below.
+  }
+  const excludedRoots = await listDerivedWorkspaceRoots(options.workspace, { derivedPathOverrides: overrides })
+  return { overrides, excludedRoots }
 }

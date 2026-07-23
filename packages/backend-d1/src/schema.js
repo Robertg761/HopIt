@@ -338,10 +338,16 @@ export const d1SchemaStatements = [
   // default: absence of a row means disabled. `trail_summaries_mode` carries the
   // separate metadata/diff opt-in. New table (not an alter), so it applies
   // cleanly to databases created before the feature.
+  // `derived_path_overrides` (GR-C1, decisions §6) holds the per-codebase
+  // `{"add":[...],"remove":[...]}` overrides layered on top of the curated
+  // built-in derived-path list (`packages/agent/src/constants.js`). Absence
+  // (default '{}') means no overrides; derived-path classification is purely
+  // local/curated for that codebase.
   `create table if not exists codebase_settings (
     codebase_id text primary key,
     trail_summaries_enabled integer not null default 0,
     trail_summaries_mode text not null default 'metadata',
+    derived_path_overrides text not null default '{}',
     created_at text not null,
     updated_at text not null
   )`,
