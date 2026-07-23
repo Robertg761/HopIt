@@ -7,6 +7,7 @@ import { restoreAgentState } from './commands/restore.js'
 import { compareCloudRevisions } from './commands/compare.js'
 import { hydrateWorkspace } from './commands/hydrate.js'
 import { importGitProject, importLocalProject, importRemoteGitProject, initCloud, mirrorLocalProject } from './commands/import.js'
+import { runMirrorSync } from './commands/mirror.js'
 import { installAgent } from './commands/install.js'
 import { runSetup } from './commands/setup.js'
 import { runAdd } from './commands/add.js'
@@ -105,6 +106,7 @@ async function main() {
   }
   if (command === 'review-open') return openChangeSetReview(options)
   if (command === 'merge') return mergeChangeSet(options)
+  if (command === 'mirror-sync') return runMirrorSync(options)
   if (command === 'export-git') return exportGitSnapshot(options, { requireMerged: false })
   if (command === 'publish') return exportGitSnapshot(options, { requireMerged: true })
   if (command === 'validate') return validateCloud(options)

@@ -337,10 +337,11 @@ export async function copyBackupFileIfExists(output, files, relativePath, source
 }
 
 
-export function runGit(args, cwd) {
+export function runGit(args, cwd, env = process.env) {
   const result = spawnSync('git', args, {
     cwd,
     encoding: 'utf8',
+    env,
   })
 
   if (result.status !== 0) {
