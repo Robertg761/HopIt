@@ -936,6 +936,27 @@ the agent state root. The production checker warns when backup/export roots are
 not configured, and fails if state/index paths are nested into the Workspace
 Root.
 
+### Backup/Restore Drill
+
+Run this quarterly (or after any storage change) to prove backups are actually
+restorable, not just written. The drill is read-only against production state:
+`hop restore` never contacts a cloud backend, and the materialization target is
+a scratch directory.
+
+```bash
+BACKUP="$HOPIT_BACKUP_ROOT/hopit-$(date +%Y%m%d-%H%M%S)"
+npm run hop:backup -- --codebase-id "$HOPIT_CODEBASE_ID" --output "$BACKUP" --force
+npm run hop -- restore --from "$BACKUP"
+npm run hop -- restore --from "$BACKUP" --workspace /tmp/hopit-restore-drill --execute --force
+```
+
+Pass criteria: the verify step reports `ok: true` with zero issues; the execute
+step's `restore-report.json` shows the expected file count; and the
+`hashOnlySkippedFiles` list matches exactly the object-backed paths you expect
+(their bodies live in the object store, not the backup - spot-check that one of
+those hashes exists in the configured R2/S3 bucket). Delete
+`/tmp/hopit-restore-drill` afterward.
+
 ## Token Rotation
 
 Rotate scoped device tokens without deleting the local workspace:

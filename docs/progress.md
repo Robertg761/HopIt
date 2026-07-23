@@ -1694,6 +1694,16 @@ or charge.
 - `scripts/package-hop-dmg.mjs` now lazy-imports `appdmg`, so the DMG and
   release-channel test suites run (and pass) on Linux instead of failing at
   import time; macOS coverage is unchanged.
+- Per-advisory Next.js exposure assessment (nine open advisories, no patched
+  stable 16.x yet): the four Server Action/Server Function advisories do not
+  apply (no `"use server"` anywhere, every API route pins `runtime = 'nodejs'`,
+  Vercel hosting is not a custom server); the rewrites SSRF does not apply (the
+  only rewrite is the static `/install` mapping); the image-optimizer SVG DoS
+  surface is eliminated by `images: { unoptimized: true }` in next.config.ts
+  (the app never uses next/image). Residual: the Turbopack middleware-bypass
+  advisory (config conditions unclear for this app; the Clerk middleware has
+  dedicated pass-through tests) and the low-risk cache-confusion pair - both
+  clear when a patched 16.2.x/16.3.0 stable ships.
 - Dependency security: `next` moved to 16.2.11 (newest stable; the open Next.js
   advisories, including a middleware-bypass class, have no patched stable 16.x
   release yet - watch for a 16.2.x patch or 16.3.0 stable), `sharp` to 0.35.3

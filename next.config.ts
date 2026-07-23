@@ -10,6 +10,10 @@ const installHeaders = [
 const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // The app never uses next/image, but the /_next/image optimizer endpoint
+  // exists by default and is a DoS surface (GHSA-q8wf-6r8g-63ch). Disable it
+  // outright; nothing depends on it.
+  images: { unoptimized: true },
   allowedDevOrigins: ['127.0.0.1', '192.168.2.81'],
   transpilePackages: ['@hopit/backend-d1', '@hopit/core'],
   async rewrites() {
