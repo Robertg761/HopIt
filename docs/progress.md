@@ -212,9 +212,9 @@ Per-codebase service ports (`c916def`):
 
 Follow-up issues found during verification (recorded, not fixed):
 
-- Every service restart re-runs a full hydration pass over all 4,491 workspace files (~15 minutes at ~5 files/sec) before the remote-push client starts, so a restarted device has no push connection during that window.
+- Every service restart re-runs a full hydration pass over all 4,491 workspace files (~15 minutes at ~5 files/sec) before the remote-push client starts, so a restarted device has no push connection during that window. Resolved: restart hydration now verifies clean files locally without per-file cloud reads, so a clean workspace reaches ready state in seconds (see `packages/agent/test/hydrate-startup-verify.test.js`).
 - The Clerk middleware in `src/proxy.ts` blocks the agent-session-token (`hst_`) auth path supported by `src/lib/request-cloud-actor.ts` for all `/api` routes: verified live against `https://hopit.dev/api/codebase-files` (307 → `/sign-in`): so that API auth path is currently dead code.
-- `hop hydrate` of a fresh large workspace failed once mid-run with a dropped TLS socket (`UND_ERR_SOCKET`, "other side closed") and needed a retry to complete; hydrate is resumable, but the failure is worth a retry-with-backoff inside the command.
+- `hop hydrate` of a fresh large workspace failed once mid-run with a dropped TLS socket (`UND_ERR_SOCKET`, "other side closed") and needed a retry to complete; hydrate is resumable, but the failure is worth a retry-with-backoff inside the command. Resolved: hydration cloud fetches now run inside a bounded transient-retry wrapper that journals `cloud.fetch_recovered` (see `packages/agent/src/cloud-retry.js`).
 
 ## 2026-07-10 Product-Goal Hardening Proof Ledger
 
@@ -1663,6 +1663,48 @@ or charge.
   and hosted-action cancellation uses the existing `cancelled` status vocabulary.
 - Verification: full `npm run verify` passed (agent 315, web 156, Worker 87,
   config 2, TypeScript, lint, optimized Next build) and desktop 124/124 passed.
+
+### 2026-07-23 production-readiness hardening
+
+- CI cost controls: the macOS DMG job (10x-billed minutes) now runs only on
+  `workflow_dispatch` or `v*` tags, cross-platform packaging is main-push-only,
+  and docs-only pushes skip CI. Context: the GitHub Actions spending budget was
+  exhausted around 2026-07-12 and every run since was refused before starting;
+  the budget itself must be raised in the GitHub billing settings.
+- Fixed a shipping defect in packaged artifacts: the packager copied the demo
+  fixture to `app/fixtures/` while the bundled CLI resolves it at the release
+  root, so `hop init` and `hop demo` failed out of the box on every platform.
+  `verifyHostRelease` now runs the full offline demo flow against the built
+  artifact so this class of bug fails the build. The artifact manifest's
+  recorded fixture path was corrected to match.
+- Linux agent parity check (roadmap Phase 1) run on the packaged `linux-x64`
+  artifact: init/hydrate/edit/sync/status/review/merge/export/publish/doctor,
+  systemd support scripts, XDG state paths, and case-sensitive materialization
+  all pass. The only defect found was the fixture-path bug above.
+- New `hop restore` command: verify-only by default (manifest schema, per-file
+  sha256/bytes integrity, cloud.json/manifest consistency, ndjson parse checks,
+  restorable-with-content vs hash-only vs missing categorization), and
+  `--workspace <dir> --execute` offline materialization from `cloud.json` with
+  non-empty-target refusal, `--force` override, `.private/` restoration, and a
+  written restore-report.json. Object-backed bodies (`contentStorage:
+  'object-blob'`) are not in a backup: restore reports them with hash/blobKey
+  instead of writing placeholders. Proven by `packages/agent/test/restore.test.js`.
+- New `hop version` / `--version`: prints the version from the packaged release
+  manifest (with build target) or the repo package.json in dev checkouts.
+- `scripts/package-hop-dmg.mjs` now lazy-imports `appdmg`, so the DMG and
+  release-channel test suites run (and pass) on Linux instead of failing at
+  import time; macOS coverage is unchanged.
+- Dependency security: `next` moved to 16.2.11 (newest stable; the open Next.js
+  advisories, including a middleware-bypass class, have no patched stable 16.x
+  release yet - watch for a 16.2.x patch or 16.3.0 stable), `sharp` to 0.35.3
+  (libvips CVEs), `@clerk/nextjs` to 7.5.22. A broader `npm update` of the
+  remaining within-range minors was attempted and reverted: something in that
+  batch breaks the production build during page-data collection
+  (`TypeError: e.createContext is not a function`); left for a future bisect.
+- Verification on the final tree: lint, typecheck, typecheck:agent green; agent
+  suite 328 pass / 0 fail (5 known sandbox-only socket cancellations); web 211,
+  worker 87, config 3, desktop 132 all green; production build green;
+  `package:hop` verified including the new demo-flow check.
 
 ### 2026-07-23 scope simplification: work items, discussions, project boards, and releases removed
 

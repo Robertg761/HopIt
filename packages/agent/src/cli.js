@@ -3,6 +3,7 @@
 
 import { applyLocalDeviceKeyring, runKeysCommand } from './commands/keys.js'
 import { backupAgentState, exportGitSnapshot, runDoctor, validateCloud } from './commands/export.js'
+import { restoreAgentState } from './commands/restore.js'
 import { compareCloudRevisions } from './commands/compare.js'
 import { hydrateWorkspace } from './commands/hydrate.js'
 import { importGitProject, importLocalProject, importRemoteGitProject, initCloud, mirrorLocalProject } from './commands/import.js'
@@ -19,7 +20,7 @@ import { runDemo } from './commands/demo.js'
 import { normalizeCommand, parseOptions } from './options.js'
 import { autoloadEnvFile } from './env-file.js'
 import { runInteractive } from './commands/interactive.js'
-import { printHelp } from './help.js'
+import { printHelp, printVersion } from './help.js'
 import { readAgentState } from './status-state.js'
 import { runServiceCommand, runServiceProcess, serveStatus } from './service.js'
 import { remotePullOnce, watchWorkspace } from './watch.js'
@@ -85,6 +86,7 @@ async function main() {
       : await applyConnectionStore(await applyLocalDeviceKeyring(parsedOptions))
   if (HUMAN_OUTPUT_COMMANDS.has(command)) options._humanOutput = true
 
+  if (command === 'version') return printVersion()
   if (command === 'init') return initCloud(options)
   if (command === 'import-local') return importLocalProject(options)
   if (command === 'mirror-local') return mirrorLocalProject(options)
@@ -108,6 +110,7 @@ async function main() {
   if (command === 'validate') return validateCloud(options)
   if (command === 'doctor') return runDoctor(options)
   if (command === 'backup') return backupAgentState(options)
+  if (command === 'restore') return restoreAgentState(options)
   if (command === 'install') return installAgent(options)
   if (command === 'setup') return runSetup(options)
   if (command === 'add') return runAdd(options)

@@ -9,6 +9,8 @@ export function normalizeCommand(command) {
   const aliases = {
     '-h': 'help',
     '--help': 'help',
+    '-v': 'version',
+    '--version': 'version',
     import: 'import-local',
     mirror: 'mirror-local',
     'git-import': 'import-git',

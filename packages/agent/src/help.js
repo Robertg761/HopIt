@@ -1,4 +1,30 @@
 // @ts-check
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import { __dirname } from './constants.js'
+
+export function printVersion() {
+  // Packaged artifacts bundle the CLI at <releaseRoot>/app/hop.mjs and ship a
+  // build manifest at <releaseRoot>/manifest.json; a repo checkout has neither,
+  // so fall back to the repo root package.json and mark the build as dev.
+  const candidates = [
+    { file: path.resolve(__dirname, '../manifest.json'), dev: false },
+    { file: path.resolve(__dirname, '../../../package.json'), dev: true },
+  ]
+  for (const candidate of candidates) {
+    let parsed
+    try {
+      parsed = JSON.parse(readFileSync(candidate.file, 'utf8'))
+    } catch {
+      continue
+    }
+    if (typeof parsed.version !== 'string' || parsed.version.length === 0) continue
+    const build = candidate.dev ? 'dev' : parsed.target?.key ?? 'packaged'
+    console.log(`hop ${parsed.version} (${build}, node ${process.version})`)
+    return
+  }
+  console.log(`hop unknown (node ${process.version})`)
+}
 
 export function printHelp() {
   console.log(`hop - HopIt local workspace agent
@@ -23,6 +49,8 @@ Commands:
   validate    Validate the configured cloud graph contract
   doctor      Run a production-oriented local health check
   backup      Write a restorable cloud/status/event backup folder
+  restore     Verify a backup folder (default), or materialize it into --workspace with --execute
+  version     Print the hop version and build target
   install     Prepare production state, workspace, env, and optional launch agent
   trail       Browse labeled trail episodes and manage summarization (episodes, summarize, summaries on|off)
   workspace   Manage/list/discover/attach the configured HopIt workspace root and codebase
@@ -54,11 +82,11 @@ Options:
   --device-keys <path> Override local per-codebase device keyring path
   --recovery-passphrase <secret> One-shot passphrase for keys export-recovery
   --production-safe import-git/mirror: skip cloud sync if routed secrets are not encrypted
-  --execute          storage gc/workspace prune: perform planned local removals; default is dry-run
+  --execute          storage gc/workspace prune/restore: perform planned local removals or materialize a backup; default is dry-run/verify-only
   --launch-agent-label <label> mirror: macOS LaunchAgent label to stop/restart
   --output <path>     Output folder for Git export/publish
   --path <cloud-path> Cloud file/folder path for workspace hydrate-file, hydrate-path, prune, pin, or unpin
-  --from <revision>   compare: left retained graph revision
+  --from <revision|path> compare: left retained graph revision; restore: backup directory to verify or materialize
   --to <revision>     compare: right retained graph revision
   --limit <n>         trail episodes/summarize: only the most recent N episodes
   --gap-minutes <n>   trail: episode clustering gap threshold in minutes (default 30)

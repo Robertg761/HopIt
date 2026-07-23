@@ -3,7 +3,16 @@ name: CI
 on:
   push:
     branches: [main]
+    tags: ['v*']
+    # Docs-only pushes don't need the full battery.
+    paths-ignore:
+      - '**.md'
   pull_request:
+    paths-ignore:
+      - '**.md'
+  # Manual trigger for the macOS DMG build (kept off the per-push path because
+  # macOS runner minutes bill at 10x and exhausted the Actions budget in July).
+  workflow_dispatch:
 
 # Cancel superseded runs on the same ref (e.g. rapid pushes to a PR branch).
 concurrency:
@@ -36,8 +45,12 @@ jobs:
       - run: npm run test:all
       - run: npm run test:desktop
       - run: npm run build
-      - run: npm run package:hop -- --target all
-      - uses: actions/upload-artifact@v4
+      # Cross-platform packaging is main-only: PRs get the quality gates above,
+      # pushes to main additionally prove the artifacts still build.
+      - if: github.event_name != 'pull_request'
+        run: npm run package:hop -- --target all
+      - if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
         with:
           name: hop-runtimes
           path: |
@@ -48,7 +61,9 @@ jobs:
 
   macos-dmg:
     name: Build macOS DMG
-    if: github.event_name == 'push'
+    # macOS minutes bill at 10x Linux; build the DMG on demand or on release
+    # tags instead of every push. Distribution DMGs ship via release:hop anyway.
+    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/')
     runs-on: macos-latest
     timeout-minutes: 25
     steps:

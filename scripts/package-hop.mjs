@@ -109,7 +109,10 @@ function targetContext(target) {
     releaseRoot,
     runtimeRoot: path.join(releaseRoot, 'runtime'),
     appRoot,
-    fixtureRoot: path.join(appRoot, 'fixtures'),
+    // The bundled CLI lives at app/hop.mjs and resolves the demo fixture as
+    // `../fixtures/demo-cloud.json` (packages/agent/src/constants.js), so the
+    // fixture must sit at the release root, not inside app/.
+    fixtureRoot: path.join(releaseRoot, 'fixtures'),
     binRoot: path.join(releaseRoot, 'bin'),
     examplesRoot: path.join(releaseRoot, 'examples'),
     supportRoot: path.join(releaseRoot, 'support'),
@@ -647,7 +650,7 @@ async function writeManifest(ctx) {
       launcher: `bin/${ctx.target.launcherName}`,
       runtime: `runtime/${ctx.target.exeName}`,
       app: 'app/hop.mjs',
-      fixture: 'app/fixtures/demo-cloud.json',
+      fixture: 'fixtures/demo-cloud.json',
       productionEnvExample: 'examples/production.env.example',
       macosLaunchAgentInstaller: 'support/install-macos-launch-agent.sh',
       macosLaunchAgentUninstaller: 'support/uninstall-macos-launch-agent.sh',
@@ -729,6 +732,21 @@ async function verifyHostRelease(ctx) {
     !statusResult.stdout.includes('"ok": false')
   ) {
     throw new Error(`Packaged hop status verification failed: ${statusResult.stderr || statusResult.stdout}`)
+  }
+
+  // The offline demo flow is the packaged artifact's first-run experience and
+  // depends on the bundled fixture resolving from the release layout, which
+  // help/status never touch. Run it end to end so a fixture-path or bundling
+  // regression fails the build instead of shipping.
+  const demoRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'hop-package-demo-'))
+  const demoResult = spawnSync(launcherPath, ['demo'], {
+    cwd: demoRoot,
+    encoding: 'utf8',
+    env: smokeEnv,
+  })
+
+  if (demoResult.status !== 0) {
+    throw new Error(`Packaged hop demo verification failed: ${demoResult.stderr || demoResult.stdout}`)
   }
 
   return true

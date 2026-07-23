@@ -6,8 +6,6 @@ import fs from 'node:fs/promises'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
-import appdmg from 'appdmg'
-
 import { packageTargets, parseTargets } from './package-hop.mjs'
 import { buildDesktopApp } from '../packages/desktop/scripts/package-desktop.mjs'
 
@@ -126,12 +124,22 @@ function requireMacTool(tool) {
   if (result.status !== 0) throw new Error(`${tool} is required to build a macOS disk image.`)
 }
 
-function createDmg({ target, specification }) {
+async function createDmg({ target, specification }) {
+  const appdmg = await loadAppdmg()
   return new Promise((resolve, reject) => {
     const emitter = appdmg({ target, basepath: repoRoot, specification })
     emitter.once('finish', resolve)
     emitter.once('error', reject)
   })
+}
+
+async function loadAppdmg() {
+  try {
+    const { default: appdmg } = await import('appdmg')
+    return appdmg
+  } catch (error) {
+    throw new Error('appdmg is unavailable — DMG packaging requires macOS with the appdmg optional dependency installed', { cause: error })
+  }
 }
 
 function localVersion() {
