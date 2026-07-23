@@ -8,7 +8,6 @@ import { PageScaffold } from '@/components/shell/page-scaffold'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/hooks/use-toast'
-import { createCollaborationItem } from '@/lib/collaboration'
 import { useWorkspace, type AgentCommand } from '@/components/workspace/workspace-provider'
 import { cn } from '@/lib/utils'
 import { repoPath } from '@/components/shell/repo-nav'
@@ -45,7 +44,6 @@ export function ReviewPage({ mode, codebaseId }: { mode: ReviewPageMode; codebas
   const { toast } = useToast()
   const [selectedPath, setSelectedPath] = React.useState<string | null>(null)
   const [selectedLine, setSelectedLine] = React.useState<number | null>(null)
-  const [followUpBusy, setFollowUpBusy] = React.useState(false)
 
   const appliedCodebaseRef = React.useRef(false)
   React.useEffect(() => {
@@ -99,12 +97,6 @@ export function ReviewPage({ mode, codebaseId }: { mode: ReviewPageMode; codebas
       : !canReview
         ? 'You need review access to record decisions.'
         : null
-  const followUpDisabledReason = !status.codebaseId
-    ? 'No codebase selected.'
-    : !canWrite
-      ? 'You need write access to file issues.'
-      : null
-
   const anchor: ThreadAnchor | null = selectedFile
     ? {
         filePath: selectedFile.path,
@@ -130,44 +122,6 @@ export function ReviewPage({ mode, codebaseId }: { mode: ReviewPageMode; codebas
     },
     [runCommand, toast],
   )
-
-  async function fileFollowUp() {
-    if (!status.codebaseId || !selectedFile) return
-    setFollowUpBusy(true)
-    const lineSuffix = lineForFile !== null ? `:${lineForFile}` : ''
-    try {
-      const result = await createCollaborationItem({
-        type: 'issue',
-        codebaseId: status.codebaseId,
-        title: `Review follow-up: ${selectedFile.path}${lineSuffix}`,
-        body: [
-          `Path: ${selectedFile.path}${lineSuffix}`,
-          `Change set: ${status.activeChangeSetId}`,
-          `Base: ${status.mainRevision}`,
-          `Head: ${status.cloudRevision}`,
-        ].join('\n'),
-        labels: ['review', 'code-browser'],
-        linkedChangeSetId: activeChangeSetId ?? undefined,
-        createdBy: actorId,
-      })
-      if (result.ok) {
-        toast({
-          title: 'Follow-up issue filed',
-          description: status.codebaseId
-            ? `Track it under Issues in this repository.`
-            : 'Track it under Issues.',
-        })
-      } else {
-        toast({
-          title: 'Follow-up issue failed',
-          description: result.error?.message ?? 'The issue could not be created.',
-          variant: 'destructive',
-        })
-      }
-    } finally {
-      setFollowUpBusy(false)
-    }
-  }
 
   const copy = MODE_COPY[mode]
   const activeId = codebaseId ?? status.codebaseId
@@ -220,9 +174,6 @@ export function ReviewPage({ mode, codebaseId }: { mode: ReviewPageMode; codebas
                 file={selectedFile}
                 selectedLine={lineForFile}
                 onSelectLine={setSelectedLine}
-                onFileFollowUp={() => void fileFollowUp()}
-                followUpBusy={followUpBusy}
-                followUpDisabledReason={followUpDisabledReason}
               />
               <ThreadPanel
                 anchor={anchor}

@@ -7,20 +7,6 @@ export type CollaborationActionCapability = {
   reason?: string
 }
 
-export type CollaborationCapabilities = {
-  backend: CollaborationBackend
-  read: CollaborationActionCapability
-  createIssue: CollaborationActionCapability
-  updateIssue: CollaborationActionCapability
-  createDiscussion: CollaborationActionCapability
-  updateDiscussion: CollaborationActionCapability
-  createRelease: CollaborationActionCapability
-  createReleaseAsset: CollaborationActionCapability
-  publishRelease: CollaborationActionCapability
-  createProject: CollaborationActionCapability
-  updateProject: CollaborationActionCapability
-}
-
 export type InvitationCapabilities = {
   backend: CollaborationBackend
   list: CollaborationActionCapability
@@ -40,122 +26,6 @@ export type MemberCapabilities = {
 export type CollaborationError = {
   code: string
   message: string
-}
-
-export type CollaborationComment = {
-  id: string
-  body: string
-  createdBy: string
-  updatedBy: string | null
-  createdAt: string
-  updatedAt: string
-}
-
-export type CollaborationIssue = {
-  id: string
-  number: number
-  title: string
-  body: string | null
-  status: 'open' | 'closed'
-  priority: 'low' | 'medium' | 'high' | null
-  labels: string[]
-  assigneeIds: string[]
-  linkedChangeSetId: string | null
-  linkedReleaseId: string | null
-  createdBy: string
-  updatedBy: string | null
-  createdAt: string
-  updatedAt: string
-  closedAt: string | null
-  comments: CollaborationComment[]
-}
-
-export type CollaborationDiscussion = {
-  id: string
-  number: number
-  title: string
-  body: string
-  category: 'general' | 'ideas' | 'q-and-a' | 'announcements'
-  status: 'open' | 'answered' | 'locked' | 'closed'
-  labels: string[]
-  linkedIssueIds: string[]
-  linkedChangeSetId: string | null
-  createdBy: string
-  updatedBy: string | null
-  createdAt: string
-  updatedAt: string
-  closedAt: string | null
-  comments: CollaborationComment[]
-}
-
-export type CollaborationRelease = {
-  id: string
-  number: number
-  version: string
-  title: string
-  notes: string
-  status: 'draft' | 'published' | 'archived'
-  target: {
-    type: 'main' | 'snapshot' | 'change-set' | 'git'
-    id: string
-    revision: number | null
-  }
-  createdBy: string
-  updatedBy: string | null
-  createdAt: string
-  updatedAt: string
-  publishedAt: string | null
-  assets: CollaborationReleaseAsset[]
-}
-
-export type CollaborationReleaseAsset = {
-  id: string
-  releaseId: string
-  name: string
-  kind: 'archive' | 'binary' | 'source' | 'checksum' | 'installer' | 'other'
-  url: string | null
-  size: number | null
-  checksum: string | null
-  createdBy: string
-  createdAt: string
-}
-
-export type CollaborationProjectColumn = {
-  id: string
-  name: string
-}
-
-export type CollaborationProjectItem = {
-  id: string
-  projectId: string
-  item: {
-    type?: 'issue' | 'discussion' | 'release' | 'note'
-    id?: string
-    title?: string
-    body?: string | null
-    version?: string
-  }
-  columnId: string
-  position: number
-  createdBy: string
-  updatedBy: string | null
-  createdAt: string
-  updatedAt: string
-}
-
-export type CollaborationProject = {
-  id: string
-  number: number
-  name: string
-  description: string | null
-  status: 'active' | 'archived'
-  columns: CollaborationProjectColumn[]
-  items: CollaborationProjectItem[]
-  createdBy: string
-  updatedBy: string | null
-  createdAt: string
-  updatedAt: string
-  archivedAt: string | null
 }
 
 export type PendingInvitation = {
@@ -182,17 +52,6 @@ export type CodebaseMember = {
   isOwner: boolean
   joinedAt: string | null
   avatarUrl: string | null
-}
-
-export type WorkItemsResponse = {
-  ok: boolean
-  codebaseId: string | null
-  capabilities: CollaborationCapabilities
-  issues: CollaborationIssue[]
-  discussions: CollaborationDiscussion[]
-  releases: CollaborationRelease[]
-  projects: CollaborationProject[]
-  error?: CollaborationError
 }
 
 export type InvitationsResponse = {
@@ -354,133 +213,6 @@ export type NotificationsResponse = {
   error?: CollaborationError
 }
 
-export type CreateIssueInput = {
-  type: 'issue'
-  codebaseId: string
-  title: string
-  body?: string
-  priority?: CollaborationIssue['priority']
-  labels?: string[]
-  linkedChangeSetId?: string
-  linkedReleaseId?: string
-  createdBy: string
-}
-
-export type CreateDiscussionInput = {
-  type: 'discussion'
-  codebaseId: string
-  title: string
-  body: string
-  category?: CollaborationDiscussion['category']
-  labels?: string[]
-  linkedChangeSetId?: string
-  createdBy: string
-}
-
-export type CreateReleaseInput = {
-  type: 'release'
-  codebaseId: string
-  version: string
-  title: string
-  notes: string
-  status?: CollaborationRelease['status']
-  target?: CollaborationRelease['target']
-  createdBy: string
-}
-
-export type CreateReleaseAssetInput = {
-  type: 'releaseAsset'
-  codebaseId: string
-  releaseId: string
-  name: string
-  kind?: CollaborationReleaseAsset['kind']
-  url?: string
-  size?: number
-  checksum?: string
-  createdBy: string
-}
-
-export type CreateProjectInput = {
-  type: 'project'
-  codebaseId: string
-  name: string
-  description?: string
-  columns?: CollaborationProjectColumn[]
-  createdBy: string
-}
-
-export type CreateProjectItemInput = {
-  type: 'projectItem'
-  codebaseId: string
-  projectId: string
-  item: CollaborationProjectItem['item']
-  columnId?: string
-  position?: number
-  createdBy: string
-}
-
-export type CreateIssueCommentInput = {
-  type: 'issueComment'
-  codebaseId: string
-  issueId: string
-  body: string
-  createdBy: string
-}
-
-export type CreateDiscussionCommentInput = {
-  type: 'discussionComment'
-  codebaseId: string
-  discussionId: string
-  body: string
-  createdBy: string
-}
-
-export type CreateCollaborationInput =
-  | CreateIssueInput
-  | CreateDiscussionInput
-  | CreateReleaseInput
-  | CreateReleaseAssetInput
-  | CreateProjectInput
-  | CreateProjectItemInput
-  | CreateIssueCommentInput
-  | CreateDiscussionCommentInput
-
-export type UpdateCollaborationInput =
-  | {
-      action: 'setIssueStatus'
-      codebaseId: string
-      issueId: string
-      status: CollaborationIssue['status']
-      updatedBy: string
-    }
-  | {
-      action: 'setDiscussionStatus'
-      codebaseId: string
-      discussionId: string
-      status: CollaborationDiscussion['status']
-      updatedBy: string
-    }
-  | {
-      action: 'publishRelease'
-      codebaseId: string
-      releaseId: string
-      updatedBy: string
-    }
-  | {
-      action: 'archiveProject'
-      codebaseId: string
-      projectId: string
-      updatedBy: string
-    }
-  | {
-      action: 'moveProjectItem'
-      codebaseId: string
-      projectItemId: string
-      columnId?: string
-      position?: number
-      updatedBy: string
-    }
-
 export type CreateInvitationInput = {
   codebaseId: string
   email: string
@@ -549,32 +281,6 @@ export type CreateReviewDecisionInput = {
 export type MarkNotificationReadInput = {
   codebaseId: string
   notificationId: string
-}
-
-export async function fetchWorkItems(codebaseId: string): Promise<WorkItemsResponse> {
-  return readJson<WorkItemsResponse>(`/api/collaboration/work-items?codebaseId=${encodeURIComponent(codebaseId)}`, {
-    cache: 'no-store',
-  }, workItemsFallback(codebaseId))
-}
-
-export async function createCollaborationItem(input: CreateCollaborationInput): Promise<WorkItemsResponse> {
-  return readJson<WorkItemsResponse>('/api/collaboration/work-items', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(input),
-  }, workItemsFallback(input.codebaseId))
-}
-
-export async function updateCollaborationItem(input: UpdateCollaborationInput): Promise<WorkItemsResponse> {
-  return readJson<WorkItemsResponse>('/api/collaboration/work-items', {
-    method: 'PATCH',
-    headers: {
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(input),
-  }, workItemsFallback(input.codebaseId))
 }
 
 export async function fetchInvitations(codebaseId: string): Promise<InvitationsResponse> {
@@ -781,38 +487,6 @@ async function readJson<T>(
     const payload = apiPayloadFromError<T>(error)
     if (payload) return payload
     return fallback(responseFromError(error))
-  }
-}
-
-function workItemsFallback(codebaseId: string): (response: Pick<Response, 'status' | 'statusText'>) => WorkItemsResponse {
-  return (response) => {
-    const reason = responseMessage(response)
-
-    return {
-      ok: false,
-      codebaseId,
-      capabilities: {
-        backend: 'unavailable',
-        read: disabled(reason),
-        createIssue: disabled(reason),
-        updateIssue: disabled(reason),
-        createDiscussion: disabled(reason),
-        updateDiscussion: disabled(reason),
-        createRelease: disabled(reason),
-        createReleaseAsset: disabled(reason),
-        publishRelease: disabled(reason),
-        createProject: disabled(reason),
-        updateProject: disabled(reason),
-      },
-      issues: [],
-      discussions: [],
-      releases: [],
-      projects: [],
-      error: {
-        code: `http_${response.status}`,
-        message: reason,
-      },
-    }
   }
 }
 

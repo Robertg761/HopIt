@@ -132,7 +132,7 @@ invitations, sessions, keys, audit, and access control.
    - `sessions.js`: agent session register/validate/revoke, token hashing
    - `members.js`: members, invitations, suspensions
    - `keys.js`: device keys, keyrings, wrapped keys, key audit events
-   - `collaboration.js`: work items, comments, boards, releases, review threads/decisions
+   - `collaboration.js`: review threads/decisions and notifications
    - `index.js`: re-exports the existing public surface unchanged
 2. No signature changes, no renamed exports. Callers keep importing the package root.
 3. Add JSDoc `@typedef` imports from `@hopit/core` on the module boundaries (params/returns of exported functions): types only, no behavior.
@@ -205,7 +205,7 @@ normalization monolith; one fire-and-forget refresh can leave a stale codebase l
 **Steps:**
 
 1. **Error boundaries:** add `src/app/global-error.tsx` and `src/app/(app)/error.tsx` using the existing UI primitives (`Card`, `Button`, `EmptyState`) with a reset button and the humanized error message. Keep styling consistent with the shell.
-2. **Shared API client:** create `src/lib/client/api.ts`: a thin `apiFetch<T>(path, init)` that applies JSON headers, parses the standard error envelope, and routes errors through the existing `humanizeApiError`. Migrate the per-feature wrappers (`codebases-api.ts`, `files-api.ts`, work-items/review/members fetch sites) to it. Move-only for behavior; delete the duplicated parsing.
+2. **Shared API client:** create `src/lib/client/api.ts`: a thin `apiFetch<T>(path, init)` that applies JSON headers, parses the standard error envelope, and routes errors through the existing `humanizeApiError`. Migrate the per-feature wrappers (`codebases-api.ts`, `files-api.ts`, review/members fetch sites) to it. Move-only for behavior; delete the duplicated parsing.
 3. **Fix the refresh race:** in `src/components/workspace/workspace-provider.tsx` (~line 199), `await refresh(); void refreshCodebases()`: await both (or `Promise.all`) so command completion can't show a stale codebase list.
 4. **Split `agent-status.ts`:** into `src/lib/client/agent-status/`: `normalize.ts` (main mapping), `formatters.ts` (time/duration/case), `mappers.ts` (members/files/events), `defaults.ts` (offline/fallback snapshots), `index.ts` re-exporting the current surface. Move-only.
 5. **Unit tests for normalization:** add `vitest` (devDependency, `test:web` script; do not touch `npm test`, which is the agent suite). Cover: `mapAgentStatusResponse` against a captured local-agent payload and a captured hosted-D1 payload (build fixtures from the shapes in `packages/agent/fixtures/demo-cloud.json` and the status route), missing-field fallbacks, and `humanizeApiError` cases.
@@ -223,7 +223,8 @@ normalization monolith; one fire-and-forget refresh can leave a stale codebase l
 never losing work: are the unfinished parts: demand hydration, push-based remote-update
 delivery (today: activity-gated polling with a 5-minute cooldown), and object-backed
 diff/history reconstruction. Collaboration surfaces (issues/discussions/releases/boards)
-are FROZEN until these land: no new features there, bug fixes only.
+were FROZEN under this plan and have since been removed from scope entirely in the
+July 2026 scope simplification.
 
 Each sub-workstream is **design doc first, then implementation after the owner approves
 the doc.** Design docs go in `docs/`, follow the style of `docs/agent-architecture.md`,

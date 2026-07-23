@@ -1,6 +1,6 @@
 # HopIt Progress Tracker
 
-Last updated: 2026-07-14
+Last updated: 2026-07-23
 
 This tracker is the working view of what is done, what is in progress, what is next, and what is still deliberately out of scope. The roadmap source remains [MVP Plan](mvp-plan.md), and the agent contract source remains [Local Agent Architecture](agent-architecture.md). This file turns those plans into a practical implementation ledger.
 
@@ -18,7 +18,7 @@ This tracker is the working view of what is done, what is in progress, what is n
 
 HopIt has a working local managed-folder agent spike plus a deployed personal production baseline. The agent can seed a cloud graph, hydrate a normal folder, capture local writes, journal them durably, upload regular file bodies to S3-compatible object storage, acknowledge object metadata into the selected active change set, recover unacknowledged writes after restart, safely refresh a second same-owner workspace, export/publish a clean Git escape hatch, and expose local status/event/journal/cloud state.
 
-The solid v1 target is now broader than the current spike: a HopIt Workspace Root, managed-folder/lazy materialization first, production-grade automatic remote-update delivery, object-backed content-addressed storage with per-file revision guards, scoped device/session auth, and GitHub-like code/review/work-item/release surfaces. True native filesystem-provider work remains future research; v1 should prove the managed-folder Workspace Root before going there.
+The solid v1 target is now broader than the current spike: a HopIt Workspace Root, managed-folder/lazy materialization first, production-grade automatic remote-update delivery, object-backed content-addressed storage with per-file revision guards, scoped device/session auth, and GitHub-like code/review surfaces. True native filesystem-provider work remains future research; v1 should prove the managed-folder Workspace Root before going there.
 
 The web app polls `/api/agent/status`. In local mode that route requires the local agent `/status` response and treats `/events` and `/cloud` as best-effort payloads so a slow graph read does not take the dashboard offline; in production it reads the configured D1 cloud dashboard backend. Local dashboard server routes merge `~/.config/hopit/production.env` under the Next.js process env, merge `hop workspace discover` readiness into `/api/codebases`, and the command route can run whitelisted sync, refresh, recover, review, merge, first-run Workspace Root setup, and Workspace Root attach actions with `--profile production` when installed-agent paths are configured. Hosted deployments remain read-only for workspace commands and require dashboard authentication.
 
@@ -65,7 +65,7 @@ work.
 
 The installed macOS service is owned by LaunchAgent `com.hopit.agent.hopit`; it is verified with `launchctl print` plus `curl http://127.0.0.1:4785/status`. `hop service status` now also trusts a healthy loopback `/status` probe that positively matches the expected codebase id, so a launchd-owned `service run` process without a pid file reports `running: true` with `source: "health-probe"`.
 
-Current production state as of 2026-07-10: HopIt uses Cloudflare D1 as the only hosted graph backend. Vercel aliases and Clerk sign-in routing are live. The D1 database `hopit` is created, schema-applied, seeded from the historical export, reachable through `hopit-d1-api.hopit-robert.workers.dev`, configured in Vercel/local env for graph/status/file/codebase/account/action-job/member/invite/work-item/session/key paths, and serving the deployed `hopit.dev` app. The push hub is deployed and the installed personal-production service reports push enabled. The long-standing "workspace drift" that skipped every push apply was diagnosed on 2026-07-10 as a stale content manifest rather than real drift; refresh and the remote-push decision now self-heal that case, the live manifest was healed (24 phantom paths exonerated, clean scan at revision 4436), and the service was restarted clean. A live `push-applied` proof landed on 2026-07-11: a second isolated device workspace synced revision 4436 → 4437 and the production service applied it over the hub (trigger `remote-push`, ~8s after the remote sync). Push-enabled watch/service mode supplements socket hints with a lightweight periodic graph-head reconciliation at the configured five-minute cadence.
+Current production state as of 2026-07-10: HopIt uses Cloudflare D1 as the only hosted graph backend. Vercel aliases and Clerk sign-in routing are live. The D1 database `hopit` is created, schema-applied, seeded from the historical export, reachable through `hopit-d1-api.hopit-robert.workers.dev`, configured in Vercel/local env for graph/status/file/codebase/account/action-job/member/invite/session/key paths, and serving the deployed `hopit.dev` app. The push hub is deployed and the installed personal-production service reports push enabled. The long-standing "workspace drift" that skipped every push apply was diagnosed on 2026-07-10 as a stale content manifest rather than real drift; refresh and the remote-push decision now self-heal that case, the live manifest was healed (24 phantom paths exonerated, clean scan at revision 4436), and the service was restarted clean. A live `push-applied` proof landed on 2026-07-11: a second isolated device workspace synced revision 4436 → 4437 and the production service applied it over the hub (trigger `remote-push`, ~8s after the remote sync). Push-enabled watch/service mode supplements socket hints with a lightweight periodic graph-head reconciliation at the configured five-minute cadence.
 
 History: the retired hosted graph export was saved to `/Users/robert/HopIt-Backups/convex/hopit-convex-prod-2026-06-30-disabled-snapshot.zip` with SHA-256 `0e83df9ab7e80a81a9a3b06e1cd3399ff5b532fa968bded3c14334640b4c9f3d`. The migration script is retained for export rehearsals; the backend code path was removed by WS1 in [Remediation Plan July 2026](remediation-plan-2026-07.md).
 
@@ -598,7 +598,7 @@ Still open:
 | Local managed-folder agent | Done for spike | The agent proves hydration, journaling, sync acknowledgement, recovery, watch startup gating, safe refresh, status, and same-owner continuity. |
 | Lazy materialization | In progress | `workspace attach`, `workspace open`, `workspace files`, `workspace hydrate-file`, `workspace hydrate-file --with-siblings`, `workspace hydrate-path --recursive`, safe full hydrate through `refresh`, `workspace pin|unpin`, dry-run-by-default `workspace prune`, opt-in scheduled pruning, dashboard file cache controls, and `workspace dehydrate --force` prove metadata-first attach, open-time first-working-set hydration, metadata listing, path-level hydration, explicit full materialization, clean local-body eviction, and metadata-only/partial/materialized state. V1 still needs native provider-backed read-triggered hydration and pruning-policy dogfood. |
 | Vercel/D1 production baseline | Active dogfood | Vercel hosts the protected dashboard and Clerk sign-in routing is live. The D1 database/env/seeding sequence is complete, `hopit-d1-api` proxies D1 for Vercel, hosted D1 reads can skip schema re-checks with `HOPIT_D1_ASSUME_SCHEMA=1`, hosted status reads are cached/coalesced and the hosted client polls less often to protect the free D1 budget, `hopit.dev` live API smoke checks pass, and the packaged LaunchAgent reports D1 cloud status with push enabled. Push/pull service mode uses a lightweight five-minute periodic graph-head reconciliation; the long-standing push block was diagnosed on 2026-07-10 as a stale content manifest rather than real drift and healed, and a live `push-applied` proof landed on 2026-07-11 (second device synced revision 4436 → 4437, applied over the hub ~8s later). |
-| D1 cloud graph | In progress | D1 now has schema, HTTP API backend, agent service integration, hosted status/codebase/file/account/action-job/member/invite/work-item/key-grant routes, automatic verified-owner bootstrap for `local-owner` migrations, account-visible codebase heads with actor access summaries, scoped-token configured-codebase fallback, actions-runner support, scoped D1 proxy session auth, scoped agent sessions, device key/user keyring/wrapped key metadata, project-board operations and UI, durable issue/discussion comments, historical export migration script, and D1 graph/collaboration/session/key round-trip tests. History reconstruction, retention policy, richer release assets, and full product write-path coverage remain to port or complete. |
+| D1 cloud graph | In progress | D1 now has schema, HTTP API backend, agent service integration, hosted status/codebase/file/account/action-job/member/invite/key-grant routes, automatic verified-owner bootstrap for `local-owner` migrations, account-visible codebase heads with actor access summaries, scoped-token configured-codebase fallback, actions-runner support, scoped D1 proxy session auth, scoped agent sessions, device key/user keyring/wrapped key metadata, historical export migration script, and D1 graph/collaboration/session/key round-trip tests. History reconstruction, retention policy, and full product write-path coverage remain to port or complete. |
 | Historical hosted graph export | Done | The retired export backup is retained under `/Users/robert/HopIt-Backups/convex/` as a migration/recovery source; the backend implementation was removed by WS1. |
 | Object blob storage | Mostly done | The agent has an S3-compatible blob provider boundary, Cloudflare R2 env contract, Backblaze B2-compatible migration path, filesystem-backed tests, metadata-only D1 commits, hash-verified hydrate/refresh/export, client-encrypted secret-object metadata, and dry-run-by-default storage GC. The live `hopit-blobs` R2 bucket exists, scoped local R2 credentials are configured for that bucket only, and read/write/hydrate/delete smoke coverage exists. Personal use keeps R2 free-only with an 8 GB cap and public access disabled; the 1-day auto-delete lifecycle rule was removed on 2026-07-08 so stored blobs persist durably (verified: no object-backed rows existed while the rule was active). Production retention policy and storage tier decisions remain. |
 | `.private/` model | Done for spike | `.private/` files are synced/versioned and classified as owner-private; they are not ignored or skipped. Routed `.private/env/` secrets remain local-only by default, and sync only when object storage plus the legacy local key or `hop keys` user-vault bridge are configured so raw secret bytes never go to D1/R2. |
@@ -618,7 +618,7 @@ Still open:
 | Git compatibility | In progress | Safe export/publish now creates clean Git repos while omitting `.private/` from publish, but ancestry preservation and remote publishing are still not started. |
 | Real accounts/auth | In progress | The repo now has Clerk sign-in routes, middleware, `/api/me`, provider-token forwarding, owner email config, and D1-backed account sync. The production Clerk instance, DNS, SSL, Vercel live env, `HOPIT_AUTH_PROVIDER=clerk`, production Google OAuth, owner sign-in, and D1 owner claim are active for `hopit.dev`; Basic Auth fallback is no longer needed for production owner access. |
 | Permissions and invitations | In progress | Durable memberships, invitation tables, requester-aware dashboard filtering, owner claim, member management, invite create/accept/revoke UI, and scoped agent-session token groundwork are in place; complete permission coverage remains. |
-| Code browsing/reviews/issues/releases | In progress | The dashboard now has a read-only code-review browser slice, review-linked follow-up issue comments, D1-backed issue/discussion/release/project-board UI, durable issue/discussion comments, project card movement, and object-backed compare/history wired through to real UI. As of 2026-07-12 the compare page renders live trail-step directory compares and unified per-file diffs from the WS7c engine (via `/api/codebases/compare`), and the desktop app's Trail expands the same real diffs: so diff UI is no longer pending. Snapshot-anchored inline review comments, richer routeable history, and immutable release publishing remain. |
+| Code browsing and reviews | In progress | The dashboard now has a read-only code-review browser slice and object-backed compare/history wired through to real UI. As of 2026-07-12 the compare page renders live trail-step directory compares and unified per-file diffs from the WS7c engine (via `/api/codebases/compare`), and the desktop app's Trail expands the same real diffs: so diff UI is no longer pending. Snapshot-anchored inline review comments and richer routeable history remain. The issues, discussions, project-board, and release surfaces were removed from scope in July 2026. |
 | Native mount/FUSE/RAM-only cache | Later | Explicitly not the first v1 implementation path. Revisit only after the managed-folder Workspace Root proves core value. |
 
 ## Milestone Tracker
@@ -1118,9 +1118,9 @@ Risks:
 
 ## Immediate Next Queue
 
-The next major phase is a solid v1 workspace, not collaboration alone. The v1 sequence is: HopIt Workspace Root and hydration-state contract, object-backed content-addressed storage with per-file revision guards, privacy/encryption key grants, production-grade automatic remote-update delivery, scoped device/session auth, and GitHub-like web surfaces. The collaboration track is documented in [GitHub-Lite Collaboration Plan](github-lite-collaboration-plan.md), the privacy/security track is documented in [HopIt Privacy And Encryption Plan](privacy-encryption-plan.md), and the sub-plans remain [Auth And Collaboration Plan](auth-collaboration-plan.md), [Code Browsing, Review, Comments, And History Plan](review-code-browser-plan.md), and [HopIt Work Items, Projects, Discussions, And Releases Plan](work-items-releases-plan.md).
+The next major phase is a solid v1 workspace, not collaboration alone. The v1 sequence is: HopIt Workspace Root and hydration-state contract, object-backed content-addressed storage with per-file revision guards, privacy/encryption key grants, production-grade automatic remote-update delivery, scoped device/session auth, and GitHub-like web surfaces. The collaboration track is documented in [GitHub-Lite Collaboration Plan](github-lite-collaboration-plan.md), the privacy/security track is documented in [HopIt Privacy And Encryption Plan](privacy-encryption-plan.md), and the sub-plans remain [Auth And Collaboration Plan](auth-collaboration-plan.md) and [Code Browsing, Review, Comments, And History Plan](review-code-browser-plan.md).
 
-Domain-dependent infrastructure is now configured and active: `hopit.dev` routes to Vercel, Clerk production DNS/SSL are verified, Vercel has the redacted `pk_live_`/`sk_live_` values, Vercel Production uses `HOPIT_AUTH_PROVIDER=clerk`, production Google OAuth is configured for the owner test user while the Google app stays in Testing mode, the seeded owner has been claimed by the real Clerk user in D1, and Basic Auth fallback env vars have been removed from Vercel Production. Continue building Workspace Root, storage, remote-update, permission checks, collaboration data, code browsing, review/history, issues, projects, discussions, releases, and scoped agent-session hardening behind Clerk auth.
+Domain-dependent infrastructure is now configured and active: `hopit.dev` routes to Vercel, Clerk production DNS/SSL are verified, Vercel has the redacted `pk_live_`/`sk_live_` values, Vercel Production uses `HOPIT_AUTH_PROVIDER=clerk`, production Google OAuth is configured for the owner test user while the Google app stays in Testing mode, the seeded owner has been claimed by the real Clerk user in D1, and Basic Auth fallback env vars have been removed from Vercel Production. Continue building Workspace Root, storage, remote-update, permission checks, collaboration data, code browsing, review/history, and scoped agent-session hardening behind Clerk auth.
 
 ### 0. HopIt Workspace Root And Lazy Materialization
 
@@ -1366,40 +1366,13 @@ Current foundation:
 - The UI now surfaces current review, merge, conflict, file, and event state together.
 - A real diff API now exists and is wired to UI: `/api/codebases/compare` and `hop compare` reconstruct object-backed directory and per-file line diffs, the dashboard compare page and the desktop Trail render them (2026-07-12). Durable review/comment/merge-history records are still pending.
 
-### 5. Issues, Projects, And Discussions
+### 5. Issues, Projects, Discussions, And Releases
 
-Status: `In progress`
+Status: `Removed from scope`
 
-Definition of done:
+The issue, project-board, discussion, and product-release surfaces were removed in the July 2026 scope simplification: their D1 tables, backend functions, API routes, and dashboard UI no longer exist. A redesigned version of these surfaces is deferred to roadmap Phase 4+.
 
-- Add durable issue, project, project-item, discussion, and comment records.
-- Add list/detail UI with state, assignee, label, and linked-code filters.
-- Enforce permission checks for create/edit/close/archive actions.
-
-Current foundation:
-
-- D1 schema now includes issue, project, project item, discussion, comment, and collaboration counter tables.
-- Permission-gated list/create/status/comment/project-item functions exist.
-- The dashboard can list/create/update issues and discussions, and draft/publish releases. Project-board UI is still pending.
-
-### 6. Releases
-
-Status: `In progress`
-
-Definition of done:
-
-- Add release records tied to Main revisions.
-- Add list/detail/create/publish/archive UI.
-- Gate release publishing by maintainer/owner permission.
-- Leave room for future Git export artifacts and binary artifacts.
-
-Current foundation:
-
-- D1 schema now includes releases and release assets.
-- Permission-gated list/create/publish/asset functions exist and validate the target codebase before creating releases.
-- The dashboard can draft releases and publish drafts. The separate agent distribution channel now publishes versioned archives, checksums, and a schema-v2 manifest under immutable keys before uploading `latest/manifest.json` as the only mutable pointer.
-- The installer resolves one immutable version, requires direct SHA-256 verification of the named archive, smoke-tests the downloaded runtime, and atomically activates a versioned runtime under an installer lock. Public unsigned publication is blocked; private dogfood uses local package artifacts.
-- Linking dashboard release records to these distribution artifacts, signed/notarized bundles, and native installers remains pending.
+The separate agent distribution channel is unaffected by this removal. It publishes versioned archives, checksums, and a schema-v2 manifest under immutable keys before uploading `latest/manifest.json` as the only mutable pointer. The installer resolves one immutable version, requires direct SHA-256 verification of the named archive, smoke-tests the downloaded runtime, and atomically activates a versioned runtime under an installer lock. Public unsigned publication is blocked; private dogfood uses local package artifacts. Signed/notarized bundles and native installers remain pending.
 
 ### Later: Deeper Git Replacement Work
 
@@ -1691,6 +1664,19 @@ or charge.
 - Verification: full `npm run verify` passed (agent 315, web 156, Worker 87,
   config 2, TypeScript, lint, optimized Next build) and desktop 124/124 passed.
 
+### 2026-07-23 scope simplification: work items, discussions, project boards, and releases removed
+
+- Removed the work-item (issue), discussion, project-board, and product-release
+  surfaces from the product: their backend methods and D1 tables are deleted,
+  the Worker allowlist is trimmed to match, and the hosted API route and
+  dashboard UI for those objects no longer exist.
+- Review threads, review decisions, and notifications are kept. The review page
+  no longer offers a "File follow-up issue" action.
+- The `release` session capability string is kept for released-agent
+  compatibility, and the separate `hop` CLI packaging/release-channel
+  distribution path is unaffected.
+- A redesigned version of these surfaces is deferred to roadmap Phase 4+.
+
 ## Known Gaps
 
 - Phase 3 billing plumbing is live behind `HOPIT_BILLING`: Stripe Managed
@@ -1724,8 +1710,8 @@ or charge.
 - Per-file revision-guarded mutation now covers D1 agent journal commits and browser text edits. Browser edits require a writable active change set, preserve Main, retain concurrent different-path changes, and reject stale/object-backed cases; the remaining non-agent product write surface has not moved to the same model yet.
 - Graph contract validators exist for the agent/D1 graph path, but product-level validation is not yet comprehensive across every future object type.
 - Requester-aware dashboard filtering exists, but the auth-backed collaborator permission model is not enforced across every user-facing write yet.
-- A first read-only code-review browser slice exists, now with routeable codebase review/compare/history pages, durable review-linked follow-up issues/comments, D1-backed snapshot-anchored inline review threads, durable review decisions, and object-backed revision compare support. The compare API is now wired to real UI (2026-07-12): the dashboard compare page renders live trail-step directory compares and unified per-file diffs, and the desktop Trail expands the same diffs. Richer tree/diff interactions and snapshot-anchored inline comments on those diffs are still pending.
-- Issue, discussion, release, durable comments, release-asset attachment, project-board UI, routeable work-item detail pages, and first codebase notification feed exist for the first slice; richer linked-object cards and complete permission coverage are still pending.
+- A first read-only code-review browser slice exists, now with routeable codebase review/compare/history pages, D1-backed snapshot-anchored inline review threads, durable review decisions, and object-backed revision compare support. The compare API is now wired to real UI (2026-07-12): the dashboard compare page renders live trail-step directory compares and unified per-file diffs, and the desktop Trail expands the same diffs. Richer tree/diff interactions and snapshot-anchored inline comments on those diffs are still pending.
+- A first codebase notification feed exists; complete permission coverage is still pending. The issue, discussion, release, and project-board surfaces from the first collaboration slice were removed in the July 2026 scope simplification.
 - Cloudflare push/subscription remote-update delivery is deployed and enabled in personal production. The long-standing push skip was diagnosed on 2026-07-10 as a stale content manifest rather than real drift and healed, so the workspace is scan-clean, and a clean-workspace live apply was proven on 2026-07-11 (a second isolated device synced revision 4436 → 4437 and the production service applied it over the hub via trigger `remote-push`, ~8s later). Explicit refresh, per-workspace cursor state, reconnect fallback, and periodic graph-head reconciliation remain the safety layers.
 - Service mode syncs local edits and serves status. Local two-service simulation proves device A edits sync through the watcher, while device B pulls them through explicit safe refresh before switching devices.
 - No conflict resolution UI yet; fixture conflict detection/status exists.

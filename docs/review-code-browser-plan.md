@@ -36,7 +36,7 @@ Already available in this repo:
 - D1-backed snapshot-anchored inline review threads now store codebase id, change-set id, file path, line number, base/head revision labels, line fingerprint, comments, and resolution state.
 - D1 can persist the current graph, files, and agent events; legacy Convex remains a fallback/export source.
 
-Current live setup note: this browser/review work runs inside the Clerk-protected Vercel deployment at `https://hopit.dev` against Cloudflare D1 through the `hopit-d1-api` Worker. Production Google OAuth is configured for the owner test user, and D1 owner claim is verified. The dashboard can create review follow-up issues, show/add durable comments on review-linked issues, and store snapshot-anchored inline review threads. Routeable tree APIs, true durable diffs, object-backed history reconstruction, and durable review decision records are still future work. Operational setup details are centralized in [Personal Production Runbook](personal-production.md).
+Current live setup note: this browser/review work runs inside the Clerk-protected Vercel deployment at `https://hopit.dev` against Cloudflare D1 through the `hopit-d1-api` Worker. Production Google OAuth is configured for the owner test user, and D1 owner claim is verified. The dashboard can store snapshot-anchored inline review threads. Routeable tree APIs, true durable diffs, object-backed history reconstruction, and durable review decision records are still future work. Operational setup details are centralized in [Personal Production Runbook](personal-production.md).
 
 Not yet available:
 

@@ -247,7 +247,7 @@ test('D1 allocates distinct tenant-safe ids for the same common codebase name', 
   )
 })
 
-test('D1 backend supports members, invitations, and collaboration work items', async (t) => {
+test('D1 backend supports members, invitations, and review collaboration', async (t) => {
   const server = await startD1ApiServer(t)
   const previousOwnerEmail = process.env.HOPIT_OWNER_EMAIL
   process.env.HOPIT_OWNER_EMAIL = 'owner@example.com'
@@ -328,118 +328,6 @@ test('D1 backend supports members, invitations, and collaboration work items', a
   }
   await backend.claimCodebaseOwner({ codebaseId: 'collab-core', actor: owner })
 
-  const issue = await backend.createWorkItem({
-    type: 'issue',
-    codebaseId: 'collab-core',
-    title: 'Track D1 collaboration',
-    priority: 'high',
-    labels: ['d1', 'migration', 'd1'],
-    actor: owner,
-  })
-  const discussion = await backend.createWorkItem({
-    type: 'discussion',
-    codebaseId: 'collab-core',
-    title: 'Migration notes',
-    body: 'D1 is the primary backend.',
-    category: 'announcements',
-    actor: owner,
-  })
-  const release = await backend.createWorkItem({
-    type: 'release',
-    codebaseId: 'collab-core',
-    version: 'v1.0.0-d1',
-    title: 'D1 migration',
-    notes: 'First D1-backed collaboration release.',
-    actor: owner,
-  })
-  const releaseAsset = await backend.createWorkItem({
-    type: 'releaseAsset',
-    codebaseId: 'collab-core',
-    releaseId: release.id,
-    name: 'hopit-d1-migration.tar.gz',
-    kind: 'archive',
-    url: 'https://example.com/hopit-d1-migration.tar.gz',
-    checksum: 'sha256:test',
-    size: 1024,
-    actor: owner,
-  })
-  assert.equal(releaseAsset.releaseId, release.id)
-  assert.equal(releaseAsset.kind, 'archive')
-  const issueComment = await backend.createWorkItem({
-    type: 'issueComment',
-    codebaseId: 'collab-core',
-    issueId: issue.id,
-    body: 'This issue now has a durable comment.',
-    actor: owner,
-  })
-  assert.equal(issueComment.issueId, issue.id)
-  const discussionComment = await backend.createWorkItem({
-    type: 'discussionComment',
-    codebaseId: 'collab-core',
-    discussionId: discussion.id,
-    body: 'This discussion also has a durable comment.',
-    actor: owner,
-  })
-  assert.equal(discussionComment.discussionId, discussion.id)
-  const project = await backend.createWorkItem({
-    type: 'project',
-    codebaseId: 'collab-core',
-    name: 'D1 migration board',
-    description: 'Track the D1 migration follow-through.',
-    actor: owner,
-  })
-  assert.equal(project.status, 'active')
-  assert.deepEqual(project.columns.map((column) => column.id), ['todo', 'in-progress', 'done'])
-
-  const projectItem = await backend.createWorkItem({
-    type: 'projectItem',
-    codebaseId: 'collab-core',
-    projectId: project.id,
-    item: { type: 'issue', id: issue.id },
-    columnId: 'todo',
-    actor: owner,
-  })
-  assert.equal(projectItem.item.id, issue.id)
-  assert.equal(projectItem.columnId, 'todo')
-
-  const movedProjectItem = await backend.updateWorkItem({
-    action: 'moveProjectItem',
-    codebaseId: 'collab-core',
-    projectItemId: projectItem.id,
-    columnId: 'in-progress',
-    position: 10,
-    actor: owner,
-  })
-  assert.equal(movedProjectItem.columnId, 'in-progress')
-  assert.equal(movedProjectItem.position, 10)
-
-  await assert.rejects(
-    () => backend.createWorkItem({
-      type: 'projectItem',
-      codebaseId: 'collab-core',
-      projectId: project.id,
-      item: { type: 'discussion', id: 'dis_missing_other_codebase' },
-      actor: owner,
-    }),
-    /Discussion dis_missing_other_codebase was not found in collab-core/,
-  )
-
-  const items = await backend.listWorkItems({ codebaseId: 'collab-core', actor: owner })
-  assert.equal(items.issues.length, 1)
-  assert.equal(items.issues[0].number, 1)
-  assert.deepEqual(items.issues[0].labels, ['d1', 'migration'])
-  assert.equal(items.issues[0].comments.length, 1)
-  assert.equal(items.issues[0].comments[0].body, 'This issue now has a durable comment.')
-  assert.equal(items.discussions.length, 1)
-  assert.equal(items.discussions[0].comments.length, 1)
-  assert.equal(items.discussions[0].comments[0].body, 'This discussion also has a durable comment.')
-  assert.equal(items.releases.length, 1)
-  assert.equal(items.releases[0].assets.length, 1)
-  assert.equal(items.releases[0].assets[0].name, 'hopit-d1-migration.tar.gz')
-  assert.equal(items.projects.length, 1)
-  assert.equal(items.projects[0].items.length, 1)
-  assert.equal(items.projects[0].items[0].columnId, 'in-progress')
-
   const reviewThread = await backend.createReviewThread({
     codebaseId: 'collab-core',
     changeSetId: 'cs_collab_core_main',
@@ -490,7 +378,7 @@ test('D1 backend supports members, invitations, and collaboration work items', a
   assert.equal(reviewDecisions[0].summary, 'Ready to merge after the D1-backed review loop.')
 
   const notifications = await backend.listNotifications({ codebaseId: 'collab-core', actor: owner })
-  assert.ok(notifications.length >= 4)
+  assert.ok(notifications.length >= 1)
   assert.ok(notifications.some((notification) => notification.kind === 'review.approved'))
   const readNotification = await backend.markNotificationRead({
     codebaseId: 'collab-core',
@@ -514,17 +402,6 @@ test('D1 backend supports members, invitations, and collaboration work items', a
     actor: owner,
   })
   assert.equal(rotation.rotationState, 'planned')
-
-  const archivedProject = await backend.updateWorkItem({
-    action: 'archiveProject',
-    codebaseId: 'collab-core',
-    projectId: project.id,
-    actor: owner,
-  })
-  assert.equal(archivedProject.status, 'archived')
-  assert.equal(issue.title, 'Track D1 collaboration')
-  assert.equal(discussion.title, 'Migration notes')
-  assert.equal(release.version, 'v1.0.0-d1')
 
   const invitation = await backend.createInvitation({
     codebaseId: 'collab-core',

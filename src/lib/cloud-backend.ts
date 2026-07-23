@@ -219,21 +219,6 @@ export async function revokeCloudInvitation(input: { codebaseId: string; invitat
   throw new Error('No HopIt cloud backend is configured for invitations.')
 }
 
-export async function listCloudWorkItems(input: { codebaseId: string; actor: CloudActor }) {
-  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }, input.actor).listWorkItems(input)
-  throw new Error('No HopIt cloud backend is configured for collaboration.')
-}
-
-export async function createCloudWorkItem(input: Record<string, unknown> & { codebaseId: string; actor: CloudActor }) {
-  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }, input.actor).createWorkItem(input)
-  throw new Error('No HopIt cloud backend is configured for collaboration.')
-}
-
-export async function updateCloudWorkItem(input: Record<string, unknown> & { codebaseId: string; actor: CloudActor }) {
-  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }, input.actor).updateWorkItem(input)
-  throw new Error('No HopIt cloud backend is configured for collaboration.')
-}
-
 export async function upsertCloudUser(input: CloudActor & {
   avatarUrl?: string | null
   emailVerified?: boolean

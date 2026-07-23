@@ -81,7 +81,6 @@ export function activeNavId(pathname: string): string {
   if (
     pathname.startsWith('/files') ||
     pathname.startsWith('/review') ||
-    pathname.startsWith('/work-items') ||
     pathname.startsWith('/activity') ||
     pathname.startsWith('/members') ||
     pathname.startsWith('/settings') ||

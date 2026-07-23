@@ -183,7 +183,7 @@ the current v1 proof gate.
 
 - Web app: Next.js product shell on Vercel for codebases, files, live sync state, active change sets, connected devices, recent activity, collaborators, review/merge state, and snapshots.
 - API: Next.js routes for hosted/local status and whitelisted local commands. Hosted deployments read D1 status and refuse local workspace commands.
-- D1 backend: production graph service for codebase metadata, file metadata, object-blob references, agent events, dashboard reads, memberships, invitations, first work items/releases, scoped sessions, and trusted-device/key metadata. Legacy Convex backend remains as disabled fallback/migration code.
+- D1 backend: production graph service for codebase metadata, file metadata, object-blob references, agent events, dashboard reads, memberships, invitations, scoped sessions, and trusted-device/key metadata. Legacy Convex backend remains as disabled fallback/migration code.
 - Object storage: S3-compatible file-byte layer. Cloudflare R2 is the first personal-use provider with free-only budget guards enabled; Backblaze B2 can use the same adapter later by switching provider/env configuration when HopIt is ready for broader release.
 - Local agent: managed-folder process with service/session token support, workspace-root index, hydration cursor, local cache, safety journal, retry queue, service wrapper, and `.private/` visibility handling.
 - Installer/daemon: standalone package with embedded runtime, production env example, user-level launchd/systemd support scripts, manual service controls, supervised `service run`, backup/export runbook, token-rotation runbook, and stricter production config checks.
@@ -238,7 +238,7 @@ Current next work:
    wrapping, revocation, recovery, and path-metadata privacy.
 4. Promote the opt-in activity-gated remote-pull proof into production-grade automatic remote-update delivery so same-owner devices refresh safely without a manual command when the local journal is clean.
 5. Harden scoped device/session auth coverage, membership, invitation, and permission work behind Clerk auth now that owner handoff is proven and production uses Clerk/D1 without Basic Auth.
-6. Deepen the hosted code browser, diff/review/comment/history surface, issue/detail and discussion thread flows, releases, and project boards beyond the first dashboard slices.
+6. Deepen the hosted code browser and diff/review/comment/history surface beyond the first dashboard slices.
 
 ### Milestone 3: Recovery And Watch Loop
 
@@ -310,7 +310,6 @@ Current next work:
 - Add codebase memberships, roles, invitations, and server-side permission checks.
 - Build a hosted web code browser for Cloudflare D1-backed file graphs.
 - Add diff, review, inline comment, and merge-history records around active change sets and Main.
-- Add issues, projects, discussions, and releases as first-class codebase collaboration objects.
 - Keep local-agent service tokens separate from human user auth.
 - Keep `.private/` owner-only regardless of codebase role until a future explicit sharing model changes that.
 
@@ -333,7 +332,7 @@ The detailed implementation sequence lives in [GitHub-Lite Collaboration Plan](g
 - Convex/storage writes use file-level revisions and content-addressed blobs instead of replacing the whole graph as the concurrency boundary.
 - Device/session tokens are scoped, revocable, and separate from human dashboard auth.
 - A new device can run HopIt at login, expose loopback-only health endpoints, rotate a scoped token, and produce restorable agent-state backups, owner-private Git exports, and publishable exports without relying on the source checkout.
-- The web app supports routeable code browsing, diffs, review comments, history, issues, discussions, projects, releases, members, invitations, and permission-aware writes.
+- The web app supports routeable code browsing, diffs, review comments, history, members, invitations, and permission-aware writes.
 - Git import/export/publish remains available as interoperability without becoming the everyday workspace model.
 
 ## Deliberate Non-Goals For V1

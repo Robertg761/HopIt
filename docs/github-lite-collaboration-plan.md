@@ -34,19 +34,19 @@ The current setup details live in [Personal Production Runbook](personal-product
 
 The first collaboration slice is now started in the repo:
 
-- D1 now covers the graph/status/account/codebase/file/action-job slice plus members, invitations, issue/discussion/release/project-board/comment operations, scoped D1 proxy session auth, scoped agent sessions, trusted device keys, user keyrings, wrapped-key metadata, and redacted key-grant status. Convex retains legacy fallback implementations and the saved migration source.
+- D1 now covers the graph/status/account/codebase/file/action-job slice plus members, invitations, review-thread and review-decision operations, scoped D1 proxy session auth, scoped agent sessions, trusted device keys, user keyrings, wrapped-key metadata, and redacted key-grant status. Convex retains legacy fallback implementations and the saved migration source.
 - D1 exposes authenticated viewer/upsert entrypoints plus owner-claim, member list/manage, and invitation create/accept/revoke operations, with Convex retained as a legacy fallback.
 - The dashboard query can filter graph files by requester role and `.private/` ownership through D1 or legacy Convex.
 - The status mapper carries capped shared-file content previews.
 - The dashboard includes a read-only code-review browser section.
-- The dashboard includes member/invite management plus first issue, discussion, and release workflows.
-- D1 has permission-gated tables/functions for issues, issue comments, projects, project items, discussions, discussion comments, releases, release assets, review decisions, notifications, and per-codebase counters; routeable work-item detail pages now exist, while richer linked-object cards remain to be completed.
+- The dashboard includes member/invite management.
+- D1 has permission-gated tables/functions for review threads, review decisions, notifications, and per-codebase counters.
 - D1 and legacy Convex both have scoped agent-session token registration/list/touch/revoke plus first trusted-device/key metadata APIs; complete write-path enforcement and public setup UX remain to harden.
 - Secret-only client encryption exists for routed `.private/env/` object blobs,
   but full private-repo encryption, invite-time key grants, independent secret
   sharing, path encryption, and revocation/rekey flows are still pending.
 
-This is still a foundation layer, but it is no longer only backend scaffolding. The repo has Clerk-backed sign-in routes, auth middleware, D1 backend selection, legacy Convex auth config, D1-backed member/invite UI, D1-backed work-item/project-board/comment/detail UI, review decisions, notifications, owner email config, D1-backed scoped agent-session/key metadata, scoped D1 proxy session auth, redacted key-grant status, and a Convex JWT template for the legacy path. Clerk production DNS, SSL, live Vercel env, `HOPIT_AUTH_PROVIDER=clerk`, production Google OAuth, owner sign-in, and D1 owner claim are active for `hopit.dev`; Basic Auth fallback env vars are removed from Vercel Production. Real diffs, object-backed history reconstruction, immutable release publishing, complete permission coverage, dashboard/setup UX for scoped sessions, and full private-repo key grant approval/rotation remain pending.
+This is still a foundation layer, but it is no longer only backend scaffolding. The repo has Clerk-backed sign-in routes, auth middleware, D1 backend selection, legacy Convex auth config, D1-backed member/invite UI, review decisions, notifications, owner email config, D1-backed scoped agent-session/key metadata, scoped D1 proxy session auth, redacted key-grant status, and a Convex JWT template for the legacy path. Clerk production DNS, SSL, live Vercel env, `HOPIT_AUTH_PROVIDER=clerk`, production Google OAuth, owner sign-in, and D1 owner claim are active for `hopit.dev`; Basic Auth fallback env vars are removed from Vercel Production. Real diffs, object-backed history reconstruction, complete permission coverage, dashboard/setup UX for scoped sessions, and full private-repo key grant approval/rotation remain pending.
 
 ## Phase Principle
 
@@ -56,7 +56,7 @@ For private repos, permission checks must be paired with encryption grants.
 Membership can make a user eligible to read something, but only wrapped keys
 should make that content decryptable on a trusted device.
 
-With owner handoff proven, keep product work behind Clerk and D1: permissions, role checks, code browsing, reviews, issues, discussions, releases, and local-agent/session-token hardening. Basic Auth should stay unset in production unless deliberately re-enabled for emergency recovery.
+With owner handoff proven, keep product work behind Clerk and D1: permissions, role checks, code browsing, reviews, and local-agent/session-token hardening. Basic Auth should stay unset in production unless deliberately re-enabled for emergency recovery.
 
 ## Goal 1: Real Accounts And Auth
 
@@ -197,48 +197,9 @@ HopIt shows what changed, lets users review active change sets, comment on files
 - Maintainers can merge only when permissions and review state allow it.
 - Main history shows merge records and changed files.
 
-## Goal 5: Issues, Projects, And Discussions
+## Removed Goals: Issues, Projects, Discussions, And Releases
 
-### Product Outcome
-
-HopIt supports planning and asynchronous collaboration around codebases without leaving the product.
-
-### Implementation Plan
-
-1. Add issue records with title, body, author, assignee, labels, state, priority, and linked paths/change sets.
-2. Add project records with views and project items that can reference issues, reviews, discussions, and releases.
-3. Add discussion records with categories, comments, resolution/answer state, and optional linked files.
-4. Add list/detail UI for issues, projects, and discussions.
-5. Add permission checks for create, edit, close, pin, label, and delete/archive actions.
-6. Add search/filter by state, assignee, label, project, and linked code path.
-
-### Definition Of Done
-
-- Members can create, edit, close, and comment on issues.
-- Members can create discussions and reply in threads.
-- Projects can group issues/reviews/discussions into basic planning views.
-- All records are tied to codebase membership and audit metadata.
-
-## Goal 6: Releases
-
-### Product Outcome
-
-HopIt can name accepted Main states as releases and attach notes/artifacts later.
-
-### Implementation Plan
-
-1. Add release records tied to `codebaseId`, Main revision, tag/name, notes, author, and creation time.
-2. Start with metadata-only releases, then add artifacts once export/publish artifacts are durable.
-3. Add release UI: list, detail, create draft, publish, archive.
-4. Gate release publishing behind maintainer/owner permission.
-5. Link releases to Git publish/export results when the Git compatibility layer grows remote publishing.
-
-### Definition Of Done
-
-- Maintainers can create a release from a Main revision.
-- Releases show title, notes, revision, author, status, and timestamps.
-- Published releases are immutable except for notes/status edits unless a later policy says otherwise.
-- Release records can later attach Git exports or binary artifacts without schema churn.
+The issues/projects/discussions and releases surfaces were removed from scope in July 2026 and will be redesigned in roadmap Phase 4+.
 
 ## Execution Order
 
@@ -246,14 +207,12 @@ HopIt can name accepted Main states as releases and attach notes/artifacts later
 2. Memberships, roles, invitations, and permission helpers.
 3. Read-only code browser on permission-checked file reads.
 4. Durable change sets, diffs, review records, and comments.
-5. Issues, discussions, and projects.
-6. Releases tied to Main revisions.
-7. Deeper Git replacement work: immutable history, content-addressed blobs, clone/fetch/push equivalents, rollback, tags, and offline-first sync.
+5. Deeper Git replacement work: immutable history, content-addressed blobs, clone/fetch/push equivalents, rollback, tags, and offline-first sync.
 
 ## Verification Strategy
 
 - Unit tests for permission helpers and schema validators.
 - D1 migration/CLI smoke checks for seeded graph data, collaboration routes, scoped sessions, and trusted-device/key metadata, plus legacy Convex checks only for fallback paths.
-- Browser smoke for auth redirect, code browsing, invite acceptance, review open/comment/merge, issue creation, and release creation.
+- Browser smoke for auth redirect, code browsing, invite acceptance, and review open/comment/merge.
 - Production smoke on `https://hopit.dev` after each deployment.
 - Explicit negative tests for non-member reads, viewer write attempts, expired invites, `.private/` access, and merge without permission.

@@ -256,7 +256,6 @@ function scopedStatementPolicy(normalizedSql, params, session) {
     : null
   let baseCapability = 'write'
   if (operation === 'select') baseCapability = 'read'
-  else if (table === 'releases' || table === 'release_assets') baseCapability = 'release'
   else if (table === 'review_threads' || table === 'review_thread_comments' || table === 'review_decisions') baseCapability = 'review'
   const requiredCapability = (touchesAdminTable(normalizedSql) && !isOwnAgentSessionRead(normalizedSql, params, session))
     || codebaseMutationRequiresAdmin(normalizedSql, params, operation, table)
@@ -523,15 +522,6 @@ const codebaseScopedTables = new Set([
   'file_blobs',
   'agent_events',
   'action_jobs',
-  'collaboration_counters',
-  'issues',
-  'issue_comments',
-  'projects',
-  'project_items',
-  'discussions',
-  'discussion_comments',
-  'releases',
-  'release_assets',
   'review_threads',
   'review_thread_comments',
   'review_decisions',

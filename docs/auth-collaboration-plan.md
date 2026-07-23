@@ -1,6 +1,6 @@
 # Auth And Collaboration Plan
 
-This plan is the identity and permissions sub-plan under the solid v1 dogfood track. It covers real accounts, authenticated access, durable codebase membership, and invitation flows. Code browsing, diffs, comments, issues, projects, discussions, and releases build on this access layer as it becomes enforced server-side.
+This plan is the identity and permissions sub-plan under the solid v1 dogfood track. It covers real accounts, authenticated access, durable codebase membership, and invitation flows. Code browsing, diffs, and comments build on this access layer as it becomes enforced server-side.
 
 Permissions are necessary but not sufficient for private repos. Private and
 shared-private content also needs client-side encryption and wrapped key grants

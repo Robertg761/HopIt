@@ -170,7 +170,7 @@ test('scoped SQL policy accepts known file reads, guards, literals, and conflict
         where m.codebase_id = ? and m.status = ?`,
       params: ['codebase-1', 'active'],
     },
-    { sql: "select '-- not a comment' as note from issues where codebase_id = ?", params: ['codebase-1'] },
+    { sql: "select '-- not a comment' as note from review_threads where codebase_id = ?", params: ['codebase-1'] },
     {
       sql: `insert into files (codebase_id, path, content)
         values (?, ?, ?)
@@ -499,15 +499,6 @@ const crossTenantScopedTables = [
   'file_blobs',
   'agent_events',
   'action_jobs',
-  'collaboration_counters',
-  'issues',
-  'issue_comments',
-  'projects',
-  'project_items',
-  'discussions',
-  'discussion_comments',
-  'releases',
-  'release_assets',
   'review_threads',
   'review_thread_comments',
   'review_decisions',
@@ -592,12 +583,12 @@ test('scoped SQL policy rejects cross-tenant INSERT and UPDATE targeting another
   const rejected = [
     {
       name: 'insert into another codebase',
-      sql: 'insert into issues (codebase_id, issue_id, number, title) values (?, ?, ?, ?)',
-      params: ['codebase-2', 'issue_1', 1, 'smuggled'],
+      sql: 'insert into review_threads (codebase_id, thread_id, change_set_id, file_path) values (?, ?, ?, ?)',
+      params: ['codebase-2', 'rvt_1', 'cs_1', 'smuggled.md'],
     },
     {
       name: 'update another codebase row',
-      sql: 'update issues set title = ? where codebase_id = ?',
+      sql: 'update review_threads set status = ? where codebase_id = ?',
       params: ['pwned', 'codebase-2'],
     },
     {
@@ -622,11 +613,11 @@ test('scoped SQL policy rejects cross-tenant INSERT and UPDATE targeting another
   // The matching own-codebase writes are accepted, proving the rejection above is
   // the cross-tenant scope guard and not the shape or capability policy.
   assert.doesNotThrow(() => assertScopedSessionStatementAllowed(session, {
-    sql: 'insert into issues (codebase_id, issue_id, number, title) values (?, ?, ?, ?)',
+    sql: 'insert into review_threads (codebase_id, thread_id, change_set_id, file_path) values (?, ?, ?, ?)',
     params: ['codebase-1', 'issue_1', 1, 'legit'],
   }))
   assert.doesNotThrow(() => assertScopedSessionStatementAllowed(session, {
-    sql: 'update issues set title = ? where codebase_id = ?',
+    sql: 'update review_threads set status = ? where codebase_id = ?',
     params: ['legit', 'codebase-1'],
   }))
 })
@@ -643,7 +634,7 @@ test('scoped SQL policy rejects codebase-id smuggling with a second predicate cl
   for (const { name, params } of smuggles) {
     assert.throws(
       () => assertScopedSessionStatementAllowed(session, {
-        sql: 'select * from issues where codebase_id = ? and codebase_id = ?',
+        sql: 'select * from review_threads where codebase_id = ? and codebase_id = ?',
         params,
       }),
       /constrained to its codebase/,
@@ -655,10 +646,10 @@ test('scoped SQL policy rejects codebase-id smuggling with a second predicate cl
 test('scoped SQL policy rejects statements with no codebase constraint at all', () => {
   const session = scopedSession()
   const unconstrained = [
-    { name: 'select without where', sql: 'select * from issues', params: [] },
-    { name: 'select on non-codebase predicate', sql: 'select * from issues where issue_id = ?', params: ['issue_1'] },
+    { name: 'select without where', sql: 'select * from review_threads', params: [] },
+    { name: 'select on non-codebase predicate', sql: 'select * from review_threads where thread_id = ?', params: ['rvt_1'] },
     { name: 'delete without codebase predicate', sql: 'delete from notifications where read_at = ?', params: ['now'] },
-    { name: 'update without codebase predicate', sql: 'update issues set title = ? where issue_id = ?', params: ['x', 'issue_1'] },
+    { name: 'update without codebase predicate', sql: 'update review_threads set status = ? where thread_id = ?', params: ['x', 'rvt_1'] },
     { name: 'unknown table with codebase predicate', sql: 'select * from secrets where codebase_id = ?', params: ['codebase-1'] },
   ]
   for (const statement of unconstrained) {
@@ -675,22 +666,22 @@ test('scoped SQL policy rejects cross-tenant JOIN, UNION, and subquery escapes',
   const escapes = [
     {
       name: 'cross-tenant union',
-      sql: 'select * from issues where codebase_id = ? union select * from issues where codebase_id = ?',
+      sql: 'select * from review_threads where codebase_id = ? union select * from review_threads where codebase_id = ?',
       params: ['codebase-1', 'codebase-2'],
     },
     {
       name: 'cross-tenant subquery',
-      sql: 'select * from issues where codebase_id = ? and issue_id in (select issue_id from issues where codebase_id = ?)',
+      sql: 'select * from review_threads where codebase_id = ? and thread_id in (select thread_id from review_threads where codebase_id = ?)',
       params: ['codebase-1', 'codebase-2'],
     },
     {
       name: 'cross-tenant join',
-      sql: 'select other.* from issues own join issues other on own.number = other.number where own.codebase_id = ?',
+      sql: 'select other.* from review_threads own join review_threads other on own.file_path = other.file_path where own.codebase_id = ?',
       params: ['codebase-1'],
     },
     {
       name: 'cross-tenant table list',
-      sql: 'select a.* from issues a, issues b where a.codebase_id = ? and b.codebase_id = ?',
+      sql: 'select a.* from review_threads a, review_threads b where a.codebase_id = ? and b.codebase_id = ?',
       params: ['codebase-1', 'codebase-2'],
     },
   ]
@@ -1162,19 +1153,14 @@ function victimStatements(codebaseId) {
       sql: 'insert into codebase_members (codebase_id, user_id, role, status, created_at, updated_at) values (?, ?, ?, ?, ?, ?)',
       params: [codebaseId, 'user-b', 'owner', 'active', 'now', 'now'],
     },
-    { table: 'issues read', sql: 'select * from issues where codebase_id = ?', params: [codebaseId] },
+    { table: 'review_threads read', sql: 'select * from review_threads where codebase_id = ?', params: [codebaseId] },
     {
-      table: 'issues insert',
-      sql: 'insert into issues (codebase_id, issue_id, number, title, status, created_by, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)',
-      params: [codebaseId, 'iss_1', 1, 'planted', 'open', 'user-b', 'now', 'now'],
+      table: 'review_threads insert',
+      sql: 'insert into review_threads (codebase_id, thread_id, change_set_id, file_path, status, created_by, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)',
+      params: [codebaseId, 'rvt_1', 'cs_1', 'README.md', 'open', 'user-b', 'now', 'now'],
     },
-    { table: 'discussions read', sql: 'select * from discussions where codebase_id = ?', params: [codebaseId] },
-    { table: 'releases read', sql: 'select * from releases where codebase_id = ?', params: [codebaseId] },
-    {
-      table: 'releases insert',
-      sql: 'insert into releases (codebase_id, release_id, number, version, title, notes, status, target_json, created_by, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      params: [codebaseId, 'rel_1', 1, '1.0.0', 'planted', 'notes', 'draft', '{}', 'user-b', 'now', 'now'],
-    },
+    { table: 'review_decisions read', sql: 'select * from review_decisions where codebase_id = ?', params: [codebaseId] },
+    { table: 'notifications read', sql: 'select * from notifications where codebase_id = ?', params: [codebaseId] },
   ]
 }
 
@@ -1529,7 +1515,7 @@ test('server-actor: flag ON lets a user list and read their own multiple codebas
   for (const codebaseId of ['codebase-a', 'codebase-c']) {
     const response = await worker.fetch(serverActorRequest({
       token: mintTestServerActorToken({ userId: 'user-a' }),
-      body: { sql: `select * from issues where codebase_id = ?`, params: [codebaseId] },
+      body: { sql: `select * from review_threads where codebase_id = ?`, params: [codebaseId] },
       ip: '203.0.113.74',
       codebaseId,
     }), multiTenantEnv({ HOPIT_D1_DB: db }))

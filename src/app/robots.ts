@@ -23,7 +23,6 @@ export default function robots(): MetadataRoute.Robots {
         '/sign-up',
         '/status',
         '/team',
-        '/work-items',
       ],
     },
     sitemap: new URL('/sitemap.xml', siteUrl).toString(),

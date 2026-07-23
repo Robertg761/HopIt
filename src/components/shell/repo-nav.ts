@@ -1,6 +1,5 @@
 import {
   Activity,
-  CircleDot,
   Code2,
   GitPullRequest,
   Radio,
@@ -36,14 +35,6 @@ export const repoTabs: RepoTab[] = [
     icon: GitPullRequest,
     description: 'Change sets, reviews, threads, and merge.',
     keywords: ['review', 'pr', 'diff', 'merge', 'compare', 'history'],
-  },
-  {
-    id: 'issues',
-    label: 'Issues',
-    segment: 'issues',
-    icon: CircleDot,
-    description: 'Issues, discussions, projects, and releases.',
-    keywords: ['work items', 'discussions', 'projects', 'releases'],
   },
   {
     id: 'activity',
@@ -114,8 +105,6 @@ export function repoPathPreservingTab(pathname: string, nextCodebaseId: string):
     rest = pathname.slice(rawPrefix.length).replace(/^\//, '')
   }
 
-  // Detail routes under work-items should land on the issues list when switching repos.
-  if (rest.startsWith('work-items/')) rest = 'issues'
   // Map legacy review path to the primary pulls tab.
   if (rest === 'review') rest = 'pulls'
 
@@ -131,7 +120,6 @@ export function activeRepoTabId(pathname: string): string {
 
   if (!head) return 'code'
   if (head === 'pulls' || head === 'review' || head === 'compare' || head === 'history') return 'pulls'
-  if (head === 'issues' || head === 'work-items') return 'issues'
   if (head === 'activity') return 'activity'
   if (head === 'collaborators' || head === 'members') return 'collaborators'
   if (head === 'settings') return 'settings'

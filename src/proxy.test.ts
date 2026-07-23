@@ -204,7 +204,6 @@ describe('proxy() unchanged pass-throughs (Clerk mode)', () => {
     '/settings',
     '/status',
     '/team',
-    '/work-items',
   ])('keeps authenticated app route %s protected', (path) => {
     expect(isClerkRedirect(run(path))).toBe(true)
   })

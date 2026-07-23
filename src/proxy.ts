@@ -36,7 +36,6 @@ const isProtectedPageRoute = createRouteMatcher([
   '/settings(.*)',
   '/status(.*)',
   '/team(.*)',
-  '/work-items(.*)',
 ])
 const isApiRoute = createRouteMatcher(['/api(.*)'])
 const isClerkInternalRoute = createRouteMatcher(['/__clerk(.*)'])

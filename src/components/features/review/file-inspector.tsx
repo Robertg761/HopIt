@@ -1,31 +1,23 @@
 'use client'
 
 import * as React from 'react'
-import { FileSearch, ListPlus } from 'lucide-react'
+import { FileSearch } from 'lucide-react'
 
 import type { AgentFile } from '@/lib/client/agent-status'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
-import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
-import { Spinner } from '@/components/ui/spinner'
 import { fileStateTone } from './review-shared'
 
 export function FileInspector({
   file,
   selectedLine,
   onSelectLine,
-  onFileFollowUp,
-  followUpBusy,
-  followUpDisabledReason,
 }: {
   file: AgentFile | null
   selectedLine: number | null
   onSelectLine: (line: number | null) => void
-  onFileFollowUp: () => void
-  followUpBusy: boolean
-  followUpDisabledReason: string | null
 }) {
   if (!file) {
     return (
@@ -58,16 +50,6 @@ export function FileInspector({
             {selectedLine !== null ? <span className="font-mono">line {selectedLine}</span> : null}
           </CardDescription>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={onFileFollowUp}
-          disabled={followUpBusy || followUpDisabledReason !== null}
-          title={followUpDisabledReason ?? undefined}
-        >
-          {followUpBusy ? <Spinner className="size-3.5" /> : <ListPlus />}
-          File follow-up issue
-        </Button>
       </CardHeader>
       <CardContent className="pt-4">
         {lines === null ? (
