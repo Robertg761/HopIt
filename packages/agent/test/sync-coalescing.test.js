@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
@@ -7,6 +8,7 @@ import { test } from 'node:test'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 
+import { bulkJournalCommitChunkSize } from '../src/constants.js'
 import { parseOptions } from '../src/options.js'
 import { createWatchSyncScheduler } from '../src/watch.js'
 
@@ -264,4 +266,75 @@ test('a crash mid-window loses nothing on disk: the edit is journaled on the nex
     'unsynced keystrokes\n',
     'the on-disk file is never deleted',
   )
+})
+
+// GR-G3: a legitimate source-write storm (e.g. a format-on-save sweep touching
+// 1,000 distinct non-derived files) must coalesce into a single sync pass and a
+// bounded number of batch commits (the existing bulk-commit chunk size), never
+// thousands of individual round trips, and must not lose a single write.
+test('a 1,000-file save storm coalesces into a bounded number of batch commits with zero lost writes', async (t) => {
+  const state = await makeState()
+  await runCli('init', [...stateArgs(state), '--force'])
+  await runCli('hydrate', stateArgs(state))
+
+  const options = parseOptions([...stateArgs(state), '--sync-debounce-ms', '150', '--sync-max-delay-ms', '5000'])
+  const schedule = createWatchSyncScheduler(options, {})
+  t.after(() => schedule.cancel())
+
+  const fileCount = 1000
+  const expected = new Map()
+  for (let index = 0; index < fileCount; index += 1) {
+    const relativePath = `burst-${index}.txt`
+    const content = `burst content ${index}\n`
+    expected.set(relativePath, content)
+    await fs.writeFile(path.join(state.workspace, relativePath), content, 'utf8')
+    schedule('rename', relativePath)
+  }
+
+  await waitFor(async () => (await readNdjson(state.events)).some((event) => event.event === 'sync.complete'), 20000)
+  await waitFor(() => schedule.isIdle(), 20000)
+  await sleep(200)
+
+  const events = await readNdjson(state.events)
+  const syncCompletes = events.filter((event) => event.event === 'sync.complete')
+  assert.equal(syncCompletes.length, 1, 'the entire storm collapses into a single sync pass')
+
+  // The bound comes straight from the existing bulk-commit chunk size: a storm
+  // of N files never needs more than ceil(N / chunkSize) batch commits.
+  const expectedMaxBulkCommits = Math.ceil(fileCount / bulkJournalCommitChunkSize)
+  const bulkCommits = events.filter((event) => event.event === 'sync.bulk_commit')
+  assert.ok(
+    bulkCommits.length <= expectedMaxBulkCommits,
+    `expected at most ${expectedMaxBulkCommits} batch commits (chunk size ${bulkJournalCommitChunkSize}), saw ${bulkCommits.length}`,
+  )
+  assert.ok(bulkCommits.length > 1, 'a storm this large is still chunked, not a single unbounded batch')
+  for (const commit of bulkCommits) {
+    assert.ok(
+      commit.detail.count <= bulkJournalCommitChunkSize,
+      `each batch commit stays within the chunk size, saw ${commit.detail.count}`,
+    )
+  }
+
+  // Content-hash audit: every one of the 1,000 paths reached the cloud with the
+  // exact content written, and the on-disk workspace still matches too.
+  const after = await readJson(state.cloud)
+  let auditedCount = 0
+  for (const [relativePath, content] of expected) {
+    const expectedHash = createHash('sha256').update(content, 'utf8').digest('hex')
+    const cloudEntry = after.files[relativePath]
+    assert.ok(cloudEntry, `${relativePath} reached the cloud`)
+    assert.equal(cloudEntry.content, content, `${relativePath} carries the exact written content`)
+    assert.equal(cloudEntry.hash, expectedHash, `${relativePath} content-hash matches what was written`)
+    const onDisk = await fs.readFile(path.join(state.workspace, relativePath), 'utf8')
+    assert.equal(onDisk, content, `${relativePath} on-disk content is unchanged`)
+    auditedCount += 1
+  }
+  assert.equal(auditedCount, fileCount, 'every one of the 1,000 paths was audited, none lost')
+
+  const journal = await readNdjson(state.journal)
+  const journaledPaths = new Set(journal.map((entry) => entry.path))
+  assert.equal(journaledPaths.size, fileCount, 'every distinct path has exactly one journal entry, none dropped')
+
+  const acks = events.filter((event) => event.event === 'cloud.acknowledged')
+  assert.equal(acks.length, fileCount, 'every one of the 1,000 writes is individually acknowledged inside the batches')
 })

@@ -1735,6 +1735,31 @@ or charge.
   distribution path is unaffected.
 - A redesigned version of these surfaces is deferred to roadmap Phase 4+.
 
+### 2026-07-23 GR-G3: save-storm coalescing verification + grouped steps
+
+- Verified (no production code changes needed) that the existing
+  `createWatchSyncScheduler` debounce window plus `performSyncOnce`'s
+  bulk-commit path (`commitJournalEntries`, chunked at
+  `bulkJournalCommitChunkSize` = 40) already satisfies decisions doc §11's
+  "save storms are coalesced" requirement: a burst touching many distinct
+  non-derived paths collapses into one sync pass and a bounded number of
+  batch commits, not one round trip per file.
+- Added `packages/agent/test/sync-coalescing.test.js`: "a 1,000-file save
+  storm coalesces into a bounded number of batch commits with zero lost
+  writes" — 1,000 rapid distinct-path writes through the real watch
+  scheduler produce exactly one `sync.complete`, at most
+  `ceil(1000 / 40) = 25` `sync.bulk_commit` events, and a full content-hash
+  audit of all 1,000 paths (cloud + on-disk) confirms nothing was lost;
+  every path has exactly one journal entry and one acknowledgement.
+- Because episode clustering (`clusterEpisodes` in
+  `packages/backend-d1/src/episodes.js`) groups journal steps by time gap
+  and a coalesced burst's steps share one `now` timestamp per sync pass,
+  save storms also collapse into a small number of trail episodes rather
+  than one per file, satisfying the "grouped trail steps" half of §11
+  without further change.
+- Watch debounce default (250ms legacy micro-debounce, 2000ms default
+  coalescing window) is unchanged; only a new test was added.
+
 ## Known Gaps
 
 - Phase 3 billing plumbing is live behind `HOPIT_BILLING`: Stripe Managed
