@@ -173,6 +173,9 @@ export function applyRuntimeDefaults(options, provided) {
   if (!provided.has('sync-max-delay-ms') && process.env.HOPIT_SYNC_MAX_DELAY_MS) {
     options['sync-max-delay-ms'] = process.env.HOPIT_SYNC_MAX_DELAY_MS
   }
+  if (!provided.has('watch-limit-poll-interval-ms') && process.env.HOPIT_WATCH_LIMIT_POLL_INTERVAL_MS) {
+    options['watch-limit-poll-interval-ms'] = process.env.HOPIT_WATCH_LIMIT_POLL_INTERVAL_MS
+  }
   if (!provided.has('session-id') && process.env.HOPIT_SESSION_ID) {
     options['session-id'] = process.env.HOPIT_SESSION_ID
   }

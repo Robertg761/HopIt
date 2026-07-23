@@ -83,6 +83,13 @@ export const bulkJournalCommitChunkSize = 40
 export const defaultSyncDebounceMs = 2000
 export const defaultSyncMaxDelayMs = 5000
 export const legacySyncDebounceMs = 250
+// When the native watcher can't run at all because the OS watch limit
+// (Linux inotify's fs.inotify.max_user_watches) is exhausted, the agent falls
+// back to scan-based syncing (GR-H2). That fallback needs to poll noticeably
+// tighter than a routine health-check scan since it is the *only* signal for
+// missed writes while degraded, hence a smaller default than the generic
+// watcher-failure poll cadence would otherwise need.
+export const defaultWatchLimitPollIntervalMs = 2000
 // Refresh deletion safety: refresh materialization deletes every workspace file
 // absent from the visible cloud graph. A visibility misconfiguration (session id
 // without a requester id reads the cloud as a guest and sees zero files) can turn

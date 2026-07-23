@@ -1735,6 +1735,31 @@ or charge.
   distribution path is unaffected.
 - A redesigned version of these surfaces is deferred to roadmap Phase 4+.
 
+### 2026-07-23 GR-H2: Linux watch-limit degradation surfaced loudly
+
+- Implemented git-replacement plan task GR-H2 (decisions §12: "Linux watch
+  limits degrade loudly"). When the native watcher fails to start, or dies at
+  runtime, because the Linux inotify watch limit (`fs.inotify.max_user_watches`)
+  is exhausted (`ENOSPC`), the agent no longer treats it as a generic watcher
+  failure: it still falls back to scan-based syncing (the existing
+  `createWorkspacePoller`, now at a tighter, configurable interval via
+  `--watch-limit-poll-interval-ms` / `HOPIT_WATCH_LIMIT_POLL_INTERVAL_MS`,
+  default 2s), but the `watch.degraded` event now carries
+  `kind: "watch-limit-exhausted"` and a `remedy` string explaining the fix
+  (raise the limit with `sysctl`, persist it in `/etc/sysctl.conf`).
+- Status (`/status`, `hop status`) now reports a distinct `degraded_watch`
+  watch state (instead of the generic `polling-degraded`) with the remedy
+  attached, and `hop doctor` surfaces a failing `watch` check whose detail is
+  exactly that remedy string.
+- New test `packages/agent/test/watch-limit-degradation.test.js` injects an
+  ENOSPC failure at the `fs.watch` constructor (via an injectable `watchFn` on
+  `watchWorkspace`) and proves: the agent stays up, status reports
+  `degraded_watch`, `hop doctor` output includes the remedy, writes made while
+  degraded fully sync via the scan fallback with byte-exact content (zero
+  missed writes), and a non-ENOSPC watcher failure still degrades to the
+  pre-existing generic `polling-degraded` state rather than being
+  mis-classified as a watch-limit issue.
+
 ## Known Gaps
 
 - Phase 3 billing plumbing is live behind `HOPIT_BILLING`: Stripe Managed

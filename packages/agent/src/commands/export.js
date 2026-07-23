@@ -120,6 +120,13 @@ export async function runDoctor(options) {
       (state.status.remotePull.cursor.behindByRevisions ?? 0) === 0,
       `Workspace is ${state.status.remotePull.cursor.behindByRevisions ?? 'unknown'} revisions behind cloud.`,
     ))
+    checks.push(checkResult(
+      'watch',
+      state.status.watch.state !== 'degraded_watch',
+      state.status.watch.state === 'degraded_watch'
+        ? state.status.watch.remedy
+        : `File watch is ${state.status.watch.state}.`,
+    ))
   } catch (error) {
     checks.push(checkResult('agent-state', false, error.message))
   }
@@ -182,6 +189,7 @@ export async function runDoctor(options) {
           remoteBehindByRevisions: state.status.remotePull.cursor.behindByRevisions,
           remotePull: state.status.remotePull.state,
           watch: state.status.watch.state,
+          watchRemedy: state.status.watch.remedy,
         }
       : null,
   }

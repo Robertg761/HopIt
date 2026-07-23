@@ -1,7 +1,7 @@
 // @ts-check
 import os from 'node:os'
 import path from 'node:path'
-import { cloudServiceType, defaultSyncDebounceMs, defaultSyncMaxDelayMs } from './constants.js'
+import { cloudServiceType, defaultSyncDebounceMs, defaultSyncMaxDelayMs, defaultWatchLimitPollIntervalMs } from './constants.js'
 import { shouldUseD1Backend } from './io.js'
 import { defaultWorkspaceRoot } from './options.js'
 import { isPathInside, pathsOverlap } from './workspace-manifest.js'
@@ -66,6 +66,20 @@ export function syncMaxDelayMs(options, debounceMs = syncDebounceMs(options)) {
     throw new Error(`Invalid --sync-max-delay-ms value: ${raw}. Use an integer >= 0.`)
   }
   return Math.max(value, debounceMs)
+}
+
+// Poll cadence used once the agent has degraded to scan-only syncing because
+// the OS watch limit was hit (GR-H2). Deliberately tighter than the default
+// full-workspace poll interval so a watch-limit failure heals as fast as the
+// generic watcher-failure fallback, even before an operator raises the limit.
+export function watchLimitPollIntervalMs(options) {
+  const raw = options['watch-limit-poll-interval-ms']
+  if (raw === undefined || raw === null || raw === '') return defaultWatchLimitPollIntervalMs
+  const value = Number(raw)
+  if (!Number.isInteger(value) || value < 100) {
+    throw new Error(`Invalid --watch-limit-poll-interval-ms value: ${raw}. Use an integer >= 100.`)
+  }
+  return value
 }
 
 export function isTruthyEnv(value) {

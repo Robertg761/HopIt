@@ -289,6 +289,7 @@ export async function readAgentState(options) {
         refreshHealth.state !== 'blocked' &&
         watchHealth.state !== 'unavailable-degraded' &&
         watchHealth.state !== 'degraded' &&
+        watchHealth.state !== 'degraded_watch' &&
         watchHealth.state !== 'blocked',
       generatedAt: new Date().toISOString(),
       readiness: initialized ? 'ready' : attached ? 'attached' : 'not_initialized',
@@ -736,7 +737,13 @@ export function buildWatchHealth(watchEvents) {
   if (latestWatchEvent?.event === 'watch.recovery_blocked') {
     state = 'blocked'
   } else if (latestWatchEvent?.event === 'watch.degraded') {
-    if (lastWatchDegraded.detail?.state === 'unavailable') {
+    if (lastWatchDegraded.detail?.kind === 'watch-limit-exhausted') {
+      // Distinct from the generic polling fallback: this is specifically the
+      // Linux inotify watch-limit case decisions §12 asks us to surface loudly
+      // (scan fallback + degraded_watch status + a hop doctor remedy), not just
+      // "some watcher error happened".
+      state = 'degraded_watch'
+    } else if (lastWatchDegraded.detail?.state === 'unavailable') {
       state = 'unavailable-degraded'
     } else if (lastWatchDegraded.detail?.state === 'polling') {
       state = 'polling-degraded'
@@ -753,6 +760,7 @@ export function buildWatchHealth(watchEvents) {
     lastDegraded: lastWatchDegraded,
     lastRecoveryBlocked: lastWatchRecoveryBlocked,
     lastError: latestProblem?.detail?.reason ?? null,
+    remedy: state === 'degraded_watch' ? (lastWatchDegraded?.detail?.remedy ?? null) : null,
   }
 }
 
