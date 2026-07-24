@@ -2,7 +2,7 @@
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { createObjectBlobStore, normalizeBlobProvider } from './blob-stores/index.js'
-import { entryEncoding, entryKind } from './constants.js'
+import { curatedDerivedPathRules, entryEncoding, entryKind } from './constants.js'
 import { clientEncryptionScopeFromOptions, clientEncryptionScopes, hasPrivatePrivacyZone, isLocalOnlySecretPath, privacyZoneForPath, rawClientEncryptionKey } from '@hopit/core/crypto'
 import { cloudEntryEquals, encodeBufferForCloud, hashBuffer, hashDirectoryEntry, hashSymlinkTarget, normalizeCloudFileEntry, toCloudPath } from './journal.js'
 import { latestEvent, visibleRevisionFromEvent } from './status-state.js'
@@ -518,24 +518,6 @@ export async function sortedDirEntries(dir) {
   return entries.sort((a, b) => a.name.localeCompare(b.name))
 }
 
-// Generated/dependency directories the sync scan never uploads. Unlike
-// shouldSkipImportPath this deliberately keeps `.git/`: Git internals are
-// part of the owner-private mirror contract; node_modules and build output
-// are reproducible junk that would flood the cloud graph (a 2026-07-08 scan
-// journaled 26k node_modules files before this guard existed).
-const generatedWorkspaceDirectories = new Set([
-  '.next',
-  '.turbo',
-  '.vercel',
-  'node_modules',
-  'dist',
-  'build',
-  'out',
-  'coverage',
-  'artifacts',
-  'DerivedData',
-])
-
 export function shouldSkipWorkspacePath(relativePath, entry, options = {}) {
   const parts = relativePath.split('/')
   const basename = parts.at(-1) ?? relativePath
@@ -546,9 +528,80 @@ export function shouldSkipWorkspacePath(relativePath, entry, options = {}) {
   // lockfile as an unjournaled local change and misbehave.
   if (parts.includes('.hopit-agent')) return true
   if (basename === '.DS_Store') return true
-  if (parts.some((part) => generatedWorkspaceDirectories.has(part))) return true
+  if (isDerivedWorkspacePath(relativePath, options, parts)) return true
   if (isLocalOnlySecretPath(relativePath) && !shouldSyncLocalOnlySecretPath(relativePath, options)) return true
   return false
+}
+
+// Derived-path classification (decisions §6, GR-C1). Distinct from both the
+// secret-path check above (owner-private but still synced through
+// `.private/env`) and from any ignore file (there is none): derived paths are
+// never watched-through, never journaled, never synced, and never counted in
+// presence. `options.derivedPathOverrides` carries the per-codebase `{ add,
+// remove }` overrides resolved by the caller (CLI/backend-fetched); `remove`
+// wins over the curated list so a user can un-derive a built-in path, and
+// `add` extends the curated list with custom derived paths.
+export function isDerivedWorkspacePath(relativePath, options = {}, parts = null) {
+  const pathParts = parts ?? relativePath.split('/')
+  const overrides = normalizeDerivedPathOverrides(options.derivedPathOverrides)
+  if (overrides.remove.some((rule) => derivedPathRuleMatches(relativePath, pathParts, rule))) return false
+  if (curatedDerivedPathRules.some((rule) => derivedPathRuleMatches(relativePath, pathParts, rule))) return true
+  return overrides.add.some((rule) => derivedPathRuleMatches(relativePath, pathParts, rule))
+}
+
+// A rule containing `/` is a root-anchored subtree match (`vendor/bundle`
+// derives that exact folder but not a plain top-level `vendor/`); a bare
+// segment name matches anywhere in the path, mirroring the pre-classification
+// `generatedWorkspaceDirectories` behavior.
+function derivedPathRuleMatches(relativePath, parts, rule) {
+  if (!rule) return false
+  if (rule.includes('/')) return relativePath === rule || relativePath.startsWith(`${rule}/`)
+  return parts.includes(rule)
+}
+
+export function normalizeDerivedPathOverrides(raw) {
+  return {
+    add: normalizeDerivedPathRuleList(raw?.add),
+    remove: normalizeDerivedPathRuleList(raw?.remove),
+  }
+}
+
+function normalizeDerivedPathRuleList(list) {
+  if (!Array.isArray(list)) return []
+  const seen = new Set()
+  for (const value of list) {
+    if (typeof value !== 'string') continue
+    const cleaned = value.trim().replace(/^\/+/, '').replace(/\/+$/, '')
+    if (cleaned) seen.add(cleaned)
+  }
+  return [...seen]
+}
+
+// Shallow-recursion listing for `hop status`: reports the derived roots
+// currently present on disk without ever descending into one (matching the
+// scan guard in readWorkspaceFiles/snapshotWorkspace, this never touches
+// node_modules-sized subtrees).
+export async function listDerivedWorkspaceRoots(root, options = {}) {
+  const roots = []
+  if (!existsSync(root)) return roots
+
+  async function walk(dir) {
+    const entries = await sortedDirEntries(dir)
+    for (const entry of entries) {
+      const absolutePath = path.join(dir, entry.name)
+      const relativePath = toCloudPath(path.relative(root, absolutePath))
+      const parts = relativePath.split('/')
+      if (parts.includes('.hopit')) continue
+      if (isDerivedWorkspacePath(relativePath, options, parts)) {
+        roots.push(relativePath)
+        continue
+      }
+      if (entry.isDirectory()) await walk(absolutePath)
+    }
+  }
+
+  await walk(root)
+  return roots.sort()
 }
 
 export function shouldTrackLocalActivityPath(relativePath, entry) {
