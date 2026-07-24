@@ -1,5 +1,7 @@
 # Proposal data model design (GR-B1)
 
+Approved by the owner (Robert) on 2026-07-24, as-is. Additional constraint set at approval time: at most one open proposal per change set — GR-B2 must enforce this at propose time.
+
 Status: **design-gated**, awaiting owner sign-off before GR-B2 writes any
 propose/merge-queue code against this schema. Created 2026-07-24 for
 [GR-B1](git-replacement-implementation-plan.md#gr-b1-proposal-data-model-design--migration-design-gated).
