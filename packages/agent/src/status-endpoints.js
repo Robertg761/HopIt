@@ -63,6 +63,7 @@ export async function readAgentStatusEndpoint(options) {
       refreshHealth.state !== 'blocked' &&
       watchHealth.state !== 'unavailable-degraded' &&
       watchHealth.state !== 'degraded' &&
+      watchHealth.state !== 'degraded_watch' &&
       watchHealth.state !== 'blocked',
     generatedAt: new Date().toISOString(),
     readiness,

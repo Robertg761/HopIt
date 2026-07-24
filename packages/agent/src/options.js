@@ -176,6 +176,9 @@ export function applyRuntimeDefaults(options, provided) {
   if (!provided.has('scan-interval-ms') && process.env.HOPIT_SCAN_INTERVAL_MS) {
     options['scan-interval-ms'] = process.env.HOPIT_SCAN_INTERVAL_MS
   }
+  if (!provided.has('watch-limit-poll-interval-ms') && process.env.HOPIT_WATCH_LIMIT_POLL_INTERVAL_MS) {
+    options['watch-limit-poll-interval-ms'] = process.env.HOPIT_WATCH_LIMIT_POLL_INTERVAL_MS
+  }
   if (!provided.has('session-id') && process.env.HOPIT_SESSION_ID) {
     options['session-id'] = process.env.HOPIT_SESSION_ID
   }

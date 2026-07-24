@@ -10,13 +10,37 @@ import { emit, findLastEventOf, readNdjson } from './io.js'
 import { withCloudFetchRetry } from './cloud-retry.js'
 import { createRemotePushClient } from './remote-push.js'
 import { toCloudPath } from './journal.js'
-import { assertWorkspacePathSafe, remotePullEnabled, remotePushEnabled, remoteRefreshIntervalMs, syncDebounceMs, syncMaxDelayMs } from './paths.js'
+import { assertWorkspacePathSafe, remotePullEnabled, remotePushEnabled, remoteRefreshIntervalMs, syncDebounceMs, syncMaxDelayMs, watchLimitPollIntervalMs } from './paths.js'
 import { normalizeWatchFilename, readJournalSafety, visibleRevisionFromEvent } from './status-state.js'
 import { findIndexedCodebase, readWorkspaceIndex } from './workspace-index.js'
 import { exonerateWorkspaceChangesAgainstCloud, isLocalActivityMarkerPath, shouldSkipWorkspacePath, shouldTrackLocalActivityPath, workspaceLocalChanges } from './workspace-manifest.js'
 import { watch } from 'node:fs'
 
-export async function watchWorkspace(options) {
+// The Linux OS watch limit (fs.inotify.max_user_watches) surfaces from
+// fs.watch as ENOSPC once every watchable inode in the workspace tree
+// exhausts the kernel's inotify budget. Node re-uses ENOSPC for a couple of
+// other rare fs failures too, but on the watch-constructor/watcher-error path
+// this is specifically the watch-limit signal decisions §12 asks us to
+// surface loudly rather than let sync silently stall.
+export function isWatchLimitExhaustedError(error) {
+  return error?.code === 'ENOSPC'
+}
+
+// Shown in the `watch.degraded` event, the status API, and `hop doctor` so the
+// fix is discoverable wherever an operator looks, per decisions §12 ("surfaces
+// a degraded-watch state ... with the fix").
+export const watchLimitRemedyMessage =
+  'HopIt could not start the native file watcher because the OS watch limit ' +
+  '(inotify) is exhausted. It is syncing via periodic scans instead, so writes ' +
+  'still sync but a little more slowly. To fix: run ' +
+  '`sudo sysctl -w fs.inotify.max_user_watches=524288` for an immediate increase, ' +
+  'and add `fs.inotify.max_user_watches=524288` to /etc/sysctl.conf (or a file ' +
+  'under /etc/sysctl.d/) so the limit survives a reboot. HopIt picks the native ' +
+  'watcher back up automatically the next time the agent starts.'
+
+export async function watchWorkspace(options, deps = {}) {
+  const watchFn = deps.watchFn ?? watch
+  const createPoller = deps.createPoller ?? createWorkspacePoller
   await assertWorkspacePathSafe(options)
   const cloudService = createCloudGraphService(options)
   if (!(await cloudService.exists())) await initCloud(options)
@@ -64,18 +88,29 @@ export async function watchWorkspace(options) {
     },
   })
   const degradeToPolling = async (error) => {
+    const watchLimitExhausted = isWatchLimitExhaustedError(error)
     if (!poller) {
-      poller = await createWorkspacePoller(options.workspace, scheduleSync, { agentOptions: options })
+      poller = await createPoller(options.workspace, scheduleSync, {
+        agentOptions: options,
+        ...(watchLimitExhausted ? { intervalMs: watchLimitPollIntervalMs(options) } : {}),
+      })
     }
     await emit(options, 'watch.degraded', {
       state: 'polling',
       workspace: options.workspace,
       reason: error.message,
+      ...(watchLimitExhausted
+        ? {
+            kind: 'watch-limit-exhausted',
+            code: error.code,
+            remedy: watchLimitRemedyMessage,
+          }
+        : {}),
     })
   }
 
   try {
-    watcher = watch(options.workspace, { recursive: true }, (eventType, filename) => {
+    watcher = watchFn(options.workspace, { recursive: true }, (eventType, filename) => {
       scheduleSync(eventType, normalizeWatchFilename(filename))
     })
   } catch (error) {

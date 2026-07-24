@@ -214,6 +214,7 @@ Watch-loop expectations:
 - file create, write, and delete detection should be idempotent across repeated scans
 - rapid editor saves should coalesce into stable journaled writes without losing the latest content; the spike currently debounces watch-triggered sync attempts by `250ms`
 - transient cloud or filesystem errors after startup should emit `sync.failed`, update status with the failed/degraded state, and leave the watch loop running so later saves or retries can recover
+- if the native watcher cannot start or dies because the OS watch limit is exhausted (Linux `fs.inotify.max_user_watches`, surfaced as `ENOSPC`), the agent must not exit: it degrades to scan-only syncing (the same poller used for any other watcher failure, but at a tighter interval), emits `watch.degraded` with `kind: "watch-limit-exhausted"` and a `remedy` string, and status/`hop doctor` report a distinct `degraded_watch` state so the operator sees the fix (raise the limit) instead of silently missing edits
 - once a later sync succeeds, the agent should emit `sync.complete` and make the recovered/clean state visible through status
 - the loop should treat the selected cloud state as the source of truth while preserving pending local edits until acknowledgement or conflict review
 
@@ -312,6 +313,7 @@ Important event types:
 
 - `workspace.ready`
 - `watch.started`
+- `watch.degraded`
 - `watch.recovery_blocked`
 - `watch.scan_started` / `watch.scan_completed` / `watch.scan_healed` / `watch.scan_failed`
 - `file.hydrated`
