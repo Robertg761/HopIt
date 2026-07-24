@@ -172,6 +172,33 @@ export function partitionEntriesForReconnect(cloud, entries) {
   return { replayable, diverged, classifications }
 }
 
+/**
+ * Builds the payload passed to a cloud service's `openDivergence` for one
+ * diverged classification (decisions §1 / GR-A2). Pure and I/O-free: callers
+ * resolve the local device's on-disk content (`localEntry`) and both
+ * devices' labels before calling this, then persist the result. Nothing
+ * about the offline device's version is discarded here -- `localEntry`
+ * carries its full payload (or is `null` only when the local side genuinely
+ * has no content, i.e. `delete_vs_edit`) so it stays independently
+ * retrievable even though it is never written to `files` while open.
+ */
+export function buildDivergenceRecord(classification, { localEntry = null, localDevice = null, cloudDevice = null } = {}) {
+  return {
+    path: classification.path,
+    scope: classification.scope,
+    reason: classification.reason,
+    baseRevision: classification.baseRevision,
+    cloudRevision: classification.cloudRevision,
+    localHash: classification.localHash,
+    cloudHash: classification.cloudHash,
+    localSide: classification.localSide ?? null,
+    cloudSide: classification.cloudSide ?? null,
+    localDevice,
+    cloudDevice,
+    localEntry: classification.localSide === 'deleted' ? null : localEntry,
+  }
+}
+
 function reconcileEntryForReplay(entry, classification, cloud) {
   if (classification?.bucket !== reconnectBucket.autoResolved) return entry
 

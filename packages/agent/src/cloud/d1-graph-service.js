@@ -11,6 +11,7 @@ import { assertSafeCloudPath, normalizeDerivedPathOverrides } from '../workspace
 import { CloudflareD1HopBackend, d1CloudServiceType, d1ConfigFromOptions } from '@hopit/backend-d1'
 import { attachTextDiff, buildFileVersionRowForEntry, buildFileVersionRows, compareVersionRows, createCompareBlobReader, retainedBlobKeysForVersions } from '@hopit/backend-d1'
 import { clusterEpisodes, normalizeSummaryMode } from '@hopit/backend-d1'
+import { divergenceId, divergenceState } from '@hopit/backend-d1'
 import { scopeForPath } from '@hopit/core/privacy-zone'
 import { existsSync } from 'node:fs'
 
@@ -421,6 +422,84 @@ export class FixtureJsonCloudGraphService {
 
   async computeTrailEpisodes(codebaseId, options = {}) {
     return clusterEpisodes(await this.listFileVersions(), options)
+  }
+
+  // Same-owner multi-device divergence persistence (GR-A2, decisions §1),
+  // mirroring `attachDivergenceMethods` in `@hopit/backend-d1` for the
+  // local/dev JSON backend. State lives under `divergences` on the cloud
+  // graph file, same pattern as `trailEpisodes`/`codebaseSettings`.
+  async listDivergences(codebaseId, { state } = {}) {
+    const cloud = (await this.exists()) ? await readJson(this.path) : null
+    const stored = Array.isArray(cloud?.divergences) ? cloud.divergences : []
+    const sorted = [...stored].sort((a, b) => (a.openedAt ?? '').localeCompare(b.openedAt ?? ''))
+    return state ? sorted.filter((row) => row.state === state) : sorted
+  }
+
+  async getDivergence(codebaseId, id) {
+    const rows = await this.listDivergences(codebaseId)
+    return rows.find((row) => row.divergenceId === id) ?? null
+  }
+
+  async getOpenDivergence(codebaseId, forPath) {
+    const rows = await this.listDivergences(codebaseId, { state: divergenceState.open })
+    return [...rows].reverse().find((row) => row.path === forPath) ?? null
+  }
+
+  async openDivergence(codebaseId, divergence = {}) {
+    if (!divergence.path) throw new Error('openDivergence requires a path')
+    const cloud = await readJson(this.path)
+    const stored = Array.isArray(cloud.divergences) ? cloud.divergences : []
+    const existingIndex = stored.findIndex((row) => row.path === divergence.path && row.state === divergenceState.open)
+    const now = new Date().toISOString()
+    const existing = existingIndex >= 0 ? stored[existingIndex] : null
+    const record = {
+      divergenceId: existing?.divergenceId ?? divergenceId(),
+      codebaseId: cloud?.codebase?.id ?? codebaseId ?? null,
+      path: divergence.path,
+      scope: divergence.scope ?? null,
+      state: divergenceState.open,
+      reason: divergence.reason ?? null,
+      baseRevision: divergence.baseRevision ?? null,
+      cloudRevision: divergence.cloudRevision ?? null,
+      localHash: divergence.localHash ?? null,
+      cloudHash: divergence.cloudHash ?? null,
+      localDevice: divergence.localDevice ?? null,
+      cloudDevice: divergence.cloudDevice ?? null,
+      localSide: divergence.localSide ?? null,
+      cloudSide: divergence.cloudSide ?? null,
+      localEntry: divergence.localEntry ?? null,
+      openedAt: existing?.openedAt ?? now,
+      resolvedAt: null,
+      resolvedKeep: null,
+      resolvedRevision: null,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+    }
+    if (existingIndex >= 0) stored[existingIndex] = record
+    else stored.push(record)
+    cloud.divergences = stored
+    await writeJson(this.path, cloud)
+    return record
+  }
+
+  async resolveDivergence(codebaseId, id, { keep, resolvedRevision } = {}) {
+    const cloud = await readJson(this.path)
+    const stored = Array.isArray(cloud.divergences) ? cloud.divergences : []
+    const index = stored.findIndex((row) => row.divergenceId === id)
+    if (index === -1) return null
+    const now = new Date().toISOString()
+    const record = {
+      ...stored[index],
+      state: divergenceState.resolved,
+      resolvedAt: now,
+      resolvedKeep: keep ?? null,
+      resolvedRevision: resolvedRevision ?? null,
+      updatedAt: now,
+    }
+    stored[index] = record
+    cloud.divergences = stored
+    await writeJson(this.path, cloud)
+    return record
   }
 }
 
