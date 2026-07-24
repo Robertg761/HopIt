@@ -3,7 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { readFileSync } from 'node:fs'
 import { defaultOptions } from './constants.js'
-import { isTruthyEnv } from './paths.js'
+import { isFalsyEnv, isTruthyEnv } from './paths.js'
 
 export function normalizeCommand(command) {
   const aliases = {
@@ -149,8 +149,15 @@ export function applyRuntimeDefaults(options, provided) {
   if (!provided.has('remote-push-url') && process.env.HOPIT_REMOTE_PUSH_URL) {
     options['remote-push-url'] = process.env.HOPIT_REMOTE_PUSH_URL
   }
-  if (!provided.has('auto-prune') && isTruthyEnv(process.env.HOPIT_AUTO_PRUNE)) {
-    options['auto-prune'] = true
+  // auto-prune defaults on (GR-G1); HOPIT_AUTO_PRUNE only needs to express an
+  // explicit override, in either direction, when no --auto-prune/--no-auto-prune
+  // flag was passed.
+  if (!provided.has('auto-prune')) {
+    if (isFalsyEnv(process.env.HOPIT_AUTO_PRUNE)) {
+      options['auto-prune'] = false
+    } else if (isTruthyEnv(process.env.HOPIT_AUTO_PRUNE)) {
+      options['auto-prune'] = true
+    }
   }
   if (!provided.has('auto-prune-interval-ms') && process.env.HOPIT_AUTO_PRUNE_INTERVAL_MS) {
     options['auto-prune-interval-ms'] = process.env.HOPIT_AUTO_PRUNE_INTERVAL_MS

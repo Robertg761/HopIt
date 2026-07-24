@@ -155,6 +155,13 @@ export function isTruthyEnv(value) {
   return /^(1|true|yes|on)$/i.test(value ?? '')
 }
 
+// Explicit-disable counterpart to isTruthyEnv, used by options that default
+// to enabled (e.g. HOPIT_AUTO_PRUNE, GR-G1) so an environment override can
+// still turn them off without requiring a `--no-*` CLI flag.
+export function isFalsyEnv(value) {
+  return /^(0|false|no|off)$/i.test(value ?? '')
+}
+
 export async function assertWorkspacePathSafe(options, context = {}) {
   const workspace = path.resolve(options.workspace)
 

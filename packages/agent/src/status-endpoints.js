@@ -151,6 +151,16 @@ export async function readAgentStatusEndpoint(options) {
       lastSuspected: eventsSummary.lastSecretSuspected,
       recentSuspected: eventsSummary.recentSecretSuspected,
     },
+    // Idle dehydration status surface (GR-G1, decisions §11).
+    autoPrune: {
+      enabled: options['auto-prune'] !== false,
+      lastStarted: eventsSummary.lastAutoPruneStarted,
+      lastSkipped: eventsSummary.lastAutoPruneSkipped,
+      lastFailed: eventsSummary.lastAutoPruneFailed,
+      lastDiskPressure: eventsSummary.lastAutoPruneDiskPressure,
+      lastEvicted: eventsSummary.lastCacheEvicted,
+      latestEvent: eventsSummary.latestAutoPruneEvent,
+    },
     events: eventsSummary,
   }
 }
@@ -318,6 +328,22 @@ export function summarizeAgentEvents(eventEntries) {
   const secretSuspectedEvents = eventEntries.filter((entry) => entry?.event === 'secret.suspected')
   const lastSecretSuspected = secretSuspectedEvents.at(-1) ?? null
 
+  // GR-G1 (decisions §11): idle dehydration status surface. `cache.evicted`
+  // only fires on an executed prune (dry-run planning uses
+  // `cache.prune_planned`), so this reflects real eviction activity.
+  const lastAutoPruneStarted = findLastEvent(eventEntries, 'cache.auto_prune_started')
+  const lastAutoPruneSkipped = findLastEvent(eventEntries, 'cache.auto_prune_skipped')
+  const lastAutoPruneFailed = findLastEvent(eventEntries, 'cache.auto_prune_failed')
+  const lastAutoPruneDiskPressure = findLastEvent(eventEntries, 'cache.auto_prune_disk_pressure')
+  const lastCacheEvicted = findLastEvent(eventEntries, 'cache.evicted')
+  const latestAutoPruneEvent = findLastEventOf(eventEntries, [
+    'cache.auto_prune_started',
+    'cache.auto_prune_skipped',
+    'cache.auto_prune_failed',
+    'cache.auto_prune_disk_pressure',
+    'cache.evicted',
+  ])
+
   return {
     path: null,
     exists: eventEntries.length > 0,
@@ -362,6 +388,12 @@ export function summarizeAgentEvents(eventEntries) {
     lastSecretSuspected,
     secretSuspectedCount: secretSuspectedEvents.length,
     recentSecretSuspected: secretSuspectedEvents.slice(-20),
+    lastAutoPruneStarted,
+    lastAutoPruneSkipped,
+    lastAutoPruneFailed,
+    lastAutoPruneDiskPressure,
+    lastCacheEvicted,
+    latestAutoPruneEvent,
   }
 }
 
