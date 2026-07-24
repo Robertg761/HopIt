@@ -219,6 +219,18 @@ Watch-loop expectations:
 
 Recovery should be safe before it is clever. If the agent is unsure whether the cloud accepted a write, it should keep the journal entry pending and expose that uncertainty through status instead of silently discarding local state.
 
+### Reconnect Classification (Same-Owner Multi-Device Divergence)
+
+A single person's devices all write to the same personal change set, so two of their devices editing offline can diverge with no change-set boundary to protect them (see `docs/git-replacement-decisions-2026-07.md` §1). `packages/agent/src/reconnect.js` is the classification engine restart recovery consults before replaying anything: it fetches the current cloud head and sorts every pending journal path into one of three buckets.
+
+1. **only-local-touched** (`classifyReconnectEntry` bucket `only-local`): the cloud file's revision still equals the entry's recorded `baseRevision` (or the entry never recorded one, which keeps journals written before this classifier existed byte-identical). Replayed exactly as restart recovery always has.
+2. **both-touched, identical content** (`auto-resolved`): the cloud head moved since this device last saw the path, but the content hash still matches. Auto-resolved as a no-op: the entry's `baseRevision` (and `targetStateRevision`, when present) is rewritten to the cloud's current values before replay so the base/selected-state revision guards don't reject a no-op as a conflict.
+3. **both-touched, differing content** (`diverged`): a real divergence. `recoverJournal` never replays these entries and never clobbers the local file; it emits `journal.reconnect_diverged` per path and leaves the journal entry pending (blocking safe refresh, same as any other pending entry) until something outside this classifier resolves it. Delete-vs-edit is a divergence too, with `deleted` recorded as whichever side lost the file.
+
+Ordering across all three buckets follows causality — the entry's `baseRevision` — never wall-clock time; `sortEntriesByCausality` ignores `createdAt` entirely so a reconnecting device with a skewed clock classifies identically to one with a correct clock. `partitionEntriesForReconnect` excludes every journal entry for a diverged path, not just the causally-last one, so no partial intermediate write for that path is ever committed.
+
+This bucket-3 path intentionally supersedes the old behavior where any stale per-file `baseRevision` threw `base_revision_mismatch` and failed the whole `recover` call: the classifier now detects that case before attempting a commit, so `recover` succeeds and the divergence stays flagged for later resolution instead of hard-failing. Full divergence persistence (uploading both sides as recoverable trail data) and user-facing surfaces (`hop conflicts`, dashboard side-by-side view) are separate, later work; this classifier only guarantees nothing is silently replayed over a genuine divergence.
+
 ### Safe Refresh Contract
 
 A refresh means making the managed workspace folder match the latest selected cloud state that is safe for this device/session to see. That selected state may be Main, the user's active change set, or a visible review change set. It is a cloud-to-local operation, not a Git pull, branch checkout, fork sync, worktree update, wiki fetch, star/social feed update, or ignore-file evaluation.
