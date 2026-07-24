@@ -39,8 +39,23 @@ export async function hydrateWorkspace(options) {
   const indexedCodebase = findIndexedCodebase(workspaceIndex, codebaseId, options.workspace)
   let materializedCount = 0
   let verifiedCount = 0
+  let withheldCount = 0
+
+  // GR-A4 (decisions §1): paths carrying an open divergence (from this
+  // startup's diff-scan reconciliation, or one left open by an earlier
+  // session) must never be touched by this verify/re-materialize pass --
+  // this loop's whole job is "disk differs from cloud -> overwrite disk with
+  // cloud", which is exactly the clobber GR-A2 promises never happens to a
+  // diverged path. Mirrors GR-F1's `withheldPaths` pattern in
+  // `refreshWorkspace`/`materializeCloudToWorkspace`.
+  const skipPaths = new Set(options.hydrateSkipPaths ?? [])
 
   for (const [relativePath, file] of Object.entries(cloud.files)) {
+    if (skipPaths.has(relativePath)) {
+      withheldCount += 1
+      continue
+    }
+
     const scope = scopeForPath(relativePath)
     const entry = normalizeCloudFileEntry(relativePath, file)
     const diskEntry = diskEntries[relativePath]
@@ -85,12 +100,13 @@ export async function hydrateWorkspace(options) {
     hiddenScopeCounts: cloud.visibilityContext?.hiddenScopeCounts ?? { shared: 0, private: 0 },
     materializedFileCount: materializedCount,
     verifiedFileCount: verifiedCount,
+    ...(withheldCount > 0 ? { withheldCount } : {}),
   })
   await upsertWorkspaceIndexFromCloud(options, cloud, {
     reason: 'hydrate',
     lastEvent: 'workspace.ready',
     hydrationState: 'materialized',
-    hydratedPaths: Object.keys(cloud.files ?? {}),
+    hydratedPaths: Object.keys(cloud.files ?? {}).filter((relativePath) => !skipPaths.has(relativePath)),
   })
 }
 

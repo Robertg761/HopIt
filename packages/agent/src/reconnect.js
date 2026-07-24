@@ -17,6 +17,7 @@
 // carry no divergence signal at all.
 import { normalizeCloudFileEntry } from './journal.js'
 import { scopeForPath } from '@hopit/core/privacy-zone'
+import { randomUUID } from 'node:crypto'
 
 export const reconnectBucket = {
   onlyLocal: 'only-local',
@@ -73,6 +74,24 @@ export function classifyReconnectEntry(cloud, entry) {
     cloudRevision,
     cloudHash: cloudFile?.hash ?? null,
     localHash: entry.hash ?? null,
+  }
+
+  // GR-A4 (decisions §1: unified reconciliation). A diff-scan-synthesized
+  // deletion set shaped like a mass delete (e.g. a workspace folder restored
+  // from an external backup that is missing a large fraction of its known
+  // files) is never trusted as a genuine delete, no matter what its recorded
+  // base revision says -- it is forced into a divergence so the cloud copy
+  // stays recoverable and the user decides, instead of silently replaying as
+  // a real delete. Only meaningful when the cloud side still has the file;
+  // if cloud already lacks it too, the normal both-deleted auto-resolve path
+  // below is correct and quieter.
+  if (entry.forceDivergence && entry.type === 'delete' && cloudFile) {
+    return {
+      ...base,
+      bucket: reconnectBucket.diverged,
+      reason: entry.forceDivergenceReason ?? 'forced_divergence',
+      localSide: 'deleted',
+    }
   }
 
   if (!bothTouched) {
@@ -263,6 +282,74 @@ export function deriveOpenDivergences(eventEntries) {
   }
 
   return open.sort((a, b) => a.path.localeCompare(b.path))
+}
+
+// GR-A4 (decisions §1: unified reconciliation). Converts a diff-scan result
+// (`diffWorkspaceAgainstManifest` run against the workspace's last-known
+// content manifest) into synthesized journal entries, so edits made while the
+// agent was not running -- offline, crashed, force-quit, or a workspace
+// folder restored from an external backup -- go through exactly the same
+// recovery path as a live watcher's own writes: appended to the journal, then
+// GR-A1-classified by the normal `recoverJournal` pass that follows. There is
+// deliberately no second "startup catch-up" mechanism that could diverge from
+// it. I/O is fully injected (`readDiskEntry`) so this stays pure/testable and
+// callers control disk access.
+//
+// `massDeleteShaped` marks the whole deleted-path set as untrustworthy (see
+// `classifyReconnectEntry`'s `forceDivergence` handling): those entries are
+// tagged so a later classification pass forces them into divergences instead
+// of replaying them as real deletes.
+export async function synthesizeDiffScanEntries({
+  diff,
+  baseline,
+  readDiskEntry,
+  massDeleteShaped = false,
+  now = new Date().toISOString(),
+} = {}) {
+  const baselineFiles = baseline?.files ?? {}
+  const entries = []
+
+  const buildWriteEntry = async (relativePath) => {
+    const disk = await readDiskEntry(relativePath)
+    if (!disk) return
+    entries.push({
+      id: randomUUID(),
+      type: 'write',
+      path: relativePath,
+      scope: disk.scope ?? scopeForPath(relativePath),
+      kind: disk.kind,
+      hash: disk.hash,
+      size: disk.size,
+      baseRevision: baselineFiles[relativePath]?.revision ?? null,
+      createdAt: now,
+      status: 'pending',
+      synthesized: true,
+      synthesizedReason: 'diff_scan_unwatched_change',
+    })
+  }
+
+  for (const relativePath of diff?.addedPaths ?? []) await buildWriteEntry(relativePath)
+  for (const relativePath of diff?.modifiedPaths ?? []) await buildWriteEntry(relativePath)
+
+  for (const relativePath of diff?.deletedPaths ?? []) {
+    const baselineEntry = baselineFiles[relativePath]
+    entries.push({
+      id: randomUUID(),
+      type: 'delete',
+      path: relativePath,
+      scope: baselineEntry?.scope ?? scopeForPath(relativePath),
+      baseRevision: baselineEntry?.revision ?? null,
+      createdAt: now,
+      status: 'pending',
+      synthesized: true,
+      synthesizedReason: 'diff_scan_unwatched_change',
+      ...(massDeleteShaped
+        ? { forceDivergence: true, forceDivergenceReason: 'restored_workspace_deletion_guard' }
+        : {}),
+    })
+  }
+
+  return entries
 }
 
 function isEventBefore(event, reference) {
