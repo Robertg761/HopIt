@@ -281,6 +281,11 @@ export const d1SchemaStatements = [
   )`,
   `create index if not exists idx_action_jobs_status_created on action_jobs(status, created_at)`,
   `create index if not exists idx_action_jobs_codebase_created on action_jobs(codebase_id, created_at)`,
+  // GR-B5: ties a hosted CI job back to the proposal it gates (`kind = 'ci'`)
+  // so the merge queue can look up "the CI job for this proposal" without a
+  // separate join table.
+  `alter table action_jobs add column proposal_id text`,
+  `create index if not exists idx_action_jobs_proposal on action_jobs(proposal_id, created_at)`,
   `create table if not exists review_threads (
     thread_id text primary key,
     codebase_id text not null,

@@ -14,11 +14,21 @@
 // `upsertProposal`/`getOpenProposalForChangeSet` in the cloud service, see
 // docs/proposal-data-model-design.md "One row per proposal lifecycle").
 import { randomUUID } from 'node:crypto'
-import { proposalStaleReason, proposalState } from '@hopit/backend-d1'
+import { d1CloudServiceType, proposalStaleReason, proposalState } from '@hopit/backend-d1'
 import { createCloudGraphService } from '../cloud/d1-graph-service.js'
 import { emit } from '../io.js'
 import { actorIdFromOptions, ensureActiveChangeSet } from '../journal.js'
 import { advanceMainToRevision } from './sync.js'
+
+// GR-B5 (decisions §3): "CI's default trigger is on propose and in the merge
+// queue, not on every save." Only the D1 backend has a hosted-runner
+// `action_jobs` table (the local/dev fixture backend's enqueue/lookup are
+// deliberate no-ops -- see `enqueueCiJobForProposal` in
+// `cloud/d1-graph-service.js`, matching GR-E2's mirror-push precedent), so
+// CI only actually gates the merge queue when running against real D1.
+function ciGatingEnabled(cloudService) {
+  return cloudService.type === d1CloudServiceType
+}
 
 // `hop propose [--title <text>]`: pins the active change set's current head
 // as a proposal. A second `hop propose` on the same, still-unmerged change
@@ -56,6 +66,28 @@ export async function proposeChangeSet(options, { title } = {}) {
     baseRevision: proposal.baseRevision,
     createdByUserId: proposal.createdByUserId,
   })
+
+  // GR-B5: enqueue the CI check right away so review has a status to look
+  // at, not just at merge time. Best-effort -- an enqueue failure must never
+  // block pinning the proposal itself; the merge queue re-checks (and, if
+  // missing, re-enqueues) the same job before it ever lands the proposal, so
+  // nothing merges un-checked even if this call fails.
+  if (ciGatingEnabled(cloudService)) {
+    try {
+      const job = await cloudService.enqueueCiJobForProposal({
+        codebaseId: cloud.codebase.id,
+        proposalId: proposal.proposalId,
+        actorId,
+      })
+      if (job) await emit(options, 'ci.job_enqueued', { jobId: job.jobId, proposalId: proposal.proposalId, codebaseId: cloud.codebase.id })
+    } catch (error) {
+      await emit(options, 'ci.enqueue_failed', {
+        proposalId: proposal.proposalId,
+        codebaseId: cloud.codebase.id,
+        reason: error instanceof Error ? error.message : 'CI enqueue failed',
+      })
+    }
+  }
 
   return proposal
 }
@@ -127,11 +159,16 @@ export async function runMergeQueue(options) {
     if (ready.length === 0) break
     const outcome = await landOneProposal(options, cloudService, ready[0], actorId)
     outcomes.push(outcome)
-    // Defensive only: every reachable outcome flips the proposal's state
-    // away from 'approved' (merged or stale), so `ready` always shrinks.
-    // A 'skipped' outcome means the row already moved (e.g. raced by
-    // another caller) -- stop rather than spin.
-    if (outcome.outcome === 'skipped') break
+    // Every reachable outcome except 'ci-pending'/'ci-failed' flips the
+    // proposal's state away from 'approved' (merged or stale), so `ready`
+    // shrinks on its own. A 'skipped' outcome means the row already moved
+    // (e.g. raced by another caller) -- stop rather than spin. CI outcomes
+    // leave the proposal 'approved' on purpose (decisions §3: the merge
+    // queue is strictly serial/FIFO -- a blocked head-of-queue proposal
+    // must not let a later one land out of order), so those must stop the
+    // drain too, or the very next iteration re-picks the same still-blocked
+    // proposal forever.
+    if (outcome.outcome === 'skipped' || outcome.outcome === 'ci-pending' || outcome.outcome === 'ci-failed') break
   }
   return outcomes
 }
@@ -146,6 +183,11 @@ async function landOneProposal(options, cloudService, candidate, actorId) {
   const proposal = await cloudService.getProposal(codebaseId, candidate.proposalId)
   if (!proposal || proposal.state !== proposalState.approved) {
     return { proposalId: candidate.proposalId, outcome: 'skipped', reason: 'not-approved' }
+  }
+
+  if (ciGatingEnabled(cloudService)) {
+    const ciOutcome = await ensureCiPassed(options, cloudService, { codebaseId, proposal, actorId })
+    if (ciOutcome) return ciOutcome
   }
 
   const mainRevision = cloud.main.revision
@@ -228,6 +270,39 @@ async function landOneProposal(options, cloudService, candidate, actorId) {
   })
 
   return { proposalId: merged.proposalId, outcome: 'merged', mergedRevision: merged.mergedRevision, previousMainRevision }
+}
+
+// GR-B5: "merge blocked on job success" -- the merge queue's own CI gate,
+// re-checked (and, if needed, re-enqueued) right before every land attempt
+// rather than trusted from propose time, so a proposal that sat in the
+// queue for a while still gets a fresh answer. Returns a terminal outcome
+// object if the proposal must NOT land yet, or `null` if CI already
+// succeeded and landing should proceed.
+async function ensureCiPassed(options, cloudService, { codebaseId, proposal, actorId }) {
+  const ciJob = await cloudService.getLatestCiJobForProposal({ codebaseId, proposalId: proposal.proposalId })
+
+  if (ciJob && ciJob.status === 'succeeded') return null
+
+  if (ciJob && (ciJob.status === 'queued' || ciJob.status === 'running')) {
+    return { proposalId: proposal.proposalId, outcome: 'ci-pending', reason: ciJob.status, jobId: ciJob.jobId }
+  }
+
+  // No job yet, or the most recent one already failed -- (re-)enqueue and
+  // block. A failed CI job never auto-passes; it takes a fresh green job to
+  // unblock the queue.
+  const queued = await cloudService.enqueueCiJobForProposal({ codebaseId, proposalId: proposal.proposalId, actorId })
+  await emit(options, 'ci.job_enqueued', {
+    jobId: queued?.jobId ?? null,
+    proposalId: proposal.proposalId,
+    codebaseId,
+    reQueuedAfterFailure: Boolean(ciJob && ciJob.status === 'failed'),
+  })
+  return {
+    proposalId: proposal.proposalId,
+    outcome: ciJob && ciJob.status === 'failed' ? 'ci-failed' : 'ci-pending',
+    reason: ciJob && ciJob.status === 'failed' ? 'previous-ci-failed' : 'no-ci-job',
+    jobId: queued?.jobId ?? null,
+  }
 }
 
 function intersectChangedPaths(left, right) {

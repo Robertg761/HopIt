@@ -504,10 +504,38 @@ function d1Options(server, root) {
   }
 }
 
+function backendFor(options) {
+  return createD1Backend({
+    'codebase-id': options['codebase-id'],
+    'd1-api-base-url': options['d1-api-base-url'],
+    'd1-account-id': options['d1-account-id'],
+    'd1-database-id': options['d1-database-id'],
+    'd1-api-token': options['d1-api-token'],
+  })
+}
+
+// GR-B5: claims and completes the most recently queued 'ci' action_job,
+// exactly like a hosted runner would after actually running the check --
+// tests never run real npm scripts, they just decide the outcome directly.
+async function completeLatestCiJob(backend, status = 'succeeded') {
+  const claimed = await backend.claimNextActionJob({ runnerId: 'ci-test-runner' })
+  assert.equal(claimed.kind, 'ci', 'the queued job is the CI check, not something else')
+  await backend.completeActionJob({
+    jobId: claimed.jobId,
+    runnerId: 'ci-test-runner',
+    status,
+    exitCode: status === 'succeeded' ? 0 : 1,
+    stdout: '',
+    stderr: status === 'succeeded' ? '' : 'test failed',
+  })
+  return claimed
+}
+
 test('D1 backend: propose --merge round-trips through the real proposals table', async (t) => {
   const server = await startD1ApiServer(t)
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hopit-propose-d1-'))
   const options = d1Options(server, root)
+  const backend = backendFor(options)
 
   await initCloud({ ...options, force: true })
   await hydrateWorkspace(options)
@@ -515,17 +543,17 @@ test('D1 backend: propose --merge round-trips through the real proposals table',
   await fs.appendFile(readmePath, '\nD1 change.\n', 'utf8')
   await syncOnce(options, { trigger: 'manual' })
 
+  // GR-B5: propose --merge enqueues CI and blocks on it (decisions §3) --
+  // the first drain attempt cannot land yet.
   const { proposal, outcomes } = await proposeAndMerge(options, { title: 'D1 proposal' })
   assert.equal(outcomes.length, 1)
-  assert.equal(outcomes[0].outcome, 'merged')
+  assert.equal(outcomes[0].outcome, 'ci-pending')
 
-  const backend = createD1Backend({
-    'codebase-id': options['codebase-id'],
-    'd1-api-base-url': options['d1-api-base-url'],
-    'd1-account-id': options['d1-account-id'],
-    'd1-database-id': options['d1-database-id'],
-    'd1-api-token': options['d1-api-token'],
-  })
+  await completeLatestCiJob(backend, 'succeeded')
+  const landed = await runMergeQueue(options)
+  assert.equal(landed.length, 1)
+  assert.equal(landed[0].outcome, 'merged')
+
   const row = server.db.prepare('select * from proposals where proposal_id = ?').get(proposal.proposalId)
   assert.ok(row, 'the proposal row exists in the real proposals table')
   assert.equal(row.state, 'merged')
@@ -535,4 +563,45 @@ test('D1 backend: propose --merge round-trips through the real proposals table',
   const graph = await backend.readGraph('hopit-core')
   assert.equal(graph.main.revision, 2)
   assert.notEqual(graph.selectedState.id, 'cs_demo_active')
+})
+
+test('the merge queue blocks on red CI and lands once a fresh CI job succeeds', async (t) => {
+  const server = await startD1ApiServer(t)
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hopit-propose-d1-ci-red-'))
+  const options = d1Options(server, root)
+  const backend = backendFor(options)
+
+  await initCloud({ ...options, force: true })
+  await hydrateWorkspace(options)
+  await fs.appendFile(path.join(options.workspace, 'README.md'), '\nRed CI change.\n', 'utf8')
+  await syncOnce(options, { trigger: 'manual' })
+
+  const proposal = await proposeChangeSet(options, { title: 'Gated proposal' })
+  await approveProposal(options, { proposalId: proposal.proposalId })
+
+  // Queue drain #1: no CI job has run yet -- blocked, Main untouched.
+  const pending = await runMergeQueue(options)
+  assert.equal(pending.length, 1)
+  assert.equal(pending[0].outcome, 'ci-pending')
+  assert.equal((await backend.readGraph('hopit-core')).main.revision, 1)
+
+  // The runner reports the check failed -- still blocked, Main still
+  // untouched (red CI must never land).
+  await completeLatestCiJob(backend, 'failed')
+  const afterRed = await runMergeQueue(options)
+  assert.equal(afterRed.length, 1)
+  assert.equal(afterRed[0].outcome, 'ci-failed')
+  assert.equal((await backend.readGraph('hopit-core')).main.revision, 1, 'red CI never lands the proposal')
+
+  const jobRows = server.db.prepare(`select * from action_jobs where proposal_id = ? order by created_at asc`).all(proposal.proposalId)
+  assert.equal(jobRows.length, 2, 'a failed check gets re-queued, not silently retried in place')
+  assert.equal(jobRows[0].status, 'failed')
+  assert.equal(jobRows[1].status, 'queued')
+
+  // A fresh CI job for the same proposal goes green -- now it lands.
+  await completeLatestCiJob(backend, 'succeeded')
+  const landed = await runMergeQueue(options)
+  assert.equal(landed.length, 1)
+  assert.equal(landed[0].outcome, 'merged')
+  assert.equal((await backend.readGraph('hopit-core')).main.revision, 2)
 })

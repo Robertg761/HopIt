@@ -9,7 +9,12 @@ export function actionCommandForKind(kind) {
   // mirror-sync` directly against the codebase's own configured remote
   // (see packages/actions-runner/src/runner.js).
   if (kind === 'mirror') return { command: 'mirror-sync', args: [] }
-  throw new Error('Action kind must be lint, test, build, or mirror.')
+  // GR-B5: the CI check the merge queue gates on (decisions §3 -- "CI's
+  // default trigger is on propose and in the merge queue"). Runs the same
+  // "npm test" step a hosted `test` job would, but is only ever created via
+  // `enqueueCiJobForProposal` and always carries a `proposal_id`.
+  if (kind === 'ci') return { command: 'npm', args: ['test'] }
+  throw new Error('Action kind must be lint, test, build, mirror, or ci.')
 }
 
 export function summarizeActionJob(row) {
@@ -22,6 +27,7 @@ export function summarizeActionJob(row) {
         command: row.command,
         args: parseJson(row.args_json, []),
         status: row.status,
+        proposalId: row.proposal_id ?? null,
         requestedByUserId: row.requested_by_user_id,
         runnerId: row.runner_id ?? undefined,
         exitCode: row.exit_code ?? null,
@@ -42,6 +48,7 @@ export function summarizeActionJob(row) {
     command: job.command,
     args: Array.isArray(job.args) ? job.args : [],
     status: job.status,
+    proposalId: job.proposalId ?? null,
     requestedByUserId: job.requestedByUserId,
     runnerId: job.runnerId ?? null,
     exitCode: job.exitCode ?? null,

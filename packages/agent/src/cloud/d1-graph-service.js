@@ -623,6 +623,20 @@ export class FixtureJsonCloudGraphService {
     await writeJson(this.path, cloud)
     return record
   }
+
+  // GR-B5: same rationale as `enqueueMirrorSyncJob` above -- the local/dev
+  // fixture backend has no `action_jobs` table and no hosted runner to claim
+  // work, so CI-gating a proposal is a deliberate no-op here. `propose.js`
+  // only blocks the merge queue on CI when `cloudService.type ===
+  // d1CloudServiceType`; real CI enforcement is exercised against the D1
+  // backend.
+  async enqueueCiJobForProposal() {
+    return null
+  }
+
+  async getLatestCiJobForProposal() {
+    return null
+  }
 }
 
 export class D1CloudGraphService extends CloudflareD1HopBackend {
