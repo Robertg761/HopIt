@@ -45,6 +45,24 @@ const HUMAN_OUTPUT_COMMANDS = new Set([
   'secrets',
 ])
 
+// `hop watch` runs in the foreground until interrupted. A graceful SIGINT/
+// SIGTERM shutdown closes the watcher and releases the workspace lock so the
+// same folder can be watched again immediately (instead of leaving a lock
+// behind for the next start's stale-lock takeover to clean up).
+async function runWatchCommand(options) {
+  const handle = await watchWorkspace(options)
+  await new Promise((resolve) => {
+    const shutdown = () => {
+      process.off('SIGINT', shutdown)
+      process.off('SIGTERM', shutdown)
+      resolve()
+    }
+    process.once('SIGINT', shutdown)
+    process.once('SIGTERM', shutdown)
+  })
+  await handle.close()
+}
+
 async function main() {
   // Auto-load ~/.config/hopit/production.env (or $HOPIT_ENV_FILE) before parsing
   // options so HOPIT_PROFILE=production and the other deployed settings take
@@ -127,7 +145,7 @@ async function main() {
   if (command === 'keys') return runKeysCommand(keysAction, options)
   if (command === 'service') return runServiceCommand(serviceAction, options)
   if (command === 'service-run') return runServiceProcess(options)
-  if (command === 'watch') return watchWorkspace(options)
+  if (command === 'watch') return runWatchCommand(options)
   if (command === 'status') {
     const state = await readAgentState(options)
     console.log(JSON.stringify(state.status, null, 2))

@@ -257,6 +257,13 @@ A single person's devices all write to the same personal change set, so two of t
 Ordering across all three buckets follows causality — the entry's `baseRevision` — never wall-clock time; `sortEntriesByCausality` ignores `createdAt` entirely so a reconnecting device with a skewed clock classifies identically to one with a correct clock. `partitionEntriesForReconnect` excludes every journal entry for a diverged path, not just the causally-last one, so no partial intermediate write for that path is ever committed.
 
 This bucket-3 path intentionally supersedes the old behavior where any stale per-file `baseRevision` threw `base_revision_mismatch` and failed the whole `recover` call: the classifier now detects that case before attempting a commit, so `recover` succeeds and the divergence stays flagged for later resolution instead of hard-failing. Full divergence persistence (uploading both sides as recoverable trail data) and user-facing surfaces (`hop conflicts`, dashboard side-by-side view) are separate, later work; this classifier only guarantees nothing is silently replayed over a genuine divergence.
+One agent per workspace (GR-H3, decisions doc §12):
+
+- before touching the cloud service or journal, `watchWorkspace` takes an exclusive lock on the workspace folder at `<workspace>/.hopit-agent/lock.json` (`packages/agent/src/workspace-lock.js`)
+- the lock records the holder's pid, hostname, codebase id, and start time; a second `hop watch`, a second `hop service run`, or any other agent attaching to the same folder — regardless of profile, state-root, or session — refuses to start and names the current holder (pid, codebase, start time) instead of racing the existing watcher
+- a lock left behind by a process that has since died (crash, `kill -9`, power loss) is detected by a same-host pid liveness check and taken over automatically so a dead holder never permanently wedges the workspace; a lock recorded from a different hostname is never treated as stale, since liveness cannot be checked remotely
+- the lock is released on a clean shutdown (`hop watch` SIGINT/SIGTERM, `hop service stop`/`restart`) and on any startup failure after the lock was acquired, so a failed start never blocks a retry
+- `.hopit-agent/` inside a workspace folder is excluded from workspace scans (`shouldSkipWorkspacePath`, `shouldSkipLiteralMirrorPath`), so the lockfile is never journaled, synced, or mirrored as workspace content
 
 ### Safe Refresh Contract
 

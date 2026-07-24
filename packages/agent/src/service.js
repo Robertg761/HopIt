@@ -119,7 +119,7 @@ export async function runServiceProcess(options) {
   } finally {
     process.off('SIGTERM', requestShutdown)
     process.off('SIGINT', requestShutdown)
-    watchHandle?.close()
+    await watchHandle?.close()
     statusServer?.close()
   }
 }

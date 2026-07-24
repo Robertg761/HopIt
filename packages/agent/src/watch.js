@@ -14,6 +14,7 @@ import { assertWorkspacePathSafe, remotePullEnabled, remotePushEnabled, remoteRe
 import { normalizeWatchFilename, readJournalSafety, visibleRevisionFromEvent } from './status-state.js'
 import { findIndexedCodebase, readWorkspaceIndex } from './workspace-index.js'
 import { exonerateWorkspaceChangesAgainstCloud, isLocalActivityMarkerPath, shouldSkipWorkspacePath, shouldTrackLocalActivityPath, workspaceLocalChanges } from './workspace-manifest.js'
+import { acquireWorkspaceLock } from './workspace-lock.js'
 import { watch } from 'node:fs'
 
 // The Linux OS watch limit (fs.inotify.max_user_watches) surfaces from
@@ -42,135 +43,148 @@ export async function watchWorkspace(options, deps = {}) {
   const watchFn = deps.watchFn ?? watch
   const createPoller = deps.createPoller ?? createWorkspacePoller
   await assertWorkspacePathSafe(options)
-  const cloudService = createCloudGraphService(options)
-  if (!(await cloudService.exists())) await initCloud(options)
-  const recovery = await recoverJournal(options)
-  if (recovery.failed > 0) {
-    await emit(options, 'watch.recovery_blocked', {
-      state: 'blocked',
-      failed: recovery.failed,
-      attempted: recovery.attempted,
-      reason: 'pending journal entries could not be recovered',
-    })
-    throw new Error('Watch startup blocked because pending journal entries could not be recovered.')
-  }
-  const workspaceIndex = await readWorkspaceIndex(options)
-  const indexedCodebase = findIndexedCodebase(
-    workspaceIndex,
-    options['codebase-id'],
-    options.workspace,
-  )
-  const hydrationState = indexedCodebase?.hydration?.state ?? null
-  if (!hydrationState || hydrationState === 'materialized') {
-    await hydrateWorkspace(options)
-  } else {
-    // Attached and partially hydrated workspaces are intentionally lazy caches.
-    // Starting the watcher must not turn service startup into a full download.
-    await fs.mkdir(options.workspace, { recursive: true })
-  }
-  await emit(options, 'watch.started', {
-    state: 'watching',
-    workspace: options.workspace,
-    adapter: workspaceMode.adapter,
-    cacheMode: workspaceMode.cacheMode,
-    hydrationState,
-  })
-
-  let watcher
-  let poller = null
-  let scanner = null
-  let remotePuller = null
-  let remotePusher = null
-  let autoPruner = null
-  const scheduleSync = createWatchSyncScheduler(options, {
-    afterDrain: async (detail) => {
-      await remotePuller?.schedule('local-change', detail)
-    },
-  })
-  const degradeToPolling = async (error) => {
-    const watchLimitExhausted = isWatchLimitExhaustedError(error)
-    if (!poller) {
-      poller = await createPoller(options.workspace, scheduleSync, {
-        agentOptions: options,
-        ...(watchLimitExhausted ? { intervalMs: watchLimitPollIntervalMs(options) } : {}),
-      })
-    }
-    await emit(options, 'watch.degraded', {
-      state: 'polling',
-      workspace: options.workspace,
-      reason: error.message,
-      ...(watchLimitExhausted
-        ? {
-            kind: 'watch-limit-exhausted',
-            code: error.code,
-            remedy: watchLimitRemedyMessage,
-          }
-        : {}),
-    })
-  }
+  // One agent per workspace (decisions doc §12): fail fast, before touching
+  // the cloud service or journal, if another live agent already holds this
+  // workspace folder.
+  const workspaceLock = await acquireWorkspaceLock(options)
 
   try {
-    watcher = watchFn(options.workspace, { recursive: true }, (eventType, filename) => {
-      scheduleSync(eventType, normalizeWatchFilename(filename))
-    })
-  } catch (error) {
-    try {
-      await degradeToPolling(error)
-    } catch (pollError) {
-      await emit(options, 'watch.degraded', {
-        state: 'unavailable',
-        workspace: options.workspace,
-        reason: `${error.message}; polling fallback failed: ${pollError.message}`,
+    const cloudService = createCloudGraphService(options)
+    if (!(await cloudService.exists())) await initCloud(options)
+    const recovery = await recoverJournal(options)
+    if (recovery.failed > 0) {
+      await emit(options, 'watch.recovery_blocked', {
+        state: 'blocked',
+        failed: recovery.failed,
+        attempted: recovery.attempted,
+        reason: 'pending journal entries could not be recovered',
       })
-      throw pollError
+      throw new Error('Watch startup blocked because pending journal entries could not be recovered.')
     }
-  }
-
-  watcher?.on('error', (error) => {
-    try {
-      watcher.close()
-    } catch {
-      // The watcher may already be closed by the time Node surfaces the error.
+    const workspaceIndex = await readWorkspaceIndex(options)
+    const indexedCodebase = findIndexedCodebase(
+      workspaceIndex,
+      options['codebase-id'],
+      options.workspace,
+    )
+    const hydrationState = indexedCodebase?.hydration?.state ?? null
+    if (!hydrationState || hydrationState === 'materialized') {
+      await hydrateWorkspace(options)
+    } else {
+      // Attached and partially hydrated workspaces are intentionally lazy caches.
+      // Starting the watcher must not turn service startup into a full download.
+      await fs.mkdir(options.workspace, { recursive: true })
     }
-    watcher = null
-    degradeToPolling(error).catch((emitError) => {
-      console.error(emitError)
+    await emit(options, 'watch.started', {
+      state: 'watching',
+      workspace: options.workspace,
+      adapter: workspaceMode.adapter,
+      cacheMode: workspaceMode.cacheMode,
+      hydrationState,
     })
-  })
 
-  scanner = await createWorkspaceScanScheduler(options, {
-    onChange: scheduleSync,
-  })
-
-  remotePuller = await createRemoteRefreshScheduler(options, {
-    localSyncIdle: () => scheduleSync.isIdle?.() ?? true,
-  })
-  remotePusher = await createRemotePushClient(options, {
-    localSyncIdle: () => scheduleSync.isIdle?.() ?? true,
-    remoteRefreshDecision,
-    refreshWorkspace,
-  })
-  autoPruner = await createAutoPruneScheduler(options, {
-    localSyncIdle: () => scheduleSync.isIdle?.() ?? true,
-  })
-
-  console.log(`HopIt agent watching ${options.workspace}`)
-  console.log('Press Ctrl+C to stop.')
-
-  return {
-    close() {
-      try {
-        watcher?.close()
-      } catch {
-        // Watchers may already be closed by an error handler.
+    let watcher
+    let poller = null
+    let scanner = null
+    let remotePuller = null
+    let remotePusher = null
+    let autoPruner = null
+    const scheduleSync = createWatchSyncScheduler(options, {
+      afterDrain: async (detail) => {
+        await remotePuller?.schedule('local-change', detail)
+      },
+    })
+    const degradeToPolling = async (error) => {
+      const watchLimitExhausted = isWatchLimitExhaustedError(error)
+      if (!poller) {
+        poller = await createPoller(options.workspace, scheduleSync, {
+          agentOptions: options,
+          ...(watchLimitExhausted ? { intervalMs: watchLimitPollIntervalMs(options) } : {}),
+        })
       }
-      scheduleSync.cancel?.()
-      poller?.close()
-      scanner?.close()
-      remotePuller?.close()
-      remotePusher?.close()
-      autoPruner?.close()
-    },
+      await emit(options, 'watch.degraded', {
+        state: 'polling',
+        workspace: options.workspace,
+        reason: error.message,
+        ...(watchLimitExhausted
+          ? {
+              kind: 'watch-limit-exhausted',
+              code: error.code,
+              remedy: watchLimitRemedyMessage,
+            }
+          : {}),
+      })
+    }
+
+    try {
+      watcher = watchFn(options.workspace, { recursive: true }, (eventType, filename) => {
+        scheduleSync(eventType, normalizeWatchFilename(filename))
+      })
+    } catch (error) {
+      try {
+        await degradeToPolling(error)
+      } catch (pollError) {
+        await emit(options, 'watch.degraded', {
+          state: 'unavailable',
+          workspace: options.workspace,
+          reason: `${error.message}; polling fallback failed: ${pollError.message}`,
+        })
+        throw pollError
+      }
+    }
+
+    watcher?.on('error', (error) => {
+      try {
+        watcher.close()
+      } catch {
+        // The watcher may already be closed by the time Node surfaces the error.
+      }
+      watcher = null
+      degradeToPolling(error).catch((emitError) => {
+        console.error(emitError)
+      })
+    })
+
+    scanner = await createWorkspaceScanScheduler(options, {
+      onChange: scheduleSync,
+    })
+
+    remotePuller = await createRemoteRefreshScheduler(options, {
+      localSyncIdle: () => scheduleSync.isIdle?.() ?? true,
+    })
+    remotePusher = await createRemotePushClient(options, {
+      localSyncIdle: () => scheduleSync.isIdle?.() ?? true,
+      remoteRefreshDecision,
+      refreshWorkspace,
+    })
+    autoPruner = await createAutoPruneScheduler(options, {
+      localSyncIdle: () => scheduleSync.isIdle?.() ?? true,
+    })
+
+    console.log(`HopIt agent watching ${options.workspace}`)
+    console.log('Press Ctrl+C to stop.')
+
+    return {
+      async close() {
+        try {
+          watcher?.close()
+        } catch {
+          // Watchers may already be closed by an error handler.
+        }
+        scheduleSync.cancel?.()
+        poller?.close()
+        scanner?.close()
+        remotePuller?.close()
+        remotePusher?.close()
+        autoPruner?.close()
+        await workspaceLock.release()
+      },
+    }
+  } catch (error) {
+    // Startup failed after the lock was taken; release it so a retry (or a
+    // different agent) is not blocked by a lock this process will never use.
+    await workspaceLock.release()
+    throw error
   }
 }
 

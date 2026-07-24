@@ -540,6 +540,11 @@ export function shouldSkipWorkspacePath(relativePath, entry, options = {}) {
   const parts = relativePath.split('/')
   const basename = parts.at(-1) ?? relativePath
   if (parts.includes('.hopit')) return true
+  // `.hopit-agent/` holds the per-workspace exclusive lock (GR-H3) and other
+  // agent-local bookkeeping. It must never be treated as workspace content:
+  // syncing, importing, or refresh-safety scans would otherwise see the
+  // lockfile as an unjournaled local change and misbehave.
+  if (parts.includes('.hopit-agent')) return true
   if (basename === '.DS_Store') return true
   if (parts.some((part) => generatedWorkspaceDirectories.has(part))) return true
   if (isLocalOnlySecretPath(relativePath) && !shouldSyncLocalOnlySecretPath(relativePath, options)) return true
@@ -559,6 +564,7 @@ export function isLocalActivityMarkerPath(relativePath) {
 export function shouldSkipLiteralMirrorPath(relativePath, _entry) {
   const parts = relativePath.split('/')
   if (parts.includes('.hopit')) return true
+  if (parts.includes('.hopit-agent')) return true
   return false
 }
 
