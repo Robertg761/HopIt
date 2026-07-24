@@ -12,6 +12,7 @@ import { CloudflareD1HopBackend, d1CloudServiceType, d1ConfigFromOptions } from 
 import { attachTextDiff, buildFileVersionRowForEntry, buildFileVersionRows, compareVersionRows, createCompareBlobReader, retainedBlobKeysForVersions } from '@hopit/backend-d1'
 import { clusterEpisodes, normalizeSummaryMode } from '@hopit/backend-d1'
 import { divergenceId, divergenceState } from '@hopit/backend-d1'
+import { proposalId, proposalState } from '@hopit/backend-d1'
 import { scopeForPath } from '@hopit/core/privacy-zone'
 import { existsSync } from 'node:fs'
 
@@ -498,6 +499,127 @@ export class FixtureJsonCloudGraphService {
     }
     stored[index] = record
     cloud.divergences = stored
+    await writeJson(this.path, cloud)
+    return record
+  }
+
+  // First-class proposal persistence (GR-B2, decisions §2-4), mirroring
+  // `attachProposalMethods` in `@hopit/backend-d1` for the local/dev JSON
+  // backend. State lives under `proposals` on the cloud graph file, same
+  // pattern as `divergences`/`trailEpisodes`. See
+  // docs/proposal-data-model-design.md and packages/backend-d1/src/
+  // proposals-store.js for the full state machine -- this mirrors it
+  // exactly, field-for-field, against a plain array instead of SQL rows.
+  async listProposals(codebaseId, { state, changeSetId } = {}) {
+    const cloud = (await this.exists()) ? await readJson(this.path) : null
+    const stored = Array.isArray(cloud?.proposals) ? cloud.proposals : []
+    const sorted = [...stored].sort((a, b) => (a.updatedAt ?? '').localeCompare(b.updatedAt ?? ''))
+    return sorted
+      .filter((row) => !state || row.state === state)
+      .filter((row) => !changeSetId || row.changeSetId === changeSetId)
+  }
+
+  async getProposal(codebaseId, id) {
+    const rows = await this.listProposals(codebaseId)
+    return rows.find((row) => row.proposalId === id) ?? null
+  }
+
+  // "At most one open proposal per change set" (owner constraint from the
+  // approved design): the only non-merged row for a given change set, if
+  // any.
+  async getOpenProposalForChangeSet(codebaseId, changeSetId) {
+    if (!changeSetId) return null
+    const rows = await this.listProposals(codebaseId, { changeSetId })
+    return [...rows].reverse().find((row) => row.state !== proposalState.merged) ?? null
+  }
+
+  async listReadyProposals(codebaseId) {
+    const rows = await this.listProposals(codebaseId, { state: proposalState.approved })
+    return [...rows].sort((a, b) => (a.queuedAt ?? '').localeCompare(b.queuedAt ?? ''))
+  }
+
+  async upsertProposal(codebaseId, { changeSetId, title, pinnedRevision, baseRevision, actorId, now } = {}) {
+    if (!changeSetId) throw new Error('upsertProposal requires changeSetId')
+    const effectiveNow = now ?? new Date().toISOString()
+    const cloud = await readJson(this.path)
+    const stored = Array.isArray(cloud.proposals) ? cloud.proposals : []
+    const existingIndex = stored.findIndex(
+      (row) => row.changeSetId === changeSetId && row.state !== proposalState.merged,
+    )
+    const existing = existingIndex >= 0 ? stored[existingIndex] : null
+    const record = existing
+      ? {
+          ...existing,
+          title: title === undefined ? existing.title ?? null : title,
+          state: proposalState.proposed,
+          pinnedRevision,
+          pinnedAt: effectiveNow,
+          baseRevision,
+          updatedAt: effectiveNow,
+          queuedAt: null,
+          staleAt: null,
+          staleReason: null,
+        }
+      : {
+          proposalId: proposalId(),
+          codebaseId: cloud?.codebase?.id ?? codebaseId ?? null,
+          changeSetId,
+          title: title ?? null,
+          state: proposalState.proposed,
+          pinnedRevision,
+          pinnedAt: effectiveNow,
+          baseRevision,
+          createdByUserId: actorId ?? null,
+          createdAt: effectiveNow,
+          updatedAt: effectiveNow,
+          queuedAt: null,
+          mergedAt: null,
+          mergedRevision: null,
+          mergedByUserId: null,
+          staleAt: null,
+          staleReason: null,
+        }
+    if (existingIndex >= 0) stored[existingIndex] = record
+    else stored.push(record)
+    cloud.proposals = stored
+    await writeJson(this.path, cloud)
+    return record
+  }
+
+  async approveProposal(codebaseId, id, { now } = {}) {
+    const effectiveNow = now ?? new Date().toISOString()
+    return this.patchProposal(id, { state: proposalState.approved, queuedAt: effectiveNow }, effectiveNow)
+  }
+
+  async markProposalStale(codebaseId, id, { reason, now } = {}) {
+    const effectiveNow = now ?? new Date().toISOString()
+    return this.patchProposal(id, {
+      state: proposalState.stale,
+      staleAt: effectiveNow,
+      staleReason: reason ?? null,
+      queuedAt: null,
+    }, effectiveNow)
+  }
+
+  async markProposalMerged(codebaseId, id, { mergedRevision, mergedByUserId, now } = {}) {
+    const effectiveNow = now ?? new Date().toISOString()
+    return this.patchProposal(id, {
+      state: proposalState.merged,
+      mergedAt: effectiveNow,
+      mergedRevision: mergedRevision ?? null,
+      mergedByUserId: mergedByUserId ?? null,
+      queuedAt: null,
+    }, effectiveNow)
+  }
+
+  async patchProposal(id, patch, now = new Date().toISOString()) {
+    const cloud = await readJson(this.path)
+    const stored = Array.isArray(cloud.proposals) ? cloud.proposals : []
+    const index = stored.findIndex((row) => row.proposalId === id)
+    if (index === -1) return null
+    const record = { ...stored[index], ...patch, updatedAt: now }
+    stored[index] = record
+    cloud.proposals = stored
     await writeJson(this.path, cloud)
     return record
   }

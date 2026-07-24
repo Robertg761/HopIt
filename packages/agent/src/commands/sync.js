@@ -1130,9 +1130,6 @@ export async function mergeChangeSet(options) {
   }
 
   const previousMainRevision = cloud.main.revision
-  cloud.main.revision = cloud.selectedState.revision
-  cloud.main.mergedChangeSetId = cloud.selectedState.id
-  cloud.main.updatedAt = now
   cloud.selectedState.reviewState = 'merged'
   cloud.selectedState.mergeState = 'merged'
   cloud.selectedState.merge = {
@@ -1140,11 +1137,23 @@ export async function mergeChangeSet(options) {
     mergedAt: cloud.selectedState.merge?.mergedAt ?? now,
     mergedBy: cloud.selectedState.merge?.mergedBy ?? actorId,
     mainId: cloud.main.id,
-    mainRevision: cloud.main.revision,
+    mainRevision: cloud.selectedState.revision,
     previousMainRevision,
   }
 
-  await cloudService.writeGraph(cloud)
+  // GR-B2 (decisions §2: "Main has exactly one door"): the actual Main
+  // advance -- mutate cloud.main, write the graph, best-effort mirror
+  // enqueue -- is the same primitive the merge queue uses to land a
+  // proposal (`landOneProposal` in commands/propose.js). This plain,
+  // proposal-less merge keeps its own pre-conditions/bookkeeping above
+  // unchanged; only the Main-advancing mechanics are shared.
+  await advanceMainToRevision(options, cloudService, cloud, {
+    revision: cloud.selectedState.revision,
+    mergedChangeSetId: cloud.selectedState.id,
+    actorId,
+    now,
+  })
+
   await emit(options, 'change_set.merged', {
     selectedStateId: cloud.selectedState.id,
     selectedStateType: cloud.selectedState.type,
@@ -1157,6 +1166,25 @@ export async function mergeChangeSet(options) {
     reviewState: cloud.selectedState.reviewState,
     mergeState: cloud.selectedState.mergeState,
   })
+}
+
+// GR-B2 (decisions §2, design doc "Merge queue serialization"): the single
+// shared "advance Main" primitive. Mutates `cloud.main` in place, persists
+// it, and fires the same best-effort mirror-on-merge automation (GR-E2) --
+// used by both the plain `mergeChangeSet` above and the proposal merge
+// queue (`packages/agent/src/commands/propose.js`), so there is exactly one
+// code path that ever writes `cloud.main.revision`.
+export async function advanceMainToRevision(options, cloudService, cloud, { revision, mergedChangeSetId, actorId, now = new Date().toISOString(), beforeWrite = null }) {
+  cloud.main.revision = revision
+  cloud.main.mergedChangeSetId = mergedChangeSetId
+  cloud.main.updatedAt = now
+
+  // Optional hook for callers that need to mutate the graph further (e.g.
+  // GR-B2's change-set rotation) using the *already-advanced* `cloud.main`,
+  // in the same write as the Main advance rather than a second round-trip.
+  if (typeof beforeWrite === 'function') beforeWrite(cloud)
+
+  await cloudService.writeGraph(cloud)
 
   // GR-E2 (decisions §8): if this codebase has a mirror remote configured,
   // enqueue a mirror-push action_job for a hosted runner to pick up. This is

@@ -44,6 +44,7 @@ Commands:
   recover     Replay unacknowledged journal entries into the cloud graph
   review      Open the selected active change set for review
   merge       Merge the reviewed selected change set into Main
+  propose     Pin the active change set's head as a proposal (--title <text>); --merge self-approves and lands it through the merge queue in one command
   export      Export the selected graph state to a clean Git repo
   mirror-sync Push a deterministic, one-way git mirror commit per Main revision to a configured remote
   mirror-set-remote <url> Configure the mirror destination remote/branch and optional client-encrypted deploy key
@@ -167,6 +168,8 @@ Options:
   --message <text>    Git commit message for export/publish
   --include-private   Include .private files in export only; publish always omits them
   --keep <local|cloud> conflicts resolve: which side of a divergence to keep
+  --title <text>       propose: optional human title for the proposal
+  --merge              propose: self-approve and land through the merge queue in the same command (solo path)
   --allow-unsafe-workspace Override workspace path safety checks
   --allow-mass-delete Allow refresh to delete a full/large share of the workspace (bypasses the empty-graph and mass-delete guards)
   --allow-local-cloud Allow production profile to use local JSON cloud for dry runs
