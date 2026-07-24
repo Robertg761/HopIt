@@ -1815,6 +1815,29 @@ or charge.
   missed writes), and a non-ENOSPC watcher failure still degrades to the
   pre-existing generic `polling-degraded` state rather than being
   mis-classified as a watch-limit issue.
+### 2026-07-23 GR-H4: setup blocks nested cloud-sync Workspace Roots
+
+- `assertWorkspacePathSafe` (`packages/agent/src/paths.js`) now refuses a
+  Workspace Root nested inside Dropbox, iCloud Drive, OneDrive, or Google
+  Drive, detected by well-known folder-name segments and by marker files
+  those sync clients leave behind (walked up every ancestor directory). This
+  is the single chokepoint `hop setup`, `hop add`, and
+  `hop workspace migrate-root` all call before touching disk, so all three
+  entry points are covered from one implementation.
+- The check has **no bypass**: `--allow-unsafe-workspace` and `--advanced`
+  do not skip it, per decisions doc §12 ("two sync engines fighting over the
+  same files is unrecoverable"). All other `assertWorkspacePathSafe` checks
+  remain overridable by `--allow-unsafe-workspace` as before.
+- `hop add` now validates the candidate workspace path immediately after
+  deriving the codebase id, before creating any directories, writing the
+  device keyring, or requesting browser authorization — previously the
+  check ran only after those side effects and after the connection was
+  already persisted.
+- New tests: `packages/agent/test/workspace-cloud-sync.test.js` (8 tests) —
+  segment- and marker-file-based detection for all four providers, refusal
+  message content, no-bypass with `--allow-unsafe-workspace`, normal paths
+  unaffected, and end-to-end refusal through `migrateWorkspaceRoot`,
+  `runAdd`, and the `hop setup` CLI.
 
 ## Known Gaps
 

@@ -1,4 +1,5 @@
 // @ts-check
+import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { cloudServiceType, defaultSyncDebounceMs, defaultSyncMaxDelayMs, defaultWatchLimitPollIntervalMs } from './constants.js'
@@ -6,6 +7,74 @@ import { shouldUseD1Backend } from './io.js'
 import { defaultWorkspaceRoot } from './options.js'
 import { isPathInside, pathsOverlap } from './workspace-manifest.js'
 import { d1CloudServiceType } from '@hopit/backend-d1'
+
+// Decisions §12: "Nested cloud-sync is blocked" — two sync engines fighting over
+// the same files on disk is unrecoverable, so this is a hard refusal with no
+// bypass flag (unlike the other checks in assertWorkspacePathSafe below).
+const CLOUD_SYNC_PROVIDERS = [
+  {
+    name: 'Dropbox',
+    // "Dropbox", "Dropbox (Personal)", "Dropbox (Business)"
+    segmentPattern: /^dropbox(\s|\(|$)/i,
+    markerFiles: ['.dropbox', '.dropbox.cache'],
+  },
+  {
+    name: 'iCloud Drive',
+    // ~/Library/Mobile Documents/com~apple~CloudDocs/...
+    segmentPattern: /^(mobile documents|com~apple~clouddocs)$/i,
+    markerFiles: ['.icloud'],
+  },
+  {
+    name: 'OneDrive',
+    // "OneDrive", "OneDrive - Company Name"
+    segmentPattern: /^onedrive(\s|-|$)/i,
+    markerFiles: ['.849C9593-D756-4E56-8D6E-42412F2A707B'],
+  },
+  {
+    name: 'Google Drive',
+    // "Google Drive", "GoogleDrive", "My Drive" (Google Drive for desktop mount)
+    segmentPattern: /^(google ?drive|my drive)$/i,
+    markerFiles: ['.tmp.drivedownload', '.tmp.driveupload', '.googledrivefs'],
+  },
+]
+
+/**
+ * Detect whether `workspacePath` is inside (or itself is) a folder managed by a
+ * consumer cloud-sync client (Dropbox, iCloud Drive, OneDrive, Google Drive).
+ * Detection combines well-known folder-name segments with marker files/folders
+ * those clients leave behind, checked at every ancestor directory. Returns the
+ * provider name, or null if no nested cloud-sync folder was found.
+ */
+export async function detectNestedCloudSyncProvider(workspacePath) {
+  const resolved = path.resolve(workspacePath)
+  const segments = resolved.split(path.sep)
+  for (const provider of CLOUD_SYNC_PROVIDERS) {
+    if (segments.some((segment) => provider.segmentPattern.test(segment))) return provider.name
+  }
+
+  let directory = resolved
+  for (;;) {
+    for (const provider of CLOUD_SYNC_PROVIDERS) {
+      for (const marker of provider.markerFiles) {
+        if (await pathExists(path.join(directory, marker))) return provider.name
+      }
+    }
+    const parent = path.dirname(directory)
+    if (parent === directory) break
+    directory = parent
+  }
+  return null
+}
+
+async function pathExists(candidate) {
+  try {
+    await fs.stat(candidate)
+    return true
+  } catch (error) {
+    if (error?.code === 'ENOENT' || error?.code === 'ENOTDIR') return false
+    throw error
+  }
+}
 
 export function cloudLocationFromOptions(options, codebaseId = options['codebase-id'] ?? null) {
   if (shouldUseD1Backend(options)) {
@@ -87,9 +156,22 @@ export function isTruthyEnv(value) {
 }
 
 export async function assertWorkspacePathSafe(options, context = {}) {
+  const workspace = path.resolve(options.workspace)
+
+  // No bypass: decisions §12 calls nested cloud-sync "unrecoverable", so this
+  // check runs even when --allow-unsafe-workspace (or --advanced) is set.
+  const cloudSyncProvider = await detectNestedCloudSyncProvider(workspace)
+  if (cloudSyncProvider) {
+    throw new Error(
+      `Refusing to place a Workspace Root inside ${cloudSyncProvider}: ${workspace}. `
+        + `${cloudSyncProvider} and HopIt would both try to sync the same files, which is unrecoverable. `
+        + `Choose a folder outside ${cloudSyncProvider} and let HopIt sync it instead. `
+        + 'This check has no bypass.',
+    )
+  }
+
   if (options['allow-unsafe-workspace']) return
 
-  const workspace = path.resolve(options.workspace)
   const unsafeRoots = new Set([path.parse(workspace).root, os.homedir(), process.cwd()])
   if (unsafeRoots.has(workspace)) {
     throw new Error(`Refusing to use unsafe workspace path: ${workspace}`)

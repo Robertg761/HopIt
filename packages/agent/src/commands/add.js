@@ -142,6 +142,11 @@ export async function runAdd(options, inject = {}) {
     takenIds,
   })
 
+  // Fail fast on a nested cloud-sync Workspace Root (Dropbox/iCloud/OneDrive/
+  // Google Drive) before any directory is created, keyring is written, or
+  // browser authorization is requested.
+  await assertWorkspacePathSafe({ workspace: path.join(workspaceRoot, requestedCodebaseId) })
+
   if (human) writeLine()
   say(`  ${accent('◆')} ${bold('Add a project')}  ${muted(source)}`)
   say(`  ${accent('1/3')}  Requesting codebase ${muted(`${codebaseName} (${requestedCodebaseId})`)}`)
