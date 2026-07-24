@@ -4139,6 +4139,24 @@ test('setup --yes bootstraps state, workspace, index, and a pre-filled env file'
   assert.ok(envContent.includes(path.resolve(state.workspaceRoot)))
 })
 
+test('setup --yes defaults secret scanning on (decisions doc §7: skipping the question defaults ON)', async () => {
+  const state = await makeSetupState()
+  const result = parseLastJsonObject(
+    (await runCli('setup', setupArgs(state, ['--yes', '--codebase-id', 'secrets-default']))).stdout,
+  )
+  assert.equal(result.ok, true)
+  assert.equal(result.secretScanning.requested, true)
+})
+
+test('setup --yes --no-secret-scanning records the explicit opt-out', async () => {
+  const state = await makeSetupState()
+  const result = parseLastJsonObject(
+    (await runCli('setup', setupArgs(state, ['--yes', '--codebase-id', 'secrets-optout', '--no-secret-scanning']))).stdout,
+  )
+  assert.equal(result.ok, true)
+  assert.equal(result.secretScanning.requested, false)
+})
+
 test('setup is idempotent: a second run keeps the env file and does not duplicate index entries', async () => {
   const state = await makeSetupState()
   const args = setupArgs(state, ['--yes', '--codebase-id', 'setup-demo'])

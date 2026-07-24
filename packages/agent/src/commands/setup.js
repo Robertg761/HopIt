@@ -17,6 +17,7 @@ import {
   writeLocalDeviceKeyring,
 } from './keys.js'
 import { attachWorkspace } from './hydrate.js'
+import { createCloudGraphService } from '../cloud/d1-graph-service.js'
 import { isTransientCloudError, withCloudFetchRetry } from '../cloud-retry.js'
 import { serviceStatus, startService } from '../service.js'
 import {
@@ -692,6 +693,22 @@ export async function runSetup(options) {
       launchAgentRequested = connectRequested && isDarwin
     }
 
+    // 5b. Outbound secret scanning (decisions doc §7: warn-only, per-project,
+    // asked at onboarding). Skipping the question (including `--yes`) always
+    // defaults to on.
+    let secretScanningRequested
+    if (provided.has('secret-scanning')) {
+      secretScanningRequested = Boolean(options['secret-scanning'])
+    } else if (connectRequested && interactive && options.advanced) {
+      secretScanningRequested = await promptYesNo(
+        reader,
+        'Scan outgoing files for secret-looking content? (warn-only; a sync is never blocked)',
+        true,
+      )
+    } else {
+      secretScanningRequested = true
+    }
+
     let installOptions = productionSetupOptions(options, provided, {
       stateRoot,
       workspaceRoot,
@@ -818,6 +835,21 @@ export async function runSetup(options) {
       index = await ensureWorkspaceIndexEntry(installOptions, { codebaseId, workspaceRoot })
     }
 
+    let secretScanning = { requested: secretScanningRequested, applied: false }
+    if (connection) {
+      try {
+        const cloudService = createCloudGraphService(installOptions)
+        const updated = await cloudService.setSecretScanning(codebaseId, { enabled: secretScanningRequested })
+        secretScanning = { requested: secretScanningRequested, applied: true, enabled: updated.secretScanningEnabled }
+      } catch (error) {
+        secretScanning = {
+          requested: secretScanningRequested,
+          applied: false,
+          reason: error instanceof Error ? error.message : String(error),
+        }
+      }
+    }
+
     let launchAgent = { installed: false }
     if (connection && launchAgentRequested) {
       const written = await writeLaunchAgent(installOptions)
@@ -866,6 +898,7 @@ export async function runSetup(options) {
       } : { status: 'not-connected' },
       cloudRegistration,
       attachment,
+      secretScanning,
       service,
       created,
       nextSteps,

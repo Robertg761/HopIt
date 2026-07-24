@@ -110,6 +110,29 @@ Current verified result:
 - Production Clerk sign-in and D1 owner claim were smoke-tested on `https://hopit.dev`; Basic Auth fallback is no longer needed for the owner handoff.
 - Google Auth Platform Audience for project `hopit-auth-prod-rg`: shows `1 user (1 test, 0 other) / 100 user cap` and the test-user row `robertgordon761@gmail.com`.
 
+## 2026-07-23 GR-D1: Warn-Only Outbound Secret Scanner
+
+Implemented per the git-replacement implementation plan (`docs/git-replacement-implementation-plan.md`, Track D) and decisions doc §7 ("rotate, don't redact").
+
+- New `packages/agent/src/secret-scan.js`: high-signal pattern matching (AWS `AKIA…`, GitHub `ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`, Stripe `sk_live_…`, Slack `xox…`, PEM private-key headers) plus a conservative high-entropy `key/token/secret/password = "…"` assignment heuristic (requires a quoted literal and an identifier that *ends* with the keyword, so `sessionToken = fetchToken()` and `continuationToken` never trip it).
+- Wired into `packages/agent/src/commands/sync.js` (`performSyncOnce`): scans each outbound create/write's plaintext content right when its journal entry is built, before the cloud commit. Warn-only — a finding never blocks, delays, or fails the write; it fires a `secret.suspected` event (path, matched pattern ids, line numbers) immediately, then the write proceeds unchanged. Only plaintext (non-base64) files outside `.private/`/`.git/` are scanned.
+- Per-project setting: `codebase_settings.secret_scanning_enabled` (new column, default **on**; absence of a row also reads as on, unlike `trail_summaries_enabled` which defaults off). Schema updated in `packages/backend-d1/src/schema.js`, `cloudflare/d1/schema.sql` (which was also missing `codebase_settings` entirely — added while touching this column; the fuller schema.sql re-sync is GR-S1's job), and a new (never-applied) migration `cloudflare/d1/migrations/2026-07-23-secret-scanning-setting.sql`. `readCodebaseSettings`/new `setSecretScanning` on both the D1 backend (`packages/backend-d1/src/episodes-store.js`) and the local fixture-JSON backend (`packages/agent/src/cloud/d1-graph-service.js`).
+- New `hop secrets on|off|status` CLI command (`packages/agent/src/commands/secrets.js`), mirroring `hop trail summaries on|off`.
+- `hop setup`: new onboarding question ("Scan outgoing files for secret-looking content?", advanced-interactive only, default yes) plus `--secret-scanning`/`--no-secret-scanning` flags. Skipping the question — including `--yes` — defaults it on, per decisions doc §7. The setting is written to the connected codebase's cloud settings once the device is connected; local-only (unconnected) setup records the request without a write target.
+- `packages/agent/src/status-endpoints.js`: `secretScan` block (suspected-count, last/recent `secret.suspected` events) added to `hop status`/`serve`, sourced from the local event log only (no extra D1 round trip, to keep the status endpoint fast); `hop secrets status` is the source of truth for the enabled flag.
+- Docs: `docs/agent-architecture.md` gained an "Outbound Secret Scanning" subsection and `secret.suspected` in the event-type list.
+
+Tests: new `packages/agent/test/secret-scan.test.js` (10 tests) — 24-file seeded corpus across all 6 pattern categories (100% flagged), a 78-real-file clean-corpus scan of `packages/agent/src`, `packages/backend-d1/src`, `packages/core/src` (0 false positives), scannability-rule unit tests (`.private/`/`.git/`/binary/directory/symlink all skipped), a median-scan-time benchmark (well under the 5ms/file budget), and `performSyncOnce` integration tests (emits + still commits on a finding, never scans `.private/`, respects the per-project off switch, defaults on for a fresh codebase). Plus 2 new `hop setup` CLI tests in `packages/agent/test/agent-cli.test.js` asserting the `--yes` default-on and explicit opt-out.
+
+Battery on this branch (`gr/d1`), measured against the 2026-07-23 baseline (335 tests: 328 pass/0 fail/2 skipped/5 cancelled-env-only):
+
+- `npm run agent:test`: 347 tests, 340 pass, 0 fail, 2 skipped, 5 cancelled (same 5 environment-only cancellations as baseline) — +12 tests, zero regressions.
+- `npm run test:worker`: 87/87 pass (matches baseline).
+- `npm run test:web`: 211/211 pass across 37 files (matches baseline).
+- `npm run lint`, `npm run typecheck:agent`, `npm run build`, `node packages/agent/src/cli.js --help`: all clean.
+
+Known limitation: GR-D1 does not depend on GR-C1's derived-file classifier (parallel Wave-1 task, not yet merged at implementation time), so "non-derived" exclusion is not implemented here — only `.private/`/`.git/` and binary/base64 content are excluded from scanning. If GR-C1 lands a derived-path predicate, `secret-scan.js`'s `isScannableTextEntry` should be extended to also skip derived paths (e.g. `node_modules/`, build output) to avoid noisy findings in vendored/generated text.
+
 ## 2026-07-12 WS7c Closed: Trail Diffs In The Desktop App And Dashboard, Plus A Reliability Sweep
 
 WS7c is now closed end to end: the object-backed compare engine was verified as already built and passing, and both the desktop app and the dashboard grew real trail-step diffs on top of it: the compare/history surfaces are no longer dashboard-pending. A reliability sweep landed alongside: merged CI, human-readable sync copy, an events-journal rotation, connection-fault resilience, and scheduled nightly backups. All work is live: commits pushed, dashboard deployed to `hopit.dev`, desktop app relaunched.

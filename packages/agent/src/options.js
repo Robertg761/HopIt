@@ -62,6 +62,7 @@ export function parseOptions(args) {
     'force-env',
     'connect',
     'service',
+    'secret-scanning',
   ])
 
   for (let i = 0; i < args.length; i += 1) {

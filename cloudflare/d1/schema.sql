@@ -362,6 +362,21 @@ create table if not exists notifications (
 create index if not exists idx_notifications_codebase_created on notifications(codebase_id, created_at);
 create index if not exists idx_notifications_recipient_created on notifications(recipient_user_id, created_at);
 
+-- Per-codebase agent settings (added here to re-sync with the runtime schema
+-- in packages/backend-d1/src/schema.js, which is self-healing/authoritative
+-- at runtime; this file lags without an explicit re-sync). Trail
+-- summarization defaults OFF (absence of a row means disabled);
+-- secret_scanning_enabled defaults ON (decisions doc §7) — absence of a row
+-- is also read as enabled by callers.
+create table if not exists codebase_settings (
+  codebase_id text primary key,
+  trail_summaries_enabled integer not null default 0,
+  trail_summaries_mode text not null default 'metadata',
+  secret_scanning_enabled integer not null default 1,
+  created_at text not null,
+  updated_at text not null
+);
+
 -- Phase 3 multi-tenant usage and billing. These are additive tables so the
 -- migration is safe to apply before the feature flags are enabled.
 create table if not exists tenant_usage (

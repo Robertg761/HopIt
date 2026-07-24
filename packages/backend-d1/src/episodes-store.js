@@ -12,6 +12,12 @@ export function normalizeCodebaseSettings(codebaseId, row) {
     codebaseId,
     trailSummariesEnabled: Boolean(row?.trail_summaries_enabled),
     trailSummariesMode: normalizeSummaryMode(row?.trail_summaries_mode),
+    // Secrets: warn-only outbound scanning defaults ON (decisions doc §7),
+    // unlike trail summaries which default off. Absence of a row (or an
+    // absent column on a not-yet-migrated database) still reads as enabled.
+    secretScanningEnabled: row?.secret_scanning_enabled === undefined || row?.secret_scanning_enabled === null
+      ? true
+      : Boolean(row.secret_scanning_enabled),
     updatedAt: row?.updated_at ?? null,
   }
 }
@@ -66,6 +72,27 @@ export function attachEpisodeMethods(Backend) {
         codebaseId,
         trailSummariesEnabled: nextEnabled,
         trailSummariesMode: nextMode,
+        updatedAt: now,
+      }
+    },
+
+    async setSecretScanning(codebaseId = this.codebaseId, { enabled } = {}) {
+      await this.ensureSchema()
+      const now = new Date().toISOString()
+      const current = await this.readCodebaseSettings(codebaseId)
+      const nextEnabled = enabled === undefined ? current.secretScanningEnabled : Boolean(enabled)
+      await this.query(
+        `insert into codebase_settings (
+          codebase_id, trail_summaries_enabled, trail_summaries_mode, secret_scanning_enabled, created_at, updated_at
+        ) values (?, ?, ?, ?, ?, ?)
+        on conflict(codebase_id) do update set
+          secret_scanning_enabled = excluded.secret_scanning_enabled,
+          updated_at = excluded.updated_at`,
+        [codebaseId, current.trailSummariesEnabled ? 1 : 0, current.trailSummariesMode, nextEnabled ? 1 : 0, now, now],
+      )
+      return {
+        codebaseId,
+        secretScanningEnabled: nextEnabled,
         updatedAt: now,
       }
     },

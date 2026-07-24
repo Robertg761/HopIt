@@ -53,6 +53,7 @@ Commands:
   version     Print the hop version and build target
   install     Prepare production state, workspace, env, and optional launch agent
   trail       Browse labeled trail episodes and manage summarization (episodes, summarize, summaries on|off)
+  secrets     Show or change the per-project outbound secret-scanning setting (on|off|status)
   workspace   Manage/list/discover/attach the configured HopIt workspace root and codebase
   session     Manage this device/session registration (alias: device)
   keys        Manage local encryption device keys and recovery exports
@@ -146,6 +147,7 @@ Options:
   --force-env          setup: overwrite an existing production env file
   --no-connect         setup: prepare local files without opening browser account authorization
   --no-launch-agent    setup: skip the macOS start-on-login agent prompt/step
+  --secret-scanning    setup: explicitly turn outbound secret scanning on or off (default on; --no-secret-scanning to opt out)
   --service            add: install and load the per-codebase macOS start-on-login service (default off)
   --auth-base-url <url> add/setup: device-authorization dashboard base URL, default https://hopit.dev
   --interactive        setup: force interactive prompts even when stdin is not a TTY (testing/advanced; env HOPIT_SETUP_ASSUME_TTY=1)

@@ -338,10 +338,15 @@ export const d1SchemaStatements = [
   // default: absence of a row means disabled. `trail_summaries_mode` carries the
   // separate metadata/diff opt-in. New table (not an alter), so it applies
   // cleanly to databases created before the feature.
+  // secret_scanning_enabled: warn-only outbound secret scanning (decisions
+  // doc §7). Unlike trail summaries, this defaults ON (1) — absence of a row
+  // is also treated as enabled by readers, so a not-yet-migrated database and
+  // a fresh one behave the same.
   `create table if not exists codebase_settings (
     codebase_id text primary key,
     trail_summaries_enabled integer not null default 0,
     trail_summaries_mode text not null default 'metadata',
+    secret_scanning_enabled integer not null default 1,
     created_at text not null,
     updated_at text not null
   )`,
