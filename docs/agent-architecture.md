@@ -705,6 +705,40 @@ in the proposal model (decisions §2: "Main has exactly one door"):
   automation that marks a decision stale on re-pin are still deferred to
   GR-B3, per the design doc.
 
+**Releases (GR-B4, decisions §9).** A lightweight, permanent pin of a Main
+revision — "mark this state as a release" without a git tag in the product.
+`packages/backend-d1/src/releases-store.js` (`attachReleaseMethods`) owns the
+`releases` table (`release_id`, `codebase_id`, `name`, `notes`,
+`pinned_revision`, `created_by_user_id`, `created_at`; schema + migration in
+`packages/backend-d1/src/schema.js`, `cloudflare/d1/schema.sql`,
+`cloudflare/d1/migrations/2026-07-24-releases.sql`), mirrored for the
+local/dev JSON fixture in `packages/agent/src/cloud/d1-graph-service.js`
+(`FixtureJsonCloudGraphService.createRelease`/`listReleases`/...), same
+pattern as `proposals`/`divergences`. `packages/agent/src/commands/release.js`
+is the CLI surface:
+
+- `hop release <name> [--notes <text>]` pins the codebase's *current*
+  `cloud.main.revision` — deliberately not the caller's active change set
+  head, since a release always describes what is actually live on Main right
+  now, independent of who is proposing what. Every call inserts a brand-new
+  row; unlike proposals, releases are never re-pinned or mutated once
+  created — they are historical facts ("what shipped as v1.2").
+- Names are unique per codebase (decisions §9); `createRelease` checks
+  `getReleaseByName` first and throws `DuplicateReleaseNameError` on a
+  collision, enforced in application code rather than a SQL unique
+  constraint — same reasoning as the proposals table's open-proposal
+  constraint (the GR-S1 drift-test parser only understands plain `create
+  index` statements).
+- `hop release list` and the dashboard's read-only `ReleasesCard`
+  (`src/components/features/files/releases-card.tsx`, flag-gated behind
+  `NEXT_PUBLIC_RELEASES_LIST` on the codebase page, same
+  collaboration-surface-freeze convention as GR-C1's derived-paths card) both
+  read `listReleases`, newest first.
+- The git-tag emission on the mirror is GR-E3 (a later task, not implemented
+  here); this table's `name`/`pinned_revision` are shaped for E3 to read
+  directly (tag name candidate, revision to build the git tree from) without
+  a schema change.
+
 ### 8. Tighten Conflict Handling
 
 Status: done for the fixture-backed proof.

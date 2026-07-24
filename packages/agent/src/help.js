@@ -45,6 +45,7 @@ Commands:
   review      Open the selected active change set for review
   merge       Merge the reviewed selected change set into Main
   propose     Pin the active change set's head as a proposal (--title <text>); --merge self-approves and lands it through the merge queue in one command
+  release     Pin the current Main revision as a named release (release <name> [--notes <text>], or release list)
   export      Export the selected graph state to a clean Git repo
   mirror-sync Push a deterministic, one-way git mirror commit per Main revision to a configured remote
   mirror-set-remote <url> Configure the mirror destination remote/branch and optional client-encrypted deploy key
@@ -170,6 +171,7 @@ Options:
   --keep <local|cloud> conflicts resolve: which side of a divergence to keep
   --title <text>       propose: optional human title for the proposal
   --merge              propose: self-approve and land through the merge queue in the same command (solo path)
+  --notes <text>       release: optional notes stored with the release
   --allow-unsafe-workspace Override workspace path safety checks
   --allow-mass-delete Allow refresh to delete a full/large share of the workspace (bypasses the empty-graph and mass-delete guards)
   --allow-local-cloud Allow production profile to use local JSON cloud for dry runs

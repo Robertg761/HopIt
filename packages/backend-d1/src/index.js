@@ -11,6 +11,7 @@ import { attachGraphMethods } from './graph.js'
 import { attachKeyMethods } from './keys.js'
 import { attachMemberMethods } from './members.js'
 import { attachProposalMethods } from './proposals-store.js'
+import { attachReleaseMethods } from './releases-store.js'
 import { attachSchemaMethods } from './schema-methods.js'
 import { attachSessionMethods } from './sessions.js'
 
@@ -51,6 +52,11 @@ export {
   proposalStaleReason,
   proposalState,
 } from './proposals-store.js'
+export {
+  DuplicateReleaseNameError,
+  normalizeReleaseRow,
+  releaseId,
+} from './releases-store.js'
 
 export function createD1Backend(options = {}, env = process.env) {
   return new CloudflareD1HopBackend(d1ConfigFromOptions(options, env))
@@ -78,5 +84,6 @@ attachKeyMethods(CloudflareD1HopBackend)
 attachDeviceAuthorizationMethods(CloudflareD1HopBackend)
 attachDivergenceMethods(CloudflareD1HopBackend)
 attachProposalMethods(CloudflareD1HopBackend)
+attachReleaseMethods(CloudflareD1HopBackend)
 attachEpisodeMethods(CloudflareD1HopBackend)
 attachClientMethods(CloudflareD1HopBackend)

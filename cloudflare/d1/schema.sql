@@ -584,3 +584,23 @@ create table if not exists service_admin_events (
 
 create index if not exists idx_service_admin_events_created
   on service_admin_events(created_at);
+
+-- GR-B4 (decisions §9): a lightweight, named pin of a Main revision. See
+-- packages/backend-d1/src/schema.js for the rationale on why duplicate
+-- names are rejected in application code, not a SQL unique constraint.
+create table if not exists releases (
+  release_id text primary key,
+  codebase_id text not null,
+  name text not null,
+  notes text,
+  pinned_revision integer not null,
+  created_by_user_id text not null,
+  created_at text not null,
+  foreign key (codebase_id) references codebases(codebase_id) on delete cascade
+);
+
+create index if not exists idx_releases_codebase_name
+  on releases(codebase_id, name);
+
+create index if not exists idx_releases_codebase_created
+  on releases(codebase_id, created_at);

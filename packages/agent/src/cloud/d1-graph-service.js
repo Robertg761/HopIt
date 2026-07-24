@@ -13,6 +13,7 @@ import { attachTextDiff, buildFileVersionRowForEntry, buildFileVersionRows, comp
 import { clusterEpisodes, normalizeSummaryMode } from '@hopit/backend-d1'
 import { divergenceId, divergenceState } from '@hopit/backend-d1'
 import { proposalId, proposalState } from '@hopit/backend-d1'
+import { DuplicateReleaseNameError, releaseId } from '@hopit/backend-d1'
 import { scopeForPath } from '@hopit/core/privacy-zone'
 import { existsSync } from 'node:fs'
 
@@ -620,6 +621,57 @@ export class FixtureJsonCloudGraphService {
     const record = { ...stored[index], ...patch, updatedAt: now }
     stored[index] = record
     cloud.proposals = stored
+    await writeJson(this.path, cloud)
+    return record
+  }
+
+  // Releases (GR-B4, decisions §9), mirroring `attachReleaseMethods` in
+  // `@hopit/backend-d1` for the local/dev JSON backend. State lives under
+  // `releases` on the cloud graph file, same pattern as
+  // `proposals`/`divergences`. See packages/backend-d1/src/releases-store.js
+  // for the full contract -- this mirrors it field-for-field against a plain
+  // array instead of SQL rows.
+  async listReleases(codebaseId) {
+    const cloud = (await this.exists()) ? await readJson(this.path) : null
+    const stored = Array.isArray(cloud?.releases) ? cloud.releases : []
+    return [...stored].sort((a, b) => {
+      const created = (b.createdAt ?? '').localeCompare(a.createdAt ?? '')
+      return created !== 0 ? created : (b.releaseId ?? '').localeCompare(a.releaseId ?? '')
+    })
+  }
+
+  async getRelease(codebaseId, id) {
+    const rows = await this.listReleases(codebaseId)
+    return rows.find((row) => row.releaseId === id) ?? null
+  }
+
+  async getReleaseByName(codebaseId, name) {
+    if (!name) return null
+    const rows = await this.listReleases(codebaseId)
+    return rows.find((row) => row.name === name) ?? null
+  }
+
+  async createRelease(codebaseId, { name, notes, pinnedRevision, actorId, now } = {}) {
+    if (!name) throw new Error('createRelease requires name')
+    if (!Number.isInteger(pinnedRevision)) throw new Error('createRelease requires an integer pinnedRevision')
+
+    const existing = await this.getReleaseByName(codebaseId, name)
+    if (existing) throw new DuplicateReleaseNameError(name, { codebaseId })
+
+    const effectiveNow = now ?? new Date().toISOString()
+    const cloud = await readJson(this.path)
+    const stored = Array.isArray(cloud.releases) ? cloud.releases : []
+    const record = {
+      releaseId: releaseId(),
+      codebaseId: cloud?.codebase?.id ?? codebaseId ?? null,
+      name,
+      notes: notes ?? null,
+      pinnedRevision,
+      createdByUserId: actorId ?? null,
+      createdAt: effectiveNow,
+    }
+    stored.push(record)
+    cloud.releases = stored
     await writeJson(this.path, cloud)
     return record
   }
