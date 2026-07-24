@@ -255,8 +255,50 @@ export class FixtureJsonCloudGraphService {
         ? true
         : Boolean(stored.secretScanningEnabled),
       derivedPathOverrides: normalizeDerivedPathOverrides(stored?.derivedPathOverrides),
+      mirrorRemoteUrl: stored?.mirrorRemoteUrl ?? null,
+      mirrorBranch: stored?.mirrorBranch ?? null,
+      mirrorDeployKeyCiphertext: stored?.mirrorDeployKeyCiphertext ?? null,
+      mirrorDeployKeyMetadata: stored?.mirrorDeployKeyMetadata ?? null,
       updatedAt: stored?.updatedAt ?? null,
     }
+  }
+
+  // GR-E2: local/dev-fixture parity for `setMirrorRemote`. Persisted the same
+  // way trail-summary and derived-path settings are (a `codebaseSettings`
+  // key on the fixture graph file).
+  async setMirrorRemote(codebaseId, { remoteUrl, branch, deployKeyCiphertext, deployKeyMetadata } = {}) {
+    const cloud = await readJson(this.path)
+    const current = cloud.codebaseSettings ?? {}
+    const now = new Date().toISOString()
+    const next = {
+      ...current,
+      trailSummariesEnabled: Boolean(current.trailSummariesEnabled),
+      trailSummariesMode: normalizeSummaryMode(current.trailSummariesMode),
+      mirrorRemoteUrl: remoteUrl === undefined ? (current.mirrorRemoteUrl ?? null) : remoteUrl,
+      mirrorBranch: branch === undefined ? (current.mirrorBranch ?? null) : branch,
+      mirrorDeployKeyCiphertext: deployKeyCiphertext === undefined ? (current.mirrorDeployKeyCiphertext ?? null) : deployKeyCiphertext,
+      mirrorDeployKeyMetadata: deployKeyMetadata === undefined ? (current.mirrorDeployKeyMetadata ?? null) : deployKeyMetadata,
+      updatedAt: now,
+    }
+    cloud.codebaseSettings = next
+    await writeJson(this.path, cloud)
+    return {
+      codebaseId: cloud?.codebase?.id ?? codebaseId ?? null,
+      mirrorRemoteUrl: next.mirrorRemoteUrl,
+      mirrorBranch: next.mirrorBranch,
+      mirrorDeployKeyCiphertext: next.mirrorDeployKeyCiphertext,
+      mirrorDeployKeyMetadata: next.mirrorDeployKeyMetadata,
+      updatedAt: now,
+    }
+  }
+
+  // GR-E2: the local/dev-fixture backend has no `action_jobs` table -- there
+  // is no hosted runner to claim work in this mode, so merge-triggered
+  // mirror automation is a deliberate no-op here (mirroring how trail
+  // summarization and other cloud-job features behave against this fixture
+  // backend). Real automation is exercised against the D1 backend.
+  async enqueueMirrorSyncJob() {
+    return null
   }
 
   async setTrailSummaries(codebaseId, { enabled, mode } = {}) {

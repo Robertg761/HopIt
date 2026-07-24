@@ -63,6 +63,7 @@ export function parseOptions(args) {
     'connect',
     'service',
     'secret-scanning',
+    'clear-deploy-key',
   ])
 
   for (let i = 0; i < args.length; i += 1) {

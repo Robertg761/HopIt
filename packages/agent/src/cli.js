@@ -7,7 +7,7 @@ import { restoreAgentState } from './commands/restore.js'
 import { compareCloudRevisions } from './commands/compare.js'
 import { hydrateWorkspace } from './commands/hydrate.js'
 import { importGitProject, importLocalProject, importRemoteGitProject, initCloud, mirrorLocalProject } from './commands/import.js'
-import { runMirrorSync } from './commands/mirror.js'
+import { runMirrorSetRemote, runMirrorSync } from './commands/mirror.js'
 import { installAgent } from './commands/install.js'
 import { runSetup } from './commands/setup.js'
 import { runAdd } from './commands/add.js'
@@ -45,6 +45,7 @@ const HUMAN_OUTPUT_COMMANDS = new Set([
   'trail',
   'secrets',
   'derived',
+  'mirror-set-remote',
 ])
 
 // `hop watch` runs in the foreground until interrupted. A graceful SIGINT/
@@ -110,6 +111,8 @@ async function main() {
     command === 'derived' && (derivedAction === 'add' || derivedAction === 'remove') && args[0] && !args[0].startsWith('--')
       ? args.shift()
       : null
+  const mirrorSetRemoteUrl =
+    command === 'mirror-set-remote' && args[0] && !args[0].startsWith('--') ? args.shift() : null
   const parsedOptions = parseOptions(args)
   const options =
     command === 'keys' || command === 'setup' || command === 'add'
@@ -137,6 +140,7 @@ async function main() {
   if (command === 'review-open') return openChangeSetReview(options)
   if (command === 'merge') return mergeChangeSet(options)
   if (command === 'mirror-sync') return runMirrorSync(options)
+  if (command === 'mirror-set-remote') return runMirrorSetRemote({ ...options, remote: mirrorSetRemoteUrl ?? options.remote })
   if (command === 'export-git') return exportGitSnapshot(options, { requireMerged: false })
   if (command === 'publish') return exportGitSnapshot(options, { requireMerged: true })
   if (command === 'validate') return validateCloud(options)

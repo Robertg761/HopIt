@@ -868,4 +868,28 @@ export async function mergeChangeSet(options) {
     reviewState: cloud.selectedState.reviewState,
     mergeState: cloud.selectedState.mergeState,
   })
+
+  // GR-E2 (decisions §8): if this codebase has a mirror remote configured,
+  // enqueue a mirror-push action_job for a hosted runner to pick up. This is
+  // best-effort automation on top of an already-committed merge -- a
+  // read/enqueue failure must never surface as a merge failure, so it is
+  // swallowed and only journaled.
+  await enqueueMirrorSyncOnMerge(options, cloudService, cloud, actorId)
+}
+
+async function enqueueMirrorSyncOnMerge(options, cloudService, cloud, actorId) {
+  try {
+    const settings = await cloudService.readCodebaseSettings(cloud.codebase.id)
+    if (!settings?.mirrorRemoteUrl) return
+    const job = await cloudService.enqueueMirrorSyncJob({
+      codebaseId: cloud.codebase.id,
+      actor: { userId: actorId },
+    })
+    if (job) await emit(options, 'mirror.job_enqueued', { jobId: job.jobId, codebaseId: cloud.codebase.id })
+  } catch (error) {
+    await emit(options, 'mirror.enqueue_failed', {
+      codebaseId: cloud.codebase.id,
+      reason: error instanceof Error ? error.message : 'mirror enqueue failed',
+    })
+  }
 }
