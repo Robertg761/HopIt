@@ -3656,7 +3656,7 @@ test('validate rejects graph privacy zone mismatches', async () => {
   assert.match(failure.stderr, /privacy zone mismatch/)
 })
 
-test('recover surfaces stale file revision as reviewable conflict state', async () => {
+test('recover classifies a stale file revision as a reconnect divergence, not a hard conflict', async () => {
   const state = await makeState()
   await runCli('init', [...stateArgs(state), '--force'])
   await runCli('hydrate', stateArgs(state))
@@ -3665,6 +3665,7 @@ test('recover surfaces stale file revision as reviewable conflict state', async 
   await fs.writeFile(path.join(state.workspace, 'README.md'), staleContent, 'utf8')
 
   const cloud = await readJson(state.cloud)
+  const originalContent = cloud.files['README.md'].content
   await appendJournalEntry(state, {
     id: randomUUID(),
     type: 'write',
@@ -3683,22 +3684,23 @@ test('recover surfaces stale file revision as reviewable conflict state', async 
     effectiveChangeSetVisibility: 'private',
   })
 
-  const failure = await runCliFailure('recover', stateArgs(state))
-  assert.equal(failure.code, 1)
-  assert.match(failure.stdout, /change_set\.conflict_detected/)
-  assert.match(failure.stdout, /journal\.recovery_failed/)
+  // GR-A1's reconnect classifier detects the stale baseRevision before
+  // attempting replay: it is a same-path divergence (decisions §1 bucket 3),
+  // so recover succeeds without clobbering the local file or the cloud.
+  const recovery = await runCli('recover', stateArgs(state))
+  assert.match(recovery.stdout, /journal\.reconnect_diverged/)
+  assert.match(recovery.stdout, /"reason":"content_differs"/)
+  assert.doesNotMatch(recovery.stdout, /change_set\.conflict_detected/)
   assert.equal(await fs.readFile(path.join(state.workspace, 'README.md'), 'utf8'), staleContent)
 
-  const conflictedCloud = await readJson(state.cloud)
-  assert.equal(conflictedCloud.selectedState.conflictState, 'conflicted')
-  assert.equal(conflictedCloud.selectedState.conflict.reason, 'base_revision_mismatch')
-  assert.equal(conflictedCloud.selectedState.conflict.path, 'README.md')
+  const afterCloud = await readJson(state.cloud)
+  assert.notEqual(afterCloud.selectedState.conflictState, 'conflicted')
+  assert.equal(afterCloud.files['README.md'].content, originalContent)
 
   const status = JSON.parse((await runCli('status', stateArgs(state))).stdout)
-  assert.equal(status.conflict.state, 'conflicted')
-  assert.equal(status.conflict.detail.reason, 'base_revision_mismatch')
-  assert.equal(status.journal.failedCount, 1)
-  assert.equal(status.events.lastConflictDetected.detail.path, 'README.md')
+  assert.equal(status.conflict.state, 'none')
+  assert.equal(status.journal.failedCount, 0)
+  assert.equal(status.journal.pendingCount, 1)
 })
 
 test('recover surfaces stale selected-state revision as reviewable conflict state', async () => {
@@ -3858,15 +3860,19 @@ test('adversarial same-file two-device edits surface a conflict and preserve dev
   await fs.writeFile(path.join(deviceA.workspace, 'README.md'), deviceAContent, 'utf8')
   await runCli('sync-once', stateArgs(deviceA))
 
-  const failure = await runCliFailure('recover', stateArgs(deviceB))
-  assert.equal(failure.code, 1)
-  assert.match(failure.stdout, /change_set\.conflict_detected/)
+  // Same-owner multi-device divergence (decisions §1, GR-A1): the reconnect
+  // classifier detects this before attempting replay, so recover succeeds
+  // instead of throwing, and device B's file is never clobbered.
+  const recovery = await runCli('recover', stateArgs(deviceB))
+  assert.match(recovery.stdout, /journal\.reconnect_diverged/)
+  assert.match(recovery.stdout, /"diverged":1/)
+  assert.doesNotMatch(recovery.stdout, /change_set\.conflict_detected/)
   assert.equal(await fs.readFile(path.join(deviceB.workspace, 'README.md'), 'utf8'), deviceBContent)
 
   const status = JSON.parse((await runCli('status', stateArgs(deviceB))).stdout)
-  assert.equal(status.conflict.state, 'conflicted')
-  assert.equal(status.conflict.detail.reason, 'selected_state_revision_mismatch')
-  assert.equal(status.journal.failedCount, 1)
+  assert.equal(status.conflict.state, 'none')
+  assert.equal(status.journal.failedCount, 0)
+  assert.equal(status.journal.pendingCount, 1)
 
   const cloud = await readJson(deviceA.cloud)
   assert.equal(cloud.files['README.md'].content, deviceAContent)

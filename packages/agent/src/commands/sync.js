@@ -7,6 +7,7 @@ import { privacyZoneForPath } from '@hopit/core/crypto'
 import { appendNdjson, emit, findLastEventOf, readNdjson } from '../io.js'
 import { actorIdFromOptions, bufferFromCloudFileEntry, cloudEntryEquals, countCloudScopes, countEntryScopes, countPathScopes, ensureActiveChangeSet, journalContextForCloud, normalizeCloudFileEntry, recordChangeSetConflict } from '../journal.js'
 import { assertWorkspacePathSafe } from '../paths.js'
+import { partitionEntriesForReconnect } from '../reconnect.js'
 import { classifyJournalEntries, hasUnresolvedSyncFailure, prepareRecovery, readJournalSafety, syncContextDetail, visibleRevisionFromEvent } from '../status-state.js'
 import { deletableCloudPathsForWorkspace, findIndexedCodebase, hydratedPathsAfterSync, readWorkspaceIndex, upsertWorkspaceIndexFromCloud, workspaceIndexHydrationStateForSync } from '../workspace-index.js'
 import { exonerateWorkspaceChangesAgainstCloud, readWorkspaceFiles, workspaceFilePath, workspaceLocalChanges } from '../workspace-manifest.js'
@@ -459,14 +460,37 @@ export async function recoverJournal(options) {
   const journalEntries = await readNdjson(options.journal)
   const eventEntries = await readNdjson(options.events)
   const journalState = classifyJournalEntries(journalEntries, eventEntries)
-  const candidates = journalState.entries.filter((entry) => entry.recoveryStatus !== 'acknowledged')
+  const allCandidates = journalState.entries.filter((entry) => entry.recoveryStatus !== 'acknowledged')
+
+  // Reconnect classification (decisions §1): before replaying anything,
+  // sort pending paths into only-local (replay), auto-resolved (identical
+  // content, no divergence), and diverged (both touched, content differs).
+  // Diverged paths are never replayed and never clobber the local file; they
+  // stay pending until resolved outside this command.
+  const { replayable: candidates, diverged } = partitionEntriesForReconnect(cloud, allCandidates)
   const recoveredPaths = []
   const result = {
     totalJournalEntries: journalEntries.length,
     attempted: 0,
     acknowledged: 0,
     failed: 0,
-    skipped: journalEntries.length - candidates.length,
+    diverged: diverged.length,
+    divergedPaths: diverged.map((classification) => classification.path),
+    skipped: journalEntries.length - allCandidates.length,
+  }
+
+  for (const classification of diverged) {
+    await emit(options, 'journal.reconnect_diverged', {
+      id: classification.entry.id,
+      type: classification.entry.type,
+      path: classification.path,
+      scope: classification.scope,
+      reason: classification.reason,
+      baseRevision: classification.baseRevision,
+      cloudRevision: classification.cloudRevision,
+      cloudHash: classification.cloudHash,
+      localHash: classification.localHash,
+    })
   }
 
   if (candidates.length > bulkJournalCommitThreshold && typeof cloudService.commitJournalEntries === 'function') {

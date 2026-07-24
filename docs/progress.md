@@ -154,6 +154,20 @@ Implemented the first git-replacement task from [docs/git-replacement-implementa
   where it does not. All tests use ordinary small fixture files with a
   dialed-down threshold instead of writing real large files.
 
+## 2026-07-23 GR-A1 Closed: Reconnect Classification Engine (Three Buckets)
+
+Implemented the same-owner multi-device reconnect protocol from `docs/git-replacement-decisions-2026-07.md` §1 (see `docs/git-replacement-implementation-plan.md` GR-A1).
+
+- New `packages/agent/src/reconnect.js`: `classifyReconnectEntry`/`classifyReconnectEntries` sort each pending journal path into `only-local` (replay), `auto-resolved` (identical content, no divergence), or `diverged` (real divergence, never replayed, never clobbers local); `sortEntriesByCausality` orders by `baseRevision` only, never `createdAt`, so clock skew cannot change outcomes; `partitionEntriesForReconnect` excludes every entry for a diverged path from replay (not just the causally-last one) and rewrites auto-resolved entries' stale `baseRevision`/`targetStateRevision` to the cloud's current values so the existing revision guards don't reject a no-op as a conflict.
+- `packages/agent/src/commands/sync.js` `recoverJournal` now classifies before replaying: diverged paths emit `journal.reconnect_diverged` (path, reason, base/cloud revisions, both hashes) and stay pending instead of hitting `journal.recovery_failed`/`change_set.conflict_detected`; the recovery result gained `diverged`/`divergedPaths` fields. This intentionally supersedes the previous behavior where any stale per-file `baseRevision` hard-failed the whole `recover` call.
+- Updated three existing `packages/agent/test/agent-cli.test.js` scenarios that exercised exactly this case under the old semantics (`recover surfaces stale file revision...`, `adversarial same-file two-device edits...`) to assert the new classify-then-defer behavior instead of the old hard-conflict behavior.
+- New `packages/agent/test/reconnect-divergence.test.js`: 16 scenario tests — clean replay (regression fixture matching pre-change result shape), identical-hash auto-resolve, real divergence, mixed batch, delete-vs-edit, edit-vs-delete, both-deleted, causality ordering, clock-skew, partial-replay exclusion, and a 1,000-path/3-divergent-file classification performance test.
+- `docs/agent-architecture.md` gained a "Reconnect Classification (Same-Owner Multi-Device Divergence)" section documenting the three buckets and the invariants.
+
+Evidence: `npm run agent:test` — 351 tests (335 baseline + 16 new), 344 pass, 0 fail, 5 cancelled (same environment-only cancellations as baseline), 2 skipped. `npm run test:worker` 87/87 pass. `npm run test:web` 211/211 pass across 37 files. `npm run lint`, `npm run typecheck:agent`, `npm run build`, `node packages/agent/src/cli.js --help` all clean. The 1,000-path classification test measured well under the 5s budget (tens of milliseconds).
+
+Out of scope (left for GR-A2/GR-A3/GR-A4 per the plan): persisting both sides of a divergence as recoverable trail data, the `hop conflicts` CLI and status API `divergences` array, the dashboard side-by-side conflict view, and unifying this with the diff-scan-on-restart path.
+
 ## 2026-07-12 WS7c Closed: Trail Diffs In The Desktop App And Dashboard, Plus A Reliability Sweep
 
 WS7c is now closed end to end: the object-backed compare engine was verified as already built and passing, and both the desktop app and the dashboard grew real trail-step diffs on top of it: the compare/history surfaces are no longer dashboard-pending. A reliability sweep landed alongside: merged CI, human-readable sync copy, an events-journal rotation, connection-fault resilience, and scheduled nightly backups. All work is live: commits pushed, dashboard deployed to `hopit.dev`, desktop app relaunched.
