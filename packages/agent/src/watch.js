@@ -5,17 +5,18 @@ import { createCloudGraphService, visibilityRequestFromOptions } from './cloud/d
 import { hydrateWorkspace, pruneWorkspaceCache } from './commands/hydrate.js'
 import { initCloud } from './commands/import.js'
 import { recoverJournal, refreshWorkspace, syncOnce } from './commands/sync.js'
-import { defaultDiskPressureFreeBytesThreshold, defaultDiskPressureFreeFraction, defaultWorkspaceScanIntervalMs, diskPressureAccelerationFactor, legacySyncDebounceMs, minimumWorkspaceScanIntervalMs, workspaceMode } from './constants.js'
-import { emit, findLastEventOf, readNdjson } from './io.js'
+import { defaultDiskPressureFreeBytesThreshold, defaultDiskPressureFreeFraction, defaultWorkspaceScanIntervalMs, diskPressureAccelerationFactor, legacySyncDebounceMs, minimumWorkspaceScanIntervalMs, refreshMassDeleteFraction, refreshMassDeleteMinFiles, workspaceMode } from './constants.js'
+import { appendNdjson, emit, findLastEventOf, readNdjson } from './io.js'
 import { withCloudFetchRetry } from './cloud-retry.js'
 import { createRemotePushClient } from './remote-push.js'
 import { toCloudPath } from './journal.js'
 import { assertWorkspacePathSafe, remotePullEnabled, remotePushEnabled, remoteRefreshIntervalMs, syncDebounceMs, syncMaxDelayMs, watchLimitPollIntervalMs } from './paths.js'
-import { normalizeWatchFilename, readJournalSafety, visibleRevisionFromEvent } from './status-state.js'
-import { findIndexedCodebase, readWorkspaceIndex } from './workspace-index.js'
-import { exonerateWorkspaceChangesAgainstCloud, isLocalActivityMarkerPath, shouldSkipWorkspacePath, shouldTrackLocalActivityPath, workspaceLocalChanges } from './workspace-manifest.js'
+import { synthesizeDiffScanEntries } from './reconnect.js'
+import { classifyJournalEntries, normalizeWatchFilename, readJournalSafety, visibleRevisionFromEvent } from './status-state.js'
+import { findIndexedCodebase, findIndexedCodebasesByWorkspacePath, readWorkspaceIndex } from './workspace-index.js'
+import { diffWorkspaceAgainstManifest, exonerateWorkspaceChangesAgainstCloud, isLocalActivityMarkerPath, readSingleWorkspaceEntry, shouldSkipWorkspacePath, shouldTrackLocalActivityPath, workspaceLocalChanges } from './workspace-manifest.js'
 import { acquireWorkspaceLock } from './workspace-lock.js'
-import { watch } from 'node:fs'
+import { existsSync, watch } from 'node:fs'
 
 // The Linux OS watch limit (fs.inotify.max_user_watches) surfaces from
 // fs.watch as ENOSPC once every watchable inode in the workspace tree
@@ -39,6 +40,119 @@ export const watchLimitRemedyMessage =
   'under /etc/sysctl.d/) so the limit survives a reboot. HopIt picks the native ' +
   'watcher back up automatically the next time the agent starts.'
 
+// GR-A4 (decisions §1: unified reconciliation). Runs once at watch startup,
+// before `recoverJournal`, so any workspace edit made while the agent was not
+// running -- offline, crashed, force-quit, or a workspace folder restored
+// from an external backup -- is folded into the exact same recovery path a
+// live watcher's own journal entries already take: diff-scan against the
+// workspace index's last-known content manifest, synthesize journal entries
+// for what changed, append them to the journal file, then let the normal
+// `recoverJournal` pass below GR-A1-classify and either replay or open a
+// divergence for each one. There is deliberately only ever this one path;
+// offline/crash/force-quit/restored-from-backup are not special-cased apart
+// from `massDeleteShaped` below.
+//
+// A deleted-path set shaped like a mass delete (decisions §1's
+// restored-from-backup case, reusing the `refresh_would_mass_delete` guard's
+// shape test) is never trusted as a genuine local delete: those entries are
+// tagged `forceDivergence` so classification opens a divergence per path
+// instead of replaying a delete that would wipe files still on cloud.
+export async function reconcileUnwatchedChanges(options) {
+  const empty = {
+    scanned: false,
+    addedCount: 0,
+    modifiedCount: 0,
+    deletedCount: 0,
+    synthesizedCount: 0,
+    massDeleteShaped: false,
+  }
+
+  if (!existsSync(options.workspace)) return empty
+
+  const workspaceIndex = await readWorkspaceIndex(options)
+  // `options['codebase-id']` is only ever populated by the CLI option
+  // normalizer; a bare `watchWorkspace(options)` caller (like a live agent
+  // process, which reads it straight from the workspace index rather than a
+  // flag) commonly omits it. Recovering a codebase id from the cloud graph
+  // the way `recoverJournal` does would mean an extra network round trip
+  // before this even knows whether there is anything to reconcile, so this
+  // falls back to the one indexed codebase whose managed folder resolves to
+  // this workspace path -- the same 1:1 folder/codebase invariant
+  // `assertWorkspaceNotIndexedForOtherCodebase` already enforces elsewhere.
+  const indexedCodebase =
+    findIndexedCodebase(workspaceIndex, options['codebase-id'], options.workspace) ??
+    findIndexedCodebasesByWorkspacePath(workspaceIndex, options.workspace)[0] ??
+    null
+  const baseline = indexedCodebase?.contentManifest
+  if (!baseline?.files) return empty
+
+  const rawDiff = await diffWorkspaceAgainstManifest(options.workspace, baseline, options)
+
+  // A path that already has an unresolved (not-yet-acknowledged) journal
+  // entry is already covered by the normal live-watcher path -- GR-A1
+  // classification will pick it up from the journal exactly as it always
+  // has. Synthesizing a second entry for the same path here would double it
+  // up in the journal for no benefit; this is also what makes an
+  // agent-crashed-mid-write scenario (a pending entry from before the crash,
+  // still unacknowledged) behave identically to a live watcher's own replay.
+  const journalEntries = await readNdjson(options.journal)
+  const eventEntries = await readNdjson(options.events)
+  const pendingPaths = new Set(
+    classifyJournalEntries(journalEntries, eventEntries)
+      .entries.filter((entry) => entry.recoveryStatus !== 'acknowledged' && entry.path)
+      .map((entry) => entry.path),
+  )
+  const diff = {
+    addedPaths: rawDiff.addedPaths.filter((relativePath) => !pendingPaths.has(relativePath)),
+    modifiedPaths: rawDiff.modifiedPaths.filter((relativePath) => !pendingPaths.has(relativePath)),
+    deletedPaths: rawDiff.deletedPaths.filter((relativePath) => !pendingPaths.has(relativePath)),
+  }
+  diff.addedCount = diff.addedPaths.length
+  diff.modifiedCount = diff.modifiedPaths.length
+  diff.deletedCount = diff.deletedPaths.length
+  diff.samplePaths = [...diff.addedPaths, ...diff.modifiedPaths, ...diff.deletedPaths].slice(0, 10)
+
+  const dirty = diff.addedCount > 0 || diff.modifiedCount > 0 || diff.deletedCount > 0
+  if (!dirty) return { ...empty, scanned: true }
+
+  const baselineFileCount = Object.keys(baseline.files ?? {}).length
+  const massDeleteShaped =
+    diff.deletedCount > refreshMassDeleteMinFiles &&
+    baselineFileCount > 0 &&
+    diff.deletedCount / baselineFileCount > refreshMassDeleteFraction
+
+  const entries = await synthesizeDiffScanEntries({
+    diff,
+    baseline,
+    massDeleteShaped,
+    readDiskEntry: (relativePath) =>
+      readSingleWorkspaceEntry(options.workspace, relativePath).catch(() => null),
+  })
+
+  for (const entry of entries) {
+    await appendNdjson(options.journal, entry)
+  }
+
+  await emit(options, 'watch.diff_scan_synthesized', {
+    workspace: options.workspace,
+    addedCount: diff.addedCount,
+    modifiedCount: diff.modifiedCount,
+    deletedCount: diff.deletedCount,
+    synthesizedCount: entries.length,
+    massDeleteShaped,
+    samplePaths: diff.samplePaths,
+  })
+
+  return {
+    scanned: true,
+    addedCount: diff.addedCount,
+    modifiedCount: diff.modifiedCount,
+    deletedCount: diff.deletedCount,
+    synthesizedCount: entries.length,
+    massDeleteShaped,
+  }
+}
+
 export async function watchWorkspace(options, deps = {}) {
   const watchFn = deps.watchFn ?? watch
   const createPoller = deps.createPoller ?? createWorkspacePoller
@@ -51,6 +165,12 @@ export async function watchWorkspace(options, deps = {}) {
   try {
     const cloudService = createCloudGraphService(options)
     if (!(await cloudService.exists())) await initCloud(options)
+    // GR-A4: reconcile unwatched changes (diff-scan + synthesis) fully
+    // completes before recoverJournal classifies and replays, which itself
+    // fully completes before the remote-refresh scheduler below is created --
+    // enforcing the ordering invariant that the personal change set never
+    // interleaves with the safe-refresh path applying missed Main updates.
+    await reconcileUnwatchedChanges(options)
     const recovery = await recoverJournal(options)
     if (recovery.failed > 0) {
       await emit(options, 'watch.recovery_blocked', {
@@ -69,7 +189,12 @@ export async function watchWorkspace(options, deps = {}) {
     )
     const hydrationState = indexedCodebase?.hydration?.state ?? null
     if (!hydrationState || hydrationState === 'materialized') {
-      await hydrateWorkspace(options)
+      // GR-A4: any path recoverJournal just left (or already found) open as a
+      // divergence must survive hydrateWorkspace's disk-vs-cloud verify pass
+      // untouched -- otherwise a startup-detected divergence would be
+      // clobbered back to the cloud version moments after being opened,
+      // breaking GR-A2's "local file stays untouched until resolved" promise.
+      await hydrateWorkspace({ ...options, hydrateSkipPaths: recovery.divergedPaths })
     } else {
       // Attached and partially hydrated workspaces are intentionally lazy caches.
       // Starting the watcher must not turn service startup into a full download.
