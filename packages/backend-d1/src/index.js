@@ -5,6 +5,7 @@ import { attachBillingMethods } from './billing.js'
 import { attachClientMethods } from './client.js'
 import { attachCollaborationMethods } from './collaboration.js'
 import { attachDeviceAuthorizationMethods } from './device-authorizations.js'
+import { attachDivergenceMethods } from './divergences-store.js'
 import { attachEpisodeMethods } from './episodes-store.js'
 import { attachGraphMethods } from './graph.js'
 import { attachKeyMethods } from './keys.js'
@@ -38,6 +39,11 @@ export {
   normalizeCodebaseSettings,
   normalizeSummaryMode,
 } from './episodes-store.js'
+export {
+  divergenceId,
+  divergenceState,
+  normalizeDivergenceRow,
+} from './divergences-store.js'
 
 export function createD1Backend(options = {}, env = process.env) {
   return new CloudflareD1HopBackend(d1ConfigFromOptions(options, env))
@@ -63,5 +69,6 @@ attachCollaborationMethods(CloudflareD1HopBackend)
 attachSessionMethods(CloudflareD1HopBackend)
 attachKeyMethods(CloudflareD1HopBackend)
 attachDeviceAuthorizationMethods(CloudflareD1HopBackend)
+attachDivergenceMethods(CloudflareD1HopBackend)
 attachEpisodeMethods(CloudflareD1HopBackend)
 attachClientMethods(CloudflareD1HopBackend)

@@ -167,6 +167,22 @@ Implemented the same-owner multi-device reconnect protocol from `docs/git-replac
 Evidence: `npm run agent:test` — 351 tests (335 baseline + 16 new), 344 pass, 0 fail, 5 cancelled (same environment-only cancellations as baseline), 2 skipped. `npm run test:worker` 87/87 pass. `npm run test:web` 211/211 pass across 37 files. `npm run lint`, `npm run typecheck:agent`, `npm run build`, `node packages/agent/src/cli.js --help` all clean. The 1,000-path classification test measured well under the 5s budget (tens of milliseconds).
 
 Out of scope (left for GR-A2/GR-A3/GR-A4 per the plan): persisting both sides of a divergence as recoverable trail data, the `hop conflicts` CLI and status API `divergences` array, the dashboard side-by-side conflict view, and unifying this with the diff-scan-on-restart path.
+
+## 2026-07-24 GR-A2 Closed: Divergence Persistence — Nothing Silently Dropped
+
+Implemented divergence persistence from `docs/git-replacement-decisions-2026-07.md` §1 (see `docs/git-replacement-implementation-plan.md` GR-A2), on top of GR-A1's classification.
+
+- New `divergences` table (`packages/backend-d1/src/schema.js`, `cloudflare/d1/schema.sql`, `cloudflare/d1/migrations/2026-07-24-divergences.sql`; drift test stays green) plus `packages/backend-d1/src/divergences-store.js` (`openDivergence` idempotent-upsert-by-open-path, `getOpenDivergence`, `getDivergence`, `listDivergences`, `resolveDivergence`), wired into `CloudflareD1HopBackend` via `packages/backend-d1/src/index.js`.
+- Mirrored the same methods on the local/dev fixture backend (`FixtureJsonCloudGraphService` in `packages/agent/src/cloud/d1-graph-service.js`), storing records under a top-level `divergences` array on the cloud graph JSON — same pattern `fileVersions`/`codebaseSettings` already use. `D1CloudGraphService` inherits the backend methods directly.
+- New `buildDivergenceRecord` in `packages/agent/src/reconnect.js` (pure, I/O-free) builds the persistence payload from a bucket-3 classification.
+- `packages/agent/src/commands/sync.js` `recoverJournal` now opens a divergence record for every diverged path — capturing both revision refs, both hashes, both device labels, and the offline device's full on-disk content (`prepareRecovery`) — as the very last write in the function (after any replay/commit writes), so an earlier read-modify-write commit can never clobber the record a later write is racing against. New `resolveDivergence(options, { divergenceId, keep })` closes a record: `keep: 'local'` journals the captured content (or a delete, for delete-vs-edit) through the normal `commitJournalEntry` path; `keep: 'cloud'` writes nothing new since the cloud already holds the winning content. The record is only ever marked `resolved`, never deleted.
+- `docs/agent-architecture.md` gained a "Divergence Persistence" subsection under Reconnect Classification.
+- New `packages/agent/test/divergence-persistence.test.js`: 6 scenario tests — record captures both sides and never touches the local file; agent restart mid-divergence preserves (not duplicates) the open record; `keep: 'cloud'` resolution leaves the losing local content fetchable; `keep: 'local'` resolution journals a normal step and leaves the prior cloud content reachable in `file_versions` history; delete-vs-edit records and resolves correctly; and an explicit "0 code paths discard a diverged version" check via the cloud service directly.
+
+Evidence: `npm run agent:test` — 423 tests (417 baseline + 6 new), 416 pass, 0 fail, 5 cancelled (same environment-only cancellations as baseline), 2 skipped. `npm run test:worker` 89/89 pass. `npm run test:web` 219/219 pass across 38 files. `npm run lint`, `npm run typecheck:agent`, `npm run build`, `node packages/agent/src/cli.js --help` all clean.
+
+Out of scope (left for GR-A3/GR-A4 per the plan): the `hop conflicts` CLI command and its registration in `cli.js`/`help.js`/`options.js`, the status API `divergences` array, and the dashboard side-by-side conflict view. `resolveDivergence` is exported as a library function for those surfaces to call.
+
 ## 2026-07-23 GR-D1: Warn-Only Outbound Secret Scanner
 
 Implemented per the git-replacement implementation plan (`docs/git-replacement-implementation-plan.md`, Track D) and decisions doc §7 ("rotate, don't redact").

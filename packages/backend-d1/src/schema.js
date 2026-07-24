@@ -385,6 +385,43 @@ export const d1SchemaStatements = [
     primary key (codebase_id, episode_id)
   )`,
   `create index if not exists idx_trail_episodes_codebase_from on trail_episodes(codebase_id, from_revision)`,
+  // Same-owner multi-device divergence records (GR-A2, decisions §1). Written
+  // by the reconnect protocol when a path was touched by two devices with
+  // differing content: nothing is ever silently dropped. `local_entry_json`
+  // holds the offline device's full file payload (kind/content/encoding/hash)
+  // so it stays retrievable even though it is never written to `files` while
+  // the divergence is open -- the local workspace copy is the only other
+  // place it lives, and it must never be clobbered before the user resolves.
+  // The cloud side needs no separate copy here: it is the codebase's current
+  // (or, after resolution, historical) `files`/`file_versions` row. One row
+  // per divergence; a path can accumulate multiple resolved rows over time,
+  // but at most one `state = 'open'` row per (codebase_id, path).
+  `create table if not exists divergences (
+    divergence_id text primary key,
+    codebase_id text not null,
+    path text not null,
+    scope text,
+    state text not null default 'open',
+    reason text,
+    base_revision integer,
+    cloud_revision integer,
+    local_hash text,
+    cloud_hash text,
+    local_device text,
+    cloud_device text,
+    local_side text,
+    cloud_side text,
+    local_entry_json text,
+    opened_at text not null,
+    resolved_at text,
+    resolved_keep text,
+    resolved_revision integer,
+    created_at text not null,
+    updated_at text not null,
+    foreign key (codebase_id) references codebases(codebase_id) on delete cascade
+  )`,
+  `create index if not exists idx_divergences_codebase_state on divergences(codebase_id, state)`,
+  `create index if not exists idx_divergences_codebase_path_state on divergences(codebase_id, path, state)`,
   // Phase 3 Stage 2-3 (HOPIT_MULTITENANT): per-tenant usage meter + plan. One
   // indexed row per tenant (tenant == user in v1; tenant_id == owner_id). Holds a
   // maintained storage-bytes tally and a rolling daily D1-rows-written counter

@@ -1,5 +1,6 @@
 // @ts-check
 import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { canRequesterSeePath, createCloudGraphService, filterVisibleGraphForRequester, removeEmptyAncestorDirectories, summarizeGraphContract, summarizeRequester, visibilityContextForGraph, visibilityRequestFromOptions } from '../cloud/d1-graph-service.js'
 import { bulkJournalCommitChunkSize, bulkJournalCommitThreshold, ConflictError, defaultLargeFileThresholdBytes, entryKind, refreshMassDeleteFraction, refreshMassDeleteMinFiles, workspaceMode } from '../constants.js'
@@ -7,7 +8,7 @@ import { privacyZoneForPath } from '@hopit/core/crypto'
 import { appendNdjson, emit, findLastEventOf, readNdjson } from '../io.js'
 import { actorIdFromOptions, bufferFromCloudFileEntry, cloudEntryEquals, countCloudScopes, countEntryScopes, countPathScopes, ensureActiveChangeSet, journalContextForCloud, normalizeCloudFileEntry, recordChangeSetConflict } from '../journal.js'
 import { assertWorkspacePathSafe } from '../paths.js'
-import { partitionEntriesForReconnect } from '../reconnect.js'
+import { buildDivergenceRecord, partitionEntriesForReconnect } from '../reconnect.js'
 import { classifyJournalEntries, hasUnresolvedSyncFailure, prepareRecovery, readJournalSafety, syncContextDetail, visibleRevisionFromEvent } from '../status-state.js'
 import { deletableCloudPathsForWorkspace, findIndexedCodebase, hydratedPathsAfterSync, readWorkspaceIndex, upsertWorkspaceIndexFromCloud, workspaceIndexHydrationStateForSync } from '../workspace-index.js'
 import { exonerateWorkspaceChangesAgainstCloud, readWorkspaceFiles, workspaceFilePath, workspaceLocalChanges } from '../workspace-manifest.js'
@@ -517,6 +518,122 @@ export async function performSyncOnce(options, contextDetail = {}) {
   return result
 }
 
+// GR-A2 (decisions §1): persists every bucket-3 (diverged) classification as
+// an open divergence record *before* anything about it is resolved. Nothing
+// is silently dropped: the offline device's own version is captured in full
+// (`localEntry`) here, independent of whatever happens to the journal entry
+// afterwards, so it stays recoverable even if the local workspace file is
+// later changed again or the divergence is resolved in the cloud's favor.
+// The local workspace file itself is never touched by this function -- it
+// stays exactly as the user left it until they explicitly resolve.
+async function persistDivergences(options, cloudService, cloud, diverged) {
+  const localDevice = options['device-name'] ?? os.hostname() ?? 'local-device'
+  let fileVersions = null
+  const records = []
+
+  for (const classification of diverged) {
+    let localEntry = null
+    if (classification.localSide !== 'deleted') {
+      try {
+        const recovery = await prepareRecovery(cloud, classification.entry, options.workspace)
+        localEntry = recovery.entry ?? null
+      } catch (error) {
+        await emit(options, 'journal.reconnect_diverged_local_content_unavailable', {
+          path: classification.path,
+          reason: error.message,
+        })
+      }
+    }
+
+    let cloudDevice = null
+    if (classification.cloudRevision !== null && typeof cloudService.listFileVersions === 'function') {
+      if (fileVersions === null) {
+        fileVersions = await cloudService.listFileVersions(cloud.codebase?.id).catch(() => [])
+      }
+      const cloudVersion = [...fileVersions]
+        .reverse()
+        .find((row) => row.path === classification.path && row.newRevision === classification.cloudRevision)
+      cloudDevice = cloudVersion?.deviceName ?? null
+    }
+
+    const divergence = buildDivergenceRecord(classification, { localEntry, localDevice, cloudDevice })
+    const record = await cloudService.openDivergence(cloud.codebase?.id, divergence)
+    if (record) records.push(record)
+  }
+
+  return records
+}
+
+// GR-A2 (decisions §1): resolves an open divergence. `keep: 'local'` writes
+// the offline device's captured content as a normal journaled step (exactly
+// like any other write -- it goes through the same `commitJournalEntry` path,
+// so it gets its own `file_versions` row); `keep: 'cloud'` writes nothing new
+// because the cloud's current file already *is* the winning content. Either
+// way the divergence record is only ever closed, never deleted, so both the
+// content that lost (still in `record.localEntry` / still reachable at its
+// old cloud revision through `file_versions`) and the content that won
+// remain fetchable by revision forever. Combining the two sides into a new,
+// user-edited file is exposed by GR-A3's CLI/dashboard surface as a
+// `keep: 'local'` resolution against a locally-edited merge, so it needs no
+// separate branch here.
+export async function resolveDivergence(options, { divergenceId: id, keep } = {}) {
+  if (!id) throw new Error('resolveDivergence requires a divergenceId')
+  if (keep !== 'local' && keep !== 'cloud') {
+    throw new Error(`resolveDivergence: unsupported keep value ${JSON.stringify(keep)} (expected "local" or "cloud")`)
+  }
+
+  const cloudService = createCloudGraphService(options)
+  const cloud = await cloudService.readGraph()
+  const record = await cloudService.getDivergence(cloud.codebase?.id, id)
+  if (!record) throw new Error(`divergence not found: ${id}`)
+  if (record.state === 'resolved') return { record, applied: false }
+
+  let resolvedRevision = record.cloudRevision
+  if (keep === 'local' && record.localSide === 'deleted') {
+    // delete_vs_edit (decisions §1 sub-cases): keeping "local" means keeping
+    // the offline device's delete, journaled as a normal delete step.
+    const now = new Date().toISOString()
+    const entry = {
+      id: randomUUID(),
+      type: 'delete',
+      path: record.path,
+      scope: record.scope ?? scopeForPath(record.path),
+      baseRevision: cloud.files?.[record.path]?.revision ?? null,
+      createdAt: now,
+      status: 'pending',
+    }
+    const acknowledgement = await cloudService.commitJournalEntry(cloud, entry, { now })
+    resolvedRevision = acknowledgement?.revision ?? cloud.revision
+  } else if (keep === 'local') {
+    if (!record.localEntry) {
+      throw new Error(`divergence ${id} has no recoverable local content to keep (path: ${record.path})`)
+    }
+    const now = new Date().toISOString()
+    const entry = {
+      id: randomUUID(),
+      type: 'write',
+      path: record.path,
+      scope: record.scope ?? scopeForPath(record.path),
+      kind: record.localEntry.kind ?? entryKind.file,
+      hash: record.localEntry.hash,
+      baseRevision: cloud.files?.[record.path]?.revision ?? null,
+      createdAt: now,
+      status: 'pending',
+    }
+    const acknowledgement = await cloudService.commitJournalEntry(cloud, entry, { entry: record.localEntry, now })
+    resolvedRevision = acknowledgement?.revision ?? cloud.revision
+  }
+
+  const resolved = await cloudService.resolveDivergence(cloud.codebase?.id, id, { keep, resolvedRevision })
+  await emit(options, 'journal.reconnect_diverged_resolved', {
+    divergenceId: id,
+    path: record.path,
+    keep,
+    resolvedRevision,
+  })
+  return { record: resolved, applied: true }
+}
+
 export async function recoverJournal(options) {
   const cloudService = createCloudGraphService(options)
   const cloud = await cloudService.readGraph()
@@ -540,7 +657,25 @@ export async function recoverJournal(options) {
     failed: 0,
     diverged: diverged.length,
     divergedPaths: diverged.map((classification) => classification.path),
+    divergences: [],
     skipped: journalEntries.length - allCandidates.length,
+  }
+
+  // Persists every diverged path as an open divergence record (GR-A2,
+  // decisions §1). Deliberately run last, immediately before the
+  // recovery-complete summary, in each branch below: earlier commit paths
+  // (bulk-chunked and single-entry) both do their own read-modify-write
+  // cycles against the cloud graph, and if divergence persistence ran before
+  // them its writes would be clobbered by a subsequent read that predates
+  // them. Running last means nothing after it can overwrite the record.
+  async function finalizeDivergences() {
+    if (diverged.length === 0 || typeof cloudService.openDivergence !== 'function') return
+    const records = await persistDivergences(options, cloudService, cloud, diverged)
+    result.divergences = records.map((record) => ({
+      divergenceId: record.divergenceId,
+      path: record.path,
+      reason: record.reason,
+    }))
   }
 
   for (const classification of diverged) {
@@ -598,6 +733,8 @@ export async function recoverJournal(options) {
       result.acknowledged += committed.length
       recoveredPaths.push(...committed.map((entry) => entry.path).filter(Boolean))
     }
+
+    await finalizeDivergences()
 
     await emit(options, 'journal.recovery_complete', {
       ...result,
@@ -667,6 +804,8 @@ export async function recoverJournal(options) {
       })
     }
   }
+
+  await finalizeDivergences()
 
   await emit(options, 'journal.recovery_complete', {
     ...result,
