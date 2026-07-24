@@ -316,6 +316,37 @@ Refresh expectations:
 - `.private/` paths refresh like normal graph paths for the same owner, while retaining owner-private visibility metadata
 - hash-only materialization manifests let the agent detect unjournaled local drift before automatic refresh paths overwrite disk content
 
+#### Per-File Refresh Under A Live Editor (GR-F1, decisions §10)
+
+`refreshWorkspace` (`hop refresh` and the periodic/one-shot remote-pull path)
+no longer blocks the whole workspace just because *some* file carries
+unjournaled local drift. It splits the apply per path:
+
+- paths with no local edits materialize immediately, exactly as before
+- paths with genuine local drift (disk differs from both the last
+  materialization manifest and the current cloud entry) are withheld —
+  neither overwritten nor deleted — and flagged instead of blocking
+  every other file's refresh
+- the withheld path never advances the indexed `lastMaterializedRevision`
+  past cloud head, so reconciliation keeps retrying it on every cycle until
+  the local edit resolves (matches cloud again, or gets journaled/synced),
+  at which point it materializes normally
+- `refresh.complete` carries `reason: 'file_withheld_local_edits'`,
+  `withheldCount`, and a capped `withheldSamplePaths` sample when anything
+  was withheld — a reason distinct from the whole-workspace
+  `workspace_has_unjournaled_changes` block, which remains for the outer
+  safety gates only: a missing workspace, an untrustworthy content manifest,
+  pending/failed journal entries, and the mass-delete guard
+- `status.workspace.withheldRefresh` (the fast status-endpoint path always
+  reports `null` here since it deliberately skips a workspace scan) is
+  computed live against the current cloud graph each call — "Main changed
+  under you" — so it clears the instant the local edit resolves, independent
+  of the last refresh cycle's history
+- `remote-push.js` (live push delivery) intentionally keeps the old
+  whole-workspace block on any local drift; only the remote-pull path
+  (`remotePullOnce`, the periodic reconciliation loop) opts into per-file
+  withholding, since both share `remoteRefreshDecision`
+
 ### Automatic Remote-Update Delivery
 
 Explicit `hop refresh` remains the deterministic safe primitive. Watch/service
@@ -336,7 +367,8 @@ Remote-update delivery expectations:
 - the cloud emits or exposes file, review, visibility, conflict, and membership events in cursor order
 - the local service receives those events through a subscription or bounded polling loop
 - if the local journal is clean, the agent safely materializes the new selected cloud state
-- if the local journal has pending, failed, or uncertain entries, or if disk content differs from the last materialized manifest, the agent does not overwrite the workspace and instead reports a blocked/conflict state; stale-manifest findings that already match the cloud graph byte-for-byte are exonerated and the manifest is rebuilt, while genuine drift still blocks
+- if the local journal has pending, failed, or uncertain entries, the agent does not overwrite the workspace and instead reports a blocked state (this outer gate is unconditional for both remote-pull and remote-push)
+- if disk content differs from the last materialized manifest for some paths, remote-pull (see "Per-File Refresh Under A Live Editor" above) materializes every other path and withholds/flags just those paths, while remote-push keeps blocking the whole apply; stale-manifest findings that already match the cloud graph byte-for-byte are exonerated and the manifest is rebuilt in both cases, while genuine drift still blocks (whole-workspace for push, per-path for pull)
 - metadata-only or partially materialized workspaces stay lazy until an explicit hydrate or refresh operation changes that state
 - remote updates preserve `.private/` visibility and requester filtering
 - status exposes whether the last update was applied, skipped as unchanged, blocked by local work, or failed

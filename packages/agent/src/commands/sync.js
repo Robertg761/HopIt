@@ -10,7 +10,7 @@ import { assertWorkspacePathSafe } from '../paths.js'
 import { partitionEntriesForReconnect } from '../reconnect.js'
 import { classifyJournalEntries, hasUnresolvedSyncFailure, prepareRecovery, readJournalSafety, syncContextDetail, visibleRevisionFromEvent } from '../status-state.js'
 import { deletableCloudPathsForWorkspace, findIndexedCodebase, hydratedPathsAfterSync, readWorkspaceIndex, upsertWorkspaceIndexFromCloud, workspaceIndexHydrationStateForSync } from '../workspace-index.js'
-import { exonerateWorkspaceChangesAgainstCloud, readWorkspaceFiles, workspaceFilePath, workspaceLocalChanges } from '../workspace-manifest.js'
+import { exoneratedLocalChanges, readWorkspaceFiles, withheldRefreshPaths, workspaceFilePath, workspaceLocalChanges } from '../workspace-manifest.js'
 import { isScannableTextEntry, scanTextForSecrets } from '../secret-scan.js'
 import { scopeForPath } from '@hopit/core/privacy-zone'
 import { randomUUID } from 'node:crypto'
@@ -79,15 +79,27 @@ export async function refreshWorkspace(options) {
   const rawLocalChanges = existsSync(options.workspace)
     ? await workspaceLocalChanges(options, indexedCodebase, { includePaths: true })
     : { safe: true, state: 'missing', reason: null }
+
   // A stale content manifest can flag already-committed files as unjournaled
   // and deadlock refresh (the only thing that rebuilds the manifest). Exonerate
   // against the cloud graph we just read: if every reported change already
   // matches cloud, the refresh below rebuilds the manifest and self-heals.
   // The exonerated result is compact (counts + ≤10-path samples), so embedding
   // it in the refresh.blocked detail below stays bounded.
-  const localChanges = await exonerateWorkspaceChangesAgainstCloud(options, rawLocalChanges, cloud)
+  let localChanges = rawLocalChanges
+  let diskEntriesForWithhold = null
+  if (!rawLocalChanges.safe) {
+    diskEntriesForWithhold = await readWorkspaceFiles(options.workspace, options)
+    localChanges = exoneratedLocalChanges(rawLocalChanges, cloud, diskEntriesForWithhold)
+  }
   const manifestSelfHealed = Boolean(localChanges?.manifestStale)
-  if (!localChanges.safe) {
+
+  // GR-F1 (decisions §10): a whole-workspace block only remains for the outer
+  // safety gates — a workspace that is missing entirely or whose content
+  // manifest cannot be trusted. Genuine per-file drift (`dirty`) is relaxed:
+  // those specific paths are withheld and flagged below instead of blocking
+  // every other file's refresh.
+  if (!localChanges.safe && localChanges.state !== 'dirty') {
     const blockedDetail = {
       ...startedDetail,
       state: 'blocked',
@@ -98,7 +110,11 @@ export async function refreshWorkspace(options) {
     throw new Error('Refresh blocked because the local workspace has unjournaled changes.')
   }
 
-  const result = await materializeCloudToWorkspace(options, cloud, cloudService)
+  const withheldPaths = !localChanges.safe
+    ? withheldRefreshPaths(rawLocalChanges, cloud, diskEntriesForWithhold ?? {})
+    : []
+
+  const result = await materializeCloudToWorkspace(options, cloud, cloudService, { withheldPaths })
   if (result.written > 0 || result.deleted > 0) {
     await emit(options, 'remote-update', {
       workspace: options.workspace,
@@ -127,17 +143,43 @@ export async function refreshWorkspace(options) {
           manifestStalePathCount: localChanges.exoneratedCount ?? 0,
         }
       : {}),
+    // GR-F1: withheld paths get their own compact reason distinct from the
+    // whole-workspace `workspace_has_unjournaled_changes` block above, so
+    // dashboard/menu-bar surfaces can tell "one file is flagged" apart from
+    // "refresh is entirely blocked".
+    ...(withheldPaths.length > 0
+      ? {
+          reason: 'file_withheld_local_edits',
+          withheldCount: withheldPaths.length,
+          withheldSamplePaths: withheldPaths.slice(0, 10),
+        }
+      : {}),
   })
   await upsertWorkspaceIndexFromCloud(options, cloud, {
     reason: 'refresh',
     lastEvent: 'refresh.complete',
     hydrationState: 'materialized',
-    hydratedPaths: Object.keys(cloud.files ?? {}),
+    hydratedPaths: Object.keys(cloud.files ?? {}).filter((relativePath) => !withheldPaths.includes(relativePath)),
+    // GR-F1: never advance the indexed revision past a withheld path — that
+    // would make the cheap "already at head" reconciliation shortcut think
+    // the withheld file's remote change was already applied, and stop
+    // retrying once the local edit resolves.
+    ...(withheldPaths.length > 0
+      ? { materializedRevision: indexedCodebase?.hydration?.lastMaterializedRevision ?? null }
+      : {}),
   })
+  return { ...result, withheldPaths }
 }
 
-export async function materializeCloudToWorkspace(options, cloud, cloudService = null) {
+export async function materializeCloudToWorkspace(options, cloud, cloudService = null, refreshOptions = {}) {
   await fs.mkdir(options.workspace, { recursive: true })
+
+  // GR-F1 (decisions §10): paths carrying genuine unjournaled local drift are
+  // withheld from this materialize pass entirely — neither overwritten with
+  // the cloud version nor deleted — so the user's local edit survives and the
+  // caller can flag it ("Main changed under you") instead of blocking every
+  // other file in the workspace.
+  const withheldPaths = new Set(refreshOptions.withheldPaths ?? [])
 
   // cloudService is optional here (materializeCloudToWorkspace is also called
   // with an already-fetched `cloud` graph and no live service); only resolve
@@ -145,7 +187,9 @@ export async function materializeCloudToWorkspace(options, cloud, cloudService =
   const scanOptions = cloudService ? await withDerivedPathOverrides(options, cloudService) : options
   const diskEntries = await readWorkspaceFiles(options.workspace, scanOptions)
   const cloudPaths = new Set(Object.keys(cloud.files ?? {}))
-  const wouldDeletePaths = Object.keys(diskEntries).filter((relativePath) => !cloudPaths.has(relativePath))
+  const wouldDeletePaths = Object.keys(diskEntries).filter(
+    (relativePath) => !cloudPaths.has(relativePath) && !withheldPaths.has(relativePath),
+  )
 
   // Fail closed before any deletion when refresh would wipe an implausible share
   // of the workspace. A guest/zero-visibility read (session id without requester
@@ -163,6 +207,8 @@ export async function materializeCloudToWorkspace(options, cloud, cloudService =
   let unchanged = 0
 
   for (const [relativePath, file] of Object.entries(cloud.files ?? {})) {
+    if (withheldPaths.has(relativePath)) continue
+
     const entry = normalizeCloudFileEntry(relativePath, file)
     const diskEntry = diskEntries[relativePath] ? normalizeCloudFileEntry(relativePath, diskEntries[relativePath]) : null
     if (diskEntry && cloudEntryEquals(diskEntry, entry)) {
@@ -177,6 +223,7 @@ export async function materializeCloudToWorkspace(options, cloud, cloudService =
 
   for (const relativePath of sortPathsDeepestFirst(Object.keys(diskEntries))) {
     if (cloudPaths.has(relativePath)) continue
+    if (withheldPaths.has(relativePath)) continue
 
     await fs.rm(workspaceFilePath(options.workspace, relativePath), { recursive: true, force: true })
     await removeEmptyAncestorDirectories(options.workspace, path.dirname(relativePath))
@@ -195,6 +242,7 @@ export async function materializeCloudToWorkspace(options, cloud, cloudService =
     fileCount: cloudPaths.size,
     scopeCounts: countCloudScopes(cloud),
     hiddenScopeCounts: cloud.visibilityContext?.hiddenScopeCounts ?? { shared: 0, private: 0 },
+    withheldCount: withheldPaths.size,
   }
 }
 

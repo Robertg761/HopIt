@@ -94,7 +94,7 @@ test('refreshWorkspace self-heals a stale manifest whose disk files already matc
   assert.equal(complete.detail.manifestStalePathCount, 1)
 })
 
-test('refreshWorkspace still blocks on genuine local drift', async (t) => {
+test('refreshWorkspace withholds and flags genuine local drift instead of blocking (GR-F1)', async (t) => {
   const options = await makeWorkspace(t)
   await fs.writeFile(path.join(options.workspace, 'doc.txt'), 'v1\n', 'utf8')
   await syncOnce(options, { trigger: 'manual' })
@@ -102,12 +102,20 @@ test('refreshWorkspace still blocks on genuine local drift', async (t) => {
   // Edit on disk without journaling/syncing: disk differs from cloud.
   await fs.writeFile(path.join(options.workspace, 'doc.txt'), 'v2 local only\n', 'utf8')
 
-  await assert.rejects(
-    () => refreshWorkspace(options),
-    /Refresh blocked because the local workspace has unjournaled changes/,
-  )
-  // The genuine local edit is preserved (fail-closed).
+  // A single dirty file with nothing else to refresh no longer blocks the
+  // whole workspace: it's withheld and flagged, and refreshWorkspace succeeds.
+  const result = await refreshWorkspace(options)
+  assert.equal(result.written, 0)
+  assert.equal(result.deleted, 0)
+  assert.equal(result.withheldCount, 1)
+  // The genuine local edit is preserved (fail-closed) exactly as before.
   assert.equal(await fs.readFile(path.join(options.workspace, 'doc.txt'), 'utf8'), 'v2 local only\n')
+
+  const events = await readNdjson(options.events)
+  const complete = events.findLast((event) => event.event === 'refresh.complete')
+  assert.equal(complete.detail.reason, 'file_withheld_local_edits')
+  assert.equal(complete.detail.withheldCount, 1)
+  assert.deepEqual(complete.detail.withheldSamplePaths, ['doc.txt'])
 })
 
 test('exoneratedLocalChanges clears synced deletes but keeps genuine drift', async (t) => {

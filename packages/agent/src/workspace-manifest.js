@@ -186,6 +186,70 @@ export function exoneratedLocalChanges(changes, cloud, diskEntries = {}) {
   }
 }
 
+// GR-F1 (decisions §10): the full (uncapped) set of paths that must be
+// withheld from a refresh apply because they carry genuine local drift
+// against the just-read cloud graph. This mirrors exoneratedLocalChanges's
+// reconciliation, but exoneratedLocalChanges deliberately truncates its
+// output to a ≤10-path sample for compact event/status embedding — refresh
+// needs the exact, complete skip set instead. Only meaningful once
+// workspaceLocalChanges already reports state 'dirty'
+// (workspace_has_unjournaled_changes); missing-workspace/missing-manifest
+// states have no per-path list to withhold and stay whole-workspace blocks.
+export function withheldRefreshPaths(changes, cloud, diskEntries = {}) {
+  if (!changes) return []
+  const cloudFiles = cloud?.files ?? {}
+  const withheld = new Set()
+
+  for (const relativePath of changes.addedPaths ?? []) {
+    if (!diskEntryMatchesCloud(relativePath, diskEntries, cloudFiles)) withheld.add(relativePath)
+  }
+  for (const relativePath of changes.modifiedPaths ?? []) {
+    if (!diskEntryMatchesCloud(relativePath, diskEntries, cloudFiles)) withheld.add(relativePath)
+  }
+  for (const relativePath of changes.deletedPaths ?? []) {
+    // A local delete is not drift once cloud no longer has the path either.
+    if (cloudFiles[relativePath]) withheld.add(relativePath)
+  }
+
+  return [...withheld]
+}
+
+// Async, disk-scoped counterpart to withheldRefreshPaths for callers (e.g.
+// status) that must not perform a full directory walk + read of every disk
+// file just to check a handful of dirty paths (status deliberately never
+// reads untracked file bytes — see "status reports added workspace drift
+// without reading untracked file bytes"). Only paths that are also present
+// in the current cloud graph are read from disk at all: a path absent from
+// cloud can never match it, so it's withheld without touching disk. A read
+// failure (e.g. permissions) fails closed — still withheld — instead of
+// throwing.
+export async function withheldRefreshPathsFromDisk(root, changes, cloud) {
+  if (!changes) return []
+  const cloudFiles = cloud?.files ?? {}
+  const withheld = new Set()
+
+  const checkAgainstCloud = async (relativePath) => {
+    const cloudEntry = cloudFiles[relativePath]
+    if (!cloudEntry) {
+      withheld.add(relativePath)
+      return
+    }
+    const diskEntry = await readSingleWorkspaceEntry(root, relativePath).catch(() => null)
+    const matches =
+      diskEntry && cloudEntryEquals(normalizeCloudFileEntry(relativePath, diskEntry), normalizeCloudFileEntry(relativePath, cloudEntry))
+    if (!matches) withheld.add(relativePath)
+  }
+
+  for (const relativePath of changes.addedPaths ?? []) await checkAgainstCloud(relativePath)
+  for (const relativePath of changes.modifiedPaths ?? []) await checkAgainstCloud(relativePath)
+  for (const relativePath of changes.deletedPaths ?? []) {
+    // A local delete is not drift once cloud no longer has the path either.
+    if (cloudFiles[relativePath]) withheld.add(relativePath)
+  }
+
+  return [...withheld]
+}
+
 function diskEntryMatchesCloud(relativePath, diskEntries, cloudFiles) {
   const diskEntry = diskEntries?.[relativePath]
   const cloudEntry = cloudFiles?.[relativePath]

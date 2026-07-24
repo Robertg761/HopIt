@@ -440,7 +440,13 @@ export function workspaceIndexEntryFromCloud(options, cloud, metadata = {}) {
     : hydrationState === 'materialized'
       ? Object.keys(cloud.files ?? {}).sort()
       : []
-  const materializedRevision = hydrationState === 'materialized' ? (cloud.revision ?? null) : null
+  // GR-F1: a per-file refresh that withheld dirty paths must not advance the
+  // indexed revision to cloud head — that would make future reconciliation
+  // silently think the withheld path is already resolved. The caller passes
+  // an explicit override (the previous indexed revision) in that case.
+  const materializedRevision = hydrationState === 'materialized'
+    ? (Object.hasOwn(metadata, 'materializedRevision') ? metadata.materializedRevision : (cloud.revision ?? null))
+    : null
   const contentManifest = contentManifestFromCloud(cloud, hydratedPaths)
   const hydration = {
     state: hydrationState,

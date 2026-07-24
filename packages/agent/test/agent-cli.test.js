@@ -2166,18 +2166,96 @@ test('production-profile same-Mac dogfood simulation covers lazy hydration remot
   await fs.writeFile(path.join(deviceA.workspace, 'README.md'), thirdHandoff, 'utf8')
   await runCli('sync-once', deviceAArgs)
 
+  // GR-F1 (decisions §10): README.md is the only file that changed on Main and
+  // it's the same file device B has a dirty local edit to, so there's nothing
+  // clean left to apply this cycle — remote-pull still reports "skipped", but
+  // now with the dedicated per-file reason instead of the whole-workspace one,
+  // and the local edit stays intact (fail-closed).
   const blockedRemotePull = parseLastJsonObject((await runCli('remote-pull', deviceBArgs)).stdout)
   assert.equal(blockedRemotePull.ok, true)
   assert.equal(blockedRemotePull.state, 'skipped')
-  assert.equal(blockedRemotePull.reason, 'workspace_has_unjournaled_changes')
-  assert.equal(blockedRemotePull.detail.localChanges.modifiedCount, 1)
+  assert.equal(blockedRemotePull.reason, 'file_withheld_local_edits')
+  assert.equal(blockedRemotePull.detail.withheldCount, 1)
   assert.equal(await fs.readFile(path.join(deviceB.workspace, 'README.md'), 'utf8'), unsafeDeviceBContent)
 
   deviceBStatus = JSON.parse((await runCli('status', [...deviceBArgs, '--remote-pull'])).stdout)
   assert.equal(deviceBStatus.remotePull.state, 'skipped')
-  assert.equal(deviceBStatus.remotePull.lastSkipped.detail.reason, 'workspace_has_unjournaled_changes')
-  assert.equal(deviceBStatus.remotePull.lastSkipped.detail.localChanges.modifiedCount, 1)
+  assert.equal(deviceBStatus.remotePull.lastSkipped.detail.reason, 'file_withheld_local_edits')
+  assert.equal(deviceBStatus.remotePull.lastSkipped.detail.withheldCount, 1)
+  assert.equal(deviceBStatus.workspace.withheldRefresh.reason, 'file_withheld_local_edits')
+  assert.equal(deviceBStatus.workspace.withheldRefresh.count, 1)
+  assert.deepEqual(deviceBStatus.workspace.withheldRefresh.samplePaths, ['README.md'])
+  // Withholding README.md must not advance the indexed revision past cloud
+  // head, or the cheap "already at head" reconciliation shortcut would stop
+  // retrying the withheld file once the local edit resolves.
   assert.equal(deviceBStatus.remotePull.cursor.behindByRevisions, 1)
+})
+
+test('GR-F1 per-file refresh: untouched files apply, a dirty file is withheld and flagged, then applies once resolved', async () => {
+  const { deviceA, deviceB } = await makeTwoSessionState()
+  await runCli('init', [...stateArgs(deviceA), '--force'])
+  await runCli('hydrate', stateArgs(deviceA))
+  await runCli('hydrate', stateArgs(deviceB))
+
+  const readmeB = path.join(deviceB.workspace, 'README.md')
+  const packageJsonB = path.join(deviceB.workspace, 'package.json')
+
+  // Device B has a local, unjournaled edit to README.md only.
+  const deviceBDraft = '# hopit-core\n\nDevice B unsynced draft edit.\n'
+  await fs.writeFile(readmeB, deviceBDraft, 'utf8')
+
+  // Device A merges changes to both README.md (X... well Y here) and
+  // package.json (the untouched file, X) in one push.
+  const deviceAReadme = '# hopit-core\n\nMain moved on while device B was editing.\n'
+  await fs.writeFile(path.join(deviceA.workspace, 'README.md'), deviceAReadme, 'utf8')
+  await fs.writeFile(
+    path.join(deviceA.workspace, 'package.json'),
+    JSON.stringify({ name: 'hopit-core', version: '2.0.0' }, null, 2) + '\n',
+    'utf8',
+  )
+  await runCli('sync-once', stateArgs(deviceA))
+
+  // One refresh cycle: package.json (untouched) applies immediately; README.md
+  // (dirty) is withheld and flagged instead of blocking the whole refresh.
+  await runCli('refresh', stateArgs(deviceB))
+
+  assert.equal(await fs.readFile(packageJsonB, 'utf8'), await fs.readFile(path.join(deviceA.workspace, 'package.json'), 'utf8'))
+  assert.equal(await fs.readFile(readmeB, 'utf8'), deviceBDraft, 'the dirty file must not be silently overwritten')
+
+  const events = await readNdjson(deviceB.events)
+  const complete = events.findLast((event) => event.event === 'refresh.complete')
+  assert.equal(complete.detail.reason, 'file_withheld_local_edits')
+  assert.equal(complete.detail.withheldCount, 1)
+  assert.deepEqual(complete.detail.withheldSamplePaths, ['README.md'])
+  assert.ok(complete.detail.changedPaths.includes('package.json'))
+  assert.equal(complete.detail.changedPaths.includes('README.md'), false)
+
+  const statusWhileWithheld = JSON.parse((await runCli('status', stateArgs(deviceB))).stdout)
+  assert.equal(statusWhileWithheld.workspace.withheldRefresh.reason, 'file_withheld_local_edits')
+  assert.equal(statusWhileWithheld.workspace.withheldRefresh.count, 1)
+  assert.deepEqual(statusWhileWithheld.workspace.withheldRefresh.samplePaths, ['README.md'])
+  assert.equal(statusWhileWithheld.workspace.localChanges.state, 'dirty')
+
+  // Resolve README.md (the GR-A3 divergence-resolution surface this task
+  // depends on is separate, out-of-scope work): the user adopts Main's
+  // version, so device B's disk content now matches cloud exactly.
+  await fs.writeFile(readmeB, deviceAReadme, 'utf8')
+
+  const statusAfterResolve = JSON.parse((await runCli('status', stateArgs(deviceB))).stdout)
+  assert.equal(statusAfterResolve.workspace.withheldRefresh, null)
+
+  // A subsequent refresh applies README.md and fully converges — the withheld
+  // path never silently stranded the indexed revision behind cloud head.
+  await runCli('refresh', stateArgs(deviceB))
+  const finalEvents = await readNdjson(deviceB.events)
+  const finalComplete = finalEvents.findLast((event) => event.event === 'refresh.complete')
+  assert.equal(finalComplete.detail.reason, undefined)
+  assert.equal(finalComplete.detail.withheldCount, 0)
+
+  const finalStatus = JSON.parse((await runCli('status', stateArgs(deviceB))).stdout)
+  assert.equal(finalStatus.workspace.localChanges.state, 'clean')
+  assert.equal(finalStatus.workspace.withheldRefresh, null)
+  assert.equal(finalStatus.remotePull.cursor.behindByRevisions, 0)
 })
 
 test('backup writes restorable cloud status events journal and manifest files', async () => {

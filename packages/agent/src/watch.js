@@ -664,6 +664,9 @@ export async function createRemoteRefreshScheduler(options, schedulerOptions = {
       const decision = await remoteRefreshDecision(options, {
         trigger,
         localSyncIdle,
+        // GR-F1: the periodic remote-pull loop is the scoped caller that opts
+        // into per-file withholding instead of a whole-workspace skip.
+        allowPerFileWithholding: true,
       })
 
       if (decision.state === 'skip') {
@@ -673,7 +676,25 @@ export async function createRemoteRefreshScheduler(options, schedulerOptions = {
         return
       }
 
-      await refreshWorkspace(options)
+      const refreshResult = await refreshWorkspace(options)
+      const withheldCount = refreshResult?.withheldCount ?? 0
+      const madeVisibleChange = (refreshResult?.written ?? 0) > 0 || (refreshResult?.deleted ?? 0) > 0
+
+      // GR-F1: a cycle that only had withheld (dirty) paths to reconcile made
+      // no visible change on disk — surface that as a skip with the dedicated
+      // reason instead of a hollow "applied", distinct from whole-workspace skips.
+      if (!madeVisibleChange && withheldCount > 0) {
+        await emit(options, 'remote-pull.skipped', {
+          state: 'skipped',
+          trigger,
+          activity: remotePullActivitySummary(detail),
+          workspace: options.workspace,
+          reason: 'file_withheld_local_edits',
+          withheldCount,
+        })
+        return
+      }
+
       await emit(options, 'remote-pull.applied', {
         state: 'applied',
         trigger,
@@ -684,6 +705,7 @@ export async function createRemoteRefreshScheduler(options, schedulerOptions = {
         intervalMs: cooldownMs,
         cooldownMs,
         safeRefreshOnly: true,
+        ...(withheldCount > 0 ? { withheldCount, reason: 'file_withheld_local_edits' } : {}),
       })
     } catch (error) {
       await emit(options, 'remote-pull.failed', {
@@ -781,6 +803,9 @@ export async function remotePullOnce(options, inject = {}) {
       localSyncIdle: () => true,
       cloudService: inject.cloudService,
       retryOptions: inject.retryOptions,
+      // GR-F1: `hop remote-pull` is the scoped caller that opts into per-file
+      // withholding instead of a whole-workspace skip.
+      allowPerFileWithholding: true,
     })
 
     if (decision.state === 'skip') {
@@ -801,7 +826,36 @@ export async function remotePullOnce(options, inject = {}) {
       return result
     }
 
-    await refreshWorkspace(options)
+    const refreshResult = await refreshWorkspace(options)
+    const withheldCount = refreshResult?.withheldCount ?? 0
+    const madeVisibleChange = (refreshResult?.written ?? 0) > 0 || (refreshResult?.deleted ?? 0) > 0
+
+    // GR-F1 (decisions §10): if the only thing this cycle reconciled was a
+    // withheld (dirty) path, nothing actually changed on disk — report a skip
+    // with the dedicated reason, distinct from the whole-workspace skips above.
+    if (!madeVisibleChange && withheldCount > 0) {
+      const skippedDetail = {
+        state: 'skipped',
+        trigger,
+        workspace: options.workspace,
+        reason: 'file_withheld_local_edits',
+        withheldCount,
+      }
+      await emit(options, 'remote-pull.skipped', skippedDetail)
+
+      const result = {
+        ok: true,
+        action: 'remote-pull',
+        state: 'skipped',
+        trigger,
+        workspace: options.workspace,
+        reason: 'file_withheld_local_edits',
+        detail: skippedDetail,
+      }
+      console.log(JSON.stringify(result, null, 2))
+      return result
+    }
+
     const applied = {
       state: 'applied',
       trigger,
@@ -810,6 +864,7 @@ export async function remotePullOnce(options, inject = {}) {
       toRevision: decision.toRevision,
       intervalMs,
       safeRefreshOnly: true,
+      ...(withheldCount > 0 ? { withheldCount, reason: 'file_withheld_local_edits' } : {}),
     }
     await emit(options, 'remote-pull.applied', applied)
 
@@ -963,7 +1018,15 @@ export async function remoteRefreshDecision(options, context) {
     )
     localChanges = await exonerateWorkspaceChangesAgainstCloud(options, rawLocalChanges, visibleCloud)
   }
-  if (!localChanges.safe) {
+  // GR-F1 (decisions §10): a whole-refresh skip only remains for the outer
+  // safety gates (workspace missing, content manifest untrustworthy) on
+  // callers that opt into the per-file relaxation (the periodic/one-shot
+  // remote-pull path). remoteRefreshDecision is shared with remote-push.js,
+  // which is out of scope for this task and keeps its existing whole-workspace
+  // skip on any dirty state — context.allowPerFileWithholding defaults to
+  // false so that contract is untouched.
+  const dirtyIsWithholdable = context.allowPerFileWithholding && localChanges.state === 'dirty'
+  if (!localChanges.safe && !dirtyIsWithholdable) {
     return {
       state: 'skip',
       emit: true,

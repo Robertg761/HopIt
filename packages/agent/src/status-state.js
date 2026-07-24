@@ -8,7 +8,7 @@ import { cloudEntryEquals, countCloudScopes, countEntryScopes, normalizeCloudFil
 import { remotePullEnabled, remotePushEnabled, remotePushUrl, remoteRefreshIntervalMs } from './paths.js'
 import { isTimestampAtOrAfter } from './service.js'
 import { findIndexedCodebase, localCacheSnapshotForCloud, readWorkspaceIndex, workspaceIndexSummary } from './workspace-index.js'
-import { buildRemoteCursor, buildWorkspaceHydration, contentManifestSummary, listDerivedWorkspaceRoots, normalizeDerivedPathOverrides, readSingleWorkspaceEntry, workspaceFilePath, workspaceLocalChanges } from './workspace-manifest.js'
+import { buildRemoteCursor, buildWorkspaceHydration, contentManifestSummary, listDerivedWorkspaceRoots, normalizeDerivedPathOverrides, readSingleWorkspaceEntry, withheldRefreshPathsFromDisk, workspaceFilePath, workspaceLocalChanges } from './workspace-manifest.js'
 import { scopeForPath } from '@hopit/core/privacy-zone'
 import { existsSync, watch } from 'node:fs'
 
@@ -273,6 +273,15 @@ export async function readAgentState(options) {
     indexedCodebase,
   })
   const localChanges = await workspaceLocalChanges(options, indexedCodebase)
+  // GR-F1 (decisions §10): "Main changed under you" is derived live at status
+  // time (dirty local paths that genuinely differ from the current cloud
+  // graph), independent of the last refresh cycle's history, so the flag
+  // clears the instant the local edit is resolved rather than waiting on
+  // another push/pull round-trip.
+  const withheldRefresh =
+    !localChanges.safe && localChanges.state === 'dirty' && cloud && workspaceExists
+      ? await buildWithheldRefreshSummary(options, cloud, indexedCodebase)
+      : null
   const localCache = localCacheSnapshotForCloud(options, cloud, indexedCodebase)
   const derivedPaths = workspaceExists ? await readDerivedPathsSummary(options, cloudService) : null
   remotePullHealth.cursor = buildRemoteCursor({
@@ -339,6 +348,7 @@ export async function readAgentState(options) {
         remoteUpdatePolicy: workspaceMode.remoteUpdatePolicy,
         hydration,
         localChanges,
+        withheldRefresh,
         contentManifest: contentManifestSummary(indexedCodebase?.contentManifest),
         cache: localCache.summary,
         openHydration: indexedCodebase?.openHydration ?? null,
@@ -711,6 +721,28 @@ export function buildSyncHealth(syncEvents) {
     lastFailedSync,
     lastRecoveredSync,
     lastError: lastFailedSync?.detail?.reason ?? null,
+  }
+}
+
+// GR-F1 (decisions §10): compact per-file "Main changed under you" flag for
+// status/dashboard/menu-bar surfaces. Only called once workspaceLocalChanges
+// already reports state 'dirty' (a genuine unjournaled local edit exists);
+// this re-diffs with full path lists against the current cloud graph so the
+// flag reflects paths that actually differ from cloud right now, not merely
+// "something is locally dirty". The returned summary stays bounded (count +
+// ≤10-path sample), matching the compactness contract used elsewhere.
+async function buildWithheldRefreshSummary(options, cloud, indexedCodebase) {
+  const detailedChanges = await workspaceLocalChanges(options, indexedCodebase, { includePaths: true })
+  // Scoped, per-path reads only (never a full directory walk/read) — status
+  // must not read the bytes of untracked files just to compute this flag.
+  const withheldPaths = await withheldRefreshPathsFromDisk(options.workspace, detailedChanges, cloud)
+  if (withheldPaths.length === 0) return null
+
+  return {
+    reason: 'file_withheld_local_edits',
+    message: 'Main changed under you',
+    count: withheldPaths.length,
+    samplePaths: withheldPaths.slice(0, 10),
   }
 }
 

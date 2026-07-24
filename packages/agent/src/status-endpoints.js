@@ -113,6 +113,11 @@ export async function readAgentStatusEndpoint(options) {
         deletedCount: null,
         samplePaths: [],
       },
+      // GR-F1: this fast status path deliberately avoids a workspace scan (see
+      // localChanges above), so it cannot compute the live "Main changed under
+      // you" flag either. Keep the key present (null) for shape parity with
+      // the full status path (readAgentState) rather than omitting it.
+      withheldRefresh: null,
       contentManifest: contentManifestSummary(indexedCodebase?.contentManifest),
       cache: localCache.summary,
       openHydration: indexedCodebase?.openHydration ?? null,
