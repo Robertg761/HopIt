@@ -58,8 +58,6 @@ async function runOnce() {
 }
 
 async function executeJob(job) {
-  const workspace = path.join(workspaceRoot, job.codebaseId)
-  const jobEnv = actionJobEnv()
   const sharedArgs = [
     '--profile',
     'production',
@@ -71,6 +69,21 @@ async function executeJob(job) {
     stateRoot,
     ...backendArgs(),
   ]
+
+  // GR-E2: mirror-push jobs build their commits straight from the codebase's
+  // own content hashes (see commands/mirror.js) -- there is no npm-installed
+  // workspace checkout to hydrate/prepare, and the remote/branch/deploy-key
+  // come from `codebase_settings` (`hop mirror-set-remote`), not job.args.
+  if (job.kind === 'mirror') {
+    return await runProcess(process.execPath, [agentCli, 'mirror-sync', ...sharedArgs], {
+      cwd: repoRoot,
+      timeoutMs: 10 * 60 * 1000,
+      env: trustedAgentEnv(),
+    })
+  }
+
+  const workspace = path.join(workspaceRoot, job.codebaseId)
+  const jobEnv = actionJobEnv()
 
   const hydrate = await runProcess(process.execPath, [agentCli, 'hydrate', ...sharedArgs], {
     cwd: repoRoot,
@@ -188,6 +201,10 @@ function trustedAgentEnv() {
     ...prefixedEnv('HOPIT_R2_'),
     ...prefixedEnv('HOPIT_B2_'),
     ...prefixedEnv('HOPIT_S3_'),
+    // GR-E2: needed only to decrypt a configured mirror deploy key
+    // (client-encrypted at rest, same rule as `.private/env/`). Absent when
+    // no mirror deploy key is configured for any codebase this runner serves.
+    ...prefixedEnv('HOPIT_CLIENT_ENCRYPTION_'),
   }
 }
 

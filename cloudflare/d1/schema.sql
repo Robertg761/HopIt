@@ -382,6 +382,13 @@ create index if not exists idx_notifications_recipient_created on notifications(
 -- decisions §6) holds the per-codebase `{"add":[...],"remove":[...]}`
 -- overrides layered on top of the curated built-in derived-path list;
 -- absence (default '{}') means no overrides.
+-- `mirror_*` (GR-E2, decisions §8) configures the continuous one-way git
+-- mirror: destination remote/branch plus an optional deploy key. The deploy
+-- key is never stored in plaintext -- `mirror_deploy_key_ciphertext` is
+-- always the output of the same client-side AES-256-GCM envelope used for
+-- `.private/env` (see `@hopit/core/crypto` `encryptClientPayload`);
+-- `mirror_deploy_key_metadata` carries the nonce/authTag/keyId needed to
+-- decrypt it, never the key material itself.
 create table if not exists codebase_settings (
   codebase_id text primary key,
   trail_summaries_enabled integer not null default 0,
@@ -389,6 +396,10 @@ create table if not exists codebase_settings (
   large_file_threshold_bytes integer,
   secret_scanning_enabled integer not null default 1,
   derived_path_overrides text not null default '{}',
+  mirror_remote_url text,
+  mirror_branch text,
+  mirror_deploy_key_ciphertext text,
+  mirror_deploy_key_metadata text,
   created_at text not null,
   updated_at text not null
 );

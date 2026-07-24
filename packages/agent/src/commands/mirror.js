@@ -36,11 +36,19 @@ import { assertSafeCloudPath } from '../workspace-manifest.js'
 import { materializeCloudEntry } from './sync.js'
 import { runGit } from './export.js'
 import { assertSafeGitOptionValue, validateGitRemoteUrl } from './import.js'
+import { reportResult } from '../output.js'
 import { scopeForPath } from '@hopit/core/privacy-zone'
+import { clientEncryptionConfigFromOptions, decryptClientPayload, encryptClientPayload, hashBuffer } from '@hopit/core/crypto'
 
 const DEFAULT_MIRROR_BRANCH = 'main'
 export const MIRROR_AUTHOR_NAME = 'HopIt Mirror'
 export const MIRROR_AUTHOR_EMAIL = 'mirror@hopit.local'
+// Synthetic path used only to derive client-encryption AAD/zone metadata for
+// the mirror deploy key -- there is no such file in the graph. Deliberately
+// under `.private/env/` so it reuses the exact "secrets" privacy zone (and
+// the "must never reach D1/R2 unencrypted" rule) that real `.private/env/`
+// content already gets (decisions doc §7/§8).
+export const MIRROR_DEPLOY_KEY_PATH = '.private/env/mirror-deploy-key'
 
 export async function runMirrorSync(options) {
   const cloudService = createCloudGraphService(options)
@@ -51,15 +59,22 @@ export async function runMirrorSync(options) {
   const statePath = mirrorStatePath(options)
   const state = await readMirrorState(statePath)
   const existingEntry = state.codebases[codebaseId] ?? null
+  // GR-E2: a hosted runner has no prior local mirror-state.json entry on its
+  // first run for a codebase, so the remote/branch configured via `hop
+  // mirror-set-remote` (persisted server-side in codebase_settings) is the
+  // fallback source of truth. Explicit `--remote`/`--branch` always win.
+  const settings = await cloudService.readCodebaseSettings(codebaseId).catch(() => null)
 
-  const remoteUrl = options.remote ?? existingEntry?.remote ?? null
+  const remoteUrl = options.remote ?? existingEntry?.remote ?? settings?.mirrorRemoteUrl ?? null
   if (!remoteUrl) {
-    throw new Error('Missing --remote <git-url>. Pass --remote once to configure the mirror destination for this codebase.')
+    throw new Error('Missing --remote <git-url>. Pass --remote once (or run `hop mirror-set-remote <url>`) to configure the mirror destination for this codebase.')
   }
   validateGitRemoteUrl(remoteUrl)
 
-  const branch = options.branch ?? existingEntry?.branch ?? DEFAULT_MIRROR_BRANCH
+  const branch = options.branch ?? existingEntry?.branch ?? settings?.mirrorBranch ?? DEFAULT_MIRROR_BRANCH
   assertSafeGitOptionValue(branch, '--branch')
+
+  const deployKeyPath = await materializeDeployKeyFile(settings, options)
 
   // Pre-Track-B there is no divergent proposal/branch model yet: every write
   // lands directly on what will become Main, so the graph's own revision
@@ -77,6 +92,11 @@ export async function runMirrorSync(options) {
   let commitsCreated = 0
   let headCommit = existingEntry?.lastCommit ?? null
   let omittedPrivatePaths = 0
+  // A deploy key is only meaningful for SSH remotes; HTTPS remotes carry
+  // credentials in the URL itself (validated by `validateGitRemoteUrl`).
+  const gitEnv = deployKeyPath
+    ? { ...process.env, GIT_SSH_COMMAND: `ssh -i ${deployKeyPath} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new` }
+    : process.env
 
   try {
     runGit(['init', '--quiet'], workDir)
@@ -87,7 +107,7 @@ export async function runMirrorSync(options) {
     // Unborn-branch rename; works whether or not any commit exists yet.
     runGit(['symbolic-ref', 'HEAD', `refs/heads/${branch}`], workDir)
 
-    const remoteHead = fetchRemoteBranchHead(workDir, branch)
+    const remoteHead = fetchRemoteBranchHead(workDir, branch, gitEnv)
     if (remoteHead) {
       runGit(['reset', '--hard', remoteHead], workDir)
       headCommit = remoteHead
@@ -125,10 +145,11 @@ export async function runMirrorSync(options) {
     }
 
     if (commitsCreated > 0) {
-      runGit(['push', 'origin', `HEAD:refs/heads/${branch}`], workDir)
+      runGit(['push', 'origin', `HEAD:refs/heads/${branch}`], workDir, gitEnv)
     }
   } finally {
     await fs.rm(workDir, { recursive: true, force: true })
+    if (deployKeyPath) await fs.rm(path.dirname(deployKeyPath), { recursive: true, force: true })
   }
 
   const finalRevision = revisions.length > 0 ? revisions[revisions.length - 1] : lastMirroredRevision
@@ -157,11 +178,110 @@ export async function runMirrorSync(options) {
   return result
 }
 
+// `hop mirror-set-remote <url>` (GR-E2, decisions §8) -- configures the
+// mirror destination + optional deploy key server-side in
+// `codebase_settings`, so a hosted runner (with no prior local mirror-state)
+// still knows where to push. The deploy key, if given, is always encrypted
+// client-side before it is ever sent to the cloud backend; the plaintext
+// never leaves this process.
+export async function runMirrorSetRemote(options) {
+  const cloudService = createCloudGraphService(options)
+  const cloud = await cloudService.readGraph()
+  const codebaseId = cloud.codebase?.id ?? options['codebase-id'] ?? 'hopit'
+
+  const remoteUrl = options.remote ?? null
+  if (!remoteUrl) {
+    throw new Error('Usage: hop mirror-set-remote <git-url> [--branch <name>] [--deploy-key <path-to-private-key>]')
+  }
+  validateGitRemoteUrl(remoteUrl)
+
+  const branch = options.branch ?? DEFAULT_MIRROR_BRANCH
+  assertSafeGitOptionValue(branch, '--branch')
+
+  const update = { remoteUrl, branch }
+  if (options['clear-deploy-key']) {
+    update.deployKeyCiphertext = null
+    update.deployKeyMetadata = null
+  } else {
+    const plaintext = await readDeployKeyPlaintext(options)
+    if (plaintext !== null) {
+      const config = clientEncryptionConfigFromOptions(options)
+      if (!config) {
+        throw new Error(
+          'Storing a mirror deploy key requires a client encryption key (HOPIT_CLIENT_ENCRYPTION_KEY), same rule as .private/env/: the deploy key must never reach D1/R2 unencrypted.',
+        )
+      }
+      const buffer = Buffer.from(plaintext, 'utf8')
+      const encrypted = encryptClientPayload({
+        buffer,
+        codebaseId,
+        relativePath: MIRROR_DEPLOY_KEY_PATH,
+        plaintextHash: hashBuffer(buffer),
+        config,
+      })
+      update.deployKeyCiphertext = encrypted.buffer.toString('base64')
+      update.deployKeyMetadata = encrypted.metadata
+    }
+  }
+
+  const updated = await cloudService.setMirrorRemote(codebaseId, update)
+  const result = {
+    ok: true,
+    codebaseId,
+    mirrorRemoteUrl: updated.mirrorRemoteUrl,
+    mirrorBranch: updated.mirrorBranch,
+    deployKeyConfigured: Boolean(updated.mirrorDeployKeyCiphertext),
+  }
+  await emit(options, 'git.mirror_remote_set', result)
+  reportResult(options, result, ({ line, success }) => {
+    line(`  ${success('✓')} Mirror remote set for ${codebaseId}: ${result.mirrorRemoteUrl} (${result.mirrorBranch})`)
+  })
+  return result
+}
+
+async function readDeployKeyPlaintext(options) {
+  if (options['deploy-key-value'] !== undefined) return String(options['deploy-key-value'])
+  if (options['deploy-key']) return fs.readFile(options['deploy-key'], 'utf8')
+  return null
+}
+
+// Decrypts the stored deploy-key ciphertext back into plaintext, if one is
+// configured and this process holds the client encryption key. Returns null
+// (never throws) when no deploy key is configured -- most remotes (HTTPS
+// with an embedded token, or a local/CI-trusted SSH agent) don't need one.
+export function decryptMirrorDeployKey(settings, options) {
+  if (!settings?.mirrorDeployKeyCiphertext || !settings?.mirrorDeployKeyMetadata) return null
+  const config = clientEncryptionConfigFromOptions(options)
+  if (!config) {
+    throw new Error('client_encryption_key_missing: a mirror deploy key is configured for this codebase but this process has no HOPIT_CLIENT_ENCRYPTION_KEY to decrypt it.')
+  }
+  const buffer = Buffer.from(settings.mirrorDeployKeyCiphertext, 'base64')
+  return decryptClientPayload({
+    buffer,
+    codebaseId: settings.codebaseId,
+    relativePath: MIRROR_DEPLOY_KEY_PATH,
+    encryption: settings.mirrorDeployKeyMetadata,
+    config,
+  }).toString('utf8')
+}
+
+// Writes a decrypted deploy key to a 0600 temp file for the duration of one
+// `mirror-sync` run (needed for `GIT_SSH_COMMAND -i <path>`), or returns null
+// when no deploy key is configured. Caller is responsible for deleting it.
+async function materializeDeployKeyFile(settings, options) {
+  const plaintext = decryptMirrorDeployKey(settings, options)
+  if (!plaintext) return null
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'hopit-mirror-key-'))
+  const keyPath = path.join(dir, 'deploy_key')
+  await fs.writeFile(keyPath, plaintext.endsWith('\n') ? plaintext : `${plaintext}\n`, { mode: 0o600 })
+  return keyPath
+}
+
 // Reads whatever the remote branch currently points at, without ever writing
 // back to it outside of the push at the end of a sync -- the mirror is a
 // one-way projection, never a live bridge.
-function fetchRemoteBranchHead(cwd, branch) {
-  const fetchResult = spawnSync('git', ['fetch', 'origin', branch], { cwd, encoding: 'utf8' })
+function fetchRemoteBranchHead(cwd, branch, env = process.env) {
+  const fetchResult = spawnSync('git', ['fetch', 'origin', branch], { cwd, encoding: 'utf8', env })
   if (fetchResult.status !== 0) return null
   const revResult = spawnSync('git', ['rev-parse', 'FETCH_HEAD'], { cwd, encoding: 'utf8' })
   if (revResult.status !== 0) return null

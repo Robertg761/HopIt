@@ -351,6 +351,13 @@ export const d1SchemaStatements = [
   // built-in derived-path list (`packages/agent/src/constants.js`). Absence
   // (default '{}') means no overrides; derived-path classification is purely
   // local/curated for that codebase.
+  // `mirror_*` (GR-E2, decisions §8) configures the continuous one-way git
+  // mirror: destination remote/branch plus an optional deploy key. The
+  // deploy key is never stored in plaintext -- `mirror_deploy_key_ciphertext`
+  // is always the output of the same client-side AES-256-GCM envelope used
+  // for `.private/env` (see `@hopit/core/crypto` `encryptClientPayload`);
+  // `mirror_deploy_key_metadata` carries the nonce/authTag/keyId needed to
+  // decrypt it, never the key material itself.
   `create table if not exists codebase_settings (
     codebase_id text primary key,
     trail_summaries_enabled integer not null default 0,
@@ -358,6 +365,10 @@ export const d1SchemaStatements = [
     large_file_threshold_bytes integer,
     secret_scanning_enabled integer not null default 1,
     derived_path_overrides text not null default '{}',
+    mirror_remote_url text,
+    mirror_branch text,
+    mirror_deploy_key_ciphertext text,
+    mirror_deploy_key_metadata text,
     created_at text not null,
     updated_at text not null
   )`,

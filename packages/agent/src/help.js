@@ -46,6 +46,7 @@ Commands:
   merge       Merge the reviewed selected change set into Main
   export      Export the selected graph state to a clean Git repo
   mirror-sync Push a deterministic, one-way git mirror commit per Main revision to a configured remote
+  mirror-set-remote <url> Configure the mirror destination remote/branch and optional client-encrypted deploy key
   publish     Export a reviewed and merged change set to a clean Git repo
   validate    Validate the configured cloud graph contract
   doctor      Run a production-oriented local health check
@@ -159,6 +160,9 @@ Options:
   --remote <git-url>  mirror-sync: destination remote URL (persisted per codebase after first use)
   --branch <name>     mirror-sync: destination branch, default main
   --mirror-state <path> Override the local mirror-sync state file path
+  --deploy-key <path>  mirror-set-remote: path to a deploy key to store client-encrypted (requires HOPIT_CLIENT_ENCRYPTION_KEY)
+  --deploy-key-value <text> mirror-set-remote: deploy key contents inline instead of a file path
+  --clear-deploy-key   mirror-set-remote: remove the stored deploy key
   --message <text>    Git commit message for export/publish
   --include-private   Include .private files in export only; publish always omits them
   --allow-unsafe-workspace Override workspace path safety checks

@@ -248,6 +248,40 @@ question, including `--yes`, defaults it on). There is no redaction feature:
 the trail is immutable by design, so the only correct response to a flagged
 secret is rotating it, not deleting the finding or the file content.
 
+### Continuous Git Mirror
+
+Each codebase can keep an auto-generated, one-way git mirror that tools
+consume and humans never touch (decisions doc §8) -- a carve-out from
+"escape hatches only" for deploy platforms and git-pinned dependencies.
+`packages/agent/src/commands/mirror.js` builds one commit per Main revision
+advance (interim, pre-Track-B stand-in for "one commit per merged proposal")
+straight from the content hashes already recorded in file-version history,
+never from local disk, and pushes it to a user-configured remote. `.private/`
+and derived paths never enter the mirror tree. Determinism is load-bearing:
+fixed author/committer identity and commit dates taken from trail metadata
+(never wall-clock) mean two independent `hop mirror-sync` runs over the same
+Main history produce byte-identical commit SHAs.
+
+`hop mirror-set-remote <url>` (GR-E2) persists the destination remote/branch
+server-side in `codebase_settings`, plus an optional deploy key. **The deploy
+key is client-encrypted before it ever leaves this process** -- the same
+AES-256-GCM envelope (`@hopit/core/crypto` `encryptClientPayload`) and the
+same "must never reach D1/R2 unencrypted" rule already applied to
+`.private/env/`; `codebase_settings.mirror_deploy_key_ciphertext`/
+`mirror_deploy_key_metadata` are opaque without the local
+`HOPIT_CLIENT_ENCRYPTION_KEY`.
+
+**Automation on merge**: a successful `hop merge` best-effort enqueues a
+`mirror` `action_job` when a remote is configured (`enqueueMirrorSyncJob`) --
+a queueing failure is journaled but never surfaces as a merge failure, and the
+merge itself always commits first. `packages/actions-runner/src/runner.js`
+claims `mirror` jobs and runs `hop mirror-sync` directly (no workspace
+checkout/npm install -- the mirror never reads from a runner-local git clone).
+A mirror-push failure (bad remote, auth failure, etc.) surfaces as a
+`mirror.failed` dashboard notification (`completeActionJob`) and never rolls
+back or blocks the merge that triggered it -- Main/the change set's merge
+state are unaffected by mirror health.
+
 ### Restart Recovery And Watch Loop
 
 Restart recovery and the background watch loop are explicit agent contracts, not demo-only behavior. The current spike exposes recovery through `npm run agent:recover`, and `npm run agent:watch` runs recovery before hydrating the workspace.

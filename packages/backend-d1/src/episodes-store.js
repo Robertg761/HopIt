@@ -20,7 +20,25 @@ export function normalizeCodebaseSettings(codebaseId, row) {
       ? true
       : Boolean(row.secret_scanning_enabled),
     derivedPathOverrides: normalizeDerivedPathOverridesJson(row?.derived_path_overrides),
+    // GR-E2: mirror destination + deploy-key ciphertext envelope. The
+    // ciphertext/metadata are opaque at this layer -- only the agent holding
+    // the local client-encryption key can decrypt `mirror_deploy_key_metadata`
+    // + `mirror_deploy_key_ciphertext` back into a usable deploy key.
+    mirrorRemoteUrl: row?.mirror_remote_url ?? null,
+    mirrorBranch: row?.mirror_branch ?? null,
+    mirrorDeployKeyCiphertext: row?.mirror_deploy_key_ciphertext ?? null,
+    mirrorDeployKeyMetadata: parseJsonObjectOrNull(row?.mirror_deploy_key_metadata),
     updatedAt: row?.updated_at ?? null,
+  }
+}
+
+function parseJsonObjectOrNull(value) {
+  if (!value) return null
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
   }
 }
 
@@ -192,6 +210,54 @@ export function attachEpisodeMethods(Backend) {
       return {
         codebaseId,
         derivedPathOverrides: nextOverrides,
+        updatedAt: now,
+      }
+    },
+
+    // GR-E2: configures the continuous one-way git mirror's destination and
+    // (optionally) an already client-encrypted deploy key. `deployKey`
+    // undefined leaves the stored ciphertext untouched; `deployKey: null`
+    // clears it. The ciphertext/metadata pair must already be the output of
+    // `@hopit/core/crypto` `encryptClientPayload` -- this method never sees
+    // plaintext key material and never decrypts.
+    async setMirrorRemote(codebaseId = this.codebaseId, { remoteUrl, branch, deployKeyCiphertext, deployKeyMetadata } = {}) {
+      await this.ensureSchema()
+      const now = new Date().toISOString()
+      const current = await this.readCodebaseSettings(codebaseId)
+      const nextRemoteUrl = remoteUrl === undefined ? current.mirrorRemoteUrl : remoteUrl
+      const nextBranch = branch === undefined ? current.mirrorBranch : branch
+      const nextCiphertext = deployKeyCiphertext === undefined ? current.mirrorDeployKeyCiphertext : deployKeyCiphertext
+      const nextMetadata = deployKeyMetadata === undefined ? current.mirrorDeployKeyMetadata : deployKeyMetadata
+      await this.query(
+        `insert into codebase_settings (
+          codebase_id, trail_summaries_enabled, trail_summaries_mode,
+          mirror_remote_url, mirror_branch, mirror_deploy_key_ciphertext, mirror_deploy_key_metadata,
+          created_at, updated_at
+        ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        on conflict(codebase_id) do update set
+          mirror_remote_url = excluded.mirror_remote_url,
+          mirror_branch = excluded.mirror_branch,
+          mirror_deploy_key_ciphertext = excluded.mirror_deploy_key_ciphertext,
+          mirror_deploy_key_metadata = excluded.mirror_deploy_key_metadata,
+          updated_at = excluded.updated_at`,
+        [
+          codebaseId,
+          current.trailSummariesEnabled ? 1 : 0,
+          current.trailSummariesMode,
+          nextRemoteUrl,
+          nextBranch,
+          nextCiphertext,
+          nextMetadata ? JSON.stringify(nextMetadata) : null,
+          now,
+          now,
+        ],
+      )
+      return {
+        codebaseId,
+        mirrorRemoteUrl: nextRemoteUrl,
+        mirrorBranch: nextBranch,
+        mirrorDeployKeyCiphertext: nextCiphertext,
+        mirrorDeployKeyMetadata: nextMetadata,
         updatedAt: now,
       }
     },

@@ -65,6 +65,53 @@ export function attachActionMethods(Backend) {
     return summarizeActionJob(job)
   },
 
+  // GR-E2: enqueues a mirror-push job on merge-to-Main (decisions §8). Unlike
+  // `createActionJob` this is a system-triggered side effect of a successful
+  // merge, not a user-hosted-action request -- any actor with `merge`
+  // capability (not just the owner) can trigger it, and a queueing failure
+  // must never surface as a merge failure (callers should treat this as
+  // best-effort and swallow errors).
+  async enqueueMirrorSyncJob({ codebaseId, actor = {} }) {
+    await this.ensureSchema()
+    const now = new Date().toISOString()
+    const job = {
+      jobId: `job_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`,
+      codebaseId,
+      kind: 'mirror',
+      command: 'mirror-sync',
+      args: [],
+      status: 'queued',
+      requestedByUserId: actor.userId ?? 'system',
+      createdAt: now,
+      updatedAt: now,
+    }
+    await this.query(
+      `insert into action_jobs (
+        job_id, codebase_id, kind, command, args_json, status, requested_by_user_id,
+        created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        job.jobId,
+        job.codebaseId,
+        job.kind,
+        job.command,
+        stringifyJson(job.args),
+        job.status,
+        job.requestedByUserId,
+        job.createdAt,
+        job.updatedAt,
+      ],
+    )
+    await this.appendEvent({
+      codebaseId,
+      event: 'action.queued',
+      detail: { jobId: job.jobId, kind: 'mirror', requestedBy: job.requestedByUserId },
+      at: now,
+      source: 'local-agent',
+    })
+    return summarizeActionJob(job)
+  },
+
   async claimNextActionJob({ runnerId }) {
     await this.ensureSchema()
     const job = await this.first(
@@ -119,6 +166,19 @@ export function attachActionMethods(Backend) {
       at: now,
       source: 'hosted-runner',
     })
+    // GR-E2: a mirror-push failure must never block or roll back the merge
+    // that triggered it (the merge already committed before this job was
+    // enqueued) -- it only surfaces as a dashboard notification.
+    if (job.kind === 'mirror' && status !== 'succeeded') {
+      await this.createNotification({
+        codebaseId: job.codebase_id,
+        kind: 'mirror.failed',
+        title: 'Git mirror push failed',
+        body: stringOrNull(summary) ?? actionSummary(status, exitCode),
+        href: null,
+        createdAt: now,
+      })
+    }
     const updated = await this.first(`select * from action_jobs where job_id = ?`, [jobId])
     return summarizeActionJob(updated)
   },

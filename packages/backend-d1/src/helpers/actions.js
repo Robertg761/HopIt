@@ -4,7 +4,12 @@ export function actionCommandForKind(kind) {
   if (kind === 'lint') return { command: 'npm', args: ['run', 'lint'] }
   if (kind === 'test') return { command: 'npm', args: ['test'] }
   if (kind === 'build') return { command: 'npm', args: ['run', 'build'] }
-  throw new Error('Action kind must be lint, test, or build.')
+  // GR-E2: mirror-push jobs don't run an npm script against a workspace
+  // checkout -- the runner recognizes this marker and invokes `hop
+  // mirror-sync` directly against the codebase's own configured remote
+  // (see packages/actions-runner/src/runner.js).
+  if (kind === 'mirror') return { command: 'mirror-sync', args: [] }
+  throw new Error('Action kind must be lint, test, build, or mirror.')
 }
 
 export function summarizeActionJob(row) {
