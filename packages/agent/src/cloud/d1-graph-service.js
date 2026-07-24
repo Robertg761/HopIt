@@ -249,6 +249,11 @@ export class FixtureJsonCloudGraphService {
       trailSummariesEnabled: Boolean(stored?.trailSummariesEnabled),
       trailSummariesMode: normalizeSummaryMode(stored?.trailSummariesMode),
       largeFileThresholdBytes: positiveIntOrNull(stored?.largeFileThresholdBytes),
+      // Secrets: warn-only outbound scanning defaults ON (decisions doc §7).
+      // Absence of stored settings still reads as enabled.
+      secretScanningEnabled: stored?.secretScanningEnabled === undefined
+        ? true
+        : Boolean(stored.secretScanningEnabled),
       updatedAt: stored?.updatedAt ?? null,
     }
   }
@@ -261,6 +266,7 @@ export class FixtureJsonCloudGraphService {
       ...current,
       trailSummariesEnabled: enabled === undefined ? Boolean(current.trailSummariesEnabled) : Boolean(enabled),
       trailSummariesMode: mode === undefined ? normalizeSummaryMode(current.trailSummariesMode) : normalizeSummaryMode(mode),
+      secretScanningEnabled: current.secretScanningEnabled === undefined ? true : Boolean(current.secretScanningEnabled),
       updatedAt: now,
     }
     cloud.codebaseSettings = next
@@ -289,6 +295,24 @@ export class FixtureJsonCloudGraphService {
       largeFileThresholdBytes: next.largeFileThresholdBytes,
       updatedAt: now,
     }
+  }
+
+  async setSecretScanning(codebaseId, { enabled } = {}) {
+    const cloud = await readJson(this.path)
+    const current = cloud.codebaseSettings ?? {}
+    const now = new Date().toISOString()
+    const next = {
+      ...current,
+      trailSummariesEnabled: Boolean(current.trailSummariesEnabled),
+      trailSummariesMode: normalizeSummaryMode(current.trailSummariesMode),
+      secretScanningEnabled: enabled === undefined
+        ? (current.secretScanningEnabled === undefined ? true : Boolean(current.secretScanningEnabled))
+        : Boolean(enabled),
+      updatedAt: now,
+    }
+    cloud.codebaseSettings = next
+    await writeJson(this.path, cloud)
+    return { codebaseId: cloud?.codebase?.id ?? codebaseId ?? null, secretScanningEnabled: next.secretScanningEnabled, updatedAt: now }
   }
 
   async listTrailEpisodes(codebaseId, { limit } = {}) {

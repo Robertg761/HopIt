@@ -342,11 +342,16 @@ export const d1SchemaStatements = [
   // warning threshold (GR-G2). NULL means "use the agent default" (100 MB).
   // Large files always sync — this only controls when the `file.large`
   // dashboard note fires; there is no cap.
+  // secret_scanning_enabled: warn-only outbound secret scanning (decisions
+  // doc §7). Unlike trail summaries, this defaults ON (1) — absence of a row
+  // is also treated as enabled by readers, so a not-yet-migrated database and
+  // a fresh one behave the same.
   `create table if not exists codebase_settings (
     codebase_id text primary key,
     trail_summaries_enabled integer not null default 0,
     trail_summaries_mode text not null default 'metadata',
     large_file_threshold_bytes integer,
+    secret_scanning_enabled integer not null default 1,
     created_at text not null,
     updated_at text not null
   )`,

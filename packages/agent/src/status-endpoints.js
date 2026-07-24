@@ -142,6 +142,15 @@ export async function readAgentStatusEndpoint(options) {
     remotePull: remotePullHealth,
     remotePush: remotePushHealth,
     watch: watchHealth,
+    // Warn-only outbound secret scanning (decisions doc §7). `enabled` is not
+    // fetched here to keep this the fast local-index status path (see
+    // `hop secrets status` / GR-D2 dashboard flag for the fetched setting);
+    // the finding counts/paths below come straight from the local event log.
+    secretScan: {
+      suspectedCount: eventsSummary.secretSuspectedCount,
+      lastSuspected: eventsSummary.lastSecretSuspected,
+      recentSuspected: eventsSummary.recentSecretSuspected,
+    },
     events: eventsSummary,
   }
 }
@@ -306,6 +315,8 @@ export function summarizeAgentEvents(eventEntries) {
     'watch.degraded',
     'watch.recovery_blocked',
   ])
+  const secretSuspectedEvents = eventEntries.filter((entry) => entry?.event === 'secret.suspected')
+  const lastSecretSuspected = secretSuspectedEvents.at(-1) ?? null
 
   return {
     path: null,
@@ -348,6 +359,9 @@ export function summarizeAgentEvents(eventEntries) {
     lastWatchDegraded,
     lastWatchRecoveryBlocked,
     latestWatchEvent,
+    lastSecretSuspected,
+    secretSuspectedCount: secretSuspectedEvents.length,
+    recentSecretSuspected: secretSuspectedEvents.slice(-20),
   }
 }
 

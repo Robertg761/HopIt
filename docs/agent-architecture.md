@@ -196,6 +196,28 @@ Each journal entry should include:
 
 The spike writes this as NDJSON at `.hopit-agent/journal.ndjson`.
 
+### Outbound Secret Scanning
+
+`packages/agent/src/secret-scan.js` scans a file's plaintext for high-signal
+secret shapes (AWS `AKIA…` keys, GitHub `ghp_`/`gho_`/… tokens, Stripe
+`sk_live_…` keys, Slack `xox…` tokens, PEM private-key headers, and a
+conservative high-entropy `key/token/secret/password = "…"` assignment
+heuristic) at the same moment `performSyncOnce` (`commands/sync.js`) builds a
+journal entry for a create/write — before the entry is committed to cloud.
+
+This is **warn-only and per-project, on by default** (decisions doc §7,
+"rotate, don't redact"): a finding never blocks, delays, or alters the write;
+it only emits a `secret.suspected` event (path, matched pattern ids, line
+numbers) immediately alongside the journaled write. Scanning only runs on
+plaintext (UTF-8, non-base64) files outside `.private/` (and `.git/`, which
+shares the owner-private scope) — binary content and already-private paths
+are never scanned. The setting lives in `codebase_settings.secret_scanning_enabled`
+(default on; absence of a row also reads as on) and is toggled per project via
+`hop secrets on|off|status`, or asked once during `hop setup` (skipping the
+question, including `--yes`, defaults it on). There is no redaction feature:
+the trail is immutable by design, so the only correct response to a flagged
+secret is rotating it, not deleting the finding or the file content.
+
 ### Restart Recovery And Watch Loop
 
 Restart recovery and the background watch loop are explicit agent contracts, not demo-only behavior. The current spike exposes recovery through `npm run agent:recover`, and `npm run agent:watch` runs recovery before hydrating the workspace.
@@ -349,6 +371,7 @@ Important event types:
   threshold (default 100 MB, per-codebase override via
   `codebase_settings.large_file_threshold_bytes`). Purely additive: the file
   still syncs in full, with no cap and no gate (decisions doc §11).
+- `secret.suspected`
 
 The spike writes events to `.hopit-agent/events.ndjson`. A production agent can stream the same events over the status API while retaining a short local diagnostic log.
 

@@ -11,6 +11,7 @@ import { partitionEntriesForReconnect } from '../reconnect.js'
 import { classifyJournalEntries, hasUnresolvedSyncFailure, prepareRecovery, readJournalSafety, syncContextDetail, visibleRevisionFromEvent } from '../status-state.js'
 import { deletableCloudPathsForWorkspace, findIndexedCodebase, hydratedPathsAfterSync, readWorkspaceIndex, upsertWorkspaceIndexFromCloud, workspaceIndexHydrationStateForSync } from '../workspace-index.js'
 import { exonerateWorkspaceChangesAgainstCloud, readWorkspaceFiles, workspaceFilePath, workspaceLocalChanges } from '../workspace-manifest.js'
+import { isScannableTextEntry, scanTextForSecrets } from '../secret-scan.js'
 import { scopeForPath } from '@hopit/core/privacy-zone'
 import { randomUUID } from 'node:crypto'
 import { existsSync } from 'node:fs'
@@ -355,6 +356,25 @@ export async function performSyncOnce(options, contextDetail = {}) {
   const planningCloud = structuredClone(cloud)
   const largeFileThresholdBytes = await resolveLargeFileThresholdBytes(cloudService, cloud, options)
 
+  // Lazy + cached: only resolve the per-project secret-scanning setting once,
+  // and only if a candidate outbound text file actually turns up below. Never
+  // lets a settings-read failure block the sync: fails open to "scan".
+  let secretScanningEnabledPromise = null
+  const secretScanningEnabled = () => {
+    if (!secretScanningEnabledPromise) {
+      secretScanningEnabledPromise = (async () => {
+        if (typeof cloudService.readCodebaseSettings !== 'function') return true
+        try {
+          const settings = await cloudService.readCodebaseSettings(cloud.codebase?.id)
+          return settings?.secretScanningEnabled !== false
+        } catch {
+          return true
+        }
+      })()
+    }
+    return secretScanningEnabledPromise
+  }
+
   for (const [relativePath, rawEntry] of Object.entries(diskEntries)) {
     if (!canRequesterSeePath(visibilityContext, relativePath)) continue
 
@@ -397,6 +417,28 @@ export async function performSyncOnce(options, contextDetail = {}) {
 
     plannedEntries.push({ entry, payload: entryPayload })
     cloudService.applyJournalEntry(planningCloud, entry, { entry: entryPayload, now })
+
+    // Scan before upload, warn-only: findings never block or delay the write
+    // above. A scan or event-emit failure here must not fail the sync either.
+    if (isScannableTextEntry(relativePath, entryPayload)) {
+      try {
+        if (await secretScanningEnabled()) {
+          const findings = scanTextForSecrets(entryPayload.content)
+          if (findings.length > 0) {
+            await emit(options, 'secret.suspected', {
+              path: relativePath,
+              scope,
+              entryType: entry.type,
+              findingCount: findings.length,
+              findings,
+              ...journalContextForCloud(planningCloud),
+            })
+          }
+        }
+      } catch {
+        // Never let scanning block or fail the upload.
+      }
+    }
   }
 
   for (const relativePath of cloudPaths) {
