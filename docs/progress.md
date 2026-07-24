@@ -1986,7 +1986,55 @@ Naming deviation from the plan doc: the plan sketches `hop mirror sync`, but `ho
 
 Tests: `packages/agent/test/mirror-sync.test.js` — 3 merges via `syncOnce` produce exactly 3 mirror commits; an immediate re-run with no new revisions produces 0 new commits (idempotent, remote commit list unchanged); checkout of mirror HEAD is asserted byte-identical to the Main snapshot with `.private/agent-note.md` absent; malformed remote URLs (leading dash, embedded control characters) are rejected via the existing `validateGitRemoteUrl`; two independent `mirror-sync` runs over a copy of the same cloud-graph history (separate temp state roots, separate bare remotes) produce identical commit SHA chains.
 
-## Verification Checklist
+### 2026-07-24 GR-B1: proposal data model design + DRAFT migration (design-gated)
+
+[docs/proposal-data-model-design.md](proposal-data-model-design.md) specifies
+the first-class `proposals` table (decisions doc §2–§4): a proposal pins the
+active change set's revision at propose time (`pinned_revision`), saves after
+that accumulate as "since proposal" via the existing WS7c
+`compareRevisions` engine (no new diff machinery), re-pinning resets the same
+row in place (`state` back to `proposed`, `pinned_revision`/`pinned_at`
+updated), and the merge queue serializes on `proposals.queued_at` FIFO
+ordering plus the codebase's existing `revision` compare-and-swap — no new
+queue table (`action_jobs` was considered and rejected: it's a CI
+claim/run/complete queue with no change-set concept, not a merge-ordering
+primitive). `review_decisions` gains two additive columns
+(`decision_revision`, `proposal_id`) so a review can be detected as stale
+(`decision_revision != proposals.pinned_revision`) without a heavier join.
+The doc's traceability table maps all 17 relevant decisions-doc §2/§3/§4/§9
+statements to a design element or an explicit "deferred to GR-B2/B3/B4/B5"
+line.
+
+This is schema-only: no `hop propose` command, no merge-queue runner, no
+write path touches `proposals` yet. GR-B2 (blocked on owner sign-off of this
+design) implements the command/runner code against the schema landed here.
+
+Schema: `packages/backend-d1/src/schema.js`, `cloudflare/d1/schema.sql` (both
+updated so the GR-S1 drift guard stays green), draft migration
+`cloudflare/d1/migrations/2026-07-24-proposals.sql` (committed, never
+applied — the owner applies it by hand against production D1, matching this
+repo's existing migration precedent).
+
+Tests: extracted the schema-shape parser from
+`packages/agent/test/schema-drift.test.js` into a shared
+`packages/agent/test/helpers/schema-sql.js` (move-only, same 4 schema-drift
+tests still pass unchanged) so the new
+`packages/agent/test/proposal-schema-design.test.js` (3 tests) can reuse it:
+one test parses the migration file and a copy of `schema.js` with every
+GR-B1 addition programmatically stripped back out, unions the migration's
+statements onto the stripped copy, and asserts the result is
+structurally identical to the real `schema.js` — proving the migration is
+*sufficient* to take a pre-GR-B1 database to what shipped, not just that the
+file exists; one asserts the migration's `proposals` columns match the
+design doc's row-shape table; one asserts the design doc has the required
+sections and a ≥15-row traceability table covering §2, §3, and §4.
+
+Metric demonstrated by hand: removing `stale_reason` from the migration file
+took `proposal-schema-design.test.js` from 3/3 pass to 1 pass / 2 fail (the
+migration-completeness test and the column-match test both fail with a clear
+"expected proposals.stale_reason in the migration" message); restoring the
+column returned it to 3/3 pass, confirmed byte-identical to the original via
+`diff`.
 
 Run this before marking agent progress as done:
 
