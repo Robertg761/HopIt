@@ -378,13 +378,17 @@ create index if not exists idx_notifications_recipient_created on notifications(
 -- NULL means "use the agent default" (100 MB). Large files always sync — there
 -- is no cap, this only controls when the dashboard note fires.
 -- secret_scanning_enabled defaults ON (decisions doc §7) — absence of a row
--- is also read as enabled by callers.
+-- is also read as enabled by callers. `derived_path_overrides` (GR-C1,
+-- decisions §6) holds the per-codebase `{"add":[...],"remove":[...]}`
+-- overrides layered on top of the curated built-in derived-path list;
+-- absence (default '{}') means no overrides.
 create table if not exists codebase_settings (
   codebase_id text primary key,
   trail_summaries_enabled integer not null default 0,
   trail_summaries_mode text not null default 'metadata',
   large_file_threshold_bytes integer,
   secret_scanning_enabled integer not null default 1,
+  derived_path_overrides text not null default '{}',
   created_at text not null,
   updated_at text not null
 );
@@ -475,22 +479,6 @@ create table if not exists service_admin_events (
   target_id text not null,
   detail_json text not null default '{}',
   created_at text not null
-);
-
--- Per-codebase agent settings (trail summarization opt-in, GR-C1 derived-path
--- overrides). This table was previously runtime-only (packages/backend-d1/src/
--- schema.js) and missing here; GR-C1 adds `derived_path_overrides` to it, so
--- this add includes the whole table to keep the two schema sources in sync
--- for that column. `derived_path_overrides` holds the per-codebase
--- `{"add":[...],"remove":[...]}` overrides layered on top of the curated
--- built-in derived-path list; absence (default '{}') means no overrides.
-create table if not exists codebase_settings (
-  codebase_id text primary key,
-  trail_summaries_enabled integer not null default 0,
-  trail_summaries_mode text not null default 'metadata',
-  derived_path_overrides text not null default '{}',
-  created_at text not null,
-  updated_at text not null
 );
 
 create index if not exists idx_service_admin_events_created
