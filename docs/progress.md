@@ -1731,7 +1731,30 @@ or charge.
   worker 87, config 3, desktop 132 all green; production build green;
   `package:hop` verified including the new demo-flow check.
 
-### 2026-07-23 scope simplification: work items, discussions, project boards, and releases removed
+### 2026-07-23 GR-S1: re-synced `schema.sql` with the runtime schema, added a drift guard
+
+- `cloudflare/d1/schema.sql` had drifted from the runtime source of truth
+  (`packages/backend-d1/src/schema.js`): it was missing the `codebase_settings`
+  table, the `trail_episodes` table (+ its index), and the
+  `device_authorizations.requested_codebase_id` /
+  `requested_codebase_name` additive columns. `schema.sql` now matches
+  `schema.js` exactly (`schema.js` is canonical; `schema.sql` is regenerated
+  from it) - table names, column names (including `alter table add column`
+  additions), and index names all agree.
+- New `packages/agent/test/schema-drift.test.js`: parses both files into
+  `{ tables: Map<name, Set<column>>, indexes: Set<name> }` and asserts they
+  are identical, throwing on any statement shape the parser doesn't
+  recognize (so an unparsed statement fails loud instead of being silently
+  skipped). Three additional unit tests exercise the parser/differ directly
+  against synthetic schemas to prove the guard actually fails on a removed
+  column, a removed table, and a removed index - not just that it passes on
+  the current in-sync files.
+- Metric demonstrated by hand: with a `label text,` column removed from
+  `trail_episodes` in `schema.sql`, `node --test
+  packages/agent/test/schema-drift.test.js` goes from 4/4 pass to 3 pass / 1
+  fail (the sync test fails, the three synthetic-schema tests are
+  unaffected); restoring the column returns it to 4/4 pass. No net diff was
+  left behind by this experiment.
 
 - Removed the work-item (issue), discussion, project-board, and product-release
   surfaces from the product: their backend methods and D1 tables are deleted,
