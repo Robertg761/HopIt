@@ -739,6 +739,52 @@ table -- its `getLatestDecisionForProposal` stub always returns `null`,
 which is exactly correct there (only the solo path exists against that
 backend).
 
+**CI on propose and in the merge queue (GR-B5, decisions §3).** "CI's
+default trigger is on propose and in the merge queue, not on every save" is
+now enforced, gated to the D1 backend only (`cloudService.type ===
+d1CloudServiceType` — the local/dev fixture backend has no `action_jobs`
+table or hosted runner, so CI is a deliberate no-op there, matching the
+GR-E2 mirror-push precedent):
+
+- `proposeChangeSet` best-effort enqueues an `action_jobs` row of
+  `kind = 'ci'` tied to the proposal (`proposal_id` column, additive —
+  `cloudflare/d1/migrations/2026-07-24-action-jobs-proposal-link.sql`) right
+  after pinning, via `enqueueCiJobForProposal`. A failure to enqueue never
+  blocks pinning; it only emits `ci.enqueue_failed`.
+- `landOneProposal` re-checks (never trusts a stale answer) the proposal's
+  latest CI job via `getLatestCiJobForProposal` immediately before it would
+  land: `succeeded` -> proceed to the existing overlap/staleness check;
+  `queued`/`running` -> outcome `ci-pending`, do not land; missing or
+  `failed` -> (re-)enqueue a fresh job and return `ci-pending`/`ci-failed`.
+  A failed check never auto-passes; only a fresh green job unblocks the
+  proposal. Because the merge queue is strictly serial/FIFO, any outcome
+  other than `merged` (`skipped`, `ci-pending`, `ci-failed`) stops
+  `runMergeQueue`'s drain loop rather than letting a later-queued proposal
+  land out of turn.
+- This changes `hop propose --merge`'s solo behavior: it still pins and
+  self-approves in one command, but it no longer lands synchronously --
+  the drain call right after self-approval typically returns `ci-pending`
+  (nothing has run the check yet); a subsequent `runMergeQueue` call, once
+  a runner has completed the job, actually lands it.
+- `packages/actions-runner/src/runner.js` (`createActionsRunner`, a
+  dependency-injected factory over a claim -> hydrate -> run -> complete
+  cycle) claims and runs `kind: 'ci'` jobs exactly like `lint`/`test`/`build`
+  (`npm test`); no containerization yet (deferred). Claim errors (transient
+  D1/network trouble, not "no work available" -- `claimNextActionJob`
+  returning `null` is not an error) retry with exponential backoff
+  (`claimRetry`); an exhausted retry cycle is logged and the poll loop
+  continues rather than crashing the runner process. The job *step's*
+  environment (`actionJobEnv`) is built from `safeBaseEnv` only and never
+  carries `HOPIT_D1_*`/`CLOUDFLARE_*`/`HOPIT_R2_*`/etc — those are only
+  forwarded to the runner's own trusted steps (`trustedAgentEnv`, used for
+  `hydrate`/`mirror-sync`), so untrusted job code (a contributor's own repo
+  content, npm scripts) can never read cloud credentials. Covered by
+  `packages/agent/test/actions-runner.test.js` (success, command failure,
+  timeout, output cap, env lockdown -- including an end-to-end assertion
+  that a real job step's `process.env` never contains a `HOPIT_D1_*` key --
+  and claim retry/backoff) and the "blocks on red CI" scenarios in
+  `packages/agent/test/propose.test.js`.
+
 ### 8. Tighten Conflict Handling
 
 Status: done for the fixture-backed proof.

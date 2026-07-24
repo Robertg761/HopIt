@@ -112,6 +112,69 @@ export function attachActionMethods(Backend) {
     return summarizeActionJob(job)
   },
 
+  // GR-B5 (decisions §3, "CI's default trigger is on propose and in the
+  // merge queue"): the CI check gating a single proposal. `hop propose`
+  // enqueues one right after pinning; the merge queue (`landOneProposal` in
+  // `propose.js`) re-checks (and, if none/failed, re-enqueues) the same job
+  // right before landing -- "an action_job on propose and in the merge
+  // queue" is these two call sites, not two independent jobs in the common
+  // case.
+  async enqueueCiJobForProposal({ codebaseId, proposalId, actorId }) {
+    await this.ensureSchema()
+    const command = actionCommandForKind('ci')
+    const now = new Date().toISOString()
+    const job = {
+      jobId: `job_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`,
+      codebaseId,
+      kind: 'ci',
+      command: command.command,
+      args: command.args,
+      status: 'queued',
+      proposalId,
+      requestedByUserId: actorId ?? 'system',
+      createdAt: now,
+      updatedAt: now,
+    }
+    await this.query(
+      `insert into action_jobs (
+        job_id, codebase_id, kind, command, args_json, status, proposal_id, requested_by_user_id,
+        created_at, updated_at
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        job.jobId,
+        job.codebaseId,
+        job.kind,
+        job.command,
+        stringifyJson(job.args),
+        job.status,
+        job.proposalId,
+        job.requestedByUserId,
+        job.createdAt,
+        job.updatedAt,
+      ],
+    )
+    await this.appendEvent({
+      codebaseId,
+      event: 'action.queued',
+      detail: { jobId: job.jobId, kind: 'ci', proposalId, requestedBy: job.requestedByUserId },
+      at: now,
+      source: 'local-agent',
+    })
+    return summarizeActionJob(job)
+  },
+
+  // Most recent CI job pinned to this proposal, if any -- the merge queue's
+  // "is this proposal's CI green" read.
+  async getLatestCiJobForProposal({ codebaseId, proposalId }) {
+    await this.ensureSchema()
+    const row = await this.first(
+      `select * from action_jobs where codebase_id = ? and proposal_id = ? and kind = 'ci'
+        order by created_at desc limit 1`,
+      [codebaseId, proposalId],
+    )
+    return summarizeActionJob(row)
+  },
+
   async claimNextActionJob({ runnerId }) {
     await this.ensureSchema()
     const job = await this.first(

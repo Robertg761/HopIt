@@ -309,6 +309,9 @@ create table if not exists action_jobs (
 create index if not exists idx_action_jobs_status_created on action_jobs(status, created_at);
 create index if not exists idx_action_jobs_codebase_created on action_jobs(codebase_id, created_at);
 
+alter table action_jobs add column proposal_id text;
+create index if not exists idx_action_jobs_proposal on action_jobs(proposal_id, created_at);
+
 create table if not exists review_threads (
   thread_id text primary key,
   codebase_id text not null,
