@@ -602,11 +602,11 @@ verifies them end-to-end rather than as separate build tasks.)*
   `hst_` token path, encryption phases, multi-tenant flags) is reported, not
   fixed — those belong to the Phase-3 plans.
 - **Checklist** (orchestrator updates as tasks merge):
-  - [x] GR-S1  - [x] GR-A1  - [ ] GR-A2  - [ ] GR-A3  - [ ] GR-A4
-  - [ ] GR-B1  - [ ] GR-B2  - [ ] GR-B3  - [ ] GR-B4  - [ ] GR-B5
+  - [x] GR-S1  - [x] GR-A1  - [x] GR-A2  - [x] GR-A3  - [ ] GR-A4
+  - [x] GR-B1  - [ ] GR-B2  - [ ] GR-B3  - [ ] GR-B4  - [ ] GR-B5
   - [x] GR-C1  - [x] GR-D1  - [ ] GR-D2
-  - [x] GR-E1  - [ ] GR-E2  - [ ] GR-E3
-  - [ ] GR-F1  - [ ] GR-F2
-  - [ ] GR-G1  - [x] GR-G2  - [x] GR-G3
+  - [x] GR-E1  - [x] GR-E2  - [ ] GR-E3
+  - [x] GR-F1  - [x] GR-F2
+  - [x] GR-G1  - [x] GR-G2  - [x] GR-G3
   - [x] GR-H1  - [x] GR-H2  - [x] GR-H3  - [x] GR-H4
   - [ ] GR-X1
