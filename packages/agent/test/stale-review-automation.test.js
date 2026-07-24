@@ -123,6 +123,25 @@ function d1Backend(options) {
 
 const reviewerActor = { userId: 'user_demo_owner' }
 
+// GR-B5 (Wave 4 integration): every `hop propose` against the real D1
+// backend enqueues a `ci` action_job, and the merge queue's CI gate runs
+// alongside the stale-review guard these tests exercise -- so any drain that
+// expects a land must first complete the queued CI job(s), exactly like a
+// hosted runner would (same helper as propose.test.js).
+async function completeLatestCiJob(backend, status = 'succeeded') {
+  const claimed = await backend.claimNextActionJob({ runnerId: 'ci-test-runner' })
+  assert.equal(claimed.kind, 'ci', 'the queued job is the CI check, not something else')
+  await backend.completeActionJob({
+    jobId: claimed.jobId,
+    runnerId: 'ci-test-runner',
+    status,
+    exitCode: status === 'succeeded' ? 0 : 1,
+    stdout: '',
+    stderr: status === 'succeeded' ? '' : 'test failed',
+  })
+  return claimed
+}
+
 async function setUp(t, label) {
   const server = await startD1ApiServer(t)
   const root = await fs.mkdtemp(path.join(os.tmpdir(), `hopit-stale-review-${label}-`))
@@ -161,6 +180,7 @@ test('an approved review decision links to the proposal and transitions it into 
   assert.equal(stored.state, 'approved', 'an approved team review decision is a door into the merge queue, same as solo self-approve')
   assert.ok(stored.queuedAt)
 
+  await completeLatestCiJob(backend)
   const outcomes = await runMergeQueue(options)
   assert.equal(outcomes.length, 1)
   assert.equal(outcomes[0].outcome, 'merged')
@@ -214,6 +234,10 @@ test('re-pinning after an approval flags the prior decision stale and blocks the
   assert.equal(reapproved.decisionRevision, 3)
   assert.equal(reapproved.stale, false)
 
+  // Both proposes (initial pin + re-pin) enqueued a CI job; the gate reads
+  // the proposal's *latest* job, so green both.
+  await completeLatestCiJob(backend)
+  await completeLatestCiJob(backend)
   const outcomes = await runMergeQueue(options)
   assert.equal(outcomes.length, 1)
   assert.equal(outcomes[0].outcome, 'merged')
@@ -270,6 +294,7 @@ test('the merge-queue guard refuses to land when the most recent linked decision
     createdBy: 'reviewer_1',
     actor: reviewerActor,
   })
+  await completeLatestCiJob(backend)
   const landed = await runMergeQueue(options)
   assert.equal(landed.length, 1)
   assert.equal(landed[0].outcome, 'merged')
@@ -288,6 +313,7 @@ test('the solo self-approve path never links a review decision and is exempt fro
   })
   assert.equal(decisions.length, 0, 'solo self-approve creates no review_decisions row')
 
+  await completeLatestCiJob(backend)
   const outcomes = await runMergeQueue(options)
   assert.equal(outcomes.length, 1)
   assert.equal(outcomes[0].outcome, 'merged', 'no linked decision -- solo path stays intact, never blocked')
