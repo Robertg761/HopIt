@@ -148,6 +148,37 @@ async function landOneProposal(options, cloudService, candidate, actorId) {
     return { proposalId: candidate.proposalId, outcome: 'skipped', reason: 'not-approved' }
   }
 
+  // GR-B3 queue guard (decisions §4; design doc "queued_at is set the
+  // instant a proposal's most recent (non-stale) review decision makes it
+  // mergeable"): "no linked review decision" is the solo self-approve
+  // signature (`hop propose --merge` calls `approveProposal` directly and
+  // never writes a `review_decisions` row -- GR-B2, stays intact, never
+  // blocked here). A linked decision exists only for the team review path;
+  // it must be the most recent thing recorded for this proposal, `approved`,
+  // and still pinned at the revision the proposal currently sits at -- a
+  // re-pin after approval clears `state` back to `proposed` already (so this
+  // branch is defense-in-depth for that case), but a *later* decision that
+  // superseded an earlier approval (e.g. changes-requested after approval,
+  // both at the same pin) needs this explicit check.
+  const latestDecision = await cloudService.getLatestDecisionForProposal(codebaseId, proposal.proposalId)
+  if (latestDecision) {
+    const nonStaleApproval =
+      latestDecision.decision === 'approved' && latestDecision.decisionRevision === proposal.pinnedRevision
+    if (!nonStaleApproval) {
+      const stale = await cloudService.markProposalStale(codebaseId, proposal.proposalId, {
+        reason: proposalStaleReason.reviewStale,
+        now,
+      })
+      await emit(options, 'proposal.stale', {
+        proposalId: stale.proposalId,
+        codebaseId,
+        changeSetId: stale.changeSetId,
+        staleReason: stale.staleReason,
+      })
+      return { proposalId: stale.proposalId, outcome: 'stale', reason: proposalStaleReason.reviewStale }
+    }
+  }
+
   const mainRevision = cloud.main.revision
   if (proposal.baseRevision !== mainRevision) {
     const requester = { requesterId: actorId }

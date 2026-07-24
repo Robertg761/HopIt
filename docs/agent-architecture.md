@@ -701,9 +701,43 @@ in the proposal model (decisions §2: "Main has exactly one door"):
   is the just-landed Main revision and whose head starts at the live
   `cloud.revision` — carrying forward, not discarding, any unproposed saves
   made after the pin.
-- `review_decisions.decision_revision`/`.proposal_id` writes and the
-  automation that marks a decision stale on re-pin are still deferred to
-  GR-B3, per the design doc.
+**Stale-review automation (GR-B3, decisions §4).**
+`packages/backend-d1/src/collaboration.js`'s `createReviewDecision` now
+writes `review_decisions.decision_revision`/`.proposal_id` whenever an open
+(non-merged) proposal exists for the change set (`decisionRevision` =
+`proposal.pinnedRevision` at decision time); a review decision recorded
+before any proposal existed keeps both `NULL`, "predates proposals." An
+`approved` decision against that open proposal is the **team review-approval
+door** into the merge queue -- it calls the same `approveProposal` (`state ->
+approved`, `queued_at` set) the solo `hop propose --merge` self-approve path
+calls directly, but unlike solo self-approve it always leaves a linked
+`review_decisions` row. Staleness is never computed by mutating that
+append-only row: `decorateReviewDecisionsWithStaleness` joins each decision's
+`decisionRevision` against its proposal's *live* `pinned_revision` on read
+(`listReviewDecisions`/`createReviewDecision`'s response), which is what the
+re-pin automation actually is -- the proposer explicitly re-pinning
+(`upsertProposal`) moves `pinned_revision` and resets `state` back to
+`proposed` in the same write GR-B2 already does, so every prior decision's
+`decisionRevision` for that proposal is stale the instant the read-side join
+next runs. The dashboard review page (`decisions-card.tsx`) surfaces this as
+a "changed since your review" badge and lazily fetches a file-count summary
+via the existing `/api/codebases/compare` route (`compareRevisions(reviewedRev,
+pinnedRev)`, no new diff machinery).
+
+The merge queue (`landOneProposal` in `propose.js`) additionally guards
+directly against a proposal whose most recent *linked* decision is not a
+non-stale approval: "no linked decision" is the solo self-approve signature
+(that path never creates a `review_decisions` row) and is never blocked; a
+linked decision exists only for the team path, and if the most recent one for
+that proposal is not `approved` at the proposal's current `pinned_revision`
+(e.g. a later `changes-requested` decision superseded an earlier approval at
+the same pin, which the re-pin-reset alone would not catch), the queue marks
+the proposal `stale`/`stale_reason: 'review_stale'` and moves on rather than
+landing it. The fixture/local-dev graph service
+(`packages/agent/src/cloud/d1-graph-service.js`) has no `review_decisions`
+table -- its `getLatestDecisionForProposal` stub always returns `null`,
+which is exactly correct there (only the solo path exists against that
+backend).
 
 ### 8. Tighten Conflict Handling
 

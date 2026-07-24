@@ -20,6 +20,7 @@ import { isBackendUnavailable } from './review-shared'
 import { humanizeApiError } from '@/lib/client/errors'
 
 export type ReviewData = {
+  codebaseId: string | null
   threads: ReviewThread[]
   threadsLoading: boolean
   threadsUnavailable: boolean
@@ -230,6 +231,7 @@ export function useReviewData(
   const decisionsReady = scopeKey !== null && decisionsState?.key === scopeKey
 
   return {
+    codebaseId,
     threads: threadsReady && threadsState ? threadsState.threads : [],
     threadsLoading: scopeKey !== null && !threadsReady,
     threadsUnavailable: threadsReady && threadsState ? threadsState.unavailable : false,

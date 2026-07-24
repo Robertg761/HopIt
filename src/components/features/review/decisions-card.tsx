@@ -1,9 +1,10 @@
 'use client'
 
 import * as React from 'react'
-import { Gavel } from 'lucide-react'
+import { Gavel, RefreshCcw } from 'lucide-react'
 
 import type { ReviewDecision, ReviewDecisionKind } from '@/lib/collaboration'
+import { fetchDirectoryCompare } from '@/lib/client/compare/api'
 import { formatAbsoluteTime, formatRelativeTime } from '@/lib/client/format'
 import { Badge, type BadgeTone } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -62,7 +63,7 @@ export function DecisionsCard({
         ) : (
           <ul className="space-y-1">
             {review.decisions.map((decision) => (
-              <DecisionRow key={decision.id} decision={decision} />
+              <DecisionRow key={decision.id} decision={decision} codebaseId={review.codebaseId} />
             ))}
           </ul>
         )}
@@ -110,7 +111,7 @@ export function DecisionsCard({
   )
 }
 
-function DecisionRow({ decision }: { decision: ReviewDecision }) {
+function DecisionRow({ decision, codebaseId }: { decision: ReviewDecision; codebaseId: string | null }) {
   return (
     <li className="flex flex-wrap items-center gap-2 rounded-lg px-2.5 py-2 hover:bg-muted/50">
       <Badge tone={DECISION_TONES[decision.decision]}>{DECISION_LABELS[decision.decision]}</Badge>
@@ -124,6 +125,42 @@ function DecisionRow({ decision }: { decision: ReviewDecision }) {
       >
         {formatRelativeTime(decision.createdAt)}
       </span>
+      {decision.stale ? <StaleReviewBadge decision={decision} codebaseId={codebaseId} /> : null}
     </li>
+  )
+}
+
+// GR-B3 (decisions §4): the proposer re-pinned since this decision was
+// recorded (`decorateReviewDecisionsWithStaleness` in
+// packages/backend-d1/src/collaboration.js). "Changed since your review" --
+// the badge itself is always shown for a stale decision; the file-count
+// summary is fetched lazily via the existing `/api/codebases/compare` route
+// (`compareRevisions(reviewedRev, pinnedRev)`, no new diff machinery).
+function StaleReviewBadge({ decision, codebaseId }: { decision: ReviewDecision; codebaseId: string | null }) {
+  const [summary, setSummary] = React.useState<string | null>(null)
+  const reviewedRev = decision.decisionRevision
+  const pinnedRev = decision.currentPinnedRevision ?? null
+
+  React.useEffect(() => {
+    if (!codebaseId || reviewedRev === null || pinnedRev === null) return
+    let cancelled = false
+    void fetchDirectoryCompare(codebaseId, reviewedRev, pinnedRev).then((result) => {
+      if (cancelled || !result.ok || !result.summary) return
+      const changed = result.summary.added + result.summary.modified + result.summary.deleted + result.summary.binaryChanged
+      setSummary(changed === 1 ? '1 file changed since this review' : `${changed} files changed since this review`)
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [codebaseId, reviewedRev, pinnedRev])
+
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-medium text-amber-600 dark:text-amber-400"
+      title={summary ?? 'The proposal moved since this decision was recorded.'}
+    >
+      <RefreshCcw className="size-3" />
+      {summary ?? 'Changed since review'}
+    </span>
   )
 }

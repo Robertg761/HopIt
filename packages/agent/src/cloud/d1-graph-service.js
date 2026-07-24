@@ -612,6 +612,18 @@ export class FixtureJsonCloudGraphService {
     }, effectiveNow)
   }
 
+  // GR-B3 merge-queue guard (see propose.js's `landOneProposal`): the
+  // fixture/local-dev backend has no `review_decisions` table -- only the
+  // solo self-approve path (`hop propose --merge`) exists here, and that
+  // path never creates a linked decision, so "no decision found" is always
+  // correct for this backend. Team review-approval only exists against the
+  // real D1 backend (`getLatestDecisionForProposal` in
+  // packages/backend-d1/src/proposals-store.js), which mirrors this method's
+  // shape.
+  async getLatestDecisionForProposal(_codebaseId, _proposalId) {
+    return null
+  }
+
   async patchProposal(id, patch, now = new Date().toISOString()) {
     const cloud = await readJson(this.path)
     const stored = Array.isArray(cloud.proposals) ? cloud.proposals : []

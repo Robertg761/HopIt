@@ -1,4 +1,4 @@
-import { integerValue, stringOrNull } from './base.js'
+import { integerOrNull, integerValue, stringOrNull } from './base.js'
 
 export function mapD1ReviewThread(row, comments = []) {
   if (!row) return null
@@ -36,6 +36,14 @@ export function mapD1ReviewThreadComment(row) {
   }
 }
 
+// GR-B3 (decisions §4, docs/proposal-data-model-design.md "How review
+// staleness is derived"): `decisionRevision`/`proposalId` are additive and
+// NULL on decisions recorded before a proposal existed for the change set
+// ("predates proposals" -- never stale, no `stale`/`currentPinnedRevision`
+// fields attached by the caller). Staleness itself is *not* computed here --
+// it needs the linked proposal's live `pinned_revision`, which this row
+// alone doesn't carry -- see `decorateReviewDecisionsWithStaleness` in
+// collaboration.js, the single place that joins the two.
 export function mapD1ReviewDecision(row) {
   if (!row) return null
   return {
@@ -47,6 +55,8 @@ export function mapD1ReviewDecision(row) {
     summary: stringOrNull(row.summary),
     createdBy: stringOrNull(row.created_by) ?? 'unknown',
     createdAt: stringOrNull(row.created_at) ?? '',
+    proposalId: stringOrNull(row.proposal_id),
+    decisionRevision: integerOrNull(row.decision_revision),
   }
 }
 

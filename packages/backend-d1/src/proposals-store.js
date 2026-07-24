@@ -198,6 +198,30 @@ export function attachProposalMethods(Backend) {
       return this.getProposal(codebaseId, id)
     },
 
+    // GR-B3 (decisions §4, design doc "how review staleness is derived" +
+    // "queued_at is set the instant a proposal's most recent (non-stale)
+    // review decision makes it mergeable"): the merge-queue guard. Team
+    // review-approval (`createReviewDecision` in collaboration.js) is the
+    // only path that ever creates a `review_decisions` row linked to a
+    // proposal -- the solo self-approve path (`hop propose --merge`) calls
+    // `approveProposal` directly and leaves no linked row. So "no linked
+    // decision" unambiguously means solo self-approve, which this guard must
+    // never block (GR-B2 stays intact); a linked decision exists only for
+    // the team path, and the queue must refuse to land unless that most
+    // recent decision is both `approved` and still pinned at the revision
+    // the proposal currently sits at.
+    async getLatestDecisionForProposal(codebaseId = this.codebaseId, proposalId) {
+      await this.ensureSchema()
+      if (!proposalId) return null
+      const row = await this.first(
+        `select decision, decision_revision from review_decisions
+          where codebase_id = ? and proposal_id = ? order by created_at desc limit 1`,
+        [codebaseId, proposalId],
+      )
+      if (!row) return null
+      return { decision: row.decision, decisionRevision: intOrNull(row.decision_revision) }
+    },
+
     async markProposalMerged(codebaseId = this.codebaseId, id, { mergedRevision, mergedByUserId, now = new Date().toISOString() } = {}) {
       await this.ensureSchema()
       await this.query(

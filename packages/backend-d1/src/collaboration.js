@@ -3,6 +3,7 @@ import { privacyZoneForPath, privacyZoneIdForPath, scopeForPath } from '@hopit/c
 import { defineBackendMethods } from './method-support.js'
 import { d1CloudServiceType, d1AuthorizationToken, schemaCacheKey, usesCloudflareD1Api, usesScopedD1SessionAuth } from './config.js'
 import { d1SchemaStatements } from './schema.js'
+import { proposalState } from './proposals-store.js'
 import { summarizeAccessContext, normalizeEmail, backendErrorMessage, normalizeFutureTimestamp, normalizePositiveInteger, nullablePositiveInteger, nullableNonNegativeInteger, actorAuditId, requireTextValue, uniqueStrings, parseStringArray, normalizeRole, graphMemberCount, countPathScopes, assertSafeGraphPath, hashText, byteLength, parseJson, stringifyJson, stringOrNull, integerOrNull, integerValue, boundedLimit, requireAuthenticatedActor, requireVerifiedEmailActor, requireOwnerClaimActor, isBootstrapOwnerMember, claimedOwnerValue, graphFromRows, codebaseRowToRecord, codebaseRecordFromGraph, fileRowToEntry, normalizeGraph, normalizeFileEntry, normalizeVisibilityContract, normalizeOptionalVisibility, normalizeVisibilityValue, summarizeCodebaseHead, summarizeCodebaseRemoteUpdate, buildStatus, buildSyncHealth, buildRefreshHealth, mapD1AgentEvent, latestEventOf, applyJournalEntryToCloud, hasCapability, visibilityContextForGraph, filterVisibleGraphForRequester, filterVisibleGraphForAccess, canRequesterSeePath, canRead, canWrite, permissionsForRole, accessContextForCodebaseHead, memberSelectSql, mapD1Member, mapD1Invitation, invitationRole, invitationStatusOrNull, isInvitationExpired, invitationStatusForRead, hashInvitationToken, createAgentSessionId, createAgentSessionToken, hashAgentSessionToken, normalizeAgentSessionId, assertReusableAgentSession, normalizeAgentSessionCapabilities, agentSessionStatusOrNull, agentSessionHasCapability, codebaseCapabilityForAgentCapability, agentCapabilityForCodebaseCapability, isExpiredTimestamp, summarizeAgentSession, normalizeKeyEntityId, assertDevicePublicKeyDescriptor, looksLikePem, assertSameDevicePublicKeys, assertSameCodebaseKeyring, wrappedKeyType, wrappedKeyRecipientType, capabilityForWrappedKey, isPrivateZoneId, assertWrappedKeyEnvelope, assertSameWrappedKey, effectiveWrappedKeyStatus, canActorReadWrappedKey, createWrappedKeyId, summarizeDeviceKey, summarizeUserKeyring, summarizeCodebaseKeyring, summarizeWrappedKey, deviceKeyStatusOrNull, keyRotationState, mapD1ReviewThread, mapD1ReviewThreadComment, mapD1ReviewDecision, mapD1Notification, reviewDecision, notificationKind, reviewDecisionTitle, reviewDecisionBody, reviewHref, actionCommandForKind, summarizeActionJob, actionSummary, capOutput } from './helpers/index.js'
 
 /** @typedef {import('@hopit/core').CloudGraph} CloudGraph */
@@ -184,9 +185,49 @@ export function attachCollaborationMethods(Backend) {
           `select * from review_decisions where codebase_id = ? order by created_at desc limit 100`,
           [codebaseId],
         )
-    return rows.map(mapD1ReviewDecision).filter(Boolean)
+    return this.decorateReviewDecisionsWithStaleness(codebaseId, rows)
   },
 
+  // GR-B3 (decisions §4, docs/proposal-data-model-design.md "How review
+  // staleness is derived"): joins each decision's `decisionRevision` (the
+  // proposal's `pinned_revision` as of the decision) against the linked
+  // proposal's *live* `pinned_revision`. A mismatch means the proposer
+  // re-pinned since this decision was recorded -- the dashboard's "changed
+  // since your review" affordance. Decisions that predate proposals
+  // (`proposalId` null) are never stale.
+  async decorateReviewDecisionsWithStaleness(codebaseId, rows) {
+    const mapped = rows.map(mapD1ReviewDecision).filter(Boolean)
+    const proposalIds = uniqueStrings(mapped.map((decision) => decision.proposalId).filter(Boolean))
+    const proposals = proposalIds.length === 0
+      ? []
+      : await Promise.all(proposalIds.map((id) => this.getProposal(codebaseId, id)))
+    const pinnedRevisionById = new Map(
+      proposals.filter(Boolean).map((proposal) => [proposal.proposalId, proposal.pinnedRevision]),
+    )
+    return mapped.map((decision) => {
+      if (!decision.proposalId) return { ...decision, currentPinnedRevision: null, stale: false }
+      const currentPinnedRevision = pinnedRevisionById.get(decision.proposalId) ?? null
+      return {
+        ...decision,
+        currentPinnedRevision,
+        stale:
+          currentPinnedRevision !== null &&
+          decision.decisionRevision !== null &&
+          currentPinnedRevision !== decision.decisionRevision,
+      }
+    })
+  },
+
+  // Decisions §4: "the proposer explicitly updates the proposal, which
+  // automatically marks existing reviews as stale." Every decision records
+  // the pinned revision it was made against (`decisionRevision`); when the
+  // linked proposal is re-pinned, `decorateReviewDecisionsWithStaleness`
+  // above surfaces that mismatch without ever mutating the (append-only)
+  // decision row. Decisions §2/§3: "the reviewer owns acceptance" -- an
+  // `approved` decision against the change set's open proposal is the team
+  // review-approval door into the merge queue (the solo self-approve path,
+  // `hop propose --merge`, calls `approveProposal` directly and never
+  // creates a review_decisions row -- see propose.js's merge-queue guard).
   async createReviewDecision({ codebaseId, changeSetId, decision, summary, createdBy, actor = {} }) {
     await this.requireGraphCapability(codebaseId, actor, 'review')
     const normalizedChangeSetId = requireTextValue(changeSetId, 'Review change set id')
@@ -194,10 +235,16 @@ export function attachCollaborationMethods(Backend) {
     const now = new Date().toISOString()
     const decisionId = `rdec_${Date.now().toString(36)}_${randomUUID().slice(0, 8)}`
     const reviewer = actorAuditId(actor, createdBy, 'Review decision creator')
+
+    const proposal = await this.getOpenProposalForChangeSet(codebaseId, normalizedChangeSetId)
+    const decisionRevision = proposal ? proposal.pinnedRevision : null
+    const proposalIdValue = proposal ? proposal.proposalId : null
+
     await this.query(
       `insert into review_decisions (
-        decision_id, codebase_id, change_set_id, decision, summary, created_by, created_at
-      ) values (?, ?, ?, ?, ?, ?, ?)`,
+        decision_id, codebase_id, change_set_id, decision, summary, created_by, created_at,
+        decision_revision, proposal_id
+      ) values (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         decisionId,
         codebaseId,
@@ -206,12 +253,19 @@ export function attachCollaborationMethods(Backend) {
         stringOrNull(summary),
         reviewer,
         now,
+        decisionRevision,
+        proposalIdValue,
       ],
     )
+
+    if (nextDecision === 'approved' && proposal && proposal.state !== proposalState.merged) {
+      await this.approveProposal(codebaseId, proposal.proposalId, { now })
+    }
+
     await this.appendEvent({
       codebaseId,
       event: 'review.decision_recorded',
-      detail: { decisionId, changeSetId: normalizedChangeSetId, decision: nextDecision },
+      detail: { decisionId, changeSetId: normalizedChangeSetId, decision: nextDecision, proposalId: proposalIdValue },
       at: now,
       source: 'browser',
     })
@@ -223,7 +277,10 @@ export function attachCollaborationMethods(Backend) {
       href: reviewHref(codebaseId, normalizedChangeSetId),
       createdAt: now,
     })
-    return mapD1ReviewDecision(await this.first(`select * from review_decisions where codebase_id = ? and decision_id = ?`, [codebaseId, decisionId]))
+    const [created] = await this.decorateReviewDecisionsWithStaleness(codebaseId, [
+      await this.first(`select * from review_decisions where codebase_id = ? and decision_id = ?`, [codebaseId, decisionId]),
+    ])
+    return created
   },
 
   async listNotifications({ codebaseId, actor = {}, limit = 20, unreadOnly = false }) {

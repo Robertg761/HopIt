@@ -184,6 +184,16 @@ export type ReviewDecision = {
   summary: string | null
   createdBy: string
   createdAt: string
+  // GR-B3 (decisions §4): `proposalId`/`decisionRevision` are null for
+  // decisions recorded before a proposal existed for the change set.
+  // `currentPinnedRevision`/`stale` are server-computed against the linked
+  // proposal's *live* pin -- "changed since your review" is `stale`, and the
+  // dashboard hits /api/codebases/compare with `decisionRevision` and
+  // `currentPinnedRevision` to show what changed.
+  proposalId: string | null
+  decisionRevision: number | null
+  currentPinnedRevision?: number | null
+  stale?: boolean
 }
 
 export type ReviewDecisionsResponse = {
