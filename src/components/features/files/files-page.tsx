@@ -17,6 +17,13 @@ import { ImportGitDialog } from '@/components/features/codebases/codebase-dialog
 import { FileDetail } from './file-detail'
 import { FileList } from './file-list'
 import { NewFileDialog } from './new-file-dialog'
+import { ReleasesCard } from './releases-card'
+
+// GR-B4 (decisions §9): the releases list stays behind this flag until Track
+// B's dashboard surfaces graduate out of the collaboration-surface freeze
+// (see docs/git-replacement-implementation-plan.md, Track B). `hop release`
+// works from the CLI regardless of this flag.
+const RELEASES_LIST_ENABLED = process.env.NEXT_PUBLIC_RELEASES_LIST === '1'
 
 type ScopeFilter = 'all' | 'shared' | 'private'
 type LocalityFilter = 'all' | 'local' | 'cloud'
@@ -213,6 +220,8 @@ export function FilesPage() {
           </div>
         </div>
       )}
+
+      {RELEASES_LIST_ENABLED ? <ReleasesCard codebaseId={codebaseId} /> : null}
 
       <NewFileDialog
         open={newFileOpen}

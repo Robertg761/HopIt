@@ -545,4 +545,29 @@ export const d1SchemaStatements = [
     created_at text not null
   )`,
   `create index if not exists idx_service_admin_events_created on service_admin_events(created_at)`,
+  // GR-B4 (decisions §9): a lightweight, named pin of a Main revision.
+  // "Releasing" never mutates Main or files -- it is a pointer row, like a
+  // git tag but without git. `pinned_revision` is compared against Main with
+  // the same `compareRevisions` engine used elsewhere (zero diff at the
+  // pinned revision proves the pin is exact). Duplicate names per codebase
+  // are rejected in application code (`createRelease` in
+  // packages/backend-d1/src/releases-store.js) rather than a SQL unique
+  // constraint -- same reasoning as the proposals table's open-proposal
+  // constraint: the GR-S1 drift-test parser only understands plain `create
+  // index` statements, not partial/unique index syntax. GR-E3 (later, not
+  // implemented here) reads this table to emit a git tag on the mirror when
+  // one is configured; `name` is the tag name candidate and `pinned_revision`
+  // is what to build the tree from.
+  `create table if not exists releases (
+    release_id text primary key,
+    codebase_id text not null,
+    name text not null,
+    notes text,
+    pinned_revision integer not null,
+    created_by_user_id text not null,
+    created_at text not null,
+    foreign key (codebase_id) references codebases(codebase_id) on delete cascade
+  )`,
+  `create index if not exists idx_releases_codebase_name on releases(codebase_id, name)`,
+  `create index if not exists idx_releases_codebase_created on releases(codebase_id, created_at)`,
 ]

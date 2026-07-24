@@ -15,6 +15,7 @@ import { applyConnectionStore } from './connections.js'
 import { runSessionCommand } from './commands/keys.js'
 import { mergeChangeSet, openChangeSetReview, recoverJournal, refreshWorkspace, syncOnce } from './commands/sync.js'
 import { runProposeCommand } from './commands/propose.js'
+import { runReleaseCommand } from './commands/release.js'
 import { manageStorage } from './commands/storage.js'
 import { runWorkspaceCommand } from './commands/workspace.js'
 import { runTrailCommand } from './commands/trail.js'
@@ -122,6 +123,16 @@ async function main() {
     command === 'conflicts' && conflictsAction === 'resolve' && args[0] && !args[0].startsWith('--')
       ? args.shift()
       : null
+  // `hop release <name> [--notes <text>]` or `hop release list`. Unlike
+  // `derived`/`conflicts`, "list" is a subcommand keyword rather than the
+  // default -- a release name is required to create one, so a bare `hop
+  // release` with no args is a usage error, not an implicit list.
+  const releaseAction = command === 'release' && args[0] === 'list' ? 'list' : 'create'
+  const releaseName =
+    command === 'release' && releaseAction === 'create' && args[0] && !args[0].startsWith('--')
+      ? args.shift()
+      : null
+  if (command === 'release' && releaseAction === 'list') args.shift()
   const parsedOptions = parseOptions(args)
   const options =
     command === 'keys' || command === 'setup' || command === 'add'
@@ -149,6 +160,7 @@ async function main() {
   if (command === 'review-open') return openChangeSetReview(options)
   if (command === 'merge') return mergeChangeSet(options)
   if (command === 'propose') return runProposeCommand(options)
+  if (command === 'release') return runReleaseCommand(releaseAction, releaseName, options)
   if (command === 'mirror-sync') return runMirrorSync(options)
   if (command === 'mirror-set-remote') return runMirrorSetRemote({ ...options, remote: mirrorSetRemoteUrl ?? options.remote })
   if (command === 'export-git') return exportGitSnapshot(options, { requireMerged: false })
