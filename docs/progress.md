@@ -2048,6 +2048,56 @@ A successful `hop merge` (`mergeChangeSet`, `packages/agent/src/commands/sync.js
 
 Tests: `packages/agent/test/mirror-automation.test.js` (D1 loopback backend via the real `cloudflare/d1/api-worker.js` against an in-memory `node:sqlite` database, plus a local bare git remote) — `mirror-set-remote` persists remote/branch and a subsequent `mirror-sync` with no `--remote` falls back to the server-persisted setting; a deploy key is asserted ciphertext-only at rest (raw ciphertext bytes and the stored metadata JSON never contain the plaintext key material) and decrypts back to the exact original bytes, while decrypting without the client encryption key throws `client_encryption_key_missing`; setting a deploy key with no encryption key configured is rejected and leaves no settings row; merging with a mirror remote configured enqueues exactly one `action_jobs` row of kind `mirror`, which a simulated runner (claim → `mirror-sync` → complete) advances the bare remote by one commit containing the merged content (mirror lag = one job cycle); a mirror failure against a broken remote produces exactly one `mirror.failed` notification row while `main`/merge state on the cloud graph is asserted unchanged from immediately after the (already-successful) merge.
 
+### 2026-07-24 GR-B1: proposal data model design + DRAFT migration (design-gated)
+
+[docs/proposal-data-model-design.md](proposal-data-model-design.md) specifies
+the first-class `proposals` table (decisions doc §2–§4): a proposal pins the
+active change set's revision at propose time (`pinned_revision`), saves after
+that accumulate as "since proposal" via the existing WS7c
+`compareRevisions` engine (no new diff machinery), re-pinning resets the same
+row in place (`state` back to `proposed`, `pinned_revision`/`pinned_at`
+updated), and the merge queue serializes on `proposals.queued_at` FIFO
+ordering plus the codebase's existing `revision` compare-and-swap — no new
+queue table (`action_jobs` was considered and rejected: it's a CI
+claim/run/complete queue with no change-set concept, not a merge-ordering
+primitive). `review_decisions` gains two additive columns
+(`decision_revision`, `proposal_id`) so a review can be detected as stale
+(`decision_revision != proposals.pinned_revision`) without a heavier join.
+The doc's traceability table maps all 17 relevant decisions-doc §2/§3/§4/§9
+statements to a design element or an explicit "deferred to GR-B2/B3/B4/B5"
+line.
+
+This is schema-only: no `hop propose` command, no merge-queue runner, no
+write path touches `proposals` yet. GR-B2 (blocked on owner sign-off of this
+design) implements the command/runner code against the schema landed here.
+
+Schema: `packages/backend-d1/src/schema.js`, `cloudflare/d1/schema.sql` (both
+updated so the GR-S1 drift guard stays green), draft migration
+`cloudflare/d1/migrations/2026-07-24-proposals.sql` (committed, never
+applied — the owner applies it by hand against production D1, matching this
+repo's existing migration precedent).
+
+Tests: extracted the schema-shape parser from
+`packages/agent/test/schema-drift.test.js` into a shared
+`packages/agent/test/helpers/schema-sql.js` (move-only, same 4 schema-drift
+tests still pass unchanged) so the new
+`packages/agent/test/proposal-schema-design.test.js` (3 tests) can reuse it:
+one test parses the migration file and a copy of `schema.js` with every
+GR-B1 addition programmatically stripped back out, unions the migration's
+statements onto the stripped copy, and asserts the result is
+structurally identical to the real `schema.js` — proving the migration is
+*sufficient* to take a pre-GR-B1 database to what shipped, not just that the
+file exists; one asserts the migration's `proposals` columns match the
+design doc's row-shape table; one asserts the design doc has the required
+sections and a ≥15-row traceability table covering §2, §3, and §4.
+
+Metric demonstrated by hand: removing `stale_reason` from the migration file
+took `proposal-schema-design.test.js` from 3/3 pass to 1 pass / 2 fail (the
+migration-completeness test and the column-match test both fail with a clear
+"expected proposals.stale_reason in the migration" message); restoring the
+column returned it to 3/3 pass, confirmed byte-identical to the original via
+`diff`.
+
 ## Verification Checklist
 
 Run this before marking agent progress as done:

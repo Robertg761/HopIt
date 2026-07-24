@@ -615,6 +615,20 @@ Status: done for the fixture-backed proof.
 - Surface review and merge state through status.
 - Preserve visibility settings and owner metadata in review/merge history.
 
+**Proposals (GR-B1, design-gated).** `openChangeSetReview`/`mergeChangeSet`
+above operate on the ephemeral `cloud.selectedState` head; there is no
+first-class, persisted object recording *which* trail step was reviewed
+versus what a still-editing device has since saved. [docs/proposal-data-model-design.md](proposal-data-model-design.md)
+specifies a `proposals` table (pins `pinned_revision` at propose time,
+states `draft`/`proposed`/`approved`/`stale`/`merged`) plus additive
+`review_decisions.decision_revision`/`.proposal_id` columns, so a re-pin can
+be detected as making an existing approval stale. The schema/migration for
+this landed in GR-B1 (`packages/backend-d1/src/schema.js`,
+`cloudflare/d1/schema.sql`,
+`cloudflare/d1/migrations/2026-07-24-proposals.sql`); no command code reads
+or writes the new table yet — `hop propose` and the merge-queue runner are
+GR-B2, blocked on owner sign-off of the design.
+
 ### 8. Tighten Conflict Handling
 
 Status: done for the fixture-backed proof.

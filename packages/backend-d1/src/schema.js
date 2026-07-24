@@ -320,7 +320,55 @@ export const d1SchemaStatements = [
     created_by text not null,
     created_at text not null
   )`,
+  // GR-B1 (decisions §4): `decision_revision` / `proposal_id` land as additive
+  // columns so pre-existing review_decisions rows (created before proposals
+  // existed) stay valid with both NULL. They let GR-B3's stale-review
+  // automation answer "review_decisions at revision X, head now Y ⇒ stale"
+  // without a heavier join: `decision_revision` is the proposal's
+  // `pinned_revision` at decision time; a decision is stale once it no longer
+  // equals `proposals.pinned_revision` for `proposal_id`. See
+  // docs/proposal-data-model-design.md.
+  `alter table review_decisions add column decision_revision integer`,
+  `alter table review_decisions add column proposal_id text`,
   `create index if not exists idx_review_decisions_codebase_change_set on review_decisions(codebase_id, change_set_id, created_at)`,
+  // GR-B1 (decisions §2-4): the first-class proposal row. A proposal pins the
+  // active change set's revision at propose time (`pinned_revision`); saves
+  // after that accumulate as "since proposal" against the same
+  // `change_set_id` without moving the pin. Re-pinning (the proposer
+  // explicitly updating the proposal) advances `pinned_revision` in place on
+  // this same row and resets `state` to 'proposed', which is what makes prior
+  // `review_decisions.decision_revision` values stale. `state` is one of
+  // draft/proposed/approved/stale/merged (decisions §4; 'draft' is reserved
+  // for a future save-as-you-go flow, unused by `hop propose` in v1).
+  // `queued_at` is set when `state` becomes 'approved' and is the merge
+  // queue's FIFO ordering key; merges are serialized by the codebase's
+  // existing `revision` compare-and-swap (see design doc §"Merge queue
+  // serialization"), not a new queue table. `base_revision` is Main's
+  // revision as of the pin, used to detect whether a refresh is needed before
+  // landing. See docs/proposal-data-model-design.md for the full state
+  // machine and traceability table.
+  `create table if not exists proposals (
+    proposal_id text primary key,
+    codebase_id text not null,
+    change_set_id text not null,
+    title text,
+    state text not null default 'proposed',
+    pinned_revision integer not null,
+    pinned_at text not null,
+    base_revision integer not null,
+    created_by_user_id text not null,
+    created_at text not null,
+    updated_at text not null,
+    queued_at text,
+    merged_at text,
+    merged_revision integer,
+    merged_by_user_id text,
+    stale_at text,
+    stale_reason text,
+    foreign key (codebase_id) references codebases(codebase_id) on delete cascade
+  )`,
+  `create index if not exists idx_proposals_codebase_change_set on proposals(codebase_id, change_set_id, updated_at)`,
+  `create index if not exists idx_proposals_codebase_state_queued on proposals(codebase_id, state, queued_at)`,
   `create table if not exists notifications (
     notification_id text primary key,
     codebase_id text not null,
