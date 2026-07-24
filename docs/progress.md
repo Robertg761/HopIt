@@ -1921,6 +1921,14 @@ or charge.
 - Scoped token rotation is documented and CLI-backed, and the dashboard can track codebase keyring rotation state. Dashboard-guided recovery import, real rekey orchestration, and revocation workflows are still pending.
 - No cross-platform watch behavior matrix yet.
 
+### 2026-07-23 GR-E1: deterministic incremental git mirror engine
+
+`hop mirror-sync --remote <git-url>` (packages/agent/src/commands/mirror.js) implements the continuous, one-way git mirror from decisions doc §8: it walks the already-recorded file-version history and builds one git commit per Main revision advance since the last mirrored revision (interim stand-in for "one commit per merged proposal" until Track B lands proposals), pushes to a user-configured remote, and records `{ remote, branch, lastMirroredRevision, lastCommit }` per codebase in a local `mirror-state.json` (no D1 schema change needed for this interim state). `.private/`-scoped paths are filtered out of every mirrored tree the same way `export-git` filters them; derived/generated paths never enter the mirror because they never enter the cloud graph in the first place (decisions doc §6). Commit author/committer identity is fixed (`HopIt Mirror <mirror@hopit.local>`) and commit dates come from the file-version row's recorded `createdAt` (trail metadata), never wall-clock, so two independent `mirror-sync` runs over the same source history produce byte-identical commit SHA chains. Commit messages use the matching trail episode label when one covers that revision, else a generic "Update `<codebase>` to revision `<n>`" fallback.
+
+Naming deviation from the plan doc: the plan sketches `hop mirror sync`, but `hop mirror` is already a live, documented alias for the unrelated `mirror-local` command (see docs/personal-production.md's `hop mirror --production-safe`). Reusing that verb would have silently repointed a production command, so this ships as the flat `hop mirror-sync`, matching the existing `import-git`/`import-git-url`/`sync-once` naming convention. GR-E2 (mirror automation + `mirror set-remote` + deploy-key storage) should keep this naming.
+
+Tests: `packages/agent/test/mirror-sync.test.js` — 3 merges via `syncOnce` produce exactly 3 mirror commits; an immediate re-run with no new revisions produces 0 new commits (idempotent, remote commit list unchanged); checkout of mirror HEAD is asserted byte-identical to the Main snapshot with `.private/agent-note.md` absent; malformed remote URLs (leading dash, embedded control characters) are rejected via the existing `validateGitRemoteUrl`; two independent `mirror-sync` runs over a copy of the same cloud-graph history (separate temp state roots, separate bare remotes) produce identical commit SHA chains.
+
 ## Verification Checklist
 
 Run this before marking agent progress as done:

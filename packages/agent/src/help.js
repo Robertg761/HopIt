@@ -45,6 +45,7 @@ Commands:
   review      Open the selected active change set for review
   merge       Merge the reviewed selected change set into Main
   export      Export the selected graph state to a clean Git repo
+  mirror-sync Push a deterministic, one-way git mirror commit per Main revision to a configured remote
   publish     Export a reviewed and merged change set to a clean Git repo
   validate    Validate the configured cloud graph contract
   doctor      Run a production-oriented local health check
@@ -152,6 +153,9 @@ Options:
   --interactive        setup: force interactive prompts even when stdin is not a TTY (testing/advanced; env HOPIT_SETUP_ASSUME_TTY=1)
   --skip-service-control mirror: do not stop or restart the macOS LaunchAgent
   --json              setup: include the machine-readable result after the interactive flow
+  --remote <git-url>  mirror-sync: destination remote URL (persisted per codebase after first use)
+  --branch <name>     mirror-sync: destination branch, default main
+  --mirror-state <path> Override the local mirror-sync state file path
   --message <text>    Git commit message for export/publish
   --include-private   Include .private files in export only; publish always omits them
   --allow-unsafe-workspace Override workspace path safety checks
