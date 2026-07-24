@@ -5,6 +5,7 @@ import { formatDuration, formatEventTime, formatRevision, remotePullCadenceLabel
 import {
   backendName,
   mapCloudFiles,
+  mapDivergences,
   mapGraphMembers,
   mapRecentEvents,
   mapRequester,
@@ -14,6 +15,7 @@ import {
 
 export type {
   AgentCodebaseRole,
+  AgentDivergence,
   AgentEvent,
   AgentEventTone,
   AgentFile,
@@ -227,6 +229,25 @@ export type RawAgentStatus = {
     state?: string
   }
   events?: RawEventsResponse
+  divergences?: RawDivergence[]
+}
+
+// GR-A3 (decisions §1). Matches `deriveOpenDivergences`
+// (packages/agent/src/reconnect.js) and its `status.divergences` field.
+export type RawDivergence = {
+  path?: string | null
+  scope?: string | null
+  reason?: string | null
+  entryId?: string | null
+  entryType?: string | null
+  baseRevision?: number | null
+  cloudRevision?: number | null
+  localHash?: string | null
+  cloudHash?: string | null
+  localDeviceName?: string | null
+  cloudDeviceName?: string | null
+  detectedAt?: string | null
+  ageMs?: number | null
 }
 
 export type RawAgentEvent = {
@@ -344,6 +365,7 @@ export function mapAgentStatusResponse(response: unknown): AgentStatusSnapshot {
     members: mapGraphMembers(wrappedResponse?.cloud?.graph, access, status),
     files: mapCloudFiles(wrappedResponse?.cloud, status.workspace?.files),
     events: mapRecentEvents(recentEvents),
+    divergences: mapDivergences(status.divergences),
     rawUpdatedAt: status.generatedAt ?? null,
   }
 }

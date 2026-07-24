@@ -5,6 +5,7 @@ import { workspaceMode } from './constants.js'
 import { findLastEvent, findLastEventOf, readNdjson } from './io.js'
 import { countCloudScopes, countEntryScopes } from './journal.js'
 import { cloudLocationFromOptions } from './paths.js'
+import { deriveOpenDivergences } from './reconnect.js'
 import { buildRefreshHealth, buildRemotePullHealth, buildRemotePushHealth, buildSyncHealth, buildWatchHealth, classifyJournalEntries, workspaceRootFromOptions } from './status-state.js'
 import { findIndexedCodebase, localCacheSnapshotForCloud, readWorkspaceIndex, workspaceIndexSummary } from './workspace-index.js'
 import { buildRemoteCursor, buildWorkspaceHydration, contentManifestSummary } from './workspace-manifest.js'
@@ -50,6 +51,9 @@ export async function readAgentStatusEndpoint(options) {
     hydration,
   })
   const remotePushHealth = buildRemotePushHealth(options, eventsSummary)
+  // GR-A3 (decisions §1): fast status path stays fast -- derived from the
+  // event log already read above, no extra cloud round trip.
+  const divergences = deriveOpenDivergences(eventEntries)
   const initialized = cloudSummary.exists && (hydration.state === 'materialized' || hydration.state === 'partial')
   const attached = cloudSummary.exists && hydration.state === 'metadata-only'
   const readiness = initialized || watchHealth.state === 'watching' ? 'ready' : attached ? 'attached' : 'not_initialized'
@@ -147,6 +151,7 @@ export async function readAgentStatusEndpoint(options) {
     remotePull: remotePullHealth,
     remotePush: remotePushHealth,
     watch: watchHealth,
+    divergences,
     // Warn-only outbound secret scanning (decisions doc §7). `enabled` is not
     // fetched here to keep this the fast local-index status path (see
     // `hop secrets status` / GR-D2 dashboard flag for the fetched setting);

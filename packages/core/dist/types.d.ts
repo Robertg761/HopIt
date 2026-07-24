@@ -221,6 +221,21 @@ export type AgentFile = {
     contentPreviewTruncated: boolean;
     local: AgentFileLocal;
 };
+export type AgentDivergence = {
+    path: string;
+    scope: FileScope | null;
+    reason: string | null;
+    entryId: string | null;
+    entryType: string | null;
+    baseRevision: number | null;
+    cloudRevision: number | null;
+    localHash: string | null;
+    cloudHash: string | null;
+    localDeviceName: string | null;
+    cloudDeviceName: string | null;
+    detectedAt: string | null;
+    ageMs: number | null;
+};
 export type AgentRemotePushStatus = {
     enabled: boolean;
     state: string;
@@ -282,6 +297,7 @@ export type AgentStatusSnapshot = {
     members: AgentMember[];
     files: AgentFile[];
     events: AgentEvent[];
+    divergences: AgentDivergence[];
     rawUpdatedAt: string | null;
     unavailableReason?: string;
 };

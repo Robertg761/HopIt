@@ -1,6 +1,6 @@
 # HopIt Progress Tracker
 
-Last updated: 2026-07-23
+Last updated: 2026-07-24
 
 This tracker is the working view of what is done, what is in progress, what is next, and what is still deliberately out of scope. The roadmap source remains [MVP Plan](mvp-plan.md), and the agent contract source remains [Local Agent Architecture](agent-architecture.md). This file turns those plans into a practical implementation ledger.
 
@@ -2097,6 +2097,16 @@ migration-completeness test and the column-match test both fail with a clear
 "expected proposals.stale_reason in the migration" message); restoring the
 column returned it to 3/3 pass, confirmed byte-identical to the original via
 `diff`.
+
+### 2026-07-24 GR-A3: divergence surfaces — status API, `hop conflicts`, dashboard panel
+
+Builds on GR-A1's reconnect classifier (`packages/agent/src/reconnect.js`) to give the same-owner multi-device divergences it detects an actual owner-facing surface (decisions doc §1), without waiting on GR-A2's durable persistence work. `deriveOpenDivergences` (new, `reconnect.js`) derives the *currently open* divergence set purely from the local event log: it pairs each `journal.reconnect_diverged` event with the most recent `conflicts.resolved` event for that path and reports a divergence as open only if it was never resolved, or diverged again after its last resolution. Because this is a pure function over events already on disk, it needed no new persistence and works identically from both the fast status endpoint (`status-endpoints.js`, no cloud read) and the full `hop status` path (`status-state.js`), which both now expose `status.divergences`.
+
+New `hop conflicts` command (`packages/agent/src/commands/conflicts.js`, registered in `cli.js`/`help.js`): `hop conflicts` lists open divergences (paths, device labels, ages); `hop conflicts resolve <path> --keep local|cloud` resolves one from the terminal — `--keep cloud` materializes the cloud file locally (or deletes it, for delete-vs-edit divergences), `--keep local` journals the current on-disk content (which the user may have hand-combined from both sides — decisions §1 explicitly rules out any automatic line-level merge, so a hand-combined file resolved with `--keep local` is reported as `combined: true`) rebased onto the current cloud head. Either direction explicitly acknowledges the stale pending journal entries that caused the divergence, so a later `hop recover` never reclassifies the same path as diverged again. `sync.js`'s `journal.reconnect_diverged` emission now also records best-effort device labels (`--device-name`/hostname for the local side, the codebase's recorded session device name for the cloud side); full durable per-edit device attribution is left to GR-A2.
+
+Dashboard: `src/components/features/review/divergence-panel.tsx` extends the `file-inspector.tsx` single-file-preview pattern into a device-labeled side-by-side card (mounted on the review page, decisions doc's "MacBook version / Desktop version" framing) with "Keep &lt;device&gt;" buttons per divergence; falls back to generic "This device"/"Cloud" labels when a name is unknown rather than hiding the divergence. Resolution goes through the same `/api/agent/command` → `hop conflicts resolve` path as every other dashboard action (new `resolveConflict` command entry), so there is exactly one code path that ever closes a divergence. `AgentDivergence`/`status.divergences` are new typed surfaces in `@hopit/core` and `src/lib/client/agent-status/*`.
+
+Tests: `packages/agent/test/conflicts.test.js` — 6 unit tests for `deriveOpenDivergences` (open, closed, reopened-after-resolution, multiple paths sorted, empty log, malformed events ignored) plus 8 CLI end-to-end tests over the two-device loopback harness (list with device labels/ages, `--keep local` round-trip incl. propagation to a second device's refresh, `--keep cloud` round-trip, hand-combined `--keep local` reports `combined: true`, a resolved path does not reopen on a later `hop recover`, invalid `--keep` value rejected, resolving a path with no open divergence rejected, an empty codebase reports zero divergences); `src/components/features/review/divergence-panel.test.tsx` — 7 vitest component tests (empty renders nothing, both device labels render side by side, unknown device names fall back to generic labels, keep-local/keep-cloud both call `onResolve` with the right arguments, buttons disable while a resolution for that path is in flight, one row per open divergence).
 
 ## Verification Checklist
 
