@@ -48,6 +48,22 @@ test('blocked refresh and degraded watch derive attention', () => {
   assert.equal(projectStateFromProbe({ codebaseId: 'hopit', reachable: true, status: degraded }), 'attention')
 })
 
+test('a suspected secret derives attention (GR-D2, decisions §7: rotate, do not redact)', () => {
+  const status = structuredClone(realStatus)
+  status.secretScan = { suspectedCount: 1, lastSuspected: null, recentSuspected: [] }
+  assert.equal(projectStateFromProbe({ codebaseId: 'hopit', reachable: true, status }), 'attention')
+})
+
+test('an unset or zeroed secretScan does not force attention', () => {
+  const noScan = structuredClone(realStatus)
+  delete noScan.secretScan
+  assert.equal(projectStateFromProbe({ codebaseId: 'hopit', reachable: true, status: noScan }), 'synced')
+
+  const zeroScan = structuredClone(realStatus)
+  zeroScan.secretScan = { suspectedCount: 0, lastSuspected: null, recentSuspected: [] }
+  assert.equal(projectStateFromProbe({ codebaseId: 'hopit', reachable: true, status: zeroScan }), 'synced')
+})
+
 test('pending journal entries derive syncing', () => {
   const status = structuredClone(realStatus)
   status.journal.pendingCount = 3

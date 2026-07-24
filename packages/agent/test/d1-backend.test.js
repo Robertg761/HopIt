@@ -388,6 +388,24 @@ test('D1 backend supports members, invitations, and review collaboration', async
   assert.equal(readNotification.id, notifications[0].id)
   assert.match(readNotification.readAt, /^\d{4}-\d{2}-\d{2}T/)
 
+  // GR-D2 (decisions §7: "rotate, don't redact"). A `secret.suspected` agent
+  // event round-trips into a dashboard notification the moment it lands, so
+  // the dashboard/menu bar flag shows up on the very next poll/push cycle
+  // without any extra plumbing beyond the existing event append.
+  await backend.appendEvent({
+    codebaseId: 'collab-core',
+    event: 'secret.suspected',
+    detail: { path: 'src/config/keys.js', scope: 'shared', findingCount: 2 },
+  })
+  const secretNotifications = await backend.listNotifications({ codebaseId: 'collab-core', actor: owner })
+  const secretNotification = secretNotifications.find((notification) => notification.kind === 'secret.suspected')
+  assert.ok(secretNotification, 'secret.suspected event did not produce a notification')
+  assert.equal(secretNotification.title, 'Possible secret in src/config/keys.js')
+  assert.match(secretNotification.body, /rotate the credential/i)
+  assert.match(secretNotification.body, /src\/config\/keys\.js/)
+  assert.equal(secretNotification.readAt, null)
+  assert.match(secretNotification.href, /^\/codebases\/collab-core\/activity\?path=/)
+
   await backend.ensureCodebaseKeyring({
     codebaseId: 'collab-core',
     repoContentKeyId: 'key_repo_collab',

@@ -34,7 +34,11 @@ export function projectStateFromProbe(probe) {
   const hasConflict = status.conflict?.state && status.conflict.state !== 'none'
   const watchState = status.watch?.state
   const watchBad = watchState === 'degraded' || watchState === 'unavailable-degraded' || watchState === 'blocked'
-  if (failedJournal || syncFailed || refreshBlocked || hasConflict || watchBad) return 'attention'
+  // GR-D2 (decisions §7: "rotate, don't redact"). Warn-only secret scanning
+  // never blocks sync, but the menu bar must still flag it -- a suspected
+  // secret needs the owner's attention just as much as a sync failure does.
+  const hasSuspectedSecret = Number(status.secretScan?.suspectedCount ?? 0) > 0
+  if (failedJournal || syncFailed || refreshBlocked || hasConflict || watchBad || hasSuspectedSecret) return 'attention'
 
   // In-flight work: pending journal entries, a running sync, or partial/
   // in-progress hydration.

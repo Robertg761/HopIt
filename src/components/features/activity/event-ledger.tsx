@@ -21,7 +21,7 @@ const FILTER_PATTERNS: Record<Exclude<LedgerFilter, 'all'>, RegExp> = {
   sync: /sync|write|ack/i,
   review: /review|merge|conflict/i,
   devices: /device|session|handoff/i,
-  privacy: /privacy|private|key/i,
+  privacy: /privacy|private|key|secret/i,
 }
 
 const EVENT_TONE: Record<AgentEventTone, StatusDotTone> = {

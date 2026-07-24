@@ -349,6 +349,13 @@ function describeEvent(event: RawAgentEvent) {
     : []
   const writes = typeof payload.writes === 'number' ? payload.writes : null
 
+  if (label === 'secret.suspected') {
+    const findingCount = typeof payload.findingCount === 'number' ? payload.findingCount : null
+    const countLabel = findingCount === null ? '' : ` (${findingCount} finding${findingCount === 1 ? '' : 's'})`
+    return path
+      ? `Possible secret in ${path}${countLabel} -- rotate it, don't redact it`
+      : "Possible secret found -- rotate it, don't redact it"
+  }
   if (label.includes('review') && changeSetId) {
     return `Review opened for ${changeSetId}${headRevision === null ? '' : ` at revision ${headRevision}`}`
   }
@@ -396,6 +403,7 @@ export function mapDivergences(divergences: RawDivergence[] | undefined): AgentD
 }
 
 function toneForEvent(label: string): AgentEventTone {
+  if (label === 'secret.suspected') return 'blocked'
   if (label.includes('failed') || label.includes('blocked') || label.includes('conflict')) return 'blocked'
   if (label.includes('started') || label.includes('sync') || label.includes('refresh')) return 'syncing'
   if (label.includes('journaled') || label.includes('pending')) return 'queued'

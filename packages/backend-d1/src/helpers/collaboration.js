@@ -105,3 +105,25 @@ export function reviewHref(codebaseId, changeSetId) {
   return `/codebases/${encodeURIComponent(codebaseId)}/review${query ? `?${query}` : ''}`
 }
 
+// GR-D2 (decisions §7: "rotate, don't redact"). The dashboard/menu-bar surface
+// for a `secret.suspected` agent event. Title stays terse ("possible secret in
+// <path>") for the notification list; the rotation guidance lives in the body
+// so it survives even where only the title is glanced at (menu bar tooltip).
+export function secretFindingTitle(path) {
+  return `Possible secret in ${stringOrNull(path) ?? 'a file'}`
+}
+
+export function secretFindingBody(path, findingCount) {
+  const count = Number.isFinite(findingCount) && findingCount > 0 ? findingCount : 1
+  const plural = count === 1 ? 'finding' : 'findings'
+  return `${count} possible ${plural} in ${stringOrNull(path) ?? 'a file'}. Rotate the credential -- don't rely on deleting or redacting the entry, it may already be compromised.`
+}
+
+export function secretFindingHref(codebaseId, path) {
+  const params = new URLSearchParams()
+  const normalizedPath = stringOrNull(path)
+  if (normalizedPath) params.set('path', normalizedPath)
+  const query = params.toString()
+  return `/codebases/${encodeURIComponent(codebaseId)}/activity${query ? `?${query}` : ''}`
+}
+

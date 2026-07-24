@@ -4,6 +4,7 @@ import * as React from 'react'
 import Link from 'next/link'
 import { Check } from 'lucide-react'
 
+import { Badge } from '@/components/ui/badge'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -127,6 +128,11 @@ function NotificationRow({
   const unread = notification.readAt === null
   const createdRelative = formatRelativeTime(notification.createdAt)
   const createdAbsolute = formatAbsoluteTime(notification.createdAt)
+  // GR-D2 (decisions §7: "rotate, don't redact"). `secret.suspected` is the
+  // only notification kind that needs owner attention even after it is
+  // dismissed ("mark read" here doubles as the per-finding dismiss), so it
+  // keeps a danger dot and an explicit rotation badge regardless of read state.
+  const isSecretFinding = notification.kind === 'secret.suspected'
 
   return (
     <li
@@ -135,7 +141,7 @@ function NotificationRow({
         unread && 'bg-muted/40',
       )}
     >
-      <StatusDot tone={unread ? 'iris' : 'neutral'} className="mt-1.5" />
+      <StatusDot tone={isSecretFinding ? 'danger' : unread ? 'iris' : 'neutral'} className="mt-1.5" />
       <div className="min-w-0 flex-1">
         <p
           className={cn(
@@ -153,6 +159,11 @@ function NotificationRow({
           ) : (
             notification.title
           )}
+          {isSecretFinding ? (
+            <Badge tone="danger" className="ml-2 align-middle">
+              Rotate, don&apos;t redact
+            </Badge>
+          ) : null}
         </p>
         {notification.body.length > 0 ? (
           <p className="truncate text-xs text-muted-foreground">{notification.body}</p>

@@ -81,6 +81,14 @@ export function describeEvent(eventName, detail = {}) {
       return `Change set merged${revSuffix}`
     case 'change_set.conflict_detected':
       return 'Conflict detected'
+    // GR-D2 (decisions §7: "rotate, don't redact"). Warn-only secret scanning
+    // (GR-D1) never blocks the sync; this is the desktop half of the flag.
+    case 'secret.suspected': {
+      const findingCount = Number.isFinite(detail?.findingCount) ? detail.findingCount : null
+      const countSuffix = findingCount ? ` (${findingCount} finding${findingCount === 1 ? '' : 's'})` : ''
+      const location = detail?.path ? ` in ${detail.path}` : ''
+      return `Possible secret${location}${countSuffix} -- rotate it, don't redact it`
+    }
     default:
       return humanizeEventName(eventName)
   }

@@ -19,6 +19,7 @@ import { fetchStatus, fetchEvents } from './lib/status-client.js'
 import { deriveViewModel } from './lib/state.js'
 import { renderTrayIconPng } from './lib/icon.js'
 import { formatActivity } from './lib/activity.js'
+import { deriveSecretFindings, openSecretFindings } from './lib/secret-findings.js'
 import { deriveHistory } from './lib/history.js'
 import { buildDirectoryListing } from './lib/file-tree.js'
 import { inspectFolder } from './lib/add-inspect.js'
@@ -85,6 +86,10 @@ let pollTimer = null
 let updateTimer = null
 let isQuitting = false
 let desktopUpdater = null
+// GR-D2 (decisions §7: "rotate, don't redact"). Dismissal is a per-run "seen
+// it" ack, not a server-side mutation -- restarting the app or the underlying
+// agent will show a still-open finding again, same as the tray state itself.
+const dismissedSecretFindingIds = new Set()
 
 /** Last derived view model, served to the renderer on demand. */
 let lastView = { trayState: 'service-stopped', label: { glyph: '□', text: 'Service stopped' }, projects: [] }
@@ -180,9 +185,15 @@ function trayIcon(trayState) {
 function updateTray() {
   if (!tray) return
   tray.setImage(trayIcon(lastView.trayState))
-  tray.setToolTip(`HopIt: ${lastView.label.text}`)
+  const secretFindings = lastView.secretFindings ?? []
+  tray.setToolTip(
+    secretFindings.length > 0
+      ? `HopIt: ${lastView.label.text} -- ${secretFindings.length} possible secret${secretFindings.length === 1 ? '' : 's'}, rotate and dismiss`
+      : `HopIt: ${lastView.label.text}`,
+  )
   const menu = Menu.buildFromTemplate([
     { label: `HopIt: ${lastView.label.text}`, enabled: false },
+    ...secretFindingMenuItems(secretFindings),
     { type: 'separator' },
     { label: 'Open HopIt', click: () => showWindow() },
     ...(desktopUpdater?.getState().state === 'available' || desktopUpdater?.getState().state === 'ready'
@@ -200,6 +211,44 @@ function updateTray() {
     { label: 'Quit HopIt', click: () => { isQuitting = true; app.quit() } },
   ])
   tray.setContextMenu(menu)
+}
+
+// GR-D2 (decisions §7: "rotate, don't redact"). One submenu row per open
+// finding: "Open in dashboard" links to the flagged file, "Dismiss" clears
+// only that finding. Capped so a burst of findings cannot make the tray menu
+// unusable; the dashboard/desktop window still lists every open finding.
+const MAX_TRAY_SECRET_FINDINGS = 5
+
+function secretFindingMenuItems(secretFindings) {
+  if (secretFindings.length === 0) return []
+  const visible = secretFindings.slice(0, MAX_TRAY_SECRET_FINDINGS)
+  return [
+    { type: 'separator' },
+    ...visible.map((finding) => ({
+      label: finding.message,
+      submenu: [
+        {
+          label: "Open in dashboard (rotate, don't redact)",
+          click: () => {
+            const path = finding.codebaseId ? `${finding.codebaseId}/activity` : ''
+            void shell.openExternal(`${DASHBOARD_URL}/${path ? encodeURI(path) : ''}`)
+          },
+        },
+        {
+          label: 'Dismiss',
+          click: () => {
+            dismissedSecretFindingIds.add(finding.id)
+            lastView.secretFindings = openSecretFindings(lastView.secretFindings ?? [], dismissedSecretFindingIds)
+            updateTray()
+            broadcastState()
+          },
+        },
+      ],
+    })),
+    ...(secretFindings.length > MAX_TRAY_SECRET_FINDINGS
+      ? [{ label: `+${secretFindings.length - MAX_TRAY_SECRET_FINDINGS} more possible secret(s) -- open HopIt`, click: () => showWindow() }]
+      : []),
+  ]
 }
 
 function createTray() {
@@ -239,8 +288,23 @@ async function pollOnce() {
     }),
   )
   lastView = deriveViewModel(probes)
+  lastView.secretFindings = openSecretFindings(currentSecretFindings(probes), dismissedSecretFindingIds)
   updateTray()
   broadcastState()
+}
+
+// GR-D2 (decisions §7: "rotate, don't redact"). Every project's freshest
+// `secret.suspected` occurrences, newest first across the whole device --
+// this is the source the tray menu and the IPC surface both read from.
+function currentSecretFindings(probes) {
+  const findings = []
+  for (const probe of probes) {
+    const recentSuspected = probe.status?.secretScan?.recentSuspected
+    if (!Array.isArray(recentSuspected) || recentSuspected.length === 0) continue
+    findings.push(...deriveSecretFindings(recentSuspected, { codebaseId: probe.codebaseId }))
+  }
+  findings.sort((a, b) => String(b.at ?? '').localeCompare(String(a.at ?? '')))
+  return findings
 }
 
 function broadcastState() {
@@ -252,6 +316,7 @@ function broadcastState() {
       workspaceRoot: lastWorkspaceRoot,
       hopAvailable: Boolean(hopBinary),
       update: desktopUpdater?.getState() ?? null,
+      secretFindings: lastView.secretFindings ?? [],
     })
   }
 }
@@ -288,7 +353,19 @@ function registerIpc() {
     workspaceRoot: lastWorkspaceRoot,
     hopAvailable: Boolean(hopBinary),
     update: desktopUpdater?.getState() ?? null,
+    secretFindings: lastView.secretFindings ?? [],
   }))
+
+  // GR-D2 (decisions §7: "rotate, don't redact"). Dismissal is per-finding
+  // (by the stable id `deriveSecretFindings` assigns), never a blanket
+  // "clear all" -- a still-open finding for a different path keeps flagging.
+  ipcMain.handle('dismissSecretFinding', (_event, findingId) => {
+    if (typeof findingId === 'string' && findingId.length > 0) dismissedSecretFindingIds.add(findingId)
+    lastView.secretFindings = openSecretFindings(lastView.secretFindings, dismissedSecretFindingIds)
+    updateTray()
+    broadcastState()
+    return { ok: true, secretFindings: lastView.secretFindings }
+  })
 
   ipcMain.handle('projectStatus', async (_event, codebaseId) => {
     const result = await fetchStatus(statusUrlForCodebase(codebaseId))

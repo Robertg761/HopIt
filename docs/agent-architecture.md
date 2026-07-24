@@ -248,6 +248,31 @@ question, including `--yes`, defaults it on). There is no redaction feature:
 the trail is immutable by design, so the only correct response to a flagged
 secret is rotating it, not deleting the finding or the file content.
 
+**Dashboard/menu-bar surfaces (GR-D2).** A `secret.suspected` event round-trips
+into a notification the moment it lands: `appendEvent` in
+`packages/backend-d1/src/graph.js` calls `createNotification` with kind
+`secret.suspected`, title `Possible secret in <path>`, and a body carrying the
+rotation guidance -- no extra plumbing needed, since `emit()`
+(`packages/agent/src/io.js`) already pushes every event to D1 via
+`appendRemoteEvent` when a D1 backend is configured. The web dashboard's
+Activity page renders it two ways: `EventLedger`
+(`src/components/features/activity/event-ledger.tsx`, filterable under
+"Privacy") reads the raw agent event feed and describes it as "possible secret
+in `<path>` (N findings) -- rotate it, don't redact it" with an escalated
+(`blocked`) tone; `NotificationsCard`
+(`src/components/features/activity/notifications-card.tsx`) is the durable,
+per-finding-dismissible surface -- its existing "Mark read" button doubles as
+dismiss, and a `secret.suspected` row gets a danger-toned dot and a "Rotate,
+don't redact" badge. The desktop app mirrors this at two layers:
+`packages/desktop/src/lib/state.js` treats any open suspected-secret count as
+an `attention` tray state (same red flag as a sync failure), and
+`packages/desktop/src/lib/secret-findings.js` derives one dismissible finding
+per occurrence (`deriveSecretFindings`/`openSecretFindings`, pure and
+unit-tested) that `main.js` renders as tray submenu rows ("Open in dashboard
+(rotate, don't redact)" / "Dismiss"); dismissal there is an in-memory,
+per-run acknowledgement, not a server-side mutation, so it never suppresses a
+genuinely new finding at the same path.
+
 ### Continuous Git Mirror
 
 Each codebase can keep an auto-generated, one-way git mirror that tools

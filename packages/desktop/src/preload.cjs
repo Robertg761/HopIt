@@ -48,6 +48,11 @@ contextBridge.exposeInMainWorld('hopit', {
   revealPath: (targetPath, options) => ipcRenderer.invoke('revealPath', targetPath, options ?? {}),
   openDashboard: (codebaseId) => ipcRenderer.invoke('openDashboard', codebaseId),
 
+  // GR-D2 (decisions §7: "rotate, don't redact"). Per-finding dismiss for the
+  // "possible secret in <path>" flag; `getState`/`onStateUpdate` already carry
+  // the open `secretFindings` list.
+  dismissSecretFinding: (findingId) => ipcRenderer.invoke('dismissSecretFinding', findingId),
+
   // Add-a-project flow.
   pickFolder: () => ipcRenderer.invoke('pickFolder'),
   inspectFolder: (folderPath) => ipcRenderer.invoke('inspectFolder', folderPath),

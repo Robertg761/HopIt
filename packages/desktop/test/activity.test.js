@@ -17,6 +17,18 @@ test('known events get plain-language lines', () => {
   assert.equal(describeEvent('change_set.conflict_detected'), 'Conflict detected')
 })
 
+test('secret.suspected reads as a rotate-not-redact flag with path and finding count', () => {
+  assert.equal(
+    describeEvent('secret.suspected', { path: 'src/config/keys.js', findingCount: 2 }),
+    "Possible secret in src/config/keys.js (2 findings) -- rotate it, don't redact it",
+  )
+  assert.equal(
+    describeEvent('secret.suspected', { path: '.env', findingCount: 1 }),
+    "Possible secret in .env (1 finding) -- rotate it, don't redact it",
+  )
+  assert.equal(describeEvent('secret.suspected', {}), "Possible secret -- rotate it, don't redact it")
+})
+
 test('unknown events fall back to a humanized name instead of being dropped', () => {
   assert.equal(humanizeEventName('some.new_event'), 'Some new event')
   assert.equal(describeEvent('totally.unknown_thing'), 'Totally unknown thing')
