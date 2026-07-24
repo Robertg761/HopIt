@@ -64,6 +64,7 @@ export function parseOptions(args) {
     'service',
     'secret-scanning',
     'clear-deploy-key',
+    'merge',
   ])
 
   for (let i = 0; i < args.length; i += 1) {

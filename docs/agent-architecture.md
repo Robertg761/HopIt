@@ -659,9 +659,51 @@ states `draft`/`proposed`/`approved`/`stale`/`merged`) plus additive
 be detected as making an existing approval stale. The schema/migration for
 this landed in GR-B1 (`packages/backend-d1/src/schema.js`,
 `cloudflare/d1/schema.sql`,
-`cloudflare/d1/migrations/2026-07-24-proposals.sql`); no command code reads
-or writes the new table yet — `hop propose` and the merge-queue runner are
-GR-B2, blocked on owner sign-off of the design.
+`cloudflare/d1/migrations/2026-07-24-proposals.sql`).
+
+**`hop propose` and the merge queue (GR-B2, decisions §2-4).**
+`packages/agent/src/commands/propose.js` is now the read/write side against
+that table, and the only code path that ever advances `cloud.main.revision`
+in the proposal model (decisions §2: "Main has exactly one door"):
+
+- `hop propose [--title <text>]` (`proposeChangeSet`) pins the active change
+  set's current head (`cloud.selectedState.revision`) and Main's current
+  revision (`cloud.main.revision`, the CAS baseline) into a `proposals` row.
+  **Owner constraint** (set at design approval): at most one *open*
+  (non-merged) proposal exists per change set — a second `hop propose` on
+  the same still-unmerged change set re-pins the same row in place
+  (`upsertProposal`/`getOpenProposalForChangeSet`) rather than forking a
+  second one. Saves made after proposing keep landing on the same
+  `change_set_id` and accumulate as "since proposal" (decisions §4) without
+  moving the pin.
+- `hop propose --merge` is the solo path (decisions §3): pin, then
+  self-approve (`state -> approved`, `queued_at` set — the merge queue's
+  FIFO order key) and drain the queue, all in one command, through the exact
+  same `runMergeQueue` path a team review-approval would use.
+- The merge queue (`runMergeQueue`/`landOneProposal`) lands every
+  `approved` proposal for a codebase oldest-`queued_at`-first. Landing a
+  proposal never applies the live (possibly-since-changed) selected-state
+  head — only `proposal.pinnedRevision`. If Main is still at the proposal's
+  recorded `base_revision`, the land is direct; if Main advanced (an earlier
+  proposal in the same drain just landed), the queue compares the paths
+  Main gained since that base against this proposal's own paths past the
+  refreshed Main position (reusing `compareRevisions`, the same WS7c engine
+  `hop compare` uses — no new diff machinery) — no overlap lands cleanly
+  (`state -> merged`), a genuine overlap leaves the proposal `stale` with
+  `stale_reason: 'main_conflict'` and moves on to the next proposal, never
+  auto-resolving. `sync.js`'s plain `mergeChangeSet` (still available,
+  behavior unchanged) and the queue both funnel through the same
+  `advanceMainToRevision` primitive, so there remains exactly one code path
+  that ever mutates `cloud.main.revision`.
+- Once a proposal's change set actually lands, it can never accept another
+  save (`selected_state_already_merged`), so landing also rotates
+  `cloud.selectedState` to a fresh `active-change-set` whose `baseRevision`
+  is the just-landed Main revision and whose head starts at the live
+  `cloud.revision` — carrying forward, not discarding, any unproposed saves
+  made after the pin.
+- `review_decisions.decision_revision`/`.proposal_id` writes and the
+  automation that marks a decision stale on re-pin are still deferred to
+  GR-B3, per the design doc.
 
 ### 8. Tighten Conflict Handling
 

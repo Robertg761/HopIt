@@ -10,6 +10,7 @@ import { attachEpisodeMethods } from './episodes-store.js'
 import { attachGraphMethods } from './graph.js'
 import { attachKeyMethods } from './keys.js'
 import { attachMemberMethods } from './members.js'
+import { attachProposalMethods } from './proposals-store.js'
 import { attachSchemaMethods } from './schema-methods.js'
 import { attachSessionMethods } from './sessions.js'
 
@@ -44,6 +45,12 @@ export {
   divergenceState,
   normalizeDivergenceRow,
 } from './divergences-store.js'
+export {
+  normalizeProposalRow,
+  proposalId,
+  proposalStaleReason,
+  proposalState,
+} from './proposals-store.js'
 
 export function createD1Backend(options = {}, env = process.env) {
   return new CloudflareD1HopBackend(d1ConfigFromOptions(options, env))
@@ -70,5 +77,6 @@ attachSessionMethods(CloudflareD1HopBackend)
 attachKeyMethods(CloudflareD1HopBackend)
 attachDeviceAuthorizationMethods(CloudflareD1HopBackend)
 attachDivergenceMethods(CloudflareD1HopBackend)
+attachProposalMethods(CloudflareD1HopBackend)
 attachEpisodeMethods(CloudflareD1HopBackend)
 attachClientMethods(CloudflareD1HopBackend)

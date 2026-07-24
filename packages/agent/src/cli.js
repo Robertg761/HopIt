@@ -14,6 +14,7 @@ import { runAdd } from './commands/add.js'
 import { applyConnectionStore } from './connections.js'
 import { runSessionCommand } from './commands/keys.js'
 import { mergeChangeSet, openChangeSetReview, recoverJournal, refreshWorkspace, syncOnce } from './commands/sync.js'
+import { runProposeCommand } from './commands/propose.js'
 import { manageStorage } from './commands/storage.js'
 import { runWorkspaceCommand } from './commands/workspace.js'
 import { runTrailCommand } from './commands/trail.js'
@@ -147,6 +148,7 @@ async function main() {
   }
   if (command === 'review-open') return openChangeSetReview(options)
   if (command === 'merge') return mergeChangeSet(options)
+  if (command === 'propose') return runProposeCommand(options)
   if (command === 'mirror-sync') return runMirrorSync(options)
   if (command === 'mirror-set-remote') return runMirrorSetRemote({ ...options, remote: mirrorSetRemoteUrl ?? options.remote })
   if (command === 'export-git') return exportGitSnapshot(options, { requireMerged: false })
