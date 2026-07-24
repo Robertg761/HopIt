@@ -83,6 +83,14 @@ export const bulkJournalCommitChunkSize = 40
 export const defaultSyncDebounceMs = 2000
 export const defaultSyncMaxDelayMs = 5000
 export const legacySyncDebounceMs = 250
+// Periodic full workspace diff-scan (decisions doc §12: "missed watcher events
+// are assumed, not exceptional"). Runs independent of both the fs watcher and
+// the 5-min cloud graph-head reconciliation, so a dropped FSEvents/inotify
+// notification still heals within one scan interval. Conservative default
+// (10 min) because the scan walks the entire workspace tree every tick;
+// --scan-interval-ms / HOPIT_SCAN_INTERVAL_MS tune it per install.
+export const defaultWorkspaceScanIntervalMs = 10 * 60 * 1000
+export const minimumWorkspaceScanIntervalMs = 1000
 // Refresh deletion safety: refresh materialization deletes every workspace file
 // absent from the visible cloud graph. A visibility misconfiguration (session id
 // without a requester id reads the cloud as a guest and sees zero files) can turn

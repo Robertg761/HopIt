@@ -219,6 +219,8 @@ Watch-loop expectations:
 
 Recovery should be safe before it is clever. If the agent is unsure whether the cloud accepted a write, it should keep the journal entry pending and expose that uncertainty through status instead of silently discarding local state.
 
+**Missed watcher events are assumed, not exceptional (GR-H1).** `fs.watch`/inotify notifications can be dropped by the OS. Rather than treat that as an edge case, `watchWorkspace` always runs a periodic full workspace diff-scan (`createWorkspaceScanScheduler` in `watch.js`) alongside the live watcher — independent of both the watcher's own health (healthy, degraded to polling, or unavailable) and the separate 5-min cloud graph-head reconciliation (which only covers the cloud side). Each tick re-walks the tree with the same cheap stat-based comparison used by the degraded-polling fallback, excludes derived paths via `shouldSkipWorkspacePath` for cost, and feeds any drift into the normal watch-sync path exactly like a live watcher event — so a missed write heals within one scan interval instead of persisting silently. Default interval is 10 minutes (`--scan-interval-ms` / `HOPIT_SCAN_INTERVAL_MS`), conservative because the scan cost scales with tree size.
+
 ### Safe Refresh Contract
 
 A refresh means making the managed workspace folder match the latest selected cloud state that is safe for this device/session to see. That selected state may be Main, the user's active change set, or a visible review change set. It is a cloud-to-local operation, not a Git pull, branch checkout, fork sync, worktree update, wiki fetch, star/social feed update, or ignore-file evaluation.
@@ -311,6 +313,7 @@ Important event types:
 - `workspace.ready`
 - `watch.started`
 - `watch.recovery_blocked`
+- `watch.scan_started` / `watch.scan_completed` / `watch.scan_healed` / `watch.scan_failed`
 - `file.hydrated`
 - `write.journaled`
 - `cloud.acknowledged`

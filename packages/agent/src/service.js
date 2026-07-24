@@ -452,6 +452,9 @@ export function runtimeArgsFromOptions(options) {
   if (options['sync-max-delay-ms'] !== undefined && options['sync-max-delay-ms'] !== '') {
     args.push('--sync-max-delay-ms', String(options['sync-max-delay-ms']))
   }
+  if (options['scan-interval-ms'] !== undefined && options['scan-interval-ms'] !== '') {
+    args.push('--scan-interval-ms', String(options['scan-interval-ms']))
+  }
   if (options['allow-local-cloud']) {
     args.push('--allow-local-cloud')
   }

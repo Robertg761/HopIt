@@ -5,7 +5,7 @@ import { createCloudGraphService, visibilityRequestFromOptions } from './cloud/d
 import { hydrateWorkspace, pruneWorkspaceCache } from './commands/hydrate.js'
 import { initCloud } from './commands/import.js'
 import { recoverJournal, refreshWorkspace, syncOnce } from './commands/sync.js'
-import { legacySyncDebounceMs, workspaceMode } from './constants.js'
+import { defaultWorkspaceScanIntervalMs, legacySyncDebounceMs, minimumWorkspaceScanIntervalMs, workspaceMode } from './constants.js'
 import { emit, findLastEventOf, readNdjson } from './io.js'
 import { withCloudFetchRetry } from './cloud-retry.js'
 import { createRemotePushClient } from './remote-push.js'
@@ -54,6 +54,7 @@ export async function watchWorkspace(options) {
 
   let watcher
   let poller = null
+  let scanner = null
   let remotePuller = null
   let remotePusher = null
   let autoPruner = null
@@ -102,6 +103,10 @@ export async function watchWorkspace(options) {
     })
   })
 
+  scanner = await createWorkspaceScanScheduler(options, {
+    onChange: scheduleSync,
+  })
+
   remotePuller = await createRemoteRefreshScheduler(options, {
     localSyncIdle: () => scheduleSync.isIdle?.() ?? true,
   })
@@ -126,6 +131,7 @@ export async function watchWorkspace(options) {
       }
       scheduleSync.cancel?.()
       poller?.close()
+      scanner?.close()
       remotePuller?.close()
       remotePusher?.close()
       autoPruner?.close()
@@ -398,6 +404,101 @@ export async function createWorkspacePoller(workspace, onChange, pollerOptions =
       clearInterval(interval)
     },
   }
+}
+
+const minimumWorkspaceScanMs = minimumWorkspaceScanIntervalMs
+
+// Periodic full workspace diff-scan (GR-H1 / decisions §12). Missed watcher
+// events are assumed, not exceptional: a dropped FSEvents/inotify notification
+// leaves a write invisible to the debounced watch scheduler until something
+// else notices it. This scheduler runs independently of both the fs watcher
+// (which may be healthy, degraded to polling, or unavailable) and the 5-min
+// cloud graph-head reconciliation (which only covers the cloud side) — it
+// re-walks the on-disk tree every interval, compares it to the last scan, and
+// feeds any drift into the normal watch-sync path exactly like a live watcher
+// event would, so a missed write heals within one scan interval. The walk
+// reuses snapshotWorkspace's cheap stat-based comparison (no content hashing)
+// and shouldSkipWorkspacePath's derived-path exclusions (GR-C1), keeping the
+// cost bounded even on large trees.
+export async function createWorkspaceScanScheduler(options, schedulerOptions = {}) {
+  const intervalMs = schedulerOptions.intervalMs ?? parseWorkspaceScanMs(
+    options['scan-interval-ms'],
+    defaultWorkspaceScanIntervalMs,
+    '--scan-interval-ms',
+  )
+  const onChange = schedulerOptions.onChange ?? (() => {})
+  const takeSnapshot = schedulerOptions.snapshotWorkspace ?? snapshotWorkspace
+  let closed = false
+  let running = false
+  let previousSnapshot = await takeSnapshot(options.workspace, options)
+
+  await emit(options, 'watch.scan_started', {
+    state: 'scheduled',
+    workspace: options.workspace,
+    intervalMs,
+  })
+
+  const run = async () => {
+    if (closed || running) return
+    running = true
+    const startedAt = Date.now()
+
+    try {
+      const nextSnapshot = await takeSnapshot(options.workspace, options)
+      const changed = nextSnapshot !== previousSnapshot
+      const changedPath = changed ? firstChangedSnapshotPath(previousSnapshot, nextSnapshot) : null
+      previousSnapshot = nextSnapshot
+
+      await emit(options, 'watch.scan_completed', {
+        state: 'completed',
+        workspace: options.workspace,
+        durationMs: Date.now() - startedAt,
+        changed,
+      })
+
+      if (changed) {
+        await emit(options, 'watch.scan_healed', {
+          state: 'healed',
+          workspace: options.workspace,
+          path: changedPath,
+        })
+        onChange('scan', changedPath)
+      }
+    } catch (error) {
+      await emit(options, 'watch.scan_failed', {
+        state: 'failed',
+        workspace: options.workspace,
+        reason: error instanceof Error ? error.message : 'scan_failed',
+      })
+    } finally {
+      running = false
+    }
+  }
+
+  const timer = setInterval(() => {
+    run().catch((error) => {
+      console.error(error)
+    })
+  }, intervalMs)
+  timer.unref?.()
+
+  return {
+    // Exposed so tests can force a scan deterministically instead of racing
+    // the interval timer.
+    runOnce: run,
+    close() {
+      closed = true
+      clearInterval(timer)
+    },
+  }
+}
+
+export function parseWorkspaceScanMs(rawValue, fallback, optionName) {
+  const value = Number(rawValue ?? fallback)
+  if (!Number.isInteger(value) || value < minimumWorkspaceScanMs) {
+    throw new Error(`Invalid ${optionName} value: ${rawValue ?? fallback}. Use at least ${minimumWorkspaceScanMs}ms.`)
+  }
+  return value
 }
 
 export function firstChangedSnapshotPath(previousSnapshot, nextSnapshot) {
