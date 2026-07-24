@@ -603,7 +603,7 @@ verifies them end-to-end rather than as separate build tasks.)*
   fixed — those belong to the Phase-3 plans.
 - **Checklist** (orchestrator updates as tasks merge):
   - [x] GR-S1  - [x] GR-A1  - [x] GR-A2  - [x] GR-A3  - [x] GR-A4
-  - [x] GR-B1  - [x] GR-B2  - [ ] GR-B3  - [ ] GR-B4  - [ ] GR-B5
+  - [x] GR-B1  - [x] GR-B2  - [x] GR-B3  - [x] GR-B4  - [x] GR-B5
   - [x] GR-C1  - [x] GR-D1  - [x] GR-D2
   - [x] GR-E1  - [x] GR-E2  - [ ] GR-E3
   - [x] GR-F1  - [x] GR-F2
