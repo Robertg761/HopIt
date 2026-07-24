@@ -5,9 +5,10 @@ import { canRequesterSeePath, createCloudGraphService, filterVisibleGraphForRequ
 import { bulkJournalCommitChunkSize, bulkJournalCommitThreshold, ConflictError, defaultLargeFileThresholdBytes, entryKind, refreshMassDeleteFraction, refreshMassDeleteMinFiles, workspaceMode } from '../constants.js'
 import { privacyZoneForPath } from '@hopit/core/crypto'
 import { appendNdjson, emit, findLastEventOf, readNdjson } from '../io.js'
-import { actorIdFromOptions, bufferFromCloudFileEntry, cloudEntryEquals, countCloudScopes, countEntryScopes, countPathScopes, ensureActiveChangeSet, journalContextForCloud, normalizeCloudFileEntry, recordChangeSetConflict } from '../journal.js'
+import { actorIdFromOptions, bufferFromCloudFileEntry, bufferFromFileEntry, cloudEntryEquals, countCloudScopes, countEntryScopes, countPathScopes, ensureActiveChangeSet, journalContextForCloud, normalizeCloudFileEntry, recordChangeSetConflict } from '../journal.js'
 import { assertWorkspacePathSafe } from '../paths.js'
-import { partitionEntriesForReconnect } from '../reconnect.js'
+import { partitionEntriesForReconnect, reconnectBucket } from '../reconnect.js'
+import { classifySaveAgainstRefresh, clearWriterLedgerPath, markLocalSaveWriter, markRefreshWriter, readWriterLedger, writeWriterLedger } from '../save-clobber.js'
 import { classifyJournalEntries, hasUnresolvedSyncFailure, prepareRecovery, readJournalSafety, syncContextDetail, visibleRevisionFromEvent } from '../status-state.js'
 import { deletableCloudPathsForWorkspace, findIndexedCodebase, hydratedPathsAfterSync, readWorkspaceIndex, upsertWorkspaceIndexFromCloud, workspaceIndexHydrationStateForSync } from '../workspace-index.js'
 import { exoneratedLocalChanges, readWorkspaceFiles, withheldRefreshPaths, workspaceFilePath, workspaceLocalChanges } from '../workspace-manifest.js'
@@ -115,6 +116,25 @@ export async function refreshWorkspace(options) {
     : []
 
   const result = await materializeCloudToWorkspace(options, cloud, cloudService, { withheldPaths })
+
+  // GR-F2 (decisions §10): record which paths a remote refresh just
+  // materialized new content into, so the next local save to any of them can
+  // be checked for a stale-editor-buffer clobber before it overwrites Main's
+  // version. Deletions clear any pending refresh (nothing left to clobber).
+  if (result.changedPaths.length > 0 || result.deletedPaths.length > 0) {
+    const writerLedger = await readWriterLedger(options)
+    for (const relativePath of result.changedPaths) {
+      const file = cloud.files?.[relativePath]
+      if (!file) continue
+      const normalized = normalizeCloudFileEntry(relativePath, file)
+      markRefreshWriter(writerLedger, relativePath, { hash: normalized.hash, revision: normalized.revision ?? null })
+    }
+    for (const relativePath of result.deletedPaths) {
+      clearWriterLedgerPath(writerLedger, relativePath)
+    }
+    await writeWriterLedger(options, writerLedger)
+  }
+
   if (result.written > 0 || result.deleted > 0) {
     await emit(options, 'remote-update', {
       workspace: options.workspace,
@@ -425,6 +445,12 @@ export async function performSyncOnce(options, contextDetail = {}) {
   const plannedEntries = []
   const planningCloud = structuredClone(cloud)
   const largeFileThresholdBytes = await resolveLargeFileThresholdBytes(cloudService, cloud, options)
+  // GR-F2 (decisions §10): save-side clobber detection. Loaded once per sync
+  // call; mutated in memory as saves are classified below and persisted once
+  // at the end if anything changed.
+  const writerLedger = await readWriterLedger(options)
+  let writerLedgerChanged = false
+  const clobberDiverged = []
 
   // Lazy + cached: only resolve the per-project secret-scanning setting once,
   // and only if a candidate outbound text file actually turns up below. Never
@@ -456,6 +482,38 @@ export async function performSyncOnce(options, contextDetail = {}) {
     cloudPaths.delete(relativePath)
 
     if (current && cloudEntryEquals(current, entryPayload)) continue
+
+    // GR-F2 (decisions §10): if a remote refresh materialized new content at
+    // this path since this device's last known local save, the current disk
+    // write is a *candidate* stale-editor-buffer clobber. Classify it against
+    // the refreshed content before ever journaling it: a diverged save is
+    // never committed (Main's version stays exactly as it is -- never a
+    // silent revert of either side) and is surfaced instead.
+    const ledgerRecord = writerLedger.paths[relativePath]
+    if (ledgerRecord?.pendingRefresh) {
+      const refreshedContent = current
+        ? await bufferFromCloudFileEntry(current, cloudService, { relativePath })
+        : null
+      const classification = classifySaveAgainstRefresh({
+        ledger: writerLedger,
+        relativePath,
+        kind: entryPayload.kind,
+        newHash: entryPayload.hash,
+        newContent: bufferFromFileEntry(entryPayload),
+        refreshedContent,
+      })
+      if (classification.bucket === reconnectBucket.diverged) {
+        clobberDiverged.push({
+          path: relativePath,
+          reason: classification.reason,
+          refreshedHash: ledgerRecord.pendingRefresh.hash,
+          refreshedRevision: ledgerRecord.pendingRefresh.revision,
+          localHash: entryPayload.hash,
+          scope,
+        })
+        continue
+      }
+    }
 
     // GR-G2: large files sync exactly like everything else (no cap, no gate) --
     // this is a purely additive dashboard note, so it must never influence what
@@ -544,6 +602,34 @@ export async function performSyncOnce(options, contextDetail = {}) {
   if (!cloudService.usesAtomicFileMutations) {
     await cloudService.writeGraph(cloud)
   }
+
+  // GR-F2: every committed write/create resolves (or never had) a pending
+  // refresh for its path -- record the revision it just committed at as the
+  // new local-save baseline. Committed deletes drop any leftover ledger
+  // record for the path (nothing left on disk to clobber).
+  for (const committedEntry of writeEvents) {
+    if (committedEntry.type === 'delete') {
+      if (writerLedger.paths[committedEntry.path]) {
+        clearWriterLedgerPath(writerLedger, committedEntry.path)
+        writerLedgerChanged = true
+      }
+      continue
+    }
+    const committedRevision = cloud.files?.[committedEntry.path]?.revision ?? cloud.revision ?? null
+    markLocalSaveWriter(writerLedger, committedEntry.path, { revision: committedRevision })
+    writerLedgerChanged = true
+  }
+
+  for (const diverged of clobberDiverged) {
+    await emit(options, 'sync.save_clobber_diverged', {
+      ...diverged,
+      ...journalContextForCloud(planningCloud),
+    })
+  }
+  if (writerLedgerChanged) {
+    await writeWriterLedger(options, writerLedger)
+  }
+
   const result = {
     ...contextDetail,
     writes: writeEvents.length,
@@ -552,6 +638,12 @@ export async function performSyncOnce(options, contextDetail = {}) {
     contract: summarizeGraphContract(cloud),
     scopeCounts: countCloudScopes(cloud),
     journaledScopeCounts: countEntryScopes(writeEvents),
+    ...(clobberDiverged.length > 0
+      ? {
+          saveClobberDiverged: clobberDiverged.length,
+          saveClobberDivergedPaths: clobberDiverged.map((entry) => entry.path),
+        }
+      : {}),
   }
   await emit(options, 'sync.complete', result)
   const visibleCloud = filterVisibleGraphForRequester(cloud, visibilityRequestFromOptions(options))

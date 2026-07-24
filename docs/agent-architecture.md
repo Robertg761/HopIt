@@ -287,6 +287,19 @@ A single person's devices all write to the same personal change set, so two of t
 Ordering across all three buckets follows causality — the entry's `baseRevision` — never wall-clock time; `sortEntriesByCausality` ignores `createdAt` entirely so a reconnecting device with a skewed clock classifies identically to one with a correct clock. `partitionEntriesForReconnect` excludes every journal entry for a diverged path, not just the causally-last one, so no partial intermediate write for that path is ever committed.
 
 This bucket-3 path intentionally supersedes the old behavior where any stale per-file `baseRevision` threw `base_revision_mismatch` and failed the whole `recover` call: the classifier now detects that case before attempting a commit, so `recover` succeeds and the divergence stays flagged for later resolution instead of hard-failing. Full divergence persistence (uploading both sides as recoverable trail data) and user-facing surfaces (`hop conflicts`, dashboard side-by-side view) are separate, later work; this classifier only guarantees nothing is silently replayed over a genuine divergence.
+
+### Save-Side Clobber Detection (GR-F2)
+
+The agent only ever sees disk, never an editor's unsaved buffer, so decisions §10 requires the clobber check to run on the *save* side: if `refreshWorkspace` materializes new content at a path (Main moved that file while this device was away or idle) and the *next* local save to that path is not simply the refreshed content and does not build on it, that save is a candidate stale-editor-buffer clobber, not an ordinary edit.
+
+`packages/agent/src/save-clobber.js` tracks this with a small per-codebase **writer ledger** (`<journal-file>.writer-ledger.json`, colocated with the journal it protects) recording, per path, the last local-save revision this device committed and any still-unresolved pending refresh (hash + revision of what a refresh just wrote). `refreshWorkspace` marks a pending refresh for every path `materializeCloudToWorkspace` actually changed; `performSyncOnce` consults it for every disk change about to be journaled as a write/create.
+
+Classification reuses `classifyReconnectEntry` from GR-A1 verbatim (same bucket vocabulary, same "both touched" reasoning) — the pending refresh stands in for the cloud head, the pending save stands in for a journal entry whose recorded `baseRevision` is the device's last known local-save revision for that path:
+
+1. **No pending refresh:** ordinary edit (`only-local`) — journaled exactly as before.
+2. **Save matches the refreshed hash, or its content contains the refreshed content:** clean edit (`auto-resolved`, reason `identical_content` or `builds_on_refreshed_content`) — journaled normally, and the ledger's pending refresh clears.
+3. **Neither:** a genuine save-side divergence (`diverged`, reason `content_differs`). `performSyncOnce` never journals or commits this write — Main's cloud content is left exactly as it is (never a silent revert of either side) — and instead emits `sync.save_clobber_diverged` with the path, the refreshed hash/revision, and the local hash. The local file's bytes on disk are untouched either way; only the push to cloud is withheld until something outside this classifier resolves it (`hop conflicts`, GR-A3, once that surface lands).
+
 One agent per workspace (GR-H3, decisions doc §12):
 
 - before touching the cloud service or journal, `watchWorkspace` takes an exclusive lock on the workspace folder at `<workspace>/.hopit-agent/lock.json` (`packages/agent/src/workspace-lock.js`)
