@@ -136,9 +136,9 @@ Options:
   --remote-push-url <url> Push hub NDJSON stream URL, or HOPIT_REMOTE_PUSH_URL
   --remote-pull-cooldown-ms <ms> Remote head safety-check cadence, default 300000
   --remote-refresh-interval-ms <ms> Legacy alias for --remote-pull-cooldown-ms
-  --auto-prune         Opt in to safe cache pruning, or HOPIT_AUTO_PRUNE=1
+  --no-auto-prune       Disable idle dehydration (on by default), or HOPIT_AUTO_PRUNE=0
   --auto-prune-interval-ms <ms> Schedule, default 6h; HOPIT_AUTO_PRUNE_INTERVAL_MS
-  --auto-prune-inactive-ms <ms> Inactivity, default 7d; HOPIT_AUTO_PRUNE_INACTIVE_MS
+  --auto-prune-inactive-ms <ms> Idle window before dehydration, default 7d, shortened automatically under disk pressure; HOPIT_AUTO_PRUNE_INACTIVE_MS
   --scan-interval-ms <ms> Periodic full workspace diff-scan cadence (heals missed watcher events), default 600000; HOPIT_SCAN_INTERVAL_MS
   --start-service      install: start the production service after preparing paths
   --write-env          install: write hopit.env.example under the agent state root

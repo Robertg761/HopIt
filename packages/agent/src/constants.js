@@ -14,6 +14,10 @@ export const defaultOptions = {
   pid: '.hopit-agent/hopit.pid',
   host: '127.0.0.1',
   port: '4785',
+  // GR-G1 (decisions §11): idle dehydration is default-on so a codebase does
+  // not permanently occupy device disk just because nobody opted in. Explicit
+  // `--no-auto-prune` (or HOPIT_AUTO_PRUNE=0) still disables it per invocation.
+  'auto-prune': true,
 }
 
 export const workspaceMode = {
@@ -133,6 +137,18 @@ export const defaultLaunchAgentLabelPrefix = 'com.hopit.agent'
 // visible. Adjustable per codebase via codebase_settings.large_file_threshold_bytes;
 // null/unset falls back to this default.
 export const defaultLargeFileThresholdBytes = 100 * 1024 * 1024
+
+// GR-G1 (decisions §11): disk-pressure acceleration for idle dehydration.
+// When the workspace's device drops below either the absolute free-bytes
+// floor or the free-fraction floor, the auto-prune scheduler shortens the
+// idle-eviction window by accelerationFactor so a nearly-full disk sheds
+// cached (already-synced) content faster instead of quietly filling up.
+// This only ever accelerates *content* eviction: the journal itself is never
+// an eviction candidate (see pruneWorkspaceCache's journal-path guard), and
+// unacknowledged journal writes are never evicted regardless of pressure.
+export const defaultDiskPressureFreeBytesThreshold = 5 * 1024 * 1024 * 1024
+export const defaultDiskPressureFreeFraction = 0.1
+export const diskPressureAccelerationFactor = 0.25
 
 // Derived/generated paths (decisions §6): local-only, never watched-through,
 // never journaled, never synced, never counted in presence, and distinct from

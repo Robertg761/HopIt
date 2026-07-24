@@ -535,8 +535,14 @@ export async function pruneWorkspaceCache(options) {
   const journalState = classifyJournalEntries(journalEntries, eventEntries)
   const indexedCodebase = findIndexedCodebase(workspaceIndex, cloud.codebase?.id ?? options['codebase-id'], options.workspace)
   const inactiveMs = parseNonNegativeIntegerOption(options['inactive-ms'], 0)
-  const now = new Date().toISOString()
-  const nowMs = Date.now()
+  // Harness-time clock injection (GR-G1 accept criteria): tests pass
+  // `options.now` (an ISO string or anything `Date` accepts) to simulate the
+  // idle window elapsing without depending on wall time, matching the
+  // `options.now` convention already used by applyJournalEntryToCloud.
+  const now = options.now ? new Date(options.now).toISOString() : new Date().toISOString()
+  const nowMs = options.now ? new Date(options.now).getTime() : Date.now()
+  const journalPath = options.journal ? path.resolve(options.journal) : null
+  const eventsPath = options.events ? path.resolve(options.events) : null
   const candidates = []
   const skipped = []
 
@@ -546,6 +552,19 @@ export async function pruneWorkspaceCache(options) {
     const manifestEntry = indexedCodebase?.contentManifest?.files?.[relativePath] ?? null
     const pathJournalEntries = journalState.entries.filter((entry) => entry.path === relativePath)
     const unresolved = pathJournalEntries.find((entry) => entry.recoveryStatus === 'pending' || entry.recoveryStatus === 'failed')
+
+    // Defense in depth for "the journal itself is last-sacrificed" (decisions
+    // §11): eviction candidates come from the cloud file graph, which never
+    // includes the journal/events ndjson files, but a workspace-relative path
+    // that happens to resolve onto either state file is refused explicitly
+    // rather than relying solely on that structural exclusion.
+    if (journalPath || eventsPath) {
+      const absolutePath = path.resolve(workspaceFilePath(options.workspace, relativePath))
+      if (absolutePath === journalPath || absolutePath === eventsPath) {
+        skipped.push({ path: relativePath, reason: 'journal_path' })
+        continue
+      }
+    }
 
     if (!diskEntry) {
       skipped.push({ path: relativePath, reason: 'not_hydrated' })
@@ -637,6 +656,7 @@ export async function pruneWorkspaceCache(options) {
   }
   await emit(options, execute ? 'cache.evicted' : 'cache.prune_planned', result)
   console.log(JSON.stringify(result, null, 2))
+  return result
 }
 
 export async function setWorkspaceCachePin(options, pinned) {

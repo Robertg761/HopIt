@@ -432,7 +432,12 @@ export function runtimeArgsFromOptions(options) {
   if (options['remote-push-url']) {
     args.push('--remote-push-url', options['remote-push-url'])
   }
-  if (options['auto-prune']) {
+  if (options['auto-prune'] === false) {
+    // auto-prune defaults on (GR-G1); an explicit opt-out must be forwarded to
+    // the launchd/service child process too, or the child would silently fall
+    // back to its own on-by-default cadence.
+    args.push('--no-auto-prune')
+  } else if (options['auto-prune']) {
     args.push('--auto-prune')
   }
   if (options['auto-prune-interval-ms']) {

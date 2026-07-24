@@ -6,7 +6,7 @@ import { test } from 'node:test'
 
 import { parseOptions } from '../src/options.js'
 import { runtimeArgsFromOptions } from '../src/service.js'
-import { createAutoPruneScheduler, createWorkspaceScanScheduler, parseAutoPruneMs, parseWorkspaceScanMs } from '../src/watch.js'
+import { createAutoPruneScheduler, createWorkspaceScanScheduler, diskPressureAcceleratedInactiveMs, parseAutoPruneMs, parseWorkspaceScanMs } from '../src/watch.js'
 
 async function makeState() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hopit-watch-scheduler-test-'))
@@ -102,7 +102,7 @@ test('auto-prune production cadence rejects aggressive intervals', () => {
   )
 })
 
-test('auto-prune remains opt-in and survives service argument forwarding', () => {
+test('explicit --auto-prune survives service argument forwarding', () => {
   const options = parseOptions([
     '--auto-prune',
     '--auto-prune-interval-ms',
@@ -123,6 +123,146 @@ test('auto-prune remains opt-in and survives service argument forwarding', () =>
       '604800000',
     ],
   )
+})
+
+// GR-G1 (decisions §11): idle dehydration is default-on, not opt-in.
+
+test('auto-prune defaults on without any flag', () => {
+  const options = parseOptions([])
+  assert.equal(options['auto-prune'], true)
+})
+
+test('--no-auto-prune disables it and is forwarded to the service child', () => {
+  const options = parseOptions(['--no-auto-prune'])
+  assert.equal(options['auto-prune'], false)
+
+  const serviceArgs = runtimeArgsFromOptions(options)
+  assert.ok(serviceArgs.includes('--no-auto-prune'))
+  assert.ok(!serviceArgs.includes('--auto-prune'))
+})
+
+test('HOPIT_AUTO_PRUNE=0 disables the default-on scheduler', async () => {
+  const previous = process.env.HOPIT_AUTO_PRUNE
+  process.env.HOPIT_AUTO_PRUNE = '0'
+  try {
+    const options = parseOptions([])
+    assert.equal(options['auto-prune'], false)
+    assert.equal(await createAutoPruneScheduler(options), null)
+  } finally {
+    if (previous === undefined) delete process.env.HOPIT_AUTO_PRUNE
+    else process.env.HOPIT_AUTO_PRUNE = previous
+  }
+})
+
+test('a default-on scheduler starts without any --auto-prune flag', async (t) => {
+  const state = await makeState()
+  const scheduler = await createAutoPruneScheduler({
+    ...state,
+  }, {
+    intervalMs: 60_000,
+    inactiveMs: 60_000,
+    localSyncIdle: () => true,
+    pruneWorkspace: async () => {},
+  })
+  t.after(() => scheduler?.close())
+  assert.ok(scheduler, 'auto-prune must start by default even with no explicit flag')
+
+  const started = (await readEvents(state.events)).find((event) => event.event === 'cache.auto_prune_started')
+  assert.ok(started)
+})
+
+// GR-G1 (decisions §11): disk-pressure acceleration shortens the idle window
+// on a nearly-full disk instead of leaving it fixed at the configured default.
+
+test('disk-pressure acceleration leaves the window untouched with ample free space', () => {
+  const sevenDays = 7 * 24 * 60 * 60 * 1000
+  const result = diskPressureAcceleratedInactiveMs(sevenDays, {
+    freeBytes: 500 * 1024 * 1024 * 1024,
+    totalBytes: 1000 * 1024 * 1024 * 1024,
+  })
+  assert.equal(result, sevenDays)
+})
+
+test('disk-pressure acceleration shortens the window below the absolute free-bytes floor', () => {
+  const sevenDays = 7 * 24 * 60 * 60 * 1000
+  const result = diskPressureAcceleratedInactiveMs(sevenDays, {
+    freeBytes: 1 * 1024 * 1024 * 1024, // under the 5 GB default floor
+    totalBytes: 1000 * 1024 * 1024 * 1024,
+  })
+  assert.ok(result < sevenDays, 'low absolute free space must shorten the window')
+  assert.equal(result, Math.round(sevenDays * 0.25))
+})
+
+test('disk-pressure acceleration shortens the window below the free-fraction floor', () => {
+  const sevenDays = 7 * 24 * 60 * 60 * 1000
+  const result = diskPressureAcceleratedInactiveMs(sevenDays, {
+    freeBytes: 8 * 1024 * 1024 * 1024, // above the absolute floor...
+    totalBytes: 1000 * 1024 * 1024 * 1024, // ...but under the 10% fraction floor
+  })
+  assert.ok(result < sevenDays, 'low free-space fraction must shorten the window')
+})
+
+test('disk-pressure acceleration never shortens below the scheduler minimum cadence', () => {
+  const result = diskPressureAcceleratedInactiveMs(90_000, {
+    freeBytes: 0,
+    totalBytes: 1000 * 1024 * 1024 * 1024,
+  })
+  assert.ok(result >= 60_000)
+})
+
+test('disk-pressure acceleration is a no-op when disk stats are unavailable', () => {
+  const sevenDays = 7 * 24 * 60 * 60 * 1000
+  assert.equal(diskPressureAcceleratedInactiveMs(sevenDays, null), sevenDays)
+})
+
+test('a scheduled prune under disk pressure narrows the inactive-ms it hands to pruneWorkspaceCache', async (t) => {
+  const state = await makeState()
+  let receivedOptions = null
+  const scheduler = await createAutoPruneScheduler({
+    ...state,
+    'auto-prune': true,
+  }, {
+    intervalMs: 20,
+    inactiveMs: 604_800_000, // 7 days
+    localSyncIdle: () => true,
+    statDisk: async () => ({ freeBytes: 1024, totalBytes: 1000 * 1024 * 1024 * 1024 }),
+    pruneWorkspace: async (options) => {
+      receivedOptions = options
+    },
+  })
+  t.after(() => scheduler?.close())
+
+  await waitFor(() => receivedOptions)
+  assert.ok(Number(receivedOptions['inactive-ms']) < 604_800_000)
+
+  const pressureEvent = (await readEvents(state.events)).find((event) => event.event === 'cache.auto_prune_disk_pressure')
+  assert.ok(pressureEvent, 'disk-pressure acceleration must be observable in the event log')
+  assert.equal(pressureEvent.detail.baseInactiveMs, 604_800_000)
+  assert.equal(pressureEvent.detail.inactiveMs, Number(receivedOptions['inactive-ms']))
+})
+
+test('a scheduled prune with ample free disk does not emit a disk-pressure event', async (t) => {
+  const state = await makeState()
+  let receivedOptions = null
+  const scheduler = await createAutoPruneScheduler({
+    ...state,
+    'auto-prune': true,
+  }, {
+    intervalMs: 20,
+    inactiveMs: 604_800_000,
+    localSyncIdle: () => true,
+    statDisk: async () => ({ freeBytes: 500 * 1024 * 1024 * 1024, totalBytes: 1000 * 1024 * 1024 * 1024 }),
+    pruneWorkspace: async (options) => {
+      receivedOptions = options
+    },
+  })
+  t.after(() => scheduler?.close())
+
+  await waitFor(() => receivedOptions)
+  assert.equal(Number(receivedOptions['inactive-ms']), 604_800_000)
+
+  const pressureEvent = (await readEvents(state.events)).find((event) => event.event === 'cache.auto_prune_disk_pressure')
+  assert.equal(pressureEvent, undefined)
 })
 
 // GR-H1: periodic full workspace diff-scan (decisions §12 — missed watcher

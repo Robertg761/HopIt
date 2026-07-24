@@ -5,7 +5,7 @@ import { createCloudGraphService, visibilityRequestFromOptions } from './cloud/d
 import { hydrateWorkspace, pruneWorkspaceCache } from './commands/hydrate.js'
 import { initCloud } from './commands/import.js'
 import { recoverJournal, refreshWorkspace, syncOnce } from './commands/sync.js'
-import { defaultWorkspaceScanIntervalMs, legacySyncDebounceMs, minimumWorkspaceScanIntervalMs, workspaceMode } from './constants.js'
+import { defaultDiskPressureFreeBytesThreshold, defaultDiskPressureFreeFraction, defaultWorkspaceScanIntervalMs, diskPressureAccelerationFactor, legacySyncDebounceMs, minimumWorkspaceScanIntervalMs, workspaceMode } from './constants.js'
 import { emit, findLastEventOf, readNdjson } from './io.js'
 import { withCloudFetchRetry } from './cloud-retry.js'
 import { createRemotePushClient } from './remote-push.js'
@@ -188,12 +188,57 @@ export async function watchWorkspace(options, deps = {}) {
   }
 }
 
+// Idle window before an untouched codebase dehydrates back to metadata-only
+// (decisions §11 default: 7 days). User-tunable via --auto-prune-inactive-ms /
+// HOPIT_AUTO_PRUNE_INACTIVE_MS, and shortened automatically under disk
+// pressure by diskPressureAcceleratedInactiveMs below.
 const defaultAutoPruneIntervalMs = 6 * 60 * 60 * 1000
 const defaultAutoPruneInactiveMs = 7 * 24 * 60 * 60 * 1000
 const minimumAutoPruneMs = 60 * 1000
 
+// Reads free/total space for the device backing the workspace root. Returns
+// null (never throws) when statfs is unsupported or the path does not exist
+// yet, so a disk-pressure read failure degrades to "no acceleration" rather
+// than blocking the scheduler.
+export async function statWorkspaceDisk(workspacePath) {
+  try {
+    const stats = await fs.statfs(workspacePath)
+    const blockSize = Number(stats.bsize)
+    if (!Number.isFinite(blockSize) || blockSize <= 0) return null
+    return {
+      freeBytes: Number(stats.bavail) * blockSize,
+      totalBytes: Number(stats.blocks) * blockSize,
+    }
+  } catch {
+    return null
+  }
+}
+
+// GR-G1 (decisions §11): "disk-pressure acceleration (low free disk ⇒
+// shorten window)". Pure function — tests inject synthetic disk stats rather
+// than filling a real disk. When free space is below either the absolute or
+// fractional floor, the idle window shrinks by accelerationFactor (never
+// below the scheduler's minimum cadence); otherwise the configured window is
+// returned unchanged. This only ever changes *when* already-synced content is
+// evicted — it never touches the journal (see pruneWorkspaceCache) and never
+// overrides the unacknowledged-write refusal.
+export function diskPressureAcceleratedInactiveMs(baseInactiveMs, diskStats, thresholds = {}) {
+  if (!diskStats || !Number.isFinite(diskStats.freeBytes)) return baseInactiveMs
+  const freeBytesThreshold = thresholds.freeBytesThreshold ?? defaultDiskPressureFreeBytesThreshold
+  const freeFractionThreshold = thresholds.freeFractionThreshold ?? defaultDiskPressureFreeFraction
+  const accelerationFactor = thresholds.accelerationFactor ?? diskPressureAccelerationFactor
+  const totalBytes = Number.isFinite(diskStats.totalBytes) && diskStats.totalBytes > 0 ? diskStats.totalBytes : null
+  const freeFraction = totalBytes ? diskStats.freeBytes / totalBytes : 1
+  const underPressure = diskStats.freeBytes < freeBytesThreshold || freeFraction < freeFractionThreshold
+  if (!underPressure) return baseInactiveMs
+  return Math.max(minimumAutoPruneMs, Math.round(baseInactiveMs * accelerationFactor))
+}
+
 export async function createAutoPruneScheduler(options, schedulerOptions = {}) {
-  if (!options['auto-prune']) return null
+  // auto-prune defaults on (GR-G1); only an explicit --no-auto-prune /
+  // HOPIT_AUTO_PRUNE=0 (both surface as options['auto-prune'] === false)
+  // disables it.
+  if (options['auto-prune'] === false) return null
 
   const intervalMs = schedulerOptions.intervalMs ?? parseAutoPruneMs(
     options['auto-prune-interval-ms'],
@@ -207,6 +252,7 @@ export async function createAutoPruneScheduler(options, schedulerOptions = {}) {
   )
   const localSyncIdle = schedulerOptions.localSyncIdle ?? (() => true)
   const pruneWorkspace = schedulerOptions.pruneWorkspace ?? pruneWorkspaceCache
+  const statDisk = schedulerOptions.statDisk ?? statWorkspaceDisk
   let closed = false
   let running = false
 
@@ -243,12 +289,25 @@ export async function createAutoPruneScheduler(options, schedulerOptions = {}) {
         return
       }
 
+      const diskStats = await statDisk(options.workspace)
+      const effectiveInactiveMs = diskPressureAcceleratedInactiveMs(inactiveMs, diskStats)
+      if (effectiveInactiveMs !== inactiveMs) {
+        await emit(options, 'cache.auto_prune_disk_pressure', {
+          state: 'accelerated',
+          workspace: options.workspace,
+          baseInactiveMs: inactiveMs,
+          inactiveMs: effectiveInactiveMs,
+          freeBytes: diskStats?.freeBytes ?? null,
+          totalBytes: diskStats?.totalBytes ?? null,
+        })
+      }
+
       await pruneWorkspace({
         ...options,
         path: 'all',
         recursive: true,
         execute: true,
-        'inactive-ms': String(inactiveMs),
+        'inactive-ms': String(effectiveInactiveMs),
       })
     } catch (error) {
       await emit(options, 'cache.auto_prune_failed', {
