@@ -14,6 +14,11 @@ import { clusterEpisodes, normalizeSummaryMode } from '@hopit/backend-d1'
 import { scopeForPath } from '@hopit/core/privacy-zone'
 import { existsSync } from 'node:fs'
 
+function positiveIntOrNull(value) {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
+}
+
 export function createCloudGraphService(options) {
   if (shouldUseD1Backend(options)) {
     return new D1CloudGraphService(options)
@@ -243,6 +248,7 @@ export class FixtureJsonCloudGraphService {
       codebaseId: cloud?.codebase?.id ?? null,
       trailSummariesEnabled: Boolean(stored?.trailSummariesEnabled),
       trailSummariesMode: normalizeSummaryMode(stored?.trailSummariesMode),
+      largeFileThresholdBytes: positiveIntOrNull(stored?.largeFileThresholdBytes),
       updatedAt: stored?.updatedAt ?? null,
     }
   }
@@ -252,6 +258,7 @@ export class FixtureJsonCloudGraphService {
     const current = cloud.codebaseSettings ?? {}
     const now = new Date().toISOString()
     const next = {
+      ...current,
       trailSummariesEnabled: enabled === undefined ? Boolean(current.trailSummariesEnabled) : Boolean(enabled),
       trailSummariesMode: mode === undefined ? normalizeSummaryMode(current.trailSummariesMode) : normalizeSummaryMode(mode),
       updatedAt: now,
@@ -259,6 +266,29 @@ export class FixtureJsonCloudGraphService {
     cloud.codebaseSettings = next
     await writeJson(this.path, cloud)
     return { codebaseId: cloud?.codebase?.id ?? codebaseId ?? null, ...next }
+  }
+
+  // GR-G2: per-codebase override for the large-file warning threshold.
+  // `thresholdBytes: null` clears the override (falls back to the agent
+  // default). Large files always sync regardless of this setting -- it only
+  // controls when the `file.large` dashboard note fires.
+  async setLargeFileThreshold(codebaseId, { thresholdBytes } = {}) {
+    const cloud = await readJson(this.path)
+    const current = cloud.codebaseSettings ?? {}
+    const now = new Date().toISOString()
+    const next = {
+      ...current,
+      largeFileThresholdBytes:
+        thresholdBytes === undefined ? positiveIntOrNull(current.largeFileThresholdBytes) : positiveIntOrNull(thresholdBytes),
+      updatedAt: now,
+    }
+    cloud.codebaseSettings = next
+    await writeJson(this.path, cloud)
+    return {
+      codebaseId: cloud?.codebase?.id ?? codebaseId ?? null,
+      largeFileThresholdBytes: next.largeFileThresholdBytes,
+      updatedAt: now,
+    }
   }
 
   async listTrailEpisodes(codebaseId, { limit } = {}) {

@@ -333,6 +333,10 @@ Important event types:
 - `remote-update`
 - `cache.evicted`
 - `connection.changed`
+- `file.large` — a create/write journal entry exceeded the large-file warning
+  threshold (default 100 MB, per-codebase override via
+  `codebase_settings.large_file_threshold_bytes`). Purely additive: the file
+  still syncs in full, with no cap and no gate (decisions doc §11).
 
 The spike writes events to `.hopit-agent/events.ndjson`. A production agent can stream the same events over the status API while retaining a short local diagnostic log.
 

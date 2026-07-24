@@ -128,6 +128,11 @@ export const mirrorNonSecretEnvSuffixes = new Set([
   'default',
 ])
 export const defaultLaunchAgentLabelPrefix = 'com.hopit.agent'
+// Large files sync like everything else (decisions doc §11: no cap, no gate) —
+// this is purely a dashboard/notification threshold so storage surprises are
+// visible. Adjustable per codebase via codebase_settings.large_file_threshold_bytes;
+// null/unset falls back to this default.
+export const defaultLargeFileThresholdBytes = 100 * 1024 * 1024
 
 export class ConflictError extends Error {
   constructor(message, detail) {

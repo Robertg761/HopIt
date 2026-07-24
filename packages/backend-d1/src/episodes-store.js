@@ -12,8 +12,14 @@ export function normalizeCodebaseSettings(codebaseId, row) {
     codebaseId,
     trailSummariesEnabled: Boolean(row?.trail_summaries_enabled),
     trailSummariesMode: normalizeSummaryMode(row?.trail_summaries_mode),
+    largeFileThresholdBytes: positiveIntOrNull(row?.large_file_threshold_bytes),
     updatedAt: row?.updated_at ?? null,
   }
+}
+
+function positiveIntOrNull(value) {
+  const parsed = Number(value)
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null
 }
 
 export function mapTrailEpisodeRow(row) {
@@ -66,6 +72,39 @@ export function attachEpisodeMethods(Backend) {
         codebaseId,
         trailSummariesEnabled: nextEnabled,
         trailSummariesMode: nextMode,
+        updatedAt: now,
+      }
+    },
+
+    // GR-G2: per-codebase override for the large-file warning threshold.
+    // `thresholdBytes: null` clears the override (falls back to the agent
+    // default). Large files always sync regardless of this setting -- it only
+    // controls when the `file.large` dashboard note fires.
+    async setLargeFileThreshold(codebaseId = this.codebaseId, { thresholdBytes } = {}) {
+      await this.ensureSchema()
+      const now = new Date().toISOString()
+      const current = await this.readCodebaseSettings(codebaseId)
+      const nextThreshold =
+        thresholdBytes === undefined ? current.largeFileThresholdBytes : positiveIntOrNull(thresholdBytes)
+      await this.query(
+        `insert into codebase_settings (
+          codebase_id, trail_summaries_enabled, trail_summaries_mode, large_file_threshold_bytes, created_at, updated_at
+        ) values (?, ?, ?, ?, ?, ?)
+        on conflict(codebase_id) do update set
+          large_file_threshold_bytes = excluded.large_file_threshold_bytes,
+          updated_at = excluded.updated_at`,
+        [
+          codebaseId,
+          current.trailSummariesEnabled ? 1 : 0,
+          current.trailSummariesMode,
+          nextThreshold,
+          now,
+          now,
+        ],
+      )
+      return {
+        codebaseId,
+        largeFileThresholdBytes: nextThreshold,
         updatedAt: now,
       }
     },

@@ -48,6 +48,9 @@ export async function readAgentState(options) {
     'workspace.open_hydration.skipped',
   ])
   const lastRemoteUpdate = findLastEvent(eventEntries, 'remote-update')
+  // GR-G2: most recent large-file warning, so status/dashboard surfaces can
+  // show a storage-surprise note without scanning `recent` for the event type.
+  const lastLargeFile = findLastEvent(eventEntries, 'file.large')
   const lastRemotePullStarted = findLastEvent(eventEntries, 'remote-pull.started')
   const lastRemotePullSkipped = findLastEvent(eventEntries, 'remote-pull.skipped')
   const lastRemotePullFailed = findLastEvent(eventEntries, 'remote-pull.failed')
@@ -237,6 +240,7 @@ export async function readAgentState(options) {
     lastRefreshBlocked,
     lastRefreshComplete,
     lastRemoteUpdate,
+    lastLargeFile,
     lastRemotePullStarted,
     lastRemotePullApplied,
     lastRemotePullSkipped,
