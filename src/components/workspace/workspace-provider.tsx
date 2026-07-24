@@ -29,6 +29,7 @@ export type AgentCommand =
   | 'unpinPath'
   | 'dehydrateWorkspace'
   | 'importGitUrl'
+  | 'resolveConflict'
 
 export type AgentCommandPayload = {
   codebaseId?: string | null
@@ -38,6 +39,7 @@ export type AgentCommandPayload = {
   recursive?: boolean
   execute?: boolean
   inactiveMs?: number
+  keep?: 'local' | 'cloud'
 }
 
 export type AgentCommandResult = {

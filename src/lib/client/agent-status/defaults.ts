@@ -71,6 +71,7 @@ export function offlineAgentStatus(reason = 'Start the local HopIt agent status 
         tone: 'blocked',
       },
     ],
+    divergences: [],
     rawUpdatedAt: null,
     unavailableReason: reason,
   }

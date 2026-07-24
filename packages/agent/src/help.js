@@ -56,6 +56,7 @@ Commands:
   trail       Browse labeled trail episodes and manage summarization (episodes, summarize, summaries on|off)
   secrets     Show or change the per-project outbound secret-scanning setting (on|off|status)
   derived     Show/edit derived (local-only, never-synced) path overrides (list, add <path>, remove <path>)
+  conflicts   List open same-owner multi-device divergences or resolve one (resolve <path> --keep local|cloud)
   workspace   Manage/list/discover/attach the configured HopIt workspace root and codebase
   session     Manage this device/session registration (alias: device)
   keys        Manage local encryption device keys and recovery exports
@@ -161,6 +162,7 @@ Options:
   --mirror-state <path> Override the local mirror-sync state file path
   --message <text>    Git commit message for export/publish
   --include-private   Include .private files in export only; publish always omits them
+  --keep <local|cloud> conflicts resolve: which side of a divergence to keep
   --allow-unsafe-workspace Override workspace path safety checks
   --allow-mass-delete Allow refresh to delete a full/large share of the workspace (bypasses the empty-graph and mass-delete guards)
   --allow-local-cloud Allow production profile to use local JSON cloud for dry runs

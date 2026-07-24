@@ -19,6 +19,7 @@ import { runWorkspaceCommand } from './commands/workspace.js'
 import { runTrailCommand } from './commands/trail.js'
 import { runSecretsCommand } from './commands/secrets.js'
 import { runDerivedCommand } from './commands/derived.js'
+import { runConflictsCommand } from './commands/conflicts.js'
 import { runDemo } from './commands/demo.js'
 import { normalizeCommand, parseOptions } from './options.js'
 import { autoloadEnvFile } from './env-file.js'
@@ -45,6 +46,7 @@ const HUMAN_OUTPUT_COMMANDS = new Set([
   'trail',
   'secrets',
   'derived',
+  'conflicts',
 ])
 
 // `hop watch` runs in the foreground until interrupted. A graceful SIGINT/
@@ -110,6 +112,12 @@ async function main() {
     command === 'derived' && (derivedAction === 'add' || derivedAction === 'remove') && args[0] && !args[0].startsWith('--')
       ? args.shift()
       : null
+  const conflictsAction =
+    command === 'conflicts' && args[0] && !args[0].startsWith('--') ? args.shift() : 'list'
+  const conflictsPath =
+    command === 'conflicts' && conflictsAction === 'resolve' && args[0] && !args[0].startsWith('--')
+      ? args.shift()
+      : null
   const parsedOptions = parseOptions(args)
   const options =
     command === 'keys' || command === 'setup' || command === 'add'
@@ -150,6 +158,7 @@ async function main() {
   if (command === 'trail') return runTrailCommand(trailAction, trailState, options)
   if (command === 'secrets') return runSecretsCommand(secretsState, options)
   if (command === 'derived') return runDerivedCommand(derivedAction, derivedPath, options)
+  if (command === 'conflicts') return runConflictsCommand(conflictsAction, conflictsPath, options)
   if (command === 'session') return runSessionCommand(sessionAction, options)
   if (command === 'keys') return runKeysCommand(keysAction, options)
   if (command === 'service') return runServiceCommand(serviceAction, options)

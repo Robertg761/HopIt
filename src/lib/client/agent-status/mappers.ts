@@ -1,5 +1,6 @@
 import type {
   AgentCodebaseRole,
+  AgentDivergence,
   AgentEvent,
   AgentEventTone,
   AgentFile,
@@ -17,6 +18,7 @@ import type {
   RawAgentStatus,
   RawCloudFile,
   RawCloudResponse,
+  RawDivergence,
   RawGraphMember,
   RawLocalFileState,
 } from './normalize'
@@ -366,6 +368,31 @@ function describeEvent(event: RawAgentEvent) {
   if (trigger) return `Triggered by ${trigger}`
 
   return 'Local agent state changed'
+}
+
+// GR-A3 (decisions §1). `deriveOpenDivergences` already produces this exact
+// shape server-side (packages/agent/src/reconnect.js); this stays a
+// pass-through with type-safe defaults rather than re-deriving anything, so
+// the dashboard never diverges from the CLI's/status API's view of what is
+// still open.
+export function mapDivergences(divergences: RawDivergence[] | undefined): AgentDivergence[] {
+  if (!Array.isArray(divergences)) return []
+
+  return divergences.map((entry) => ({
+    path: stringOrNull(entry?.path) ?? '',
+    scope: entry?.scope === 'owner-private' ? 'owner-private' : entry?.scope === 'shared' ? 'shared' : null,
+    reason: stringOrNull(entry?.reason),
+    entryId: stringOrNull(entry?.entryId),
+    entryType: stringOrNull(entry?.entryType),
+    baseRevision: numberOrNull(entry?.baseRevision),
+    cloudRevision: numberOrNull(entry?.cloudRevision),
+    localHash: stringOrNull(entry?.localHash),
+    cloudHash: stringOrNull(entry?.cloudHash),
+    localDeviceName: stringOrNull(entry?.localDeviceName),
+    cloudDeviceName: stringOrNull(entry?.cloudDeviceName),
+    detectedAt: stringOrNull(entry?.detectedAt),
+    ageMs: numberOrNull(entry?.ageMs),
+  }))
 }
 
 function toneForEvent(label: string): AgentEventTone {

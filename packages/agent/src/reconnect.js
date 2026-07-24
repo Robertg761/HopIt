@@ -181,3 +181,66 @@ function reconcileEntryForReplay(entry, classification, cloud) {
   }
   return reconciled
 }
+
+// GR-A3 (decisions §1: divergence surfaces). `recoverJournal` never persists
+// its own durable divergence records (that is GR-A2's job); it does emit one
+// `journal.reconnect_diverged` event per diverged path every time recovery
+// runs against still-unresolved journal entries. This derives the current
+// *open* set from the local event log alone -- the same event log `hop
+// status`/`hop conflicts` already read -- by pairing each diverged path with
+// the most recent `conflicts.resolved` event for that path: a divergence is
+// open if it has never been resolved, or if it diverged again after its last
+// resolution. Used by both the fast status endpoint (no live cloud read) and
+// the full `hop status`/`hop conflicts` paths, so this must only depend on
+// events.ndjson.
+export function deriveOpenDivergences(eventEntries) {
+  const latestDivergedByPath = new Map()
+  const latestResolvedByPath = new Map()
+
+  for (const event of eventEntries) {
+    if (event?.event === 'journal.reconnect_diverged') {
+      const detailPath = event.detail?.path
+      if (!detailPath) continue
+      latestDivergedByPath.set(detailPath, event)
+    } else if (event?.event === 'conflicts.resolved') {
+      const detailPath = event.detail?.path
+      if (!detailPath) continue
+      latestResolvedByPath.set(detailPath, event)
+    }
+  }
+
+  const now = Date.now()
+  const open = []
+  for (const [path, divergedEvent] of latestDivergedByPath) {
+    const resolvedEvent = latestResolvedByPath.get(path)
+    if (resolvedEvent && !isEventBefore(resolvedEvent, divergedEvent)) continue
+
+    const detail = divergedEvent.detail ?? {}
+    const detectedAt = divergedEvent.at ?? null
+    const detectedAtMs = detectedAt ? Date.parse(detectedAt) : Number.NaN
+    open.push({
+      path,
+      scope: detail.scope ?? null,
+      reason: detail.reason ?? null,
+      entryId: detail.id ?? null,
+      entryType: detail.type ?? null,
+      baseRevision: Number.isInteger(detail.baseRevision) ? detail.baseRevision : null,
+      cloudRevision: Number.isInteger(detail.cloudRevision) ? detail.cloudRevision : null,
+      localHash: detail.localHash ?? null,
+      cloudHash: detail.cloudHash ?? null,
+      localDeviceName: detail.localDeviceName ?? null,
+      cloudDeviceName: detail.cloudDeviceName ?? null,
+      detectedAt,
+      ageMs: Number.isNaN(detectedAtMs) ? null : Math.max(0, now - detectedAtMs),
+    })
+  }
+
+  return open.sort((a, b) => a.path.localeCompare(b.path))
+}
+
+function isEventBefore(event, reference) {
+  const eventAt = Date.parse(event?.at)
+  const referenceAt = Date.parse(reference?.at)
+  if (Number.isNaN(eventAt) || Number.isNaN(referenceAt)) return false
+  return eventAt < referenceAt
+}

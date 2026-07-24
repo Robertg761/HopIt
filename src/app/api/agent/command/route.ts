@@ -32,6 +32,10 @@ const commandMap = {
     timeoutMs: 60_000,
   },
   importGitUrl: { label: 'Import Git URL', cliCommand: 'import-git-url', timeoutMs: 10 * 60 * 1000 },
+  // GR-A3 (decisions §1): the dashboard's side-by-side divergence view
+  // resolves through the same `hop conflicts resolve <path> --keep local|cloud`
+  // path as the terminal -- no separate resolution logic lives in the web app.
+  resolveConflict: { label: 'Resolve conflict', cliCommand: 'conflicts', subcommand: 'resolve', timeoutMs: 30_000 },
 } as const
 
 type AgentCommand = keyof typeof commandMap
@@ -44,6 +48,7 @@ type AgentCommandRequest = {
   recursive?: unknown
   execute?: unknown
   inactiveMs?: unknown
+  keep?: unknown
 }
 
 let activeCommand: string | null = null
@@ -88,10 +93,12 @@ export async function POST(request: Request) {
     const extraArgs = commandArgsFromRequest(command, body)
     if (extraArgs instanceof NextResponse) return extraArgs
     const staticArgs = 'staticArgs' in commandConfig ? [...commandConfig.staticArgs] : []
+    const prefixArgs = commandPrefixArgs(command, commandConfig, body)
+    if (prefixArgs instanceof NextResponse) return prefixArgs
 
     const result = await runAgentCli(commandConfig.cliCommand, codebaseId, extraArgs, {
       env: commandEnv,
-      prefixArgs: 'subcommand' in commandConfig ? [commandConfig.subcommand] : [],
+      prefixArgs,
       staticArgs,
       timeoutMs: 'timeoutMs' in commandConfig ? commandConfig.timeoutMs : undefined,
     })
@@ -152,8 +159,20 @@ function summarizeCommandResult(
   if (command === 'unpinPath') return summarizePinPath(result.stdout, false)
   if (command === 'dehydrateWorkspace') return summarizeDehydrateWorkspace(result.stdout)
   if (command === 'importGitUrl') return summarizeGitUrlImport(result.stdout)
+  if (command === 'resolveConflict') return summarizeResolveConflict(result.stdout)
 
   return 'Agent command completed.'
+}
+
+function summarizeResolveConflict(stdout: string) {
+  const parsed = parseLastJsonObject(stdout)
+  const path = nestedString(parsed, ['path'])
+  const keep = nestedString(parsed, ['keep'])
+  const combined = nestedBoolean(parsed, ['combined'])
+  if (path && keep) {
+    return `Resolved ${path}: kept ${keep}${combined ? ' (combined)' : ''}.`
+  }
+  return 'Resolved the divergence.'
 }
 
 function summarizeSync(stdout: string) {
@@ -331,12 +350,39 @@ function runAgentCli(
   }))
 }
 
+// `hop conflicts resolve <path> --keep local|cloud` takes its path as a bare
+// positional argument (mirrors the documented terminal syntax), which must
+// appear immediately after the `resolve` subcommand -- before any `--`
+// flags -- for the CLI's own positional-arg parsing to pick it up. Every
+// other proxied command uses `--path`, where order does not matter, so this
+// is kept as a narrow special case rather than restructuring the shared arg
+// builder below.
+function commandPrefixArgs(
+  command: AgentCommand,
+  commandConfig: (typeof commandMap)[AgentCommand],
+  body: AgentCommandRequest,
+) {
+  if (command !== 'resolveConflict') {
+    return 'subcommand' in commandConfig ? [commandConfig.subcommand] : []
+  }
+
+  const targetPath = cloudPathFromRequest(body.path, { allowAll: false })
+  if (targetPath instanceof NextResponse) return targetPath
+  const subcommand = 'subcommand' in commandConfig ? commandConfig.subcommand : 'resolve'
+  return [subcommand, targetPath]
+}
+
 function commandArgsFromRequest(command: AgentCommand, body: AgentCommandRequest) {
   if (command === 'hydratePath' || command === 'pinPath' || command === 'unpinPath') {
     return pathCommandArgs(body, { allowAll: false })
   }
   if (command === 'pruneWorkspace') {
     return pathCommandArgs(body, { allowAll: true, defaultPath: 'all', execute: body.execute === true })
+  }
+  if (command === 'resolveConflict') {
+    const keep = body.keep === 'cloud' ? 'cloud' : body.keep === 'local' ? 'local' : null
+    if (!keep) return commandError('invalid_keep', 'Expected keep to be "local" or "cloud".', 400)
+    return ['--keep', keep]
   }
   if (command !== 'importGitUrl') return []
 

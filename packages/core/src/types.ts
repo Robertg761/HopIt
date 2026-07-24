@@ -252,6 +252,27 @@ export type AgentFile = {
   local: AgentFileLocal
 }
 
+// GR-A3 (decisions §1: same-owner multi-device divergence surfaces). Mirrors
+// the shape `deriveOpenDivergences` (packages/agent/src/reconnect.js) puts on
+// `status.divergences`. Device labels/hashes are best-effort (`null` when the
+// agent that recorded the divergence never had them) -- the UI must degrade
+// to a generic label, never hide the divergence.
+export type AgentDivergence = {
+  path: string
+  scope: FileScope | null
+  reason: string | null
+  entryId: string | null
+  entryType: string | null
+  baseRevision: number | null
+  cloudRevision: number | null
+  localHash: string | null
+  cloudHash: string | null
+  localDeviceName: string | null
+  cloudDeviceName: string | null
+  detectedAt: string | null
+  ageMs: number | null
+}
+
 export type AgentRemotePushStatus = {
   enabled: boolean
   state: string
@@ -314,6 +335,7 @@ export type AgentStatusSnapshot = {
   members: AgentMember[]
   files: AgentFile[]
   events: AgentEvent[]
+  divergences: AgentDivergence[]
   rawUpdatedAt: string | null
   unavailableReason?: string
 }

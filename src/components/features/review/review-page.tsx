@@ -15,6 +15,7 @@ import { CompareExplorer } from '@/components/features/compare/compare-explorer'
 import { TrailView } from '@/components/features/trail/trail-view'
 import { ChangedFilesCard } from './changed-files'
 import { DecisionsCard } from './decisions-card'
+import { DivergencePanel } from './divergence-panel'
 import { FileInspector } from './file-inspector'
 import { filterReviewHistory, HistoryTimelineCard } from './history-timeline'
 import { ConflictPanel, ReviewActions, ReviewMetaRow } from './review-header'
@@ -44,6 +45,7 @@ export function ReviewPage({ mode, codebaseId }: { mode: ReviewPageMode; codebas
   const { toast } = useToast()
   const [selectedPath, setSelectedPath] = React.useState<string | null>(null)
   const [selectedLine, setSelectedLine] = React.useState<number | null>(null)
+  const [resolvingDivergencePath, setResolvingDivergencePath] = React.useState<string | null>(null)
 
   const appliedCodebaseRef = React.useRef(false)
   React.useEffect(() => {
@@ -123,6 +125,27 @@ export function ReviewPage({ mode, codebaseId }: { mode: ReviewPageMode; codebas
     [runCommand, toast],
   )
 
+  const handleResolveDivergence = React.useCallback(
+    async (path: string, keep: 'local' | 'cloud') => {
+      setResolvingDivergencePath(path)
+      try {
+        const result = await runCommand('resolveConflict', { path, keep })
+        if (result.ok) {
+          toast({ title: result.label ?? 'Resolved', description: result.summary })
+        } else {
+          toast({
+            title: 'Resolve failed',
+            description: result.error?.message ?? result.stderr ?? 'The agent command failed.',
+            variant: 'destructive',
+          })
+        }
+      } finally {
+        setResolvingDivergencePath(null)
+      }
+    },
+    [runCommand, toast],
+  )
+
   const copy = MODE_COPY[mode]
   const activeId = codebaseId ?? status.codebaseId
 
@@ -156,6 +179,11 @@ export function ReviewPage({ mode, codebaseId }: { mode: ReviewPageMode; codebas
         <>
           <ReviewMetaRow status={status} />
           <ConflictPanel status={status} runningCommand={runningCommand} onCommand={handleCommand} />
+          <DivergencePanel
+            divergences={status.divergences}
+            onResolve={handleResolveDivergence}
+            resolvingPath={resolvingDivergencePath}
+          />
           <div className="grid gap-6 lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
             <div className="space-y-6">
               <ChangedFilesCard

@@ -1,5 +1,6 @@
 // @ts-check
 import fs from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { canRequesterSeePath, createCloudGraphService, filterVisibleGraphForRequester, removeEmptyAncestorDirectories, summarizeGraphContract, summarizeRequester, visibilityContextForGraph, visibilityRequestFromOptions } from '../cloud/d1-graph-service.js'
 import { bulkJournalCommitChunkSize, bulkJournalCommitThreshold, ConflictError, defaultLargeFileThresholdBytes, entryKind, refreshMassDeleteFraction, refreshMassDeleteMinFiles, workspaceMode } from '../constants.js'
@@ -543,6 +544,14 @@ export async function recoverJournal(options) {
     skipped: journalEntries.length - allCandidates.length,
   }
 
+  // GR-A3 (decisions §1): device labels for the divergence surfaces (`hop
+  // conflicts`, status API `divergences`, dashboard side-by-side view). Best
+  // effort only -- neither side's device identity is durably tracked yet
+  // (that level of attribution is GR-A2 territory), so this labels the
+  // reconnecting device from its own `--device-name`/hostname and the cloud
+  // side from the session name recorded when this codebase was initialized.
+  const localDeviceName = options['device-name'] ?? os.hostname() ?? null
+  const cloudDeviceName = cloud.session?.deviceName ?? null
   for (const classification of diverged) {
     await emit(options, 'journal.reconnect_diverged', {
       id: classification.entry.id,
@@ -554,6 +563,8 @@ export async function recoverJournal(options) {
       cloudRevision: classification.cloudRevision,
       cloudHash: classification.cloudHash,
       localHash: classification.localHash,
+      localDeviceName,
+      cloudDeviceName,
     })
   }
 

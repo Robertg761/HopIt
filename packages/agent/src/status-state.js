@@ -6,6 +6,7 @@ import { privacyZoneForPath } from '@hopit/core/crypto'
 import { findLastEvent, findLastEventOf, readNdjson } from './io.js'
 import { cloudEntryEquals, countCloudScopes, countEntryScopes, normalizeCloudFileEntry, toCloudPath } from './journal.js'
 import { remotePullEnabled, remotePushEnabled, remotePushUrl, remoteRefreshIntervalMs } from './paths.js'
+import { deriveOpenDivergences } from './reconnect.js'
 import { isTimestampAtOrAfter } from './service.js'
 import { findIndexedCodebase, localCacheSnapshotForCloud, readWorkspaceIndex, workspaceIndexSummary } from './workspace-index.js'
 import { buildRemoteCursor, buildWorkspaceHydration, contentManifestSummary, listDerivedWorkspaceRoots, normalizeDerivedPathOverrides, readSingleWorkspaceEntry, workspaceFilePath, workspaceLocalChanges } from './workspace-manifest.js'
@@ -112,6 +113,9 @@ export async function readAgentState(options) {
     latestRefreshEvent,
   })
   const lastRecovery = findLastEvent(eventEntries, 'journal.recovery_complete')
+  // GR-A3 (decisions §1): open same-owner multi-device divergences, derived
+  // purely from the local event log so this never needs a second cloud read.
+  const divergences = deriveOpenDivergences(eventEntries)
   const lastWatchStarted = findLastEvent(eventEntries, 'watch.started')
   const lastWatchDegraded = findLastEvent(eventEntries, 'watch.degraded')
   const lastWatchRecoveryBlocked = findLastEvent(eventEntries, 'watch.recovery_blocked')
@@ -369,6 +373,7 @@ export async function readAgentState(options) {
       remotePull: remotePullHealth,
       remotePush: remotePushHealth,
       watch: watchHealth,
+      divergences,
       events: {
         path: eventsSummary.path,
         exists: eventsSummary.exists,
