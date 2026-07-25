@@ -15,7 +15,25 @@ import { existsSync, watch } from 'node:fs'
 
 export async function readAgentState(options) {
   const cloudService = createCloudGraphService(options)
-  const cloud = await cloudService.readOptionalVisibleGraph(visibilityRequestFromOptions(options))
+  // Decisions §12 (cloud-unreachable behavior): `hop status` is the surface
+  // that tells you how much unacknowledged work is queued up, so it is most
+  // needed precisely when the cloud cannot be reached. A remote backend
+  // throws a transport error here rather than returning the `null` a
+  // not-yet-initialized local graph returns, which would take the whole
+  // read-only status path down with it. `null` is already a supported shape
+  // everywhere below (that is the not-initialized case), so an unreachable
+  // cloud degrades into it and is reported as `cloudReachable: false`
+  // instead of as a crash. Local journal/event state -- the backlog itself --
+  // is read from disk and is unaffected either way.
+  let cloudReachable = true
+  let cloudReadError = null
+  let cloud = null
+  try {
+    cloud = await cloudService.readOptionalVisibleGraph(visibilityRequestFromOptions(options))
+  } catch (error) {
+    cloudReachable = false
+    cloudReadError = error instanceof Error ? error.message : String(error)
+  }
   const journalEntries = await readNdjson(options.journal)
   const eventEntries = await readNdjson(options.events)
   const journalState = classifyJournalEntries(journalEntries, eventEntries)
@@ -362,6 +380,8 @@ export async function readAgentState(options) {
         derivedPaths,
       },
       cloud: cloudSummary,
+      cloudReachable,
+      cloudReadError,
       journal: {
         path: journalSummary.path,
         exists: journalSummary.exists,

@@ -605,8 +605,8 @@ verifies them end-to-end rather than as separate build tasks.)*
   - [x] GR-S1  - [x] GR-A1  - [x] GR-A2  - [x] GR-A3  - [x] GR-A4
   - [x] GR-B1  - [x] GR-B2  - [x] GR-B3  - [x] GR-B4  - [x] GR-B5
   - [x] GR-C1  - [x] GR-D1  - [x] GR-D2
-  - [x] GR-E1  - [x] GR-E2  - [ ] GR-E3
+  - [x] GR-E1  - [x] GR-E2  - [x] GR-E3
   - [x] GR-F1  - [x] GR-F2
   - [x] GR-G1  - [x] GR-G2  - [x] GR-G3
   - [x] GR-H1  - [x] GR-H2  - [x] GR-H3  - [x] GR-H4
-  - [ ] GR-X1
+  - [x] GR-X1
