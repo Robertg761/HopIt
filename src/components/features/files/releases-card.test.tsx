@@ -5,7 +5,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { ReleasesLoadState } from './use-releases'
 
-const useReleases = vi.fn<[string | null], ReleasesLoadState | null>()
+const useReleases = vi.fn<(codebaseId: string | null) => ReleasesLoadState | null>()
 
 vi.mock('./use-releases', () => ({
   useReleases: (codebaseId: string | null) => useReleases(codebaseId),
