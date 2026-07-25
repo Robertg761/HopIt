@@ -2,6 +2,9 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
+import { execFile } from 'node:child_process'
+import { promisify } from 'node:util'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { test } from 'node:test'
 import { readNdjson } from '../src/io.js'
 import { hashBuffer } from '../src/journal.js'
@@ -112,6 +115,45 @@ test('withCloudFetchRetry throws the last error once transient attempts are exha
     /fetch failed/,
   )
   assert.equal(calls, 4, 'it stops after the configured attempt budget')
+})
+
+// Every other retry test above injects `sleep: noSleep`, so none of them ever
+// executes the real backoff -- which is exactly how this survived: the default
+// sleep `unref`'d its timer, so it did not hold the event loop open. A process
+// whose only pending work was a retry backoff therefore exited *before* the
+// retry ran: no result, no error, exit code 0. It also cancelled every
+// remaining test in remote-push.test.js, which had long been written off as an
+// environment-only quirk on Linux.
+//
+// This has to run in a child process with nothing else keeping the loop alive;
+// inside the parent test run there is always other pending work to mask it.
+test('withCloudFetchRetry default backoff holds the event loop open until the retry completes', async () => {
+  const cloudRetryUrl = pathToFileURL(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), '../src/cloud-retry.js'),
+  ).href
+  const script = `
+    import { withCloudFetchRetry } from ${JSON.stringify(cloudRetryUrl)}
+    const transient = () => {
+      const error = new TypeError('fetch failed')
+      error.cause = Object.assign(new Error('other side closed'), { code: 'UND_ERR_SOCKET' })
+      return error
+    }
+    let calls = 0
+    const value = await withCloudFetchRetry(async () => {
+      calls += 1
+      if (calls < 3) throw transient()
+      return 'recovered'
+    }, { attempts: 5, baseDelayMs: 25, maxDelayMs: 50 })
+    process.stdout.write(JSON.stringify({ calls, value }))
+  `
+  const { stdout } = await promisify(execFile)(process.execPath, ['--input-type=module', '-e', script], {
+    encoding: 'utf8',
+  })
+  assert.deepEqual(
+    JSON.parse(stdout || '{}'),
+    { calls: 3, value: 'recovered' },
+    'the retry must survive two backoffs and return its result',
+  )
 })
 
 test('materializeCloudEntry survives a transient blob fetch and journals cloud.fetch_recovered', async (t) => {
