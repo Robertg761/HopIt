@@ -376,7 +376,7 @@ Classification reuses `classifyReconnectEntry` from GR-A1 verbatim (same bucket 
 
 1. **No pending refresh:** ordinary edit (`only-local`) — journaled exactly as before.
 2. **Save matches the refreshed hash, or its content contains the refreshed content:** clean edit (`auto-resolved`, reason `identical_content` or `builds_on_refreshed_content`) — journaled normally, and the ledger's pending refresh clears.
-3. **Neither:** a genuine save-side divergence (`diverged`, reason `content_differs`). `performSyncOnce` never journals or commits this write — Main's cloud content is left exactly as it is (never a silent revert of either side) — and instead emits `sync.save_clobber_diverged` with the path, the refreshed hash/revision, and the local hash. The local file's bytes on disk are untouched either way; only the push to cloud is withheld until something outside this classifier resolves it (`hop conflicts`, GR-A3, once that surface lands).
+3. **Neither:** a genuine save-side divergence (`diverged`, reason `content_differs`). `performSyncOnce` never journals or commits this write — Main's cloud content is left exactly as it is (never a silent revert of either side) — and instead emits `sync.save_clobber_diverged` with the path, the refreshed hash/revision, and the local hash. The local file's bytes on disk are untouched either way; only the push to cloud is withheld until something outside this classifier resolves it — `hop conflicts` / `hop conflicts resolve` (GR-A3), which reads this event through `deriveOpenDivergences` below.
 
 ### Divergence Persistence (GR-A2, decisions §1)
 
@@ -388,7 +388,7 @@ Every bucket-3 classification from `recoverJournal` is persisted as an open **di
 - **Resolution is itself a step.** `resolveDivergence` (`packages/agent/src/commands/sync.js`) is the library entry point GR-A3's CLI/dashboard surfaces call: `keep: 'local'` commits the captured `localEntry` (or a delete, for the delete-vs-edit case) through the normal `commitJournalEntry` path — same `file_versions` bookkeeping as any other write — and `keep: 'cloud'` writes nothing new, since the cloud's current file already is the winning content. Either way the record is only ever marked `resolved`, never deleted, so the side that lost stays fetchable (via `getDivergence`, or, for the cloud side, via `file_versions` at its old revision) forever.
 - Divergence persistence is best-effort with respect to disk reads: if the local file was already moved out from under `recoverJournal` before the record could be opened, that one path's `journal.reconnect_diverged_local_content_unavailable` event fires and the record is still opened with `localEntry: null` (`localHash` still identifies what was lost), rather than failing the whole recovery.
 
-**Divergence surfaces (GR-A3, decisions §1).** `deriveOpenDivergences` (`packages/agent/src/reconnect.js`) turns the raw `journal.reconnect_diverged` event stream into the *currently open* set: it pairs each diverged path with the most recent `conflicts.resolved` event for that path (emitted by the resolver below) and reports it as open only if it has never been resolved, or diverged again after its last resolution. This stays a pure function over the local event log — no second cloud read, no separate persistence layer — so both the fast status endpoint (`status-endpoints.js`, used by the dashboard poll) and the full `hop status` path (`status-state.js`) expose the identical `status.divergences` array. `packages/agent/src/commands/conflicts.js` is the only place that closes a divergence: `hop conflicts` lists the open set (device labels, paths, ages); `hop conflicts resolve <path> --keep local|cloud` either materializes the cloud file locally (`--keep cloud`) or journals the current on-disk content, rebased onto the current cloud head, as a normal write (`--keep local` — a user who hand-combined both sides into the local file before running this is exactly how a "combined" resolution happens, since no automatic line-level merge exists anywhere in HopIt). Either way the stale pending journal entries that caused the divergence are explicitly acknowledged so `hop recover` never reclassifies them as diverged again. Device labels (`localDeviceName`/`cloudDeviceName`) are best-effort only — attributing a specific cloud-side edit to a specific device durably is GR-A2 territory — so the CLI, status API, and dashboard panel (`src/components/features/review/divergence-panel.tsx`) must all degrade to a generic label rather than omit a divergence when a name is unknown.
+**Divergence surfaces (GR-A3, decisions §1).** `deriveOpenDivergences` (`packages/agent/src/reconnect.js`) turns the raw divergence-opening event stream into the *currently open* set: it pairs each diverged path with the most recent `conflicts.resolved` event for that path (emitted by the resolver below) and reports it as open only if it has never been resolved, or diverged again after its last resolution. Two event names open a divergence, not one: `journal.reconnect_diverged` from the reconnect path, and `sync.save_clobber_diverged` from GR-F2's save-side path, whose cloud side is named `refreshedHash`/`refreshedRevision` and is normalized to `cloudHash`/`cloudRevision` here (`divergenceOpeningEvents`) rather than at each consumer. Normalizing centrally is what makes GR-F2's stated acceptance — "journal it as a divergence instead of a clean edit, surface via GR-A3" — actually hold: a stale-buffer clobber shows up in `hop conflicts`, in `status.divergences`, and is resolvable with `hop conflicts resolve` through exactly the same code path as a reconnect divergence. This stays a pure function over the local event log — no second cloud read, no separate persistence layer — so both the fast status endpoint (`status-endpoints.js`, used by the dashboard poll) and the full `hop status` path (`status-state.js`) expose the identical `status.divergences` array. `packages/agent/src/commands/conflicts.js` is the only place that closes a divergence: `hop conflicts` lists the open set (device labels, paths, ages); `hop conflicts resolve <path> --keep local|cloud` either materializes the cloud file locally (`--keep cloud`) or journals the current on-disk content, rebased onto the current cloud head, as a normal write (`--keep local` — a user who hand-combined both sides into the local file before running this is exactly how a "combined" resolution happens, since no automatic line-level merge exists anywhere in HopIt). Either way the stale pending journal entries that caused the divergence are explicitly acknowledged so `hop recover` never reclassifies them as diverged again. Device labels (`localDeviceName`/`cloudDeviceName`) are best-effort only — attributing a specific cloud-side edit to a specific device durably is GR-A2 territory — so the CLI, status API, and dashboard panel (`src/components/features/review/divergence-panel.tsx`) must all degrade to a generic label rather than omit a divergence when a name is unknown.
 
 **Unified reconciliation and reconnect ordering (GR-A4, decisions §1).** Everything above (GR-A1's classification, GR-A2's persistence, GR-A3's surfaces) assumes there is already a pending journal entry to classify. That is true for a live watcher's own writes, but not for edits made while the agent was not running at all — offline, crashed, force-quit, or a workspace folder restored from an external backup (e.g. Time Machine). `watchWorkspace`'s startup path (`packages/agent/src/watch.js`) closes that gap with a single extra step, `reconcileUnwatchedChanges`, run **before** `recoverJournal` and fully awaited before it:
 
@@ -839,6 +839,39 @@ is the CLI surface:
   directly (tag name, revision to look up the mirror commit by) with no
   schema change needed. See "Continuous Git Mirror" above for the tagging
   mechanics.
+
+### End-To-End Adversarial Suite (GR-X1)
+
+`packages/agent/test/git-replacement-e2e.test.js` chains the tracks above
+into five scenarios instead of testing any one of them in isolation, so it
+fails when a seam between two tasks breaks even though both tasks' own
+suites stay green. Two devices share one cloud graph and are driven through
+the real `hop` CLI; scenario 5 additionally runs against a live loopback D1
+worker whose sockets are destroyed mid-test, so "cloud unreachable" is a real
+severed connection. Every scenario finishes with a recursive path→sha256
+compare across both devices, the cloud graph, and (scenario 1) a checkout of
+the git mirror.
+
+Two behaviors it pinned down are worth calling out because they were only
+visible when the tracks were chained:
+
+- **`hop status` survives an unreachable cloud** (`status-state.js`).
+  A remote backend throws a transport error where a not-yet-initialized local
+  graph returns `null`, which used to take the whole read-only status path
+  down with it — precisely when status is the surface you reach for. The
+  cloud read is now guarded, degrades to the already-supported `null` graph,
+  and reports `cloudReachable: false` with `cloudReadError` instead of
+  crashing. Journal and event state come off local disk and are unaffected.
+- **A hard outage does not fill the journal.** `performSyncOnce` must read
+  the cloud graph before it can plan (and therefore journal) anything, so
+  with the cloud fully unreachable the sync fails at that read and no entry
+  is written — the journal-first wording elsewhere in this document
+  overstates what happens in this specific case. What actually keeps those
+  writes safe is the workspace plus GR-A4's startup diff-scan, which
+  synthesizes the entries at reconnect along the same path a crash takes.
+  Scenario 5 asserts that real behavior; making the journal genuinely
+  write-ahead of the cloud read is a separate, larger change to the sync
+  path and has not been made.
 
 ### 8. Tighten Conflict Handling
 

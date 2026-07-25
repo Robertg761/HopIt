@@ -228,6 +228,27 @@ function reconcileEntryForReplay(entry, classification, cloud) {
   return reconciled
 }
 
+// GR-F2's save-side clobber detection opens a divergence from the *sync*
+// path rather than the reconnect path, and reports it under its own event
+// name with the refreshed (cloud) side named `refreshedHash`/
+// `refreshedRevision`. GR-F2's acceptance is "journal it as a divergence
+// instead of a clean edit, surface via GR-A3", so it has to land in the same
+// open set as a reconnect divergence -- normalized here rather than at each
+// consumer, so `hop conflicts`, `hop conflicts resolve` and the status
+// `divergences` array all see one kind of divergence.
+const divergenceOpeningEvents = new Map([
+  ['journal.reconnect_diverged', (detail) => detail],
+  [
+    'sync.save_clobber_diverged',
+    (detail) => ({
+      ...detail,
+      type: detail.type ?? 'write',
+      cloudHash: detail.cloudHash ?? detail.refreshedHash ?? null,
+      cloudRevision: detail.cloudRevision ?? detail.refreshedRevision ?? null,
+    }),
+  ],
+])
+
 // GR-A3 (decisions §1: divergence surfaces). `recoverJournal` never persists
 // its own durable divergence records (that is GR-A2's job); it does emit one
 // `journal.reconnect_diverged` event per diverged path every time recovery
@@ -244,10 +265,11 @@ export function deriveOpenDivergences(eventEntries) {
   const latestResolvedByPath = new Map()
 
   for (const event of eventEntries) {
-    if (event?.event === 'journal.reconnect_diverged') {
+    const normalizeDetail = divergenceOpeningEvents.get(event?.event)
+    if (normalizeDetail) {
       const detailPath = event.detail?.path
       if (!detailPath) continue
-      latestDivergedByPath.set(detailPath, event)
+      latestDivergedByPath.set(detailPath, { ...event, detail: normalizeDetail(event.detail ?? {}) })
     } else if (event?.event === 'conflicts.resolved') {
       const detailPath = event.detail?.path
       if (!detailPath) continue
