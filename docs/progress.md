@@ -110,6 +110,26 @@ Current verified result:
 - Production Clerk sign-in and D1 owner claim were smoke-tested on `https://hopit.dev`; Basic Auth fallback is no longer needed for the owner handoff.
 - Google Auth Platform Audience for project `hopit-auth-prod-rg`: shows `1 user (1 test, 0 other) / 100 user cap` and the test-user row `robertgordon761@gmail.com`.
 
+## 2026-07-24 Write-Ahead Journaling Across A Cloud Outage
+
+Closes the one item GR-X1 scenario 5 found and deliberately left open.
+
+**The gap.** A journal entry needs a `baseRevision`, a privacy zone, a target state and a before/after comparison, all of which come from the cloud graph — so `performSyncOnce`'s graph read was a hard prerequisite for journaling anything. With the cloud fully unreachable the sync failed at that read and wrote **no entry at all**; the writes survived only as files on disk for GR-A4's startup diff-scan to find at reconnect. Safe, but recovery-on-restart rather than the journal-first behavior the architecture doc claimed.
+
+**The fix** (`packages/agent/src/graph-cache.js`, wired into `performSyncOnce`): every successful graph read snapshots the graph next to the journal (`<journal-basename>.graph-cache.json`, same convention as the GR-F2 writer ledger), taken at the *start* of a sync so it is always a state the server really was in. When a later read fails because the cloud is unreachable, the sync plans against that snapshot: entries come out fully formed, land as `pending`, and `recoverJournal` commits them at reconnect with no special casing. `sync.cloud_unreachable` and `journal.write_ahead_pending` report it; the sync result carries `cloudReachable: false` and `writeAheadPending`.
+
+Three things that turned out to matter more than the caching itself:
+
+- **Only transport failures qualify.** `isCloudUnreachableError` says yes only to a `fetch`-level rejection — no HTTP response arrived. Anything the backend throws *after* a response (bad token, revoked session, quota, malformed statement) keeps failing loudly, because falling back there would hide a real, non-transient problem behind a silently growing local backlog. It defaults to "no" for anything unrecognized, and with no snapshot on disk the pre-existing failure behavior is unchanged.
+- **The snapshot rolls forward during an outage.** Without this, every sync in one outage re-planned against the same untouched snapshot: it re-journaled the same paths and stamped every entry with the same revision, so the first entry committed at reconnect and the rest failed `selected_state_revision_mismatch` against the state their own predecessor had just advanced. Each offline sync now writes back the graph it projected, so successive syncs read as one continuous session. The snapshot becomes a projected rather than observed state — safe, because it is only used for offline planning, any successful read overwrites it, and a wrong projection degrades into a divergence.
+- **Offline entries carry no `targetStateRevision`.** That guard encodes a strict *global* sequence, but replay orders entries by per-path causality and does not preserve it, so a write-ahead batch failed on whichever entry was applied out of order. The revision it would commit at is unknowable offline anyway. `baseRevision` is kept — per-path, survives reordering, is what GR-A1 classification reads, and is the guard that actually prevents clobbering a newer cloud version.
+
+New `packages/agent/test/journal-write-ahead.test.js`: 9 tests. Three unit tests on the unreachable/rejected discriminator (including a cyclic `cause` chain). Six end-to-end against a loopback D1 worker severed at the socket: the snapshot is taken and predates its own sync's commit; an unreachable cloud journals well-formed pending entries and acknowledges nothing; reconnect commits the backlog and the write reaches a second device; an entry whose path moved on the cloud meanwhile opens a divergence with both sides intact rather than overwriting; a *reachable* server that rejects the request (wrong proxy token) still fails loudly and journals nothing; and with no snapshot on disk the sync fails exactly as it did before.
+
+GR-X1 scenario 5 was updated to assert the new, stronger property — the journal fills up during the outage rather than being reconstructed afterwards — and no longer expects a diff-scan to synthesize the backlog, because there is nothing left for it to find.
+
+Evidence: `npm run agent:test` — 541 tests, 534 pass, 0 fail, 5 cancelled (the same environment-only Linux cancellations), 2 skipped; previous wave was 532/525, so +9 with zero regressions in the core sync path. `npm run test:worker` 89/89. `npm run test:web` 250/250 across 45 files. `npm run lint`, `npm run typecheck:agent`, `npm run build`, `node packages/agent/src/cli.js --help` all clean.
+
 ## 2026-07-24 Final Wave Closed: Release Git Tags (GR-E3) And The End-To-End Adversarial Suite (GR-X1)
 
 Closes `docs/git-replacement-implementation-plan.md` — all 26 checklist boxes are now ticked.

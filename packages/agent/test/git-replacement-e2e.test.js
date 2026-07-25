@@ -629,16 +629,15 @@ test('scenario 4: a stale-buffer save over a refreshed file diverges instead of 
 // the outage visible rather than pretending everything is fine, and
 // reconnecting has to converge byte-identically with no lost writes.
 //
-// Worth knowing, because it is not what you would guess: against a *fully*
-// unreachable cloud the journal does not accumulate. `performSyncOnce` reads
-// the cloud graph before it can plan (and therefore journal) anything, so a
-// hard outage fails at that read and no entry is written. What actually
-// keeps the writes safe is the workspace itself plus GR-A4's startup
-// diff-scan, which synthesizes the entries at reconnect -- the same path a
-// crash takes in scenario 2. This scenario asserts that real behavior rather
-// than the journal-first one the architecture doc's wording implies; closing
-// that gap would mean restructuring the sync path and is deliberately left
-// to a separate task.
+// This scenario originally documented a gap it found: a hard outage used to
+// produce no journal entry at all, because `performSyncOnce` must read the
+// cloud graph before it can plan anything, so the read failed first and the
+// writes survived only as files on disk for GR-A4's startup diff-scan to
+// find at reconnect. That gap is now closed -- successful reads snapshot the
+// graph and an unreachable cloud plans against the snapshot
+// (`packages/agent/src/graph-cache.js`) -- so the scenario asserts the
+// stronger property: the journal fills up *during* the outage, and the
+// backlog is real rather than reconstructed after the fact.
 // ---------------------------------------------------------------------------
 
 // A loopback D1 API worker whose connection can be cut and restored without
@@ -794,10 +793,16 @@ test('scenario 5: editing through a severed cloud loses nothing and converges by
   }
   for (const [relativePath, content] of Object.entries(offlineWrites)) {
     await writeWorkspaceFile(deviceA, relativePath, content)
-    // Each save tries to reach the cloud and cannot. The failure is the
-    // scenario, so it is captured rather than thrown.
+    // The sync cannot reach the cloud, but it no longer fails: it plans
+    // against the cached graph and journals the write as pending.
     const attempt = await runCliAllowingFailure('sync-once', argsA)
-    assert.equal(attempt.ok, false, `sync of ${relativePath} could not reach the severed cloud`)
+    assert.equal(attempt.ok, true, `sync of ${relativePath} journaled despite the severed cloud`)
+  }
+
+  // The backlog is a real journal, accumulated during the outage.
+  const outageJournalPaths = new Set((await readNdjson(deviceA.journal)).map((entry) => entry.path))
+  for (const relativePath of Object.keys(offlineWrites)) {
+    assert.ok(outageJournalPaths.has(relativePath), `${relativePath} is journaled while the cloud is unreachable`)
   }
 
   // --- The outage is surfaced, not swallowed: `hop status` still runs (it is
@@ -830,19 +835,20 @@ test('scenario 5: editing through a severed cloud loses nothing and converges by
     'the severed writes really did not reach the cloud -- convergence below is not a false positive',
   )
 
-  // --- Restarting the agent is what drains the backlog: startup
-  // reconciliation diff-scans the workspace, synthesizes a journal entry for
-  // every edit made while the cloud was gone, and replays them.
+  // --- Restarting the agent drains the backlog: the entries are already in
+  // the journal from during the outage, so recovery simply commits them.
   const restartOptions = { ...parseOptions(argsA), quiet: true }
   const eventsBefore = (await readNdjson(deviceA.events)).length
   const handle = await watchWorkspace(restartOptions)
   t.after(() => handle?.close())
 
   const newEvents = (await readNdjson(deviceA.events)).slice(eventsBefore)
-  const scanned = newEvents.find((event) => event.event === 'watch.diff_scan_synthesized')
-  assert.ok(scanned, 'the reconnecting agent diff-scans the workspace')
   const recovered = newEvents.find((event) => event.event === 'journal.recovery_complete')
-  assert.ok(recovered, 'the synthesized backlog went through the normal recovery path')
+  assert.ok(recovered, 'the write-ahead backlog went through the normal recovery path')
+  assert.ok(
+    recovered.detail.acknowledged >= Object.keys(offlineWrites).length,
+    'the entries journaled during the outage are what got committed -- not entries reconstructed afterwards',
+  )
   assert.equal(recovered.detail.diverged, 0, 'one device catching up on its own edits never diverges')
   assert.equal(recovered.detail.failed, 0)
 
