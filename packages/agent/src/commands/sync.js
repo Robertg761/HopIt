@@ -10,6 +10,7 @@ import { actorIdFromOptions, bufferFromCloudFileEntry, bufferFromFileEntry, clou
 import { assertWorkspacePathSafe } from '../paths.js'
 import { buildDivergenceRecord, partitionEntriesForReconnect, reconnectBucket } from '../reconnect.js'
 import { classifySaveAgainstRefresh, clearWriterLedgerPath, markLocalSaveWriter, markRefreshWriter, readWriterLedger, writeWriterLedger } from '../save-clobber.js'
+import { isCloudUnreachableError, readCachedGraph, writeCachedGraph } from '../graph-cache.js'
 import { classifyJournalEntries, hasUnresolvedSyncFailure, prepareRecovery, readJournalSafety, syncContextDetail, visibleRevisionFromEvent } from '../status-state.js'
 import { deletableCloudPathsForWorkspace, findIndexedCodebase, hydratedPathsAfterSync, readWorkspaceIndex, upsertWorkspaceIndexFromCloud, workspaceIndexHydrationStateForSync } from '../workspace-index.js'
 import { exoneratedLocalChanges, readWorkspaceFiles, withheldRefreshPaths, workspaceFilePath, workspaceLocalChanges } from '../workspace-manifest.js'
@@ -424,7 +425,30 @@ export async function syncOnce(options, context = {}) {
 
 export async function performSyncOnce(options, contextDetail = {}) {
   const cloudService = createCloudGraphService(options)
-  const cloud = await cloudService.readGraph()
+  // Write-ahead journaling across an outage: a successful read snapshots the
+  // graph, and an unreachable cloud falls back to that snapshot so the sync
+  // can still plan and journal. Entries land `pending` and are committed by
+  // `recoverJournal` at reconnect, which runs them through the normal GR-A1
+  // classification -- planning against a stale revision is precisely what
+  // that classifier exists to make safe. See `packages/agent/src/graph-cache.js`.
+  let cloud
+  let offlineJournaling = false
+  try {
+    cloud = await cloudService.readGraph()
+    await writeCachedGraph(options, cloud)
+  } catch (error) {
+    // Only a transport failure falls back. An auth/quota/validation error
+    // means the server answered and said no, and must keep failing loudly.
+    if (!isCloudUnreachableError(error)) throw error
+    cloud = await readCachedGraph(options)
+    if (!cloud) throw error
+    offlineJournaling = true
+    await emit(options, 'sync.cloud_unreachable', {
+      reason: error instanceof Error ? error.message : String(error),
+      cachedRevision: cloud.revision ?? null,
+      ...contextDetail,
+    })
+  }
   const scanOptions = await withDerivedPathOverrides(options, cloudService)
   const diskEntries = await readWorkspaceFiles(options.workspace, scanOptions)
   const visibilityContext = visibilityContextForGraph(cloud, visibilityRequestFromOptions(options))
@@ -598,9 +622,29 @@ export async function performSyncOnce(options, contextDetail = {}) {
     plannedEntries,
     now,
     summaryEvent: 'sync.bulk_commit',
+    offlineJournaling,
   }))
 
-  if (!cloudService.usesAtomicFileMutations) {
+  // Roll the snapshot forward by the entries this offline sync just planned.
+  // `planningCloud` has had each one applied to it, so it is the state the
+  // cloud *will* be in once the backlog commits. Without this, every sync
+  // during a single outage would re-plan against the same untouched snapshot
+  // and stamp all of its entries with the same `targetStateRevision` -- the
+  // first would commit at reconnect and the rest would fail
+  // `selected_state_revision_mismatch` against the state their own
+  // predecessor just advanced. Successive offline syncs have to read like one
+  // continuous session, which is what this makes true.
+  //
+  // It does mean the snapshot is now a projected state rather than one the
+  // server was observed in. That is safe: it is only ever used for offline
+  // planning, any successful read overwrites it with real server state, and
+  // if the projection turns out wrong (the cloud moved too), reconnect
+  // classification opens a divergence rather than trusting it.
+  if (offlineJournaling && plannedEntries.length > 0) {
+    await writeCachedGraph(options, planningCloud)
+  }
+
+  if (!cloudService.usesAtomicFileMutations && !offlineJournaling) {
     await cloudService.writeGraph(cloud)
   }
 
@@ -645,8 +689,19 @@ export async function performSyncOnce(options, contextDetail = {}) {
           saveClobberDivergedPaths: clobberDiverged.map((entry) => entry.path),
         }
       : {}),
+    ...(offlineJournaling
+      ? {
+          cloudReachable: false,
+          writeAheadPending: plannedEntries.length,
+        }
+      : {}),
   }
   await emit(options, 'sync.complete', result)
+  // Skipped while offline: the workspace index records hydration state from
+  // the graph, and the graph in hand is a stale snapshot. Writing it would
+  // claim the workspace matches a revision the cloud may have moved past.
+  // The next successful sync rewrites it from the real graph.
+  if (offlineJournaling) return result
   const visibleCloud = filterVisibleGraphForRequester(cloud, visibilityRequestFromOptions(options))
   await upsertWorkspaceIndexFromCloud(options, visibleCloud, {
     reason: 'sync',
@@ -998,8 +1053,41 @@ async function commitPlannedJournalEntries({
   summaryEvent = 'sync.bulk_commit',
   acknowledgementDetail = null,
   journalAlreadyWritten = false,
+  offlineJournaling = false,
 }) {
   if (plannedEntries.length === 0) return []
+
+  // Cloud unreachable: write the journal and stop there. The entries stay
+  // `pending`, which is the same state an interrupted sync leaves behind, so
+  // `recoverJournal` picks them up at reconnect with no special casing. No
+  // `cloud.acknowledged` is emitted because nothing was acknowledged, and
+  // none of these count as committed writes to the caller.
+  if (offlineJournaling) {
+    for (const plan of plannedEntries) {
+      if (journalAlreadyWritten) continue
+      // The selected-state revision this entry will commit at is not
+      // knowable while the cloud is unreachable, and the guard it feeds
+      // (`assertEntrySelectedStateRevision`) encodes a strict *global*
+      // sequence. Replay orders entries by per-path causality, which does
+      // not preserve that global sequence, so a write-ahead batch would fail
+      // on whichever entry happened to be applied out of order.
+      //
+      // `baseRevision` is deliberately kept: it is per-path, it survives
+      // reordering, it is what GR-A1 classification reads, and it is the
+      // guard that actually stops a stale write from clobbering a newer
+      // cloud version. Dropping the global one loses no protection that was
+      // meaningful for an entry planned offline in the first place.
+      delete plan.entry.targetStateRevision
+      await appendNdjson(options.journal, plan.entry)
+      await emit(options, 'write.journaled', plan.entry)
+    }
+    await emit(options, 'journal.write_ahead_pending', {
+      count: plannedEntries.length,
+      paths: plannedEntries.map((plan) => plan.entry.path).filter(Boolean),
+      cachedRevision: cloud?.revision ?? null,
+    })
+    return []
+  }
 
   const useBulk =
     plannedEntries.length > bulkJournalCommitThreshold &&

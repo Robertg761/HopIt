@@ -862,16 +862,59 @@ visible when the tracks were chained:
   cloud read is now guarded, degrades to the already-supported `null` graph,
   and reports `cloudReachable: false` with `cloudReadError` instead of
   crashing. Journal and event state come off local disk and are unaffected.
-- **A hard outage does not fill the journal.** `performSyncOnce` must read
-  the cloud graph before it can plan (and therefore journal) anything, so
-  with the cloud fully unreachable the sync fails at that read and no entry
-  is written — the journal-first wording elsewhere in this document
-  overstates what happens in this specific case. What actually keeps those
-  writes safe is the workspace plus GR-A4's startup diff-scan, which
-  synthesizes the entries at reconnect along the same path a crash takes.
-  Scenario 5 asserts that real behavior; making the journal genuinely
-  write-ahead of the cloud read is a separate, larger change to the sync
-  path and has not been made.
+- **A hard outage used to leave the journal empty**, because `performSyncOnce`
+  must read the cloud graph before it can plan (and therefore journal)
+  anything. That is now fixed — see "Write-Ahead Journaling Across An Outage"
+  below — and scenario 5 asserts the stronger property: the journal fills up
+  *during* the outage rather than being reconstructed from disk afterwards.
+
+### Write-Ahead Journaling Across An Outage
+
+A journal entry needs a `baseRevision`, a privacy zone, a target state, and a
+before/after comparison, all of which come from the cloud graph — which made
+the graph read a hard prerequisite for journaling anything at all. GR-X1
+scenario 5 showed the consequence: with the cloud unreachable, `sync` failed
+at that read and wrote **no entry**, so the writes survived only as files on
+disk waiting for GR-A4's startup diff-scan. Safe, but recovery-on-restart
+rather than a write-ahead journal.
+
+`packages/agent/src/graph-cache.js` closes it:
+
+- **Every successful graph read snapshots the graph** next to the journal
+  (`<journal-basename>.graph-cache.json`, the same convention the GR-F2 writer
+  ledger uses). The snapshot is taken at the *start* of a sync, so it is always
+  a state the server really was in, never a locally-mutated one.
+- **An unreachable cloud plans against the snapshot.** Entries come out fully
+  formed and land in the journal as `pending`; nothing is committed, no
+  `cloud.acknowledged` fires, and `sync.cloud_unreachable` plus
+  `journal.write_ahead_pending` report what happened. At reconnect
+  `recoverJournal` commits them with no special casing.
+- **Only transport failures qualify.** `isCloudUnreachableError` says yes only
+  to a `fetch`-level rejection (no HTTP response arrived). Anything the
+  backend throws after a response — bad token, revoked session, quota, a
+  malformed statement — keeps failing loudly, because planning against a
+  cached graph there would hide a real, non-transient problem behind a
+  silently growing local backlog. It defaults to "no" for anything
+  unrecognized, and with no snapshot on disk the old failure behavior is
+  unchanged.
+- **A stale snapshot is safe by construction.** Planning against an old
+  revision is exactly the situation GR-A1 classification exists for: if the
+  cloud moved the same path meanwhile, reconnect opens a divergence instead of
+  overwriting the newer revision.
+- **The snapshot rolls forward during an outage.** Each offline sync writes
+  back the graph it projected, so successive syncs read as one continuous
+  session instead of re-planning against the same untouched snapshot (which
+  would re-journal the same paths and stamp every entry with the same
+  revision). This makes it a *projected* state rather than an observed one —
+  acceptable because it is only ever used for offline planning, any successful
+  read overwrites it, and a wrong projection degrades into a divergence.
+- **Offline entries carry no `targetStateRevision`.** That guard encodes a
+  strict *global* sequence, but replay orders entries by per-path causality
+  and does not preserve it, so a write-ahead batch would fail on whichever
+  entry was applied out of order. The revision it would commit at is not
+  knowable offline anyway. `baseRevision` is kept: it is per-path, survives
+  reordering, is what classification reads, and is the guard that actually
+  prevents clobbering a newer cloud version.
 
 ### 8. Tighten Conflict Handling
 
