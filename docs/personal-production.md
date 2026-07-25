@@ -211,9 +211,16 @@ Two things make applying these blind unsafe:
   ever appear. A fresh database gets them from the create-table; production
   does not.
 
-**Measured state of the production `hopit` database, 2026-07-24:** only
-`2026-07-14-service-admin` is applied. The other eight are not. One of them
-is *blocked* rather than merely pending — see the `releases` collision below.
+**All nine were applied to the production `hopit` database on 2026-07-24**
+(owner-authorized), after dropping the dead `releases` table described below.
+The status report now returns 15/15 `applied = 1`. A 213 MB pre-migration
+export was taken first and kept outside the repo at
+`~/hopit-d1-backups/hopit-pre-migration-2026-07-24.sql`. Post-change smoke
+check: `hopit.dev` returns 200 and `/api/agent/status` returns 307 to
+sign-in for signed-out users, as expected.
+
+Leave the rest of this section in place: it is the procedure for the next
+batch, and the collision below is the thing most likely to recur.
 
 **Check before applying.** `cloudflare/d1/migration-status.sql` is a read-only
 report — 15 checks across the 9 files, one row per table or column, each
@@ -283,6 +290,18 @@ dropping a table this repo does not own or renaming one it does:
 Because the checker keys the `create table` migrations off a distinctive
 column rather than the table name, this class of collision now shows up as
 `applied = 0` instead of a false "applied".
+
+**Other leftovers from the same descoping.** Comparing the live schema
+against `cloudflare/d1/schema.sql` shows nine more tables that production
+still carries and this repo no longer defines, all from that same removed
+collaboration surface: `issues`, `issue_comments`, `discussions`,
+`discussion_comments`, `projects`, `project_items`, `collaboration_counters`,
+`release_assets`, and `tenant_quota_overrides`. None currently collides with
+anything HopIt wants, so they are harmless clutter today — but `releases`
+was harmless right up until GR-B4 reused the name, and `create table if not
+exists` fails silently when it does. Worth dropping deliberately rather than
+waiting for the next collision. Not dropped: no one has asked for it, and
+each is a destructive statement that deserves its own row-count check first.
 
 Take a D1 export first (`npx wrangler d1 export <DB_NAME> --remote --output
 pre-migration.sql`) — these are additive and low risk, but `alter table` has

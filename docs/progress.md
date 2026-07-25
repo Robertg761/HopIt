@@ -110,6 +110,26 @@ Current verified result:
 - Production Clerk sign-in and D1 owner claim were smoke-tested on `https://hopit.dev`; Basic Auth fallback is no longer needed for the owner handoff.
 - Google Auth Platform Audience for project `hopit-auth-prod-rg`: shows `1 user (1 test, 0 other) / 100 user cap` and the test-user row `robertgordon761@gmail.com`.
 
+## 2026-07-24 Production D1 Migrations Applied (All Nine)
+
+Owner-authorized, applied by hand from this machine against the production `hopit` database. Previously every migration in `cloudflare/d1/migrations/` was committed as a file only.
+
+**Why they had never self-applied.** Production sets `HOPIT_D1_ASSUME_SCHEMA=1`, so `ensureSchema()` (`packages/backend-d1/src/schema-methods.js`) returns before running a statement — the self-healing path that works on a fresh dev database is off in production to protect the free D1 query budget. Separately, the seven newer `codebase_settings` columns exist only inside that table's inline `create table if not exists`, which is a no-op against an already-existing table, so on a live database the migration files were the only way those columns could ever appear.
+
+**Measured starting state** (via the new read-only `cloudflare/d1/migration-status.sql`): only `2026-07-14-service-admin` was applied; the other eight were not.
+
+**The `releases` collision.** Production carried a `releases` table from the GitHub-lite collaboration surface removed in `0565f79` on 2026-07-23 — `number`/`version`/`title`/`status`/`target_json`/`provenance_json`/`published_at`, several `not null`. That commit deleted the code and the schema definition, but migrations here are manual and no drop migration was written, so the table outlived its feature; GR-B4 then reused the name for an unrelated concept. `create table if not exists releases` keys off the name, so it would have silently no-opped and left GR-B4's table uncreated while `hop release` failed on the missing `name`/`pinned_revision` columns. The table held 0 rows, and `0565f79` is in `origin/main` with no remaining reference to it in deployed code, so it was dropped.
+
+This also exposed a flaw in the checker as first written: it tested the `create table` migrations by table *name*, which is exactly what `if not exists` tests, so a foreign table with the same name reported as "applied". It now keys off a distinctive column (`releases.pinned_revision`, `proposals.pinned_revision`, `divergences.local_entry_json`, ...) so this class of collision surfaces as pending.
+
+**Sequence run.** Full 213 MB export first (kept outside the repo at `~/hopit-d1-backups/hopit-pre-migration-2026-07-24.sql`, containing the dropped table's exact DDL); rehearsed end to end on `hopit-staging`, which surfaced that staging has no `codebase_settings` table at all so the four ALTERs fail there — a staging-only condition, production has the table; then on production: drop `releases`, then the eight pending files in date order. Every file executed without error.
+
+**Verification.** The status report returns 15/15 `applied = 1`. `releases`, `proposals`, `divergences` all match the repo schema exactly, and `codebase_settings` carries all seven new columns. `hopit.dev` returns 200 and `/api/agent/status` returns 307 to sign-in for signed-out users. Every check query ran with `rows_written: 0, changed_db: false`.
+
+**Process note:** the "is the dropped table referenced by deployed code?" check was run *after* the drop rather than before. It came back clean (`0565f79` is in `origin/main`, no references), but the ordering was wrong and that verification belongs ahead of any destructive statement.
+
+**Known, not acted on:** nine further tables from the same descoping still exist in production and are no longer defined in this repo — `issues`, `issue_comments`, `discussions`, `discussion_comments`, `projects`, `project_items`, `collaboration_counters`, `release_assets`, `tenant_quota_overrides`. Harmless today, but `releases` was harmless too until a name was reused. Documented in `docs/personal-production.md` as worth dropping deliberately.
+
 ## 2026-07-24 Write-Ahead Journaling Across A Cloud Outage
 
 Closes the one item GR-X1 scenario 5 found and deliberately left open.
