@@ -307,6 +307,25 @@ A mirror-push failure (bad remote, auth failure, etc.) surfaces as a
 back or blocks the merge that triggered it -- Main/the change set's merge
 state are unaffected by mirror health.
 
+**Releases → git tags (GR-E3, decisions §9)**: every mirror commit carries a
+`Main-Revision: <n>` git trailer (`commitMessageForRevision`) -- the durable,
+remote-verifiable way to answer "which mirror commit is Main revision N at?"
+without any per-machine local bookkeeping, since the pushed git history
+itself is the source of truth. `hop release <name>` (`createRelease` in
+`packages/agent/src/commands/release.js`) calls `runMirrorTagRelease`
+(`mirror.js`) right after the release row is created: it fetches the mirror
+branch, finds the commit whose trailer matches the release's pinned
+revision (`git log --format=%(trailers:key=Main-Revision,...)`, git's own
+trailer parser -- never hand-rolled message matching), and pushes an
+annotated tag at that commit with the release name as the tag name and
+`name\n\nnotes` as the tag message. Tag names are validated with git's own
+`check-ref-format` (`assertSafeGitTagName`), same "trust the tool's
+validator" approach `validateGitRemoteUrl` already uses for remotes. This is
+best-effort and layered the same way as mirror-on-merge: no mirror
+configured at all ⇒ `mirrorTag: null`, silently; mirror configured but not
+yet caught up to the release's revision (or any other push failure) ⇒ a
+`git.mirror_tag_failed` event, never a blocked or rolled-back release.
+
 ### Restart Recovery And Watch Loop
 
 Restart recovery and the background watch loop are explicit agent contracts, not demo-only behavior. The current spike exposes recovery through `npm run agent:recover`, and `npm run agent:watch` runs recovery before hydrating the workspace.
@@ -814,10 +833,12 @@ is the CLI surface:
   `NEXT_PUBLIC_RELEASES_LIST` on the codebase page, same
   collaboration-surface-freeze convention as GR-C1's derived-paths card) both
   read `listReleases`, newest first.
-- The git-tag emission on the mirror is GR-E3 (a later task, not implemented
-  here); this table's `name`/`pinned_revision` are shaped for E3 to read
-  directly (tag name candidate, revision to build the git tree from) without
-  a schema change.
+- The git-tag emission on the mirror is GR-E3: `createRelease` calls
+  `runMirrorTagRelease` (`packages/agent/src/commands/mirror.js`) right after
+  the release row is inserted, reading this table's `name`/`pinned_revision`
+  directly (tag name, revision to look up the mirror commit by) with no
+  schema change needed. See "Continuous Git Mirror" above for the tagging
+  mechanics.
 
 ### 8. Tighten Conflict Handling
 

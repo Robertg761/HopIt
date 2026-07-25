@@ -554,10 +554,10 @@ export const d1SchemaStatements = [
   // packages/backend-d1/src/releases-store.js) rather than a SQL unique
   // constraint -- same reasoning as the proposals table's open-proposal
   // constraint: the GR-S1 drift-test parser only understands plain `create
-  // index` statements, not partial/unique index syntax. GR-E3 (later, not
-  // implemented here) reads this table to emit a git tag on the mirror when
-  // one is configured; `name` is the tag name candidate and `pinned_revision`
-  // is what to build the tree from.
+  // index` statements, not partial/unique index syntax. GR-E3: `hop release`
+  // reads this row to emit a git tag on the mirror when one is configured;
+  // `name` is the tag name and `pinned_revision` is looked up against the
+  // mirror commits' `Main-Revision:` git trailers to find the tag target.
   `create table if not exists releases (
     release_id text primary key,
     codebase_id text not null,

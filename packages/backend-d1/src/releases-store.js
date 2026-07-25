@@ -14,10 +14,11 @@ import { defineBackendMethods } from './method-support.js'
 // `createRelease` below is the only write path, and it always checks
 // `getReleaseByName` first.
 //
-// GR-E3 (a later task, not implemented here) reads this table to emit a git
-// tag on the mirror when one is configured: `name` is the tag name
-// candidate, `pinnedRevision` is the Main revision to build the git tree
-// from.
+// GR-E3: `hop release` (packages/agent/src/commands/release.js) reads this
+// row right after creating it to emit a git tag on the mirror when one is
+// configured (packages/agent/src/commands/mirror.js `runMirrorTagRelease`):
+// `name` is the tag name, `pinnedRevision` is the Main revision the mirror
+// commit is looked up by.
 
 export class DuplicateReleaseNameError extends Error {
   constructor(name, detail = {}) {
