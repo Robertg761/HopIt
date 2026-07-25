@@ -239,6 +239,131 @@ export async function runMirrorSetRemote(options) {
   return result
 }
 
+// GR-E3 (decisions §8/§9): "mark this as a release" ⇒ an annotated git tag
+// on the mirror, at the mirror commit for the release's pinned Main
+// revision, with the release name/notes as the tag message. Called from
+// `hop release` right after the release row is created.
+//
+// Best-effort: returns `null` (never throws) when this codebase has no
+// mirror configured at all -- releasing is meaningful without a mirror.
+// Once a mirror *is* configured, failures (mirror hasn't caught up to this
+// revision yet, push rejected, etc.) throw so the caller can surface a
+// non-blocking notification, same "failure surfaces, never blocks the
+// product action" rule as GR-E2's mirror-on-merge.
+export async function runMirrorTagRelease(options, { cloudService, cloud, release }) {
+  const codebaseId = cloud.codebase?.id ?? release.codebaseId
+  const settings = await cloudService.readCodebaseSettings(codebaseId).catch(() => null)
+  const statePath = mirrorStatePath(options)
+  const state = await readMirrorState(statePath)
+  const existingEntry = state.codebases[codebaseId] ?? null
+
+  const remoteUrl = options.remote ?? existingEntry?.remote ?? settings?.mirrorRemoteUrl ?? null
+  if (!remoteUrl) return null
+  validateGitRemoteUrl(remoteUrl)
+
+  const branch = options.branch ?? existingEntry?.branch ?? settings?.mirrorBranch ?? DEFAULT_MIRROR_BRANCH
+  assertSafeGitOptionValue(branch, '--branch')
+
+  if (!Number.isSafeInteger(release?.pinnedRevision)) {
+    throw new Error('runMirrorTagRelease requires a release with an integer pinnedRevision.')
+  }
+  const tagName = assertSafeGitTagName(release.name)
+
+  const deployKeyPath = await materializeDeployKeyFile(settings, options)
+  const gitEnv = deployKeyPath
+    ? { ...process.env, GIT_SSH_COMMAND: `ssh -i ${deployKeyPath} -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new` }
+    : process.env
+
+  const workDir = await fs.mkdtemp(path.join(os.tmpdir(), 'hopit-mirror-tag-'))
+  try {
+    runGit(['init', '--quiet'], workDir)
+    runGit(['config', 'user.name', MIRROR_AUTHOR_NAME], workDir)
+    runGit(['config', 'user.email', MIRROR_AUTHOR_EMAIL], workDir)
+    runGit(['remote', 'add', 'origin', remoteUrl], workDir)
+
+    const remoteHead = fetchRemoteBranchHead(workDir, branch, gitEnv)
+    if (!remoteHead) {
+      throw new Error(`Mirror branch "${branch}" has no commits on the configured remote yet. Run \`hop mirror-sync\` before tagging a release.`)
+    }
+
+    const commitSha = findMirrorCommitForRevision(workDir, remoteHead, release.pinnedRevision)
+    if (!commitSha) {
+      throw new Error(`No mirror commit found for Main revision ${release.pinnedRevision} yet. Run \`hop mirror-sync\` to catch the mirror up before tagging release "${release.name}".`)
+    }
+
+    const tagMessage = release.notes ? `${release.name}\n\n${release.notes}` : release.name
+    const tagEnv = {
+      ...process.env,
+      GIT_AUTHOR_NAME: MIRROR_AUTHOR_NAME,
+      GIT_AUTHOR_EMAIL: MIRROR_AUTHOR_EMAIL,
+      GIT_COMMITTER_NAME: MIRROR_AUTHOR_NAME,
+      GIT_COMMITTER_EMAIL: MIRROR_AUTHOR_EMAIL,
+    }
+    runGit(['tag', '-f', '-a', '-m', tagMessage, '--', tagName, commitSha], workDir, tagEnv)
+    runGit(['push', 'origin', `refs/tags/${tagName}`], workDir, gitEnv)
+    const treeSha = runGit(['rev-parse', `${commitSha}^{tree}`], workDir).stdout.trim()
+
+    const result = {
+      ok: true,
+      command: 'mirror-tag',
+      codebaseId,
+      remote: remoteUrl,
+      branch,
+      tagName,
+      commitSha,
+      treeSha,
+      releaseId: release.releaseId,
+      pinnedRevision: release.pinnedRevision,
+    }
+    await emit(options, 'git.mirror_tagged', result)
+    return result
+  } finally {
+    await fs.rm(workDir, { recursive: true, force: true })
+    if (deployKeyPath) await fs.rm(path.dirname(deployKeyPath), { recursive: true, force: true })
+  }
+}
+
+// Validates a release name as a git tag ref name by delegating to git's own
+// `check-ref-format`, rather than re-implementing the ref-name grammar --
+// same "trust the tool's own validator" approach as `validateGitRemoteUrl`
+// leaning on the URL parser. Rejects anything git itself would reject as a
+// `refs/tags/<name>` (spaces, `~^:?*[\`, `..`, a trailing `.lock`, etc.),
+// which also rules out flag-injection via a name starting with `-` once
+// combined with the `--` separator used before it is passed to `git tag`.
+export function assertSafeGitTagName(name) {
+  if (typeof name !== 'string' || name.length === 0) {
+    throw new Error('Release name must be a non-empty string to use as a git tag name.')
+  }
+  const check = spawnSync('git', ['check-ref-format', '--allow-onelevel', `refs/tags/${name}`], { encoding: 'utf8' })
+  if (check.status !== 0) {
+    throw new Error(`Release name "${name}" is not usable as a git tag name (spaces, "~^:?*[\\", ".." and a trailing ".lock" are not allowed). Choose a different release name to tag the mirror.`)
+  }
+  return name
+}
+
+// Finds the mirror commit carrying a `Main-Revision: <revision>` git trailer
+// (see `commitMessageForRevision`), reading the trailer via git's own
+// trailer parser (`%(trailers:...)`) rather than string-matching commit
+// messages by hand. This is what lets a release tag land on exactly the
+// mirror commit for its pinned Main revision without any local
+// revision-to-commit bookkeeping -- the pushed git history is the source of
+// truth.
+function findMirrorCommitForRevision(cwd, head, revision) {
+  const result = spawnSync(
+    'git',
+    ['log', head, '--format=%H%x09%(trailers:key=Main-Revision,valueonly,separator=%x2C)'],
+    { cwd, encoding: 'utf8' },
+  )
+  if (result.status !== 0) return null
+  for (const line of result.stdout.split('\n')) {
+    if (!line) continue
+    const [sha, rawValue] = line.split('\t')
+    if (!sha || rawValue === undefined) continue
+    if (Number(rawValue.trim()) === revision) return sha
+  }
+  return null
+}
+
 async function readDeployKeyPlaintext(options) {
   if (options['deploy-key-value'] !== undefined) return String(options['deploy-key-value'])
   if (options['deploy-key']) return fs.readFile(options['deploy-key'], 'utf8')
@@ -335,9 +460,14 @@ function commitDateForRevision(sortedVersions, revision) {
 
 function commitMessageForRevision(cloud, revision, trailLabels) {
   const label = trailLabels.get(revision)
-  if (label) return label
-  const codebaseName = cloud.codebase?.name ?? cloud.codebase?.id ?? 'HopIt'
-  return `Update ${codebaseName} to revision ${revision}`
+  const subject = label ?? `Update ${cloud.codebase?.name ?? cloud.codebase?.id ?? 'HopIt'} to revision ${revision}`
+  // GR-E3: a `Main-Revision: <n>` git trailer on every mirror commit is the
+  // durable, remote-verifiable way to answer "which mirror commit is Main
+  // revision N at?" when tagging a release -- the local mirror-state.json
+  // revision bookkeeping above is per-machine/per-runner and not a source of
+  // truth the way the pushed git history itself is. See
+  // `findMirrorCommitForRevision` below.
+  return `${subject}\n\nMain-Revision: ${revision}`
 }
 
 async function trailLabelsByRevision(cloudService, codebaseId) {

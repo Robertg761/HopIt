@@ -4,13 +4,21 @@
 // name, optional notes, pinned revision, created_at. It never mutates Main
 // or any file; it is a pointer row, like a git tag without git (decisions
 // §9: "answers exactly what shipped as v1.2 without git tags in the
-// product"). GR-E3 (a later task, not implemented here) reads the releases
-// table to emit an actual git tag on the mirror when one is configured.
+// product").
+//
+// GR-E3: once a release row exists, it also pushes an annotated git tag
+// (release name + notes) to the mirror at the mirror commit for the
+// release's pinned revision, when a mirror is configured for this codebase
+// (`runMirrorTagRelease` in `mirror.js` -- returns `null` and does nothing
+// when no mirror is configured). Tagging failure never blocks the release:
+// same "surfaces as a notification, never blocks the product action" rule
+// GR-E2 uses for mirror-on-merge.
 import { DuplicateReleaseNameError } from '@hopit/backend-d1'
 import { createCloudGraphService } from '../cloud/d1-graph-service.js'
 import { emit } from '../io.js'
 import { actorIdFromOptions } from '../journal.js'
 import { reportResult } from '../output.js'
+import { runMirrorTagRelease } from './mirror.js'
 
 export async function runReleaseCommand(action = 'create', nameArg = null, options = {}) {
   switch (action) {
@@ -60,7 +68,19 @@ export async function createRelease(options, { name, notes } = {}) {
     createdByUserId: release.createdByUserId,
   })
 
-  return release
+  let mirrorTag = null
+  try {
+    mirrorTag = await runMirrorTagRelease(options, { cloudService, cloud, release })
+  } catch (error) {
+    await emit(options, 'git.mirror_tag_failed', {
+      releaseId: release.releaseId,
+      codebaseId,
+      name: release.name,
+      error: error instanceof Error ? error.message : String(error),
+    })
+  }
+
+  return { ...release, mirrorTag }
 }
 
 async function runReleaseCreate(nameArg, options) {
@@ -70,6 +90,9 @@ async function runReleaseCreate(nameArg, options) {
   reportResult(options, { ok: true, release }, ({ line, success, muted }) => {
     line(`  ${success('✓')} Released ${release.name} ${muted(`(Main rev ${release.pinnedRevision})`)}`)
     if (release.notes) line(`    ${muted(release.notes)}`)
+    if (release.mirrorTag) {
+      line(`  ${success('✓')} Tagged mirror ${release.mirrorTag.tagName} ${muted(`(${release.mirrorTag.commitSha.slice(0, 12)})`)}`)
+    }
   })
   return release
 }

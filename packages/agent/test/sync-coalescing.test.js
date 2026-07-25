@@ -47,12 +47,25 @@ async function readJson(filePath) {
   return JSON.parse(await fs.readFile(filePath, 'utf8'))
 }
 
+// This poller reads the journal while the sync scheduler is still appending
+// to it, so the file's last line can be a half-written record (an append is
+// not atomic). Every *complete* line is valid JSON; only the trailing
+// fragment can be torn, so parse it defensively and let the caller's
+// `waitFor` re-read once the append lands. Dropping it weakens nothing --
+// the assertions are all "eventually N entries", never "at most N".
 async function readNdjson(filePath) {
   try {
-    return (await fs.readFile(filePath, 'utf8'))
-      .split('\n')
-      .filter(Boolean)
-      .map((line) => JSON.parse(line))
+    const lines = (await fs.readFile(filePath, 'utf8')).split('\n')
+    const trailing = lines.pop()
+    const rows = lines.filter(Boolean).map((line) => JSON.parse(line))
+    if (trailing) {
+      try {
+        rows.push(JSON.parse(trailing))
+      } catch {
+        // Torn trailing append; the next poll sees the complete line.
+      }
+    }
+    return rows
   } catch (error) {
     if (error?.code === 'ENOENT') return []
     throw error
