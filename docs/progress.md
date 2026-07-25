@@ -110,6 +110,20 @@ Current verified result:
 - Production Clerk sign-in and D1 owner claim were smoke-tested on `https://hopit.dev`; Basic Auth fallback is no longer needed for the owner handoff.
 - Google Auth Platform Audience for project `hopit-auth-prod-rg`: shows `1 user (1 test, 0 other) / 100 user cap` and the test-user row `robertgordon761@gmail.com`.
 
+## 2026-07-25 Git-Replacement Work Deployed, Scoped-SQL Gap Closed, Descoped Tables Dropped
+
+The git-replacement branch (67 commits) is pushed and live, and production D1 no longer carries the descoped collaboration tables.
+
+**A deploy-blocking gap found before pushing.** `codebaseScopedTables` in `cloudflare/d1/scoped-sql.js` is the allowlist deciding whether a scoped `hst_` session's statement counts as codebase-anchored. It never gained `divergences`, `proposals` or `releases`, and that file was untouched by all 67 commits. An installed device uses a scoped session for normal D1 proxy access, so every statement against those tables would have been refused with "Scoped agent session SQL must be constrained to its codebase or authenticated user" -- silently disabling GR-A2 divergence persistence, GR-B2 propose/merge-queue, and GR-B4 releases (with GR-E3 tagging downstream) in production. All three pass against the local fixture backend, which has no such guard, so nothing in the battery could have caught it. Creating the tables by migration was necessary but not sufficient. Fixed, with coverage on both halves: the three are added to the cross-tenant list in `api-worker.test.js` (which deliberately mirrors the allowlist so an unguarded new table shows up as a gap), and a new positive test proves the reads/inserts/updates the agent actually issues are admitted when scoped to the session's own codebase. Verified the positive test fails without the fix.
+
+**Two things CI caught that the battery never ran.** The git-replacement verification battery specified `npm run typecheck:agent` but not `npm run typecheck`, so no local run ever compiled `src/`; GR-B4's `releases-card.test.tsx` used Vitest's pre-2.x `vi.fn<TArgs, TReturn>()` form and produced seven TS errors under Vitest 4. Separately, `npm run verify` gates on `scripts/check-copy-style.mjs`, which rejects U+2014 anywhere in tracked files, and the work had introduced em-dashes across 19 files; CI does not run that step, so only `verify` would have failed. Both fixed, and the full CI sequence was then run locally rather than the narrower battery: lint, typecheck, typecheck:agent, test:all, test:desktop (140/140), build, check:copy-style.
+
+**Descoped tables dropped.** `issues`, `issue_comments`, `discussions`, `discussion_comments`, `projects`, `project_items`, `collaboration_counters`, `release_assets` -- all 0 rows, all gone. The ordering was the whole point: those eight were still named by `deleteCodebase` as an unguarded delete sequence, so dropping them ahead of the code change would have thrown `no such table` partway through a codebase deletion and left it half deleted. Sequence run: remove the dead lines, push, wait for CI green, confirm `origin/main` carries no remaining reference, verify the deploy serves, then drop. Code first, schema second.
+
+`tenant_quota_overrides` was deliberately kept and is now the only production table `schema.sql` does not define. Quota resolution reads plan defaults and env now, so its row is inert, but the row records a deliberate owner grant (100 GB, 1M daily writes, 100 codebases, 2026-07-19) and is the only record of it.
+
+**Final state.** Migration status 15/15 applied, 0 pending. 31 live tables against 30 in `schema.sql`, the single difference being `tenant_quota_overrides`. `codebase_settings` carries all 12 columns. `hopit.dev` 200, `/sign-in` 200, `/api/agent/status` 307 to sign-in. CI green on `95c2b76`.
+
 ## 2026-07-24 Production D1 Migrations Applied (All Nine)
 
 Owner-authorized, applied by hand from this machine against the production `hopit` database. Previously every migration in `cloudflare/d1/migrations/` was committed as a file only.

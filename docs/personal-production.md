@@ -291,30 +291,29 @@ Because the checker keys the `create table` migrations off a distinctive
 column rather than the table name, this class of collision now shows up as
 `applied = 0` instead of a false "applied".
 
-**Other leftovers from the same descoping -- do not drop these yet.** Nine
-more tables survive in production that this repo no longer defines:
-`issues`, `issue_comments`, `discussions`, `discussion_comments`, `projects`,
-`project_items`, `collaboration_counters`, `release_assets`, and
-`tenant_quota_overrides`. All are empty except `tenant_quota_overrides`,
-which holds one row.
+**Leftovers from the same descoping: cleared 2026-07-25.** Eight further
+tables survived in production that this repo no longer defines -- `issues`,
+`issue_comments`, `discussions`, `discussion_comments`, `projects`,
+`project_items`, `collaboration_counters`, `release_assets`. All held 0 rows
+and all have been dropped.
 
-Eight of them were, until 2026-07-24, still named by `deleteCodebase`
-(`packages/backend-d1/src/graph.js`) as an unguarded sequence of
-`await this.query("delete from <table> ...")`. Dropping any one of them while
-deployed code still referenced it would have thrown `no such table` partway
-through a codebase deletion, leaving the codebase half-deleted -- a much worse
-outcome than the clutter. The dead lines are now removed from
-`deleteCodebase`, but **the drop is still gated on that change being deployed**:
-`origin/main` must contain it before the tables go, or production breaks. The
-ordering is code first, schema second -- the reverse of the usual instinct.
+The ordering mattered and is worth remembering: until 2026-07-24 those eight
+were still named by `deleteCodebase` (`packages/backend-d1/src/graph.js`) as an
+unguarded sequence of `await this.query("delete from <table> ...")`. Dropping
+any one while deployed code still referenced it would have thrown
+`no such table` partway through a codebase deletion, leaving the codebase half
+deleted. So the sequence was: remove the dead lines, push, confirm CI green and
+`origin/main` clean of the references, verify the deploy, and only then drop.
+Code first, schema second -- the reverse of the usual instinct.
 
-`tenant_quota_overrides` is a separate case and should be kept. Current quota
-resolution reads plan defaults and environment variables
-(`packages/backend-d1/src/quota.js`), not this table, so the row is inert --
-but it records a deliberate grant for the owner's own tenant (100 GB storage,
-1,000,000 daily writes, 100 codebases, reason "Owner dogfood workspace
-migration", 2026-07-19) and is the only surviving record of it. Dropping it
-destroys information for no benefit.
+`tenant_quota_overrides` was deliberately kept and is now the only table
+present in production that `cloudflare/d1/schema.sql` does not define. Current
+quota resolution reads plan defaults and environment variables
+(`packages/backend-d1/src/quota.js`), not this table, so its single row is
+inert -- but that row records a deliberate grant for the owner's own tenant
+(100 GB storage, 1,000,000 daily writes, 100 codebases, reason "Owner dogfood
+workspace migration", 2026-07-19) and is the only surviving record of it.
+Dropping it would destroy information for no benefit.
 
 Take a D1 export first (`npx wrangler d1 export <DB_NAME> --remote --output
 pre-migration.sql`) -- these are additive and low risk, but `alter table` has
