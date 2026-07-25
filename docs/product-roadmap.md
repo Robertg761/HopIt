@@ -106,10 +106,19 @@ HopIt becomes the place where all of the owner's projects live.
 Work items:
 
 - Migrate every project in.
-- Eliminate the restart full-rehydration window (~4,491 files / ~15 minutes
-  before push reconnects: see the 2026-07-11 section of
-  [docs/progress.md](progress.md)).
-- Add retry-with-backoff inside `hop hydrate`.
+- ~~Eliminate the restart full-rehydration window~~ **done** (verified
+  2026-07-25). The original complaint was ~4,491 files / ~15 minutes before
+  push reconnects (2026-07-11 section of [docs/progress.md](progress.md)).
+  Startup now verifies clean files against the graph it already read and only
+  calls `materializeCloudEntry` -- the sole per-file cloud read -- for files
+  that actually differ, so a clean workspace costs O(1) cloud reads. Measured
+  on a synthetic 4,491-file workspace: **1.64 s** from `watchWorkspace` to
+  `watch.started`, 0 files re-materialized, 0 diff-scan entries synthesized.
+- ~~Add retry-with-backoff inside `hop hydrate`~~ **done** -- `hydrateFetchRetry`
+  wraps every per-file fetch via `withCloudFetchRetry`
+  (`packages/agent/src/cloud-retry.js`). Note it was only *effective* from
+  2026-07-25: the backoff timer was `unref`'d, so a retry could be dropped
+  silently when nothing else held the event loop open.
 - Run a real backup/restore drill.
 - Code signing plus notarization so installs are clean.
 - Linux agent parity check.

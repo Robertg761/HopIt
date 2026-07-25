@@ -110,6 +110,22 @@ Current verified result:
 - Production Clerk sign-in and D1 owner claim were smoke-tested on `https://hopit.dev`; Basic Auth fallback is no longer needed for the owner handoff.
 - Google Auth Platform Audience for project `hopit-auth-prod-rg`: shows `1 user (1 test, 0 other) / 100 user cap` and the test-user row `robertgordon761@gmail.com`.
 
+## 2026-07-25 Two Phase 1 Roadmap Items Were Already Done (Measured, Not Assumed)
+
+Picked up "eliminate the restart full-rehydration window", the roadmap's largest remaining Phase 1 item (~4,491 files / ~15 minutes before push reconnects). It was already fixed. So was "add retry-with-backoff inside `hop hydrate`". Neither was marked done on the roadmap.
+
+**Restart window, measured rather than trusted.** `docs/progress.md` line 421 already claimed this resolved, but after today's experience with the "known environment-only cancellations" line, a note claiming something works is not evidence. Built a synthetic 4,491-file workspace and measured the real path:
+
+- Restart `hydrateWorkspace` on a clean materialized workspace: **0.57 s**, 0 files re-materialized.
+- Full `watchWorkspace` startup (diff-scan reconciliation, journal recovery, hydrate verify) to `watch.started`: **1.64 s**, 0 re-materialized, 0 diff-scan entries synthesized.
+- Historical baseline: ~900 s.
+
+Wall time alone would not have settled it, because the local fixture backend makes reads nearly free while production pays a network round trip each. The load-bearing property is cloud reads being O(1) in file count, and that is structural: the hydrate loop compares the disk entry against the cloud entry already present in the single graph read, and `continue`s on a byte-identical match. `materializeCloudEntry` -- the only per-file cloud read -- runs solely for files that differ. 0 files hydrated therefore means 0 per-file cloud reads, independent of backend. The invariant is guarded by `hydrate-startup-verify.test.js`, so no new test was added; a large-N timing assertion would be flaky and would not test anything the existing skip assertion does not.
+
+**Hydrate retry** is implemented as `hydrateFetchRetry` wrapping every per-file fetch in `withCloudFetchRetry`. Worth recording that it was only *effective* as of today: the backoff timer was `unref`'d, so retries could be silently dropped (see the entry below).
+
+No code changed. The roadmap is updated to mark both done with the evidence, so neither gets re-investigated. Remaining Phase 1: migrate every project in, backup/restore drill, code signing plus notarization, Linux parity check.
+
 ## 2026-07-25 Retry Backoff Never Held The Event Loop (The "Expected" Cancellations Were A Real Bug)
 
 Every battery run in this repo has reported five cancelled tests in `remote-push.test.js`, recorded across the plans as environment-only Linux noise (loopback sockets hanging). They were not. `npm run agent:test` now reports 542 tests, 540 pass, 0 fail, **0 cancelled**, 2 skipped.
