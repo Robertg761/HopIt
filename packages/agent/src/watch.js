@@ -340,12 +340,12 @@ export async function statWorkspaceDisk(workspacePath) {
 }
 
 // GR-G1 (decisions §11): "disk-pressure acceleration (low free disk ⇒
-// shorten window)". Pure function — tests inject synthetic disk stats rather
+// shorten window)". Pure function -- tests inject synthetic disk stats rather
 // than filling a real disk. When free space is below either the absolute or
 // fractional floor, the idle window shrinks by accelerationFactor (never
 // below the scheduler's minimum cadence); otherwise the configured window is
 // returned unchanged. This only ever changes *when* already-synced content is
-// evicted — it never touches the journal (see pruneWorkspaceCache) and never
+// evicted -- it never touches the journal (see pruneWorkspaceCache) and never
 // overrides the unacknowledged-write refusal.
 export function diskPressureAcceleratedInactiveMs(baseInactiveMs, diskStats, thresholds = {}) {
   if (!diskStats || !Number.isFinite(diskStats.freeBytes)) return baseInactiveMs
@@ -646,7 +646,7 @@ const minimumWorkspaceScanMs = minimumWorkspaceScanIntervalMs
 // leaves a write invisible to the debounced watch scheduler until something
 // else notices it. This scheduler runs independently of both the fs watcher
 // (which may be healthy, degraded to polling, or unavailable) and the 5-min
-// cloud graph-head reconciliation (which only covers the cloud side) — it
+// cloud graph-head reconciliation (which only covers the cloud side) -- it
 // re-walks the on-disk tree every interval, compares it to the last scan, and
 // feeds any drift into the normal watch-sync path exactly like a live watcher
 // event would, so a missed write heals within one scan interval. The walk
@@ -865,7 +865,7 @@ export async function createRemoteRefreshScheduler(options, schedulerOptions = {
       const madeVisibleChange = (refreshResult?.written ?? 0) > 0 || (refreshResult?.deleted ?? 0) > 0
 
       // GR-F1: a cycle that only had withheld (dirty) paths to reconcile made
-      // no visible change on disk — surface that as a skip with the dedicated
+      // no visible change on disk -- surface that as a skip with the dedicated
       // reason instead of a hollow "applied", distinct from whole-workspace skips.
       if (!madeVisibleChange && withheldCount > 0) {
         await emit(options, 'remote-pull.skipped', {
@@ -1015,7 +1015,7 @@ export async function remotePullOnce(options, inject = {}) {
     const madeVisibleChange = (refreshResult?.written ?? 0) > 0 || (refreshResult?.deleted ?? 0) > 0
 
     // GR-F1 (decisions §10): if the only thing this cycle reconciled was a
-    // withheld (dirty) path, nothing actually changed on disk — report a skip
+    // withheld (dirty) path, nothing actually changed on disk -- report a skip
     // with the dedicated reason, distinct from the whole-workspace skips above.
     if (!madeVisibleChange && withheldCount > 0) {
       const skippedDetail = {
@@ -1207,7 +1207,7 @@ export async function remoteRefreshDecision(options, context) {
   // callers that opt into the per-file relaxation (the periodic/one-shot
   // remote-pull path). remoteRefreshDecision is shared with remote-push.js,
   // which is out of scope for this task and keeps its existing whole-workspace
-  // skip on any dirty state — context.allowPerFileWithholding defaults to
+  // skip on any dirty state -- context.allowPerFileWithholding defaults to
   // false so that contract is untouched.
   const dirtyIsWithholdable = context.allowPerFileWithholding && localChanges.state === 'dirty'
   if (!localChanges.safe && !dirtyIsWithholdable) {

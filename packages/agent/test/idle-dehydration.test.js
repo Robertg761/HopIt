@@ -1,10 +1,10 @@
 // GR-G1 (decisions §11): idle dehydration with a user-tunable window and
-// safety invariants — never evict content with unacknowledged journal
+// safety invariants -- never evict content with unacknowledged journal
 // writes, per-folder "keep on this device" pins survive eviction,
 // disk-pressure shortens the window, and re-opening re-materializes
 // byte-identical content. v1 dehydration is dematerialization of the whole
 // codebase back to metadata-only state via the existing dehydrateWorkspace /
-// pruneWorkspaceCache machinery (Track G intro) — no per-file placeholder
+// pruneWorkspaceCache machinery (Track G intro) -- no per-file placeholder
 // stubs.
 import assert from 'node:assert/strict'
 import { createHash, randomUUID } from 'node:crypto'

@@ -2180,7 +2180,7 @@ test('production-profile same-Mac dogfood simulation covers lazy hydration remot
 
   // GR-F1 (decisions §10): README.md is the only file that changed on Main and
   // it's the same file device B has a dirty local edit to, so there's nothing
-  // clean left to apply this cycle — remote-pull still reports "skipped", but
+  // clean left to apply this cycle -- remote-pull still reports "skipped", but
   // now with the dedicated per-file reason instead of the whole-workspace one,
   // and the local edit stays intact (fail-closed).
   const blockedRemotePull = parseLastJsonObject((await runCli('remote-pull', deviceBArgs)).stdout)
@@ -2256,7 +2256,7 @@ test('GR-F1 per-file refresh: untouched files apply, a dirty file is withheld an
   const statusAfterResolve = JSON.parse((await runCli('status', stateArgs(deviceB))).stdout)
   assert.equal(statusAfterResolve.workspace.withheldRefresh, null)
 
-  // A subsequent refresh applies README.md and fully converges — the withheld
+  // A subsequent refresh applies README.md and fully converges -- the withheld
   // path never silently stranded the indexed revision behind cloud head.
   await runCli('refresh', stateArgs(deviceB))
   const finalEvents = await readNdjson(deviceB.events)

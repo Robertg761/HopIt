@@ -393,10 +393,10 @@ export const d1SchemaStatements = [
   // cleanly to databases created before the feature.
   // large_file_threshold_bytes: per-codebase override for the large-file
   // warning threshold (GR-G2). NULL means "use the agent default" (100 MB).
-  // Large files always sync — this only controls when the `file.large`
+  // Large files always sync -- this only controls when the `file.large`
   // dashboard note fires; there is no cap.
   // secret_scanning_enabled: warn-only outbound secret scanning (decisions
-  // doc §7). Unlike trail summaries, this defaults ON (1) — absence of a row
+  // doc §7). Unlike trail summaries, this defaults ON (1) -- absence of a row
   // is also treated as enabled by readers, so a not-yet-migrated database and
   // a fresh one behave the same.
   // `derived_path_overrides` (GR-C1, decisions §6) holds the per-codebase

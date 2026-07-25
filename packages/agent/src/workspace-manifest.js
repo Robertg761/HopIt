@@ -190,7 +190,7 @@ export function exoneratedLocalChanges(changes, cloud, diskEntries = {}) {
 // withheld from a refresh apply because they carry genuine local drift
 // against the just-read cloud graph. This mirrors exoneratedLocalChanges's
 // reconciliation, but exoneratedLocalChanges deliberately truncates its
-// output to a ≤10-path sample for compact event/status embedding — refresh
+// output to a ≤10-path sample for compact event/status embedding -- refresh
 // needs the exact, complete skip set instead. Only meaningful once
 // workspaceLocalChanges already reports state 'dirty'
 // (workspace_has_unjournaled_changes); missing-workspace/missing-manifest
@@ -217,11 +217,11 @@ export function withheldRefreshPaths(changes, cloud, diskEntries = {}) {
 // Async, disk-scoped counterpart to withheldRefreshPaths for callers (e.g.
 // status) that must not perform a full directory walk + read of every disk
 // file just to check a handful of dirty paths (status deliberately never
-// reads untracked file bytes — see "status reports added workspace drift
+// reads untracked file bytes -- see "status reports added workspace drift
 // without reading untracked file bytes"). Only paths that are also present
 // in the current cloud graph are read from disk at all: a path absent from
 // cloud can never match it, so it's withheld without touching disk. A read
-// failure (e.g. permissions) fails closed — still withheld — instead of
+// failure (e.g. permissions) fails closed -- still withheld -- instead of
 // throwing.
 export async function withheldRefreshPathsFromDisk(root, changes, cloud) {
   if (!changes) return []

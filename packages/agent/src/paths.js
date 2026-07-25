@@ -8,7 +8,7 @@ import { defaultWorkspaceRoot } from './options.js'
 import { isPathInside, pathsOverlap } from './workspace-manifest.js'
 import { d1CloudServiceType } from '@hopit/backend-d1'
 
-// Decisions §12: "Nested cloud-sync is blocked" — two sync engines fighting over
+// Decisions §12: "Nested cloud-sync is blocked" -- two sync engines fighting over
 // the same files on disk is unrecoverable, so this is a hard refusal with no
 // bypass flag (unlike the other checks in assertWorkspacePathSafe below).
 const CLOUD_SYNC_PROVIDERS = [

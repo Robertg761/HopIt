@@ -7,10 +7,10 @@ orchestrating agent that spawns one subagent per task.
 
 Sources of truth, in precedence order:
 
-1. [docs/product-roadmap.md](product-roadmap.md) — vision and phase gating.
-2. [docs/git-replacement-decisions-2026-07.md](git-replacement-decisions-2026-07.md) — the product decisions this plan implements.
-3. [docs/remediation-plan-2026-07.md](remediation-plan-2026-07.md) — engineering conventions (one workstream per branch, verification battery).
-4. [docs/agent-architecture.md](agent-architecture.md) — agent invariants ("safe before clever", journal-first recovery).
+1. [docs/product-roadmap.md](product-roadmap.md) -- vision and phase gating.
+2. [docs/git-replacement-decisions-2026-07.md](git-replacement-decisions-2026-07.md) -- the product decisions this plan implements.
+3. [docs/remediation-plan-2026-07.md](remediation-plan-2026-07.md) -- engineering conventions (one workstream per branch, verification battery).
+4. [docs/agent-architecture.md](agent-architecture.md) -- agent invariants ("safe before clever", journal-first recovery).
 
 ## 0. Hard guardrails (every subagent, no exceptions)
 
@@ -24,7 +24,7 @@ production Cloudflare D1 + R2, and a running LaunchAgent
 - **Never** touch `/Users/robert/HopIt Workspaces/` or Application Support
   runtime paths.
 - All work happens against local test harnesses (loopback servers, temp dirs,
-  in-memory/file-backed D1 stubs) — the existing agent test suite shows how.
+  in-memory/file-backed D1 stubs) -- the existing agent test suite shows how.
 - Schema changes: update **both** `packages/backend-d1/src/schema.js` and
   `cloudflare/d1/schema.sql`, plus a dated migration file in
   `cloudflare/d1/migrations/`. Never apply a migration to live D1; the owner
@@ -35,16 +35,16 @@ production Cloudflare D1 + R2, and a running LaunchAgent
 
 Before starting any task, a subagent must record the **baseline**: run the
 battery once on an untouched checkout and save the pass/fail/skip counts.
-Acceptance is always measured **relative to baseline** — some suites skip or
+Acceptance is always measured **relative to baseline** -- some suites skip or
 fail for environment-only reasons on Linux (loopback ports, missing `git`,
 macOS-only launchd tests).
 
 Battery (from the repo root):
 
 ```sh
-npm run agent:test     # node --test, packages/agent/test — baseline ~262 pass
-npm run test:worker    # node --test, cloudflare/d1/api-worker.test.js — ~23
-npm run test:web       # vitest, src/ — ~47
+npm run agent:test     # node --test, packages/agent/test -- baseline ~262 pass
+npm run test:worker    # node --test, cloudflare/d1/api-worker.test.js -- ~23
+npm run test:web       # vitest, src/ -- ~47
 npm run lint
 npm run build
 npm run typecheck:agent
@@ -65,7 +65,7 @@ Definition of done for every task:
 ## 2. Execution waves and dependency graph
 
 Tasks within a wave are independent and may run in parallel (use worktree
-isolation — several tasks touch `packages/agent/src/` and will conflict
+isolation -- several tasks touch `packages/agent/src/` and will conflict
 textually otherwise). A wave starts only when its listed dependencies are
 merged.
 
@@ -83,12 +83,12 @@ Phase alignment: Tracks A, C, D, F, G, H, S serve Phase 1–2 (daily driver /
 sync you can show off). Track E serves Phase 1 (the owner's own deploys) but
 per-proposal commits depend on Track B. Track B builds the propose/review data
 model now but its **team-facing UI stays behind the collaboration-surface
-freeze until Phase 4** — build primitives and CLI, gate dashboard surfaces
+freeze until Phase 4** -- build primitives and CLI, gate dashboard surfaces
 behind a flag.
 
 ---
 
-## Track S — Schema foundations
+## Track S -- Schema foundations
 
 ### GR-S1: Re-sync `schema.sql` with the runtime schema, add drift guard
 
@@ -98,7 +98,7 @@ behind a flag.
   Every later schema task inherits this landmine.
 - **Files:** `cloudflare/d1/schema.sql`, `packages/backend-d1/src/schema.js`,
   new test.
-- **Do:** Regenerate `schema.sql` from `schema.js` (or vice versa — pick the
+- **Do:** Regenerate `schema.sql` from `schema.js` (or vice versa -- pick the
   runtime file as canonical). Add a test that parses both and fails on drift
   (table names + column names + indexes).
 - **Accept:** drift test exists and passes; battery green.
@@ -107,7 +107,7 @@ behind a flag.
 
 ---
 
-## Track A — Reconnect protocol and same-owner divergence (decisions §1)
+## Track A -- Reconnect protocol and same-owner divergence (decisions §1)
 
 The journal (`packages/agent/src/journal.js`, `status-state.js`) and revision
 guards (`packages/backend-d1/src/graph.js:909` `base_revision_mismatch`,
@@ -135,11 +135,11 @@ build what happens next.
   byte-identical to pre-change `recoverJournal` behavior on a no-divergence
   journal (regression fixture).
 
-### GR-A2: Divergence persistence — nothing silently dropped
+### GR-A2: Divergence persistence -- nothing silently dropped
 
 - **Depends:** GR-A1.
 - **Files:** `packages/agent/src/reconnect.js`, `journal.js`
-  (`recordChangeSetConflict` exists — extend), `packages/backend-d1/src/graph.js`,
+  (`recordChangeSetConflict` exists -- extend), `packages/backend-d1/src/graph.js`,
   schema (likely a `divergences` record or reuse of `agent_events` +
   file-version rows), migration file.
 - **Do:** On bucket-3, upload the offline device's version to cloud storage as
@@ -154,7 +154,7 @@ build what happens next.
   that picking "theirs" still leaves "mine" fetchable by revision); battery
   green.
 
-### GR-A3: Divergence surfaces — status API, CLI, dashboard flag
+### GR-A3: Divergence surfaces -- status API, CLI, dashboard flag
 
 - **Depends:** GR-A1.
 - **Files:** agent status server (`status`/`status-server` command,
@@ -181,7 +181,7 @@ build what happens next.
   `workspace-manifest.js` (diff-scan), `reconnect.js`, `sync.js`.
 - **Do:** On startup, diff-scan the workspace against last-known manifest,
   synthesize journal entries for unwatched changes (agent was dead), then run
-  GR-A1 classification — one path for offline, crash, force-quit, and
+  GR-A1 classification -- one path for offline, crash, force-quit, and
   restored-from-backup. Enforce ordering: reconcile personal change set fully
   before the safe-refresh path applies missed Main updates; never interleaved.
 - **Accept:** scenario tests: kill agent, edit files, restart → edits
@@ -196,12 +196,12 @@ build what happens next.
 
 ---
 
-## Track B — Propose, proposals-as-pinned-steps, releases (decisions §2–§4, §9)
+## Track B -- Propose, proposals-as-pinned-steps, releases (decisions §2–§4, §9)
 
 `review_threads` already carries `change_set_id`, `base_revision`,
 `head_revision`; `mergeChangeSet` and `openChangeSetReview` exist in
 `packages/agent/src/commands/sync.js`. There is **no first-class proposals
-table** — change sets are `selected_state_json` blobs. Team-facing dashboard
+table** -- change sets are `selected_state_json` blobs. Team-facing dashboard
 surfaces stay behind a feature flag until Phase 4 (collaboration freeze).
 
 ### GR-B1: Proposal data model design + migration (design-gated)
@@ -211,7 +211,7 @@ surfaces stay behind a feature flag until Phase 4 (collaboration freeze).
   draft migration. Must answer: proposal row shape (codebase, change set id,
   **pinned revision**, title, state draft/proposed/approved/stale/merged),
   how "saves since proposal" are computed (revision comparison via the WS7c
-  `compareRevisions` engine — no new diff machinery), how review staleness is
+  `compareRevisions` engine -- no new diff machinery), how review staleness is
   derived (`review_decisions` at revision X, head now Y ⇒ stale), and how the
   merge queue serializes (reuse `action_jobs`? new queue table?).
 - **Accept:** doc reviewed by the orchestrator against decisions §3–§4
@@ -230,11 +230,11 @@ surfaces stay behind a feature flag until Phase 4 (collaboration freeze).
   proposal. Queue merges ready proposals serially: refresh against latest
   Main, then merge; a proposal whose pinned revision no longer matches its
   reviewed revision is not merged (state → stale). Solo path: owner
-  self-approves in the same command (`hop propose --merge`) — same door,
+  self-approves in the same command (`hop propose --merge`) -- same door,
   zero extra ceremony.
 - **Accept:** tests: propose pins; post-propose saves do not change what
   merges; two ready proposals merge serially with the second refreshed
-  against the first's result (no merge races — assert final Main content);
+  against the first's result (no merge races -- assert final Main content);
   stale proposal refuses to merge.
 - **Metrics:** ≥ 10 new tests; concurrent merge attempt test proves
   serialization (second attempt observes first's Main revision); battery
@@ -272,26 +272,26 @@ surfaces stay behind a feature flag until Phase 4 (collaboration freeze).
   failure path, timeout path); add retry/backoff on claim errors. No
   containerization yet (deferred).
 - **Accept:** runner test suite exists (target ≥ 8 tests: success, command
-  failure, timeout, output cap, env lockdown — job step must not see cloud
+  failure, timeout, output cap, env lockdown -- job step must not see cloud
   credentials, poll retry); queue-blocks-on-red-CI test in the merge path.
 - **Metrics:** runner package goes from 0 → ≥ 8 tests; env-lockdown test
   asserts `HOPIT_D1_*` absent from the job step's env.
 
 ---
 
-## Track C — Derived files (decisions §6)
+## Track C -- Derived files (decisions §6)
 
 ### GR-C1: Derived-path classification: never journaled, never synced
 
 - **Files:** `packages/agent/src/constants.js` (curated list),
-  `workspace-manifest.js` (classification — follow the existing
+  `workspace-manifest.js` (classification -- follow the existing
   `isLocalOnlySecretPath` pattern), `packages/backend-d1/src/` +
   `codebase_settings` (per-codebase overrides), dashboard settings surface
   (flag-gated), `hop status` display of excluded roots.
 - **Do:** Curated built-in list (`node_modules/`, `.venv/`, `venv/`,
   `target/`, `dist/`, `build/`, `.next/`, `__pycache__/`, `.cache/`,
   `.turbo/`, `.gradle/`, `vendor/bundle/`, extend during implementation).
-  Derived paths are a distinct classification — not `.private/`, not an
+  Derived paths are a distinct classification -- not `.private/`, not an
   ignore file: not watched (or watched-and-dropped), not journaled, not
   synced, not counted in presence. Per-codebase add/remove overrides stored in
   `codebase_settings`, editable via `hop` and (flag-gated) dashboard.
@@ -299,14 +299,14 @@ surfaces stay behind a feature flag until Phase 4 (collaboration freeze).
   `node_modules/` plus 3 source files → journal contains exactly 3 entries;
   override test: user un-derives a path → it syncs; user adds a custom derived
   path → it stops syncing. Existing suites green (several fixtures may write
-  into paths that are now derived — fix fixtures, not the classification).
+  into paths that are now derived -- fix fixtures, not the classification).
 - **Metrics:** derived-burst test journals 0 derived entries; classification
   overhead in the watch path < 1 ms per event (benchmark assertion in test);
   battery green.
 
 ---
 
-## Track D — Secret scanning (decisions §7)
+## Track D -- Secret scanning (decisions §7)
 
 Trail immutability is a **non-task**: build no redaction. (Compliance-only
 erasure is a deferred Phase-3 item, not in this plan.)
@@ -336,7 +336,7 @@ erasure is a deferred Phase-3 item, not in this plan.)
 - **Do:** dashboard activity/notifications surface (`notifications-card.tsx`,
   `event-ledger.tsx`) and desktop menu bar show "possible secret in <path>"
   with a link to the file and rotation guidance copy ("rotate, don't
-  redact" — decisions §7). Dismissible per finding.
+  redact" -- decisions §7). Dismissible per finding.
 - **Accept:** web + desktop component tests; event → notification round-trip
   test in the worker suite.
 - **Metric:** notification appears in test render within one poll/push cycle
@@ -344,7 +344,7 @@ erasure is a deferred Phase-3 item, not in this plan.)
 
 ---
 
-## Track E — Continuous git mirror (decisions §8)
+## Track E -- Continuous git mirror (decisions §8)
 
 `hop export-git` already exists (`packages/agent/src/commands/export.js`);
 git import machinery in `import.js` shows the hardened-arg conventions
@@ -376,10 +376,10 @@ git import machinery in `import.js` shows the hardened-arg conventions
 
 - **Depends:** GR-E1.
 - **Do:** enqueue a mirror-push `action_job` on merge-to-Main (runner executes
-  `hop mirror sync` — no cloud-side git). Failure surfaces as a dashboard
+  `hop mirror sync` -- no cloud-side git). Failure surfaces as a dashboard
   notification, never blocks the merge itself. Config surface:
   `hop mirror set-remote <url>` + deploy-key storage (client-encrypted, reuse
-  the keys machinery — the deploy private key must never reach D1/R2
+  the keys machinery -- the deploy private key must never reach D1/R2
   unencrypted, same rule as `.private/env/`).
 - **Accept:** merge → job enqueued → mirror advanced (integration test with
   loopback backend + local bare repo); mirror failure → notification event,
@@ -398,12 +398,12 @@ git import machinery in `import.js` shows the hardened-arg conventions
 
 ---
 
-## Track F — Refresh race (decisions §10)
+## Track F -- Refresh race (decisions §10)
 
 Today `remoteRefreshDecision` blocks the **whole** apply when the workspace is
 dirty. Decisions §10 requires per-file granularity.
 
-### GR-F1: Per-file refresh — untouched files apply, dirty files delay + flag
+### GR-F1: Per-file refresh -- untouched files apply, dirty files delay + flag
 
 - **Files:** `packages/agent/src/watch.js` (`remotePullOnce`,
   `remoteRefreshDecision`), `sync.js` (`materializeCloudToWorkspace`),
@@ -412,14 +412,14 @@ dirty. Decisions §10 requires per-file granularity.
   immediately; paths with journaled local edits are withheld and flagged
   ("Main changed under you") in status/dashboard/menu bar. Existing whole-
   workspace safety gates (journal-unresolved, mass-delete guard) stay as
-  outer guards — this only relaxes the clean-file subset.
+  outer guards -- this only relaxes the clean-file subset.
 - **Accept:** two-device test: device A merges changes to files X and Y;
   device B has local edits to Y only → X applies within one push cycle, Y is
   withheld and flagged; resolving Y (via GR-A3 surface) applies it. Skip
   reasons in events distinguish `file_withheld_local_edits` from existing
   whole-workspace skips.
 - **Metrics:** untouched-file apply latency in test = one push cycle (today:
-  blocked indefinitely while dirty — assert the improvement); mass-delete and
+  blocked indefinitely while dirty -- assert the improvement); mass-delete and
   manifest-heal suites unmodified and green.
 
 ### GR-F2: Save-side clobber detection
@@ -443,7 +443,7 @@ dirty. Decisions §10 requires per-file granularity.
 
 ---
 
-## Track G — Disk, large files, save storms (decisions §11)
+## Track G -- Disk, large files, save storms (decisions §11)
 
 **Design conflict, resolved:** decisions §11 wants OneDrive-style dehydration,
 but the approved WS7b design **rejected placeholder files for source** (silent
@@ -451,7 +451,7 @@ corruption risk) and deferred FS providers. v1 dehydration therefore means:
 whole-codebase or whole-directory **dematerialization back to metadata-only
 state** (the existing `dehydrateWorkspace` / `pruneWorkspaceCache` /
 `--auto-prune` machinery), re-materialized via `hop workspace open` /
-hydration — never per-file placeholder stubs inside a materialized tree.
+hydration -- never per-file placeholder stubs inside a materialized tree.
 True per-file files-on-demand waits for the native FS-provider work already
 deferred by WS7b. Record this in the decisions doc when this track lands.
 
@@ -464,7 +464,7 @@ deferred by WS7b. Record this in the decisions doc when this track lands.
   per-codebase idle window setting (default 7 days, existing threshold);
   add per-folder "keep on this device" pins; add disk-pressure acceleration
   (low free disk ⇒ shorten window), with the journal itself last-sacrificed.
-  Hard invariant (already in cache design — extend to all eviction paths):
+  Hard invariant (already in cache design -- extend to all eviction paths):
   **never evict content with unacknowledged journal writes**.
 - **Accept:** harness-time tests (inject clock, not wall time): idle codebase
   dehydrates after window; pinned folder survives; file with a pending
@@ -485,7 +485,7 @@ deferred by WS7b. Record this in the decisions doc when this track lands.
   syncs and flags; under-threshold does not; per-codebase threshold override
   respected.
 - **Metric:** sync behavior identical with/without flag (byte-identical
-  cloud content assertion) — warning is purely additive.
+  cloud content assertion) -- warning is purely additive.
 
 ### GR-G3: Save-storm coalescing verification + grouped steps
 
@@ -505,11 +505,11 @@ deferred by WS7b. Record this in the decisions doc when this track lands.
 
 ---
 
-## Track H — Agent reliability envelope (decisions §12)
+## Track H -- Agent reliability envelope (decisions §12)
 
 ### GR-H1: Periodic full diff-scan (missed-event healing)
 
-- **Files:** `watch.js` (`createWorkspacePoller` exists — verify cadence and
+- **Files:** `watch.js` (`createWorkspacePoller` exists -- verify cadence and
   scope), `workspace-manifest.js`.
 - **Do:** ensure a periodic full workspace diff-scan runs (independent of the
   5-min graph-head reconciliation, which covers the *cloud* side) so a missed
@@ -552,7 +552,7 @@ deferred by WS7b. Record this in the decisions doc when this track lands.
 - **Files:** `setup.js` (folder-picker validation), `workspace-root.js`,
   `add.js`.
 - **Do:** refuse Workspace Roots under Dropbox / iCloud Drive
-  (`~/Library/Mobile Documents/`) / OneDrive / Google Drive paths — detect by
+  (`~/Library/Mobile Documents/`) / OneDrive / Google Drive paths -- detect by
   well-known path segments and marker files (`.dropbox`, `.dropbox.cache`,
   Drive/OneDrive markers). Refusal explains why (two sync engines,
   unrecoverable). Applies to `hop setup`, `hop add`, and root migration.
@@ -561,13 +561,13 @@ deferred by WS7b. Record this in the decisions doc when this track lands.
   (decision was block, not warn).
 - **Metric:** all four provider simulations refused; battery green.
 
-*(Disk-pressure and cloud-unreachable behavior — decisions §12 items 5–6 —
+*(Disk-pressure and cloud-unreachable behavior -- decisions §12 items 5–6 --
 are covered inside GR-G1 and the existing journal/pause machinery; GR-X1
 verifies them end-to-end rather than as separate build tasks.)*
 
 ---
 
-## Track X — Integration proof
+## Track X -- Integration proof
 
 ### GR-X1: End-to-end adversarial suite for the new invariants
 
@@ -593,14 +593,14 @@ verifies them end-to-end rather than as separate build tasks.)*
 - **Subagent prompt template:** give each subagent (a) the guardrails section
   verbatim, (b) its single task section, (c) the decisions-doc section it
   implements, (d) the baseline numbers, (e) the report format from §1.
-- **Worktree isolation** for parallel tasks in the same wave — Tracks A, F,
+- **Worktree isolation** for parallel tasks in the same wave -- Tracks A, F,
   G, H all touch `packages/agent/src/watch.js`/`sync.js` and will conflict.
   Merge order within a wave: smallest diff first.
 - **Design-gated tasks** (GR-B1) block their track until the orchestrator (or
   the owner) approves the design doc against the decisions doc.
 - **Scope discipline:** anything discovered out-of-scope (e.g. the dead
   `hst_` token path, encryption phases, multi-tenant flags) is reported, not
-  fixed — those belong to the Phase-3 plans.
+  fixed -- those belong to the Phase-3 plans.
 - **Checklist** (orchestrator updates as tasks merge):
   - [x] GR-S1  - [x] GR-A1  - [x] GR-A2  - [x] GR-A3  - [x] GR-A4
   - [x] GR-B1  - [x] GR-B2  - [x] GR-B3  - [x] GR-B4  - [x] GR-B5

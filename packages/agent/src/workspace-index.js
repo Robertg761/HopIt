@@ -441,7 +441,7 @@ export function workspaceIndexEntryFromCloud(options, cloud, metadata = {}) {
       ? Object.keys(cloud.files ?? {}).sort()
       : []
   // GR-F1: a per-file refresh that withheld dirty paths must not advance the
-  // indexed revision to cloud head — that would make future reconciliation
+  // indexed revision to cloud head -- that would make future reconciliation
   // silently think the withheld path is already resolved. The caller passes
   // an explicit override (the previous indexed revision) in that case.
   const materializedRevision = hydrationState === 'materialized'

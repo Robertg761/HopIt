@@ -52,13 +52,13 @@ delete+add in v1.
 
 ## 2. Authority: who decides what lands on Main
 
-Resolving a conflict — device-vs-device or "Main changed under you" — only ever
+Resolving a conflict -- device-vs-device or "Main changed under you" -- only ever
 edits the resolver's own change set. Main has exactly one door:
 propose → review → merge queue.
 
 - **The proposer owns the content** of their change set, including how it
   incorporates changes from Main.
-- **The reviewer owns acceptance** — whether that change set is allowed onto
+- **The reviewer owns acceptance** -- whether that change set is allowed onto
   Main. This is the PR's precedence-deciding role, unchanged.
 - **The merge queue owns ordering.** Ready proposals land serially, refreshed
   against latest Main and CI-checked. Nobody wins by pushing faster.
@@ -68,7 +68,7 @@ they never have any write path to upstream Main.
 
 ## 3. Propose is the same for solo and team
 
-Solo codebases use the same "Propose Changes" button as teams — no auto-flow
+Solo codebases use the same "Propose Changes" button as teams -- no auto-flow
 mode. This is acceptable ceremony because sync already decoupled git's two
 conflated jobs: "save my work durably on all my devices" is handled continuously
 by sync, so propose only carries "publish to Main," which is rare and
@@ -104,7 +104,7 @@ under the wrapped-key/device-trust encryption model, cross-account write access
 is a key-grant problem, not an ACL checkbox, and is not worth it for a
 convenience feature.
 
-- Later: **one-click suggestions** — a maintainer attaches a proposed patch to a
+- Later: **one-click suggestions** -- a maintainer attaches a proposed patch to a
   review comment; the contributor applies it with one click, so the write
   happens under the contributor's own keys and identity.
 - Abandoned-proposal escape hatch: a maintainer pulls the proposal's content
@@ -124,7 +124,7 @@ overrides (add/remove paths) in the dashboard. No config file in the repo.
 
 ## 7. Secrets
 
-**The trail is immutable — no redaction feature.** Rationale (owner, decided
+**The trail is immutable -- no redaction feature.** Rationale (owner, decided
 2026-07-23): redaction breeds false confidence; a captured secret is
 compromised regardless of later deletion, so the only correct response is
 rotation. HopIt's stance is "rotate, don't redact."
@@ -162,7 +162,7 @@ need a live repo, and HopIt itself deploys through Vercel.
 
 ## 9. Releases
 
-A lightweight **Release** concept: "mark this as a release" on any Main state —
+A lightweight **Release** concept: "mark this as a release" on any Main state --
 name, optional notes, pinned forever, and emitted as a git tag on the mirror.
 Answers "exactly what shipped as v1.2" without git tags in the product.
 
@@ -204,8 +204,8 @@ size, but files over a threshold (default 100 MB, adjustable per codebase)
 trigger a dashboard note so storage surprises are visible. No hard cap, no
 opt-in gate.
 
-**Partial attach is deferred.** Monorepos are handled by lazy hydration —
-attaching a huge codebase is already cheap — rather than by letting a device
+**Partial attach is deferred.** Monorepos are handled by lazy hydration --
+attaching a huge codebase is already cheap -- rather than by letting a device
 attach only a subfolder. Revisit if real teams with giant repos need it.
 
 **Save storms are coalesced.** Mass events (format-on-save sweeps, `npm

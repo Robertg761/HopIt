@@ -193,7 +193,7 @@ The `hopit-d1-api` Worker accepts `HOPIT_D1_PROXY_TOKEN` for trusted server-side
 Nine files sit in `cloudflare/d1/migrations/`. **Nothing applies them
 automatically.** Production sets `HOPIT_D1_ASSUME_SCHEMA=1`, so
 `ensureSchema()` (`packages/backend-d1/src/schema-methods.js`) returns before
-running a single statement — the self-healing `create table if not exists`
+running a single statement -- the self-healing `create table if not exists`
 path that works on a fresh dev database is switched off in production on
 purpose, to protect the free D1 query budget.
 
@@ -223,7 +223,7 @@ Leave the rest of this section in place: it is the procedure for the next
 batch, and the collision below is the thing most likely to recur.
 
 **Check before applying.** `cloudflare/d1/migration-status.sql` is a read-only
-report — 15 checks across the 9 files, one row per table or column, each
+report -- 15 checks across the 9 files, one row per table or column, each
 `applied = 1` or `applied = 0`. It writes nothing:
 
 ```sh
@@ -252,7 +252,7 @@ landed, so you can hand-apply the remaining `alter table` lines individually
 rather than re-running the whole file.
 
 **Blocked: the `releases` name collision.** Production already contains a
-`releases` table belonging to a *different* feature — `number`, `version`,
+`releases` table belonging to a *different* feature -- `number`, `version`,
 `title`, `status`, `target_json`, `provenance_json`, `published_at`,
 `created_by`/`updated_by`, several of them `not null`. It currently holds
 **0 rows**.
@@ -270,7 +270,7 @@ migration does not fix: `create table if not exists releases` keys off the
 name, so it silently no-ops against the foreign table and GR-B4's table is
 never created. `createRelease` (`packages/backend-d1/src/releases-store.js`)
 then inserts `name` / `pinned_revision` / `created_by_user_id`, none of which
-exist there, and would fail — while the foreign table's `not null` columns
+exist there, and would fail -- while the foreign table's `not null` columns
 would never be populated either. So `hop release`, and GR-E3's mirror tagging
 downstream of it, cannot work against production until this is resolved.
 
@@ -291,7 +291,7 @@ Because the checker keys the `create table` migrations off a distinctive
 column rather than the table name, this class of collision now shows up as
 `applied = 0` instead of a false "applied".
 
-**Other leftovers from the same descoping — do not drop these yet.** Nine
+**Other leftovers from the same descoping -- do not drop these yet.** Nine
 more tables survive in production that this repo no longer defines:
 `issues`, `issue_comments`, `discussions`, `discussion_comments`, `projects`,
 `project_items`, `collaboration_counters`, `release_assets`, and
@@ -302,22 +302,22 @@ Eight of them were, until 2026-07-24, still named by `deleteCodebase`
 (`packages/backend-d1/src/graph.js`) as an unguarded sequence of
 `await this.query("delete from <table> ...")`. Dropping any one of them while
 deployed code still referenced it would have thrown `no such table` partway
-through a codebase deletion, leaving the codebase half-deleted — a much worse
+through a codebase deletion, leaving the codebase half-deleted -- a much worse
 outcome than the clutter. The dead lines are now removed from
 `deleteCodebase`, but **the drop is still gated on that change being deployed**:
 `origin/main` must contain it before the tables go, or production breaks. The
-ordering is code first, schema second — the reverse of the usual instinct.
+ordering is code first, schema second -- the reverse of the usual instinct.
 
 `tenant_quota_overrides` is a separate case and should be kept. Current quota
 resolution reads plan defaults and environment variables
-(`packages/backend-d1/src/quota.js`), not this table, so the row is inert —
+(`packages/backend-d1/src/quota.js`), not this table, so the row is inert --
 but it records a deliberate grant for the owner's own tenant (100 GB storage,
 1,000,000 daily writes, 100 codebases, reason "Owner dogfood workspace
 migration", 2026-07-19) and is the only surviving record of it. Dropping it
 destroys information for no benefit.
 
 Take a D1 export first (`npx wrangler d1 export <DB_NAME> --remote --output
-pre-migration.sql`) — these are additive and low risk, but `alter table` has
+pre-migration.sql`) -- these are additive and low risk, but `alter table` has
 no undo on D1 short of a restore.
 
 Until they are applied, the features built on them degrade rather than fail

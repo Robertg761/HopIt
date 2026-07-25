@@ -98,7 +98,7 @@ export async function refreshWorkspace(options) {
   const manifestSelfHealed = Boolean(localChanges?.manifestStale)
 
   // GR-F1 (decisions §10): a whole-workspace block only remains for the outer
-  // safety gates — a workspace that is missing entirely or whose content
+  // safety gates -- a workspace that is missing entirely or whose content
   // manifest cannot be trusted. Genuine per-file drift (`dirty`) is relaxed:
   // those specific paths are withheld and flagged below instead of blocking
   // every other file's refresh.
@@ -182,7 +182,7 @@ export async function refreshWorkspace(options) {
     lastEvent: 'refresh.complete',
     hydrationState: 'materialized',
     hydratedPaths: Object.keys(cloud.files ?? {}).filter((relativePath) => !withheldPaths.includes(relativePath)),
-    // GR-F1: never advance the indexed revision past a withheld path — that
+    // GR-F1: never advance the indexed revision past a withheld path -- that
     // would make the cheap "already at head" reconciliation shortcut think
     // the withheld file's remote change was already applied, and stop
     // retrying once the local edit resolves.
@@ -197,8 +197,8 @@ export async function materializeCloudToWorkspace(options, cloud, cloudService =
   await fs.mkdir(options.workspace, { recursive: true })
 
   // GR-F1 (decisions §10): paths carrying genuine unjournaled local drift are
-  // withheld from this materialize pass entirely — neither overwritten with
-  // the cloud version nor deleted — so the user's local edit survives and the
+  // withheld from this materialize pass entirely -- neither overwritten with
+  // the cloud version nor deleted -- so the user's local edit survives and the
   // caller can flag it ("Main changed under you") instead of blocking every
   // other file in the workspace.
   const withheldPaths = new Set(refreshOptions.withheldPaths ?? [])

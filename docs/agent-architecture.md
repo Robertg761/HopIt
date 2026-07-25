@@ -21,7 +21,7 @@ Workspace Root responsibilities:
 
 The current implementation has a production-profile managed workspace path, a root-level `workspaces.json` index, D1 account-visible codebase discovery merged with local attach/readiness state when credentials allow it, scoped-token configured-codebase fallback, automatic verified-owner bootstrap for migrated `local-owner` codebases, dashboard-driven first-run setup/metadata-only attach, dashboard hydrate/dehydrate controls, `hop workspace open` open-time hydration, hydration/materialized-revision status, visible-file metadata listing with local cache states, single-file, sibling, and recursive-prefix hydration, pin/unpin controls, clean-cache pruning, metadata-only dehydrate state, an explicit metadata-first lazy materialization policy, and a remote cursor exposed through `hop status`. Solid v1 still needs production-grade event delivery rollout, editor/tool signal polish, and native filesystem-provider research before claiming a true read-triggered "install and boom" experience.
 
-`assertWorkspacePathSafe` (`packages/agent/src/paths.js`) is the single chokepoint `hop setup`, `hop add`, and `hop workspace migrate-root` all call before touching disk. It refuses a Workspace Root nested inside a consumer cloud-sync folder (Dropbox, iCloud Drive, OneDrive, Google Drive), detected by well-known folder-name segments and by marker files those clients leave behind, walked up every ancestor directory. This check has **no bypass** — not `--allow-unsafe-workspace`, not `--advanced` — because two sync engines racing to write the same files on disk is unrecoverable (decisions doc §12). All other checks in `assertWorkspacePathSafe` (unsafe root paths, workspace/source overlap, production-profile containment) remain overridable by `--allow-unsafe-workspace`.
+`assertWorkspacePathSafe` (`packages/agent/src/paths.js`) is the single chokepoint `hop setup`, `hop add`, and `hop workspace migrate-root` all call before touching disk. It refuses a Workspace Root nested inside a consumer cloud-sync folder (Dropbox, iCloud Drive, OneDrive, Google Drive), detected by well-known folder-name segments and by marker files those clients leave behind, walked up every ancestor directory. This check has **no bypass** -- not `--allow-unsafe-workspace`, not `--advanced` -- because two sync engines racing to write the same files on disk is unrecoverable (decisions doc §12). All other checks in `assertWorkspacePathSafe` (unsafe root paths, workspace/source overlap, production-profile containment) remain overridable by `--allow-unsafe-workspace`.
 
 ### Cloud File Graph
 
@@ -118,8 +118,8 @@ synced, and never counted in presence. Each device regenerates them locally.
   a plain top-level `vendor/`).
 - `isDerivedWorkspacePath` in `packages/agent/src/workspace-manifest.js` is
   the single classification function, called from `shouldSkipWorkspacePath`
-  (which every workspace scan — `readWorkspaceFiles`, `snapshotWorkspace`,
-  `diffWorkspaceAgainstManifest` — funnels through). It layers per-codebase
+  (which every workspace scan -- `readWorkspaceFiles`, `snapshotWorkspace`,
+  `diffWorkspaceAgainstManifest` -- funnels through). It layers per-codebase
   `{ add, remove }` overrides (`options.derivedPathOverrides`) on top of the
   curated list; `remove` un-derives a built-in path, `add` derives a custom
   one.
@@ -233,14 +233,14 @@ secret shapes (AWS `AKIA…` keys, GitHub `ghp_`/`gho_`/… tokens, Stripe
 `sk_live_…` keys, Slack `xox…` tokens, PEM private-key headers, and a
 conservative high-entropy `key/token/secret/password = "…"` assignment
 heuristic) at the same moment `performSyncOnce` (`commands/sync.js`) builds a
-journal entry for a create/write — before the entry is committed to cloud.
+journal entry for a create/write -- before the entry is committed to cloud.
 
 This is **warn-only and per-project, on by default** (decisions doc §7,
 "rotate, don't redact"): a finding never blocks, delays, or alters the write;
 it only emits a `secret.suspected` event (path, matched pattern ids, line
 numbers) immediately alongside the journaled write. Scanning only runs on
 plaintext (UTF-8, non-base64) files outside `.private/` (and `.git/`, which
-shares the owner-private scope) — binary content and already-private paths
+shares the owner-private scope) -- binary content and already-private paths
 are never scanned. The setting lives in `codebase_settings.secret_scanning_enabled`
 (default on; absence of a row also reads as on) and is toggled per project via
 `hop secrets on|off|status`, or asked once during `hop setup` (skipping the
@@ -352,7 +352,7 @@ Watch-loop expectations:
 
 Recovery should be safe before it is clever. If the agent is unsure whether the cloud accepted a write, it should keep the journal entry pending and expose that uncertainty through status instead of silently discarding local state.
 
-**Missed watcher events are assumed, not exceptional (GR-H1).** `fs.watch`/inotify notifications can be dropped by the OS. Rather than treat that as an edge case, `watchWorkspace` always runs a periodic full workspace diff-scan (`createWorkspaceScanScheduler` in `watch.js`) alongside the live watcher — independent of both the watcher's own health (healthy, degraded to polling, or unavailable) and the separate 5-min cloud graph-head reconciliation (which only covers the cloud side). Each tick re-walks the tree with the same cheap stat-based comparison used by the degraded-polling fallback, excludes derived paths via `shouldSkipWorkspacePath` for cost, and feeds any drift into the normal watch-sync path exactly like a live watcher event — so a missed write heals within one scan interval instead of persisting silently. Default interval is 10 minutes (`--scan-interval-ms` / `HOPIT_SCAN_INTERVAL_MS`), conservative because the scan cost scales with tree size.
+**Missed watcher events are assumed, not exceptional (GR-H1).** `fs.watch`/inotify notifications can be dropped by the OS. Rather than treat that as an edge case, `watchWorkspace` always runs a periodic full workspace diff-scan (`createWorkspaceScanScheduler` in `watch.js`) alongside the live watcher -- independent of both the watcher's own health (healthy, degraded to polling, or unavailable) and the separate 5-min cloud graph-head reconciliation (which only covers the cloud side). Each tick re-walks the tree with the same cheap stat-based comparison used by the degraded-polling fallback, excludes derived paths via `shouldSkipWorkspacePath` for cost, and feeds any drift into the normal watch-sync path exactly like a live watcher event -- so a missed write heals within one scan interval instead of persisting silently. Default interval is 10 minutes (`--scan-interval-ms` / `HOPIT_SCAN_INTERVAL_MS`), conservative because the scan cost scales with tree size.
 
 ### Reconnect Classification (Same-Owner Multi-Device Divergence)
 
@@ -362,9 +362,9 @@ A single person's devices all write to the same personal change set, so two of t
 2. **both-touched, identical content** (`auto-resolved`): the cloud head moved since this device last saw the path, but the content hash still matches. Auto-resolved as a no-op: the entry's `baseRevision` (and `targetStateRevision`, when present) is rewritten to the cloud's current values before replay so the base/selected-state revision guards don't reject a no-op as a conflict.
 3. **both-touched, differing content** (`diverged`): a real divergence. `recoverJournal` never replays these entries and never clobbers the local file; it emits `journal.reconnect_diverged` per path and leaves the journal entry pending (blocking safe refresh, same as any other pending entry) until something outside this classifier resolves it. Delete-vs-edit is a divergence too, with `deleted` recorded as whichever side lost the file.
 
-Ordering across all three buckets follows causality — the entry's `baseRevision` — never wall-clock time; `sortEntriesByCausality` ignores `createdAt` entirely so a reconnecting device with a skewed clock classifies identically to one with a correct clock. `partitionEntriesForReconnect` excludes every journal entry for a diverged path, not just the causally-last one, so no partial intermediate write for that path is ever committed.
+Ordering across all three buckets follows causality -- the entry's `baseRevision` -- never wall-clock time; `sortEntriesByCausality` ignores `createdAt` entirely so a reconnecting device with a skewed clock classifies identically to one with a correct clock. `partitionEntriesForReconnect` excludes every journal entry for a diverged path, not just the causally-last one, so no partial intermediate write for that path is ever committed.
 
-This bucket-3 path intentionally supersedes the old behavior where any stale per-file `baseRevision` threw `base_revision_mismatch` and failed the whole `recover` call: the classifier now detects that case before attempting a commit, so `recover` succeeds and the divergence stays flagged for later resolution instead of hard-failing. This classifier only guarantees nothing is silently replayed over a genuine divergence; durable divergence persistence (GR-A2) and the user-facing surfaces (`hop conflicts`, dashboard side-by-side view — GR-A3) build on it below.
+This bucket-3 path intentionally supersedes the old behavior where any stale per-file `baseRevision` threw `base_revision_mismatch` and failed the whole `recover` call: the classifier now detects that case before attempting a commit, so `recover` succeeds and the divergence stays flagged for later resolution instead of hard-failing. This classifier only guarantees nothing is silently replayed over a genuine divergence; durable divergence persistence (GR-A2) and the user-facing surfaces (`hop conflicts`, dashboard side-by-side view -- GR-A3) build on it below.
 
 ### Save-Side Clobber Detection (GR-F2)
 
@@ -372,46 +372,46 @@ The agent only ever sees disk, never an editor's unsaved buffer, so decisions §
 
 `packages/agent/src/save-clobber.js` tracks this with a small per-codebase **writer ledger** (`<journal-file>.writer-ledger.json`, colocated with the journal it protects) recording, per path, the last local-save revision this device committed and any still-unresolved pending refresh (hash + revision of what a refresh just wrote). `refreshWorkspace` marks a pending refresh for every path `materializeCloudToWorkspace` actually changed; `performSyncOnce` consults it for every disk change about to be journaled as a write/create.
 
-Classification reuses `classifyReconnectEntry` from GR-A1 verbatim (same bucket vocabulary, same "both touched" reasoning) — the pending refresh stands in for the cloud head, the pending save stands in for a journal entry whose recorded `baseRevision` is the device's last known local-save revision for that path:
+Classification reuses `classifyReconnectEntry` from GR-A1 verbatim (same bucket vocabulary, same "both touched" reasoning) -- the pending refresh stands in for the cloud head, the pending save stands in for a journal entry whose recorded `baseRevision` is the device's last known local-save revision for that path:
 
-1. **No pending refresh:** ordinary edit (`only-local`) — journaled exactly as before.
-2. **Save matches the refreshed hash, or its content contains the refreshed content:** clean edit (`auto-resolved`, reason `identical_content` or `builds_on_refreshed_content`) — journaled normally, and the ledger's pending refresh clears.
-3. **Neither:** a genuine save-side divergence (`diverged`, reason `content_differs`). `performSyncOnce` never journals or commits this write — Main's cloud content is left exactly as it is (never a silent revert of either side) — and instead emits `sync.save_clobber_diverged` with the path, the refreshed hash/revision, and the local hash. The local file's bytes on disk are untouched either way; only the push to cloud is withheld until something outside this classifier resolves it — `hop conflicts` / `hop conflicts resolve` (GR-A3), which reads this event through `deriveOpenDivergences` below.
+1. **No pending refresh:** ordinary edit (`only-local`) -- journaled exactly as before.
+2. **Save matches the refreshed hash, or its content contains the refreshed content:** clean edit (`auto-resolved`, reason `identical_content` or `builds_on_refreshed_content`) -- journaled normally, and the ledger's pending refresh clears.
+3. **Neither:** a genuine save-side divergence (`diverged`, reason `content_differs`). `performSyncOnce` never journals or commits this write -- Main's cloud content is left exactly as it is (never a silent revert of either side) -- and instead emits `sync.save_clobber_diverged` with the path, the refreshed hash/revision, and the local hash. The local file's bytes on disk are untouched either way; only the push to cloud is withheld until something outside this classifier resolves it -- `hop conflicts` / `hop conflicts resolve` (GR-A3), which reads this event through `deriveOpenDivergences` below.
 
 ### Divergence Persistence (GR-A2, decisions §1)
 
-Every bucket-3 classification from `recoverJournal` is persisted as an open **divergence record** — a new `divergences` table (D1: `packages/backend-d1/src/divergences-store.js`; local/dev fixture backend: the `divergences` array on the cloud graph JSON, mirroring how `fileVersions`/`codebaseSettings` are already stored there) — before anything about it is resolved:
+Every bucket-3 classification from `recoverJournal` is persisted as an open **divergence record** -- a new `divergences` table (D1: `packages/backend-d1/src/divergences-store.js`; local/dev fixture backend: the `divergences` array on the cloud graph JSON, mirroring how `fileVersions`/`codebaseSettings` are already stored there) -- before anything about it is resolved:
 
 - **Nothing is silently dropped.** The record captures both revision refs (`baseRevision`, `cloudRevision`), both content hashes, both device labels, and the offline device's **full file payload** (`localEntry`: kind/content/encoding/hash/size), read straight off local disk (`prepareRecovery`) at the moment the divergence is opened. The cloud side needs no separate copy: it already lives in `files` (current) and `file_versions`/`fileVersions` (historical), which nothing in this path deletes or overwrites. Delete-vs-edit divergences record `localSide: 'deleted'` with a `null` `localEntry` instead, since there is no local content to lose.
 - **The local folder is never clobbered.** Persisting a divergence record is read-only with respect to the workspace; the diverged path on disk stays exactly as the reconnecting device left it until the user resolves.
 - **Restart-safe.** Persisting is idempotent per `(codebaseId, path)`: a repeated `hop recover` against a still-open divergence (agent crash, plane mode again before resolving) refreshes the existing record's revision/hash fields in place rather than opening a duplicate, and preserves the original `openedAt`.
-- **Resolution is itself a step.** `resolveDivergence` (`packages/agent/src/commands/sync.js`) is the library entry point GR-A3's CLI/dashboard surfaces call: `keep: 'local'` commits the captured `localEntry` (or a delete, for the delete-vs-edit case) through the normal `commitJournalEntry` path — same `file_versions` bookkeeping as any other write — and `keep: 'cloud'` writes nothing new, since the cloud's current file already is the winning content. Either way the record is only ever marked `resolved`, never deleted, so the side that lost stays fetchable (via `getDivergence`, or, for the cloud side, via `file_versions` at its old revision) forever.
+- **Resolution is itself a step.** `resolveDivergence` (`packages/agent/src/commands/sync.js`) is the library entry point GR-A3's CLI/dashboard surfaces call: `keep: 'local'` commits the captured `localEntry` (or a delete, for the delete-vs-edit case) through the normal `commitJournalEntry` path -- same `file_versions` bookkeeping as any other write -- and `keep: 'cloud'` writes nothing new, since the cloud's current file already is the winning content. Either way the record is only ever marked `resolved`, never deleted, so the side that lost stays fetchable (via `getDivergence`, or, for the cloud side, via `file_versions` at its old revision) forever.
 - Divergence persistence is best-effort with respect to disk reads: if the local file was already moved out from under `recoverJournal` before the record could be opened, that one path's `journal.reconnect_diverged_local_content_unavailable` event fires and the record is still opened with `localEntry: null` (`localHash` still identifies what was lost), rather than failing the whole recovery.
 
-**Divergence surfaces (GR-A3, decisions §1).** `deriveOpenDivergences` (`packages/agent/src/reconnect.js`) turns the raw divergence-opening event stream into the *currently open* set: it pairs each diverged path with the most recent `conflicts.resolved` event for that path (emitted by the resolver below) and reports it as open only if it has never been resolved, or diverged again after its last resolution. Two event names open a divergence, not one: `journal.reconnect_diverged` from the reconnect path, and `sync.save_clobber_diverged` from GR-F2's save-side path, whose cloud side is named `refreshedHash`/`refreshedRevision` and is normalized to `cloudHash`/`cloudRevision` here (`divergenceOpeningEvents`) rather than at each consumer. Normalizing centrally is what makes GR-F2's stated acceptance — "journal it as a divergence instead of a clean edit, surface via GR-A3" — actually hold: a stale-buffer clobber shows up in `hop conflicts`, in `status.divergences`, and is resolvable with `hop conflicts resolve` through exactly the same code path as a reconnect divergence. This stays a pure function over the local event log — no second cloud read, no separate persistence layer — so both the fast status endpoint (`status-endpoints.js`, used by the dashboard poll) and the full `hop status` path (`status-state.js`) expose the identical `status.divergences` array. `packages/agent/src/commands/conflicts.js` is the only place that closes a divergence: `hop conflicts` lists the open set (device labels, paths, ages); `hop conflicts resolve <path> --keep local|cloud` either materializes the cloud file locally (`--keep cloud`) or journals the current on-disk content, rebased onto the current cloud head, as a normal write (`--keep local` — a user who hand-combined both sides into the local file before running this is exactly how a "combined" resolution happens, since no automatic line-level merge exists anywhere in HopIt). Either way the stale pending journal entries that caused the divergence are explicitly acknowledged so `hop recover` never reclassifies them as diverged again. Device labels (`localDeviceName`/`cloudDeviceName`) are best-effort only — attributing a specific cloud-side edit to a specific device durably is GR-A2 territory — so the CLI, status API, and dashboard panel (`src/components/features/review/divergence-panel.tsx`) must all degrade to a generic label rather than omit a divergence when a name is unknown.
+**Divergence surfaces (GR-A3, decisions §1).** `deriveOpenDivergences` (`packages/agent/src/reconnect.js`) turns the raw divergence-opening event stream into the *currently open* set: it pairs each diverged path with the most recent `conflicts.resolved` event for that path (emitted by the resolver below) and reports it as open only if it has never been resolved, or diverged again after its last resolution. Two event names open a divergence, not one: `journal.reconnect_diverged` from the reconnect path, and `sync.save_clobber_diverged` from GR-F2's save-side path, whose cloud side is named `refreshedHash`/`refreshedRevision` and is normalized to `cloudHash`/`cloudRevision` here (`divergenceOpeningEvents`) rather than at each consumer. Normalizing centrally is what makes GR-F2's stated acceptance -- "journal it as a divergence instead of a clean edit, surface via GR-A3" -- actually hold: a stale-buffer clobber shows up in `hop conflicts`, in `status.divergences`, and is resolvable with `hop conflicts resolve` through exactly the same code path as a reconnect divergence. This stays a pure function over the local event log -- no second cloud read, no separate persistence layer -- so both the fast status endpoint (`status-endpoints.js`, used by the dashboard poll) and the full `hop status` path (`status-state.js`) expose the identical `status.divergences` array. `packages/agent/src/commands/conflicts.js` is the only place that closes a divergence: `hop conflicts` lists the open set (device labels, paths, ages); `hop conflicts resolve <path> --keep local|cloud` either materializes the cloud file locally (`--keep cloud`) or journals the current on-disk content, rebased onto the current cloud head, as a normal write (`--keep local` -- a user who hand-combined both sides into the local file before running this is exactly how a "combined" resolution happens, since no automatic line-level merge exists anywhere in HopIt). Either way the stale pending journal entries that caused the divergence are explicitly acknowledged so `hop recover` never reclassifies them as diverged again. Device labels (`localDeviceName`/`cloudDeviceName`) are best-effort only -- attributing a specific cloud-side edit to a specific device durably is GR-A2 territory -- so the CLI, status API, and dashboard panel (`src/components/features/review/divergence-panel.tsx`) must all degrade to a generic label rather than omit a divergence when a name is unknown.
 
-**Unified reconciliation and reconnect ordering (GR-A4, decisions §1).** Everything above (GR-A1's classification, GR-A2's persistence, GR-A3's surfaces) assumes there is already a pending journal entry to classify. That is true for a live watcher's own writes, but not for edits made while the agent was not running at all — offline, crashed, force-quit, or a workspace folder restored from an external backup (e.g. Time Machine). `watchWorkspace`'s startup path (`packages/agent/src/watch.js`) closes that gap with a single extra step, `reconcileUnwatchedChanges`, run **before** `recoverJournal` and fully awaited before it:
+**Unified reconciliation and reconnect ordering (GR-A4, decisions §1).** Everything above (GR-A1's classification, GR-A2's persistence, GR-A3's surfaces) assumes there is already a pending journal entry to classify. That is true for a live watcher's own writes, but not for edits made while the agent was not running at all -- offline, crashed, force-quit, or a workspace folder restored from an external backup (e.g. Time Machine). `watchWorkspace`'s startup path (`packages/agent/src/watch.js`) closes that gap with a single extra step, `reconcileUnwatchedChanges`, run **before** `recoverJournal` and fully awaited before it:
 
-- It diff-scans the workspace against the workspace index's last-known content manifest (`diffWorkspaceAgainstManifest`, the same baseline `workspaceLocalChanges` already trusts) and, for every added/modified/deleted path that does **not** already have an unresolved journal entry, synthesizes one (`synthesizeDiffScanEntries` in `packages/agent/src/reconnect.js`) and appends it straight to the journal file. A path with an existing pending entry is left alone — GR-A1 classification already covers it — so a crash mid-write never double-journals.
+- It diff-scans the workspace against the workspace index's last-known content manifest (`diffWorkspaceAgainstManifest`, the same baseline `workspaceLocalChanges` already trusts) and, for every added/modified/deleted path that does **not** already have an unresolved journal entry, synthesizes one (`synthesizeDiffScanEntries` in `packages/agent/src/reconnect.js`) and appends it straight to the journal file. A path with an existing pending entry is left alone -- GR-A1 classification already covers it -- so a crash mid-write never double-journals.
 - Because these synthesized entries land in the same journal file, `recoverJournal`'s normal GR-A1 classification/replay/divergence-opening pass picks them up with zero special-casing: there is exactly one recovery path for offline, crash, force-quit, and restored-from-backup, never a second startup-only mechanism.
-- **Restored-from-backup mass-delete guard.** A deleted-path set shaped like a mass delete (reusing `refresh_would_mass_delete`'s threshold: `refreshMassDeleteMinFiles`/`refreshMassDeleteFraction`) is never trusted as a genuine local delete — a workspace missing a large fraction of its known files looks like a stale backup restore, not a deliberate bulk delete. Those entries are tagged `forceDivergence`, which `classifyReconnectEntry` honors ahead of its normal both-touched check (as long as the cloud side still has the file): each one opens a divergence instead of replaying a delete that would wipe files still on cloud, and the local side stays exactly as the restore left it until the user resolves via `hop conflicts resolve`.
-- **Ordering invariant.** `watchWorkspace` awaits `reconcileUnwatchedChanges`, then `recoverJournal`, then `hydrateWorkspace` (which is where a Main update this device missed while away actually lands on disk) in strict sequence — the personal change set is always reconciled in full before the safe-refresh path applies a missed Main update, never interleaved. This closes a related clobber: `hydrateWorkspace`'s disk-vs-cloud verify pass is a blunt "if disk differs from cloud, overwrite disk" loop, so without an explicit skip list it would immediately re-clobber a path GR-A4 just opened as a divergence moments earlier. `hydrateWorkspace` now accepts `options.hydrateSkipPaths` (set to `recovery.divergedPaths`) so every currently-open divergence — freshly opened this run, or still open from an earlier session — survives that pass untouched, mirroring GR-F1's `withheldPaths` pattern in `refreshWorkspace`/`materializeCloudToWorkspace`.
+- **Restored-from-backup mass-delete guard.** A deleted-path set shaped like a mass delete (reusing `refresh_would_mass_delete`'s threshold: `refreshMassDeleteMinFiles`/`refreshMassDeleteFraction`) is never trusted as a genuine local delete -- a workspace missing a large fraction of its known files looks like a stale backup restore, not a deliberate bulk delete. Those entries are tagged `forceDivergence`, which `classifyReconnectEntry` honors ahead of its normal both-touched check (as long as the cloud side still has the file): each one opens a divergence instead of replaying a delete that would wipe files still on cloud, and the local side stays exactly as the restore left it until the user resolves via `hop conflicts resolve`.
+- **Ordering invariant.** `watchWorkspace` awaits `reconcileUnwatchedChanges`, then `recoverJournal`, then `hydrateWorkspace` (which is where a Main update this device missed while away actually lands on disk) in strict sequence -- the personal change set is always reconciled in full before the safe-refresh path applies a missed Main update, never interleaved. This closes a related clobber: `hydrateWorkspace`'s disk-vs-cloud verify pass is a blunt "if disk differs from cloud, overwrite disk" loop, so without an explicit skip list it would immediately re-clobber a path GR-A4 just opened as a divergence moments earlier. `hydrateWorkspace` now accepts `options.hydrateSkipPaths` (set to `recovery.divergedPaths`) so every currently-open divergence -- freshly opened this run, or still open from an earlier session -- survives that pass untouched, mirroring GR-F1's `withheldPaths` pattern in `refreshWorkspace`/`materializeCloudToWorkspace`.
 
 One agent per workspace (GR-H3, decisions doc §12):
 
 - before touching the cloud service or journal, `watchWorkspace` takes an exclusive lock on the workspace folder at `<workspace>/.hopit-agent/lock.json` (`packages/agent/src/workspace-lock.js`)
-- the lock records the holder's pid, hostname, codebase id, and start time; a second `hop watch`, a second `hop service run`, or any other agent attaching to the same folder — regardless of profile, state-root, or session — refuses to start and names the current holder (pid, codebase, start time) instead of racing the existing watcher
+- the lock records the holder's pid, hostname, codebase id, and start time; a second `hop watch`, a second `hop service run`, or any other agent attaching to the same folder -- regardless of profile, state-root, or session -- refuses to start and names the current holder (pid, codebase, start time) instead of racing the existing watcher
 - a lock left behind by a process that has since died (crash, `kill -9`, power loss) is detected by a same-host pid liveness check and taken over automatically so a dead holder never permanently wedges the workspace; a lock recorded from a different hostname is never treated as stale, since liveness cannot be checked remotely
 - the lock is released on a clean shutdown (`hop watch` SIGINT/SIGTERM, `hop service stop`/`restart`) and on any startup failure after the lock was acquired, so a failed start never blocks a retry
 - `.hopit-agent/` inside a workspace folder is excluded from workspace scans (`shouldSkipWorkspacePath`, `shouldSkipLiteralMirrorPath`), so the lockfile is never journaled, synced, or mirrored as workspace content
 
-**Idle dehydration is default-on (GR-G1, decisions §11).** `createAutoPruneScheduler` (`watch.js`) is now enabled unless a caller explicitly opts out with `--no-auto-prune` (or `HOPIT_AUTO_PRUNE=0`); the default idle window before an untouched codebase dehydrates back to metadata-only remains 7 days (`--auto-prune-inactive-ms` / `HOPIT_AUTO_PRUNE_INACTIVE_MS`). v1 dehydration is whole-codebase/whole-directory **dematerialization** through the existing `dehydrateWorkspace` / `pruneWorkspaceCache` machinery — re-materialized on the next `hop workspace open` / hydrate — never per-file placeholder stubs inside a materialized tree (the WS7b design explicitly rejected placeholders for source; see `docs/git-replacement-decisions-2026-07.md` §11 and the Track G intro of the implementation plan). Three invariants hold across every eviction path (`pruneWorkspaceCache`, the auto-prune scheduler, and `dehydrateWorkspace`):
+**Idle dehydration is default-on (GR-G1, decisions §11).** `createAutoPruneScheduler` (`watch.js`) is now enabled unless a caller explicitly opts out with `--no-auto-prune` (or `HOPIT_AUTO_PRUNE=0`); the default idle window before an untouched codebase dehydrates back to metadata-only remains 7 days (`--auto-prune-inactive-ms` / `HOPIT_AUTO_PRUNE_INACTIVE_MS`). v1 dehydration is whole-codebase/whole-directory **dematerialization** through the existing `dehydrateWorkspace` / `pruneWorkspaceCache` machinery -- re-materialized on the next `hop workspace open` / hydrate -- never per-file placeholder stubs inside a materialized tree (the WS7b design explicitly rejected placeholders for source; see `docs/git-replacement-decisions-2026-07.md` §11 and the Track G intro of the implementation plan). Three invariants hold across every eviction path (`pruneWorkspaceCache`, the auto-prune scheduler, and `dehydrateWorkspace`):
 
 1. **Never evict content with unacknowledged journal writes.** `pruneWorkspaceCache` skips any path with a pending or failed journal entry (`journal_pending` / `journal_failed`); the auto-prune scheduler additionally refuses to run at all while the journal as a whole has unresolved entries (`readJournalSafety`), and `dehydrateWorkspace` throws before touching anything if the journal isn't clean.
 2. **Per-folder "keep on this device" pins survive eviction.** `hop workspace pin`/`unpin` (`setWorkspaceCachePin`) marks paths in the workspace index's local cache; `pruneWorkspaceCache` skips any pinned path (`pinned` reason) regardless of how long it has been idle.
 3. **The journal itself is last-sacrificed.** Eviction candidates are drawn from the cloud file graph, which structurally never contains the journal/events ndjson files; `pruneWorkspaceCache` also refuses any candidate path whose absolute location resolves onto the configured journal or events file (`journal_path` reason) as defense in depth.
 
-**Disk-pressure acceleration** (`diskPressureAcceleratedInactiveMs` in `watch.js`) shortens the auto-prune scheduler's idle window when the workspace's device is low on free space — below an absolute floor (5 GB default) or a free-fraction floor (10% default) — by a fixed acceleration factor (25% of the configured window, never below the scheduler's 60s minimum cadence). It only changes *when* already-synced content is evicted; it never overrides invariants 1–3 above. An accelerated run emits `cache.auto_prune_disk_pressure` before the shortened prune executes, surfaced through `hop status` under `autoPrune.lastDiskPressure`.
+**Disk-pressure acceleration** (`diskPressureAcceleratedInactiveMs` in `watch.js`) shortens the auto-prune scheduler's idle window when the workspace's device is low on free space -- below an absolute floor (5 GB default) or a free-fraction floor (10% default) -- by a fixed acceleration factor (25% of the configured window, never below the scheduler's 60s minimum cadence). It only changes *when* already-synced content is evicted; it never overrides invariants 1–3 above. An accelerated run emits `cache.auto_prune_disk_pressure` before the shortened prune executes, surfaced through `hop status` under `autoPrune.lastDiskPressure`.
 
 ### Safe Refresh Contract
 
@@ -442,8 +442,8 @@ unjournaled local drift. It splits the apply per path:
 
 - paths with no local edits materialize immediately, exactly as before
 - paths with genuine local drift (disk differs from both the last
-  materialization manifest and the current cloud entry) are withheld —
-  neither overwritten nor deleted — and flagged instead of blocking
+  materialization manifest and the current cloud entry) are withheld --
+  neither overwritten nor deleted -- and flagged instead of blocking
   every other file's refresh
 - the withheld path never advances the indexed `lastMaterializedRevision`
   past cloud head, so reconciliation keeps retrying it on every cycle until
@@ -451,14 +451,14 @@ unjournaled local drift. It splits the apply per path:
   at which point it materializes normally
 - `refresh.complete` carries `reason: 'file_withheld_local_edits'`,
   `withheldCount`, and a capped `withheldSamplePaths` sample when anything
-  was withheld — a reason distinct from the whole-workspace
+  was withheld -- a reason distinct from the whole-workspace
   `workspace_has_unjournaled_changes` block, which remains for the outer
   safety gates only: a missing workspace, an untrustworthy content manifest,
   pending/failed journal entries, and the mass-delete guard
 - `status.workspace.withheldRefresh` (the fast status-endpoint path always
   reports `null` here since it deliberately skips a workspace scan) is
-  computed live against the current cloud graph each call — "Main changed
-  under you" — so it clears the instant the local edit resolves, independent
+  computed live against the current cloud graph each call -- "Main changed
+  under you" -- so it clears the instant the local edit resolves, independent
   of the last refresh cycle's history
 - `remote-push.js` (live push delivery) intentionally keeps the old
   whole-workspace block on any local drift; only the remote-pull path
@@ -554,7 +554,7 @@ Important event types:
 - `remote-update`
 - `cache.evicted`
 - `connection.changed`
-- `file.large` — a create/write journal entry exceeded the large-file warning
+- `file.large` -- a create/write journal entry exceeded the large-file warning
   threshold (default 100 MB, per-codebase override via
   `codebase_settings.large_file_threshold_bytes`). Purely additive: the file
   still syncs in full, with no cap and no gate (decisions doc §11).
@@ -689,25 +689,25 @@ in the proposal model (decisions §2: "Main has exactly one door"):
   set's current head (`cloud.selectedState.revision`) and Main's current
   revision (`cloud.main.revision`, the CAS baseline) into a `proposals` row.
   **Owner constraint** (set at design approval): at most one *open*
-  (non-merged) proposal exists per change set — a second `hop propose` on
+  (non-merged) proposal exists per change set -- a second `hop propose` on
   the same still-unmerged change set re-pins the same row in place
   (`upsertProposal`/`getOpenProposalForChangeSet`) rather than forking a
   second one. Saves made after proposing keep landing on the same
   `change_set_id` and accumulate as "since proposal" (decisions §4) without
   moving the pin.
 - `hop propose --merge` is the solo path (decisions §3): pin, then
-  self-approve (`state -> approved`, `queued_at` set — the merge queue's
+  self-approve (`state -> approved`, `queued_at` set -- the merge queue's
   FIFO order key) and drain the queue, all in one command, through the exact
   same `runMergeQueue` path a team review-approval would use.
 - The merge queue (`runMergeQueue`/`landOneProposal`) lands every
   `approved` proposal for a codebase oldest-`queued_at`-first. Landing a
   proposal never applies the live (possibly-since-changed) selected-state
-  head — only `proposal.pinnedRevision`. If Main is still at the proposal's
+  head -- only `proposal.pinnedRevision`. If Main is still at the proposal's
   recorded `base_revision`, the land is direct; if Main advanced (an earlier
   proposal in the same drain just landed), the queue compares the paths
   Main gained since that base against this proposal's own paths past the
   refreshed Main position (reusing `compareRevisions`, the same WS7c engine
-  `hop compare` uses — no new diff machinery) — no overlap lands cleanly
+  `hop compare` uses -- no new diff machinery) -- no overlap lands cleanly
   (`state -> merged`), a genuine overlap leaves the proposal `stale` with
   `stale_reason: 'main_conflict'` and moves on to the next proposal, never
   auto-resolving. `sync.js`'s plain `mergeChangeSet` (still available,
@@ -718,7 +718,7 @@ in the proposal model (decisions §2: "Main has exactly one door"):
   save (`selected_state_already_merged`), so landing also rotates
   `cloud.selectedState` to a fresh `active-change-set` whose `baseRevision`
   is the just-landed Main revision and whose head starts at the live
-  `cloud.revision` — carrying forward, not discarding, any unproposed saves
+  `cloud.revision` -- carrying forward, not discarding, any unproposed saves
   made after the pin.
 **Stale-review automation (GR-B3, decisions §4).**
 `packages/backend-d1/src/collaboration.js`'s `createReviewDecision` now
@@ -761,12 +761,12 @@ backend).
 **CI on propose and in the merge queue (GR-B5, decisions §3).** "CI's
 default trigger is on propose and in the merge queue, not on every save" is
 now enforced, gated to the D1 backend only (`cloudService.type ===
-d1CloudServiceType` — the local/dev fixture backend has no `action_jobs`
+d1CloudServiceType` -- the local/dev fixture backend has no `action_jobs`
 table or hosted runner, so CI is a deliberate no-op there, matching the
 GR-E2 mirror-push precedent):
 
 - `proposeChangeSet` best-effort enqueues an `action_jobs` row of
-  `kind = 'ci'` tied to the proposal (`proposal_id` column, additive —
+  `kind = 'ci'` tied to the proposal (`proposal_id` column, additive --
   `cloudflare/d1/migrations/2026-07-24-action-jobs-proposal-link.sql`) right
   after pinning, via `enqueueCiJobForProposal`. A failure to enqueue never
   blocks pinning; it only emits `ci.enqueue_failed`.
@@ -794,7 +794,7 @@ GR-E2 mirror-push precedent):
   (`claimRetry`); an exhausted retry cycle is logged and the poll loop
   continues rather than crashing the runner process. The job *step's*
   environment (`actionJobEnv`) is built from `safeBaseEnv` only and never
-  carries `HOPIT_D1_*`/`CLOUDFLARE_*`/`HOPIT_R2_*`/etc — those are only
+  carries `HOPIT_D1_*`/`CLOUDFLARE_*`/`HOPIT_R2_*`/etc -- those are only
   forwarded to the runner's own trusted steps (`trustedAgentEnv`, used for
   `hydrate`/`mirror-sync`), so untrusted job code (a contributor's own repo
   content, npm scripts) can never read cloud credentials. Covered by
@@ -805,7 +805,7 @@ GR-E2 mirror-push precedent):
   `packages/agent/test/propose.test.js`.
 
 **Releases (GR-B4, decisions §9).** A lightweight, permanent pin of a Main
-revision — "mark this state as a release" without a git tag in the product.
+revision -- "mark this state as a release" without a git tag in the product.
 `packages/backend-d1/src/releases-store.js` (`attachReleaseMethods`) owns the
 `releases` table (`release_id`, `codebase_id`, `name`, `notes`,
 `pinned_revision`, `created_by_user_id`, `created_at`; schema + migration in
@@ -817,15 +817,15 @@ pattern as `proposals`/`divergences`. `packages/agent/src/commands/release.js`
 is the CLI surface:
 
 - `hop release <name> [--notes <text>]` pins the codebase's *current*
-  `cloud.main.revision` — deliberately not the caller's active change set
+  `cloud.main.revision` -- deliberately not the caller's active change set
   head, since a release always describes what is actually live on Main right
   now, independent of who is proposing what. Every call inserts a brand-new
   row; unlike proposals, releases are never re-pinned or mutated once
-  created — they are historical facts ("what shipped as v1.2").
+  created -- they are historical facts ("what shipped as v1.2").
 - Names are unique per codebase (decisions §9); `createRelease` checks
   `getReleaseByName` first and throws `DuplicateReleaseNameError` on a
   collision, enforced in application code rather than a SQL unique
-  constraint — same reasoning as the proposals table's open-proposal
+  constraint -- same reasoning as the proposals table's open-proposal
   constraint (the GR-S1 drift-test parser only understands plain `create
   index` statements).
 - `hop release list` and the dashboard's read-only `ReleasesCard`
@@ -858,20 +858,20 @@ visible when the tracks were chained:
 - **`hop status` survives an unreachable cloud** (`status-state.js`).
   A remote backend throws a transport error where a not-yet-initialized local
   graph returns `null`, which used to take the whole read-only status path
-  down with it — precisely when status is the surface you reach for. The
+  down with it -- precisely when status is the surface you reach for. The
   cloud read is now guarded, degrades to the already-supported `null` graph,
   and reports `cloudReachable: false` with `cloudReadError` instead of
   crashing. Journal and event state come off local disk and are unaffected.
 - **A hard outage used to leave the journal empty**, because `performSyncOnce`
   must read the cloud graph before it can plan (and therefore journal)
-  anything. That is now fixed — see "Write-Ahead Journaling Across An Outage"
-  below — and scenario 5 asserts the stronger property: the journal fills up
+  anything. That is now fixed -- see "Write-Ahead Journaling Across An Outage"
+  below -- and scenario 5 asserts the stronger property: the journal fills up
   *during* the outage rather than being reconstructed from disk afterwards.
 
 ### Write-Ahead Journaling Across An Outage
 
 A journal entry needs a `baseRevision`, a privacy zone, a target state, and a
-before/after comparison, all of which come from the cloud graph — which made
+before/after comparison, all of which come from the cloud graph -- which made
 the graph read a hard prerequisite for journaling anything at all. GR-X1
 scenario 5 showed the consequence: with the cloud unreachable, `sync` failed
 at that read and wrote **no entry**, so the writes survived only as files on
@@ -891,8 +891,8 @@ rather than a write-ahead journal.
   `recoverJournal` commits them with no special casing.
 - **Only transport failures qualify.** `isCloudUnreachableError` says yes only
   to a `fetch`-level rejection (no HTTP response arrived). Anything the
-  backend throws after a response — bad token, revoked session, quota, a
-  malformed statement — keeps failing loudly, because planning against a
+  backend throws after a response -- bad token, revoked session, quota, a
+  malformed statement -- keeps failing loudly, because planning against a
   cached graph there would hide a real, non-transient problem behind a
   silently growing local backlog. It defaults to "no" for anything
   unrecognized, and with no snapshot on disk the old failure behavior is
@@ -905,7 +905,7 @@ rather than a write-ahead journal.
   back the graph it projected, so successive syncs read as one continuous
   session instead of re-planning against the same untouched snapshot (which
   would re-journal the same paths and stamp every entry with the same
-  revision). This makes it a *projected* state rather than an observed one —
+  revision). This makes it a *projected* state rather than an observed one --
   acceptable because it is only ever used for offline planning, any successful
   read overwrites it, and a wrong projection degrades into a divergence.
 - **Offline entries carry no `targetStateRevision`.** That guard encodes a

@@ -265,7 +265,7 @@ test('a scheduled prune with ample free disk does not emit a disk-pressure event
   assert.equal(pressureEvent, undefined)
 })
 
-// GR-H1: periodic full workspace diff-scan (decisions §12 — missed watcher
+// GR-H1: periodic full workspace diff-scan (decisions §12 -- missed watcher
 // events are assumed, not exceptional).
 
 test('workspace scan cadence rejects sub-second intervals', () => {
@@ -317,7 +317,7 @@ test('a missed watcher event heals on the next periodic scan', async (t) => {
   const startedAt = (await readEvents(state.events)).find((event) => event.event === 'watch.scan_started')
   assert.equal(startedAt.detail.intervalMs, 20)
 
-  // Simulate the watcher missing this write entirely (no scheduleSync call) —
+  // Simulate the watcher missing this write entirely (no scheduleSync call) --
   // the file lands on disk with nothing observing it until the next scan.
   await fs.writeFile(path.join(state.workspace, 'missed-write.txt'), 'healed by scan', 'utf8')
 

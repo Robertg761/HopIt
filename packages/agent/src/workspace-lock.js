@@ -1,9 +1,9 @@
 // @ts-check
 // One agent per workspace (decisions doc §12): the agent that starts watching a
 // workspace folder takes an exclusive lock on that folder for the lifetime of
-// the watch. A second agent attaching to the same folder — whether a second
+// the watch. A second agent attaching to the same folder -- whether a second
 // `hop watch`, a second `hop service run`, or a completely separate profile/
-// state-root pointed at the same folder — must refuse to start rather than
+// state-root pointed at the same folder -- must refuse to start rather than
 // have two watchers race to sync the same files. A lock left behind by a
 // process that has since died (crash, kill -9, power loss) is detected via a
 // liveness check on the recorded pid and taken over automatically so a dead

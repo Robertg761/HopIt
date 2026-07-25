@@ -758,7 +758,7 @@ export function buildSyncHealth(syncEvents) {
 // ≤10-path sample), matching the compactness contract used elsewhere.
 async function buildWithheldRefreshSummary(options, cloud, indexedCodebase) {
   const detailedChanges = await workspaceLocalChanges(options, indexedCodebase, { includePaths: true })
-  // Scoped, per-path reads only (never a full directory walk/read) — status
+  // Scoped, per-path reads only (never a full directory walk/read) -- status
   // must not read the bytes of untracked files just to compute this flag.
   const withheldPaths = await withheldRefreshPathsFromDisk(options.workspace, detailedChanges, cloud)
   if (withheldPaths.length === 0) return null

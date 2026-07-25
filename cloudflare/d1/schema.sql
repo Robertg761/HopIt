@@ -429,9 +429,9 @@ create index if not exists idx_notifications_recipient_created on notifications(
 -- separate metadata/diff opt-in. New table (not an alter), so it applies
 -- cleanly to databases created before the feature. large_file_threshold_bytes
 -- is the GR-G2 per-codebase override for the large-file warning threshold;
--- NULL means "use the agent default" (100 MB). Large files always sync — there
+-- NULL means "use the agent default" (100 MB). Large files always sync -- there
 -- is no cap, this only controls when the dashboard note fires.
--- secret_scanning_enabled defaults ON (decisions doc §7) — absence of a row
+-- secret_scanning_enabled defaults ON (decisions doc §7) -- absence of a row
 -- is also read as enabled by callers. `derived_path_overrides` (GR-C1,
 -- decisions §6) holds the per-codebase `{"add":[...],"remove":[...]}`
 -- overrides layered on top of the curated built-in derived-path list;
