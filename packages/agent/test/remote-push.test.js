@@ -180,7 +180,18 @@ async function startFakePushHub(t) {
   }
 
   t.after(async () => {
+    accepting = false
     for (const connection of connections) connection.response.end()
+    // `server.close()` only invokes its callback once every connection has
+    // gone away, and the push clients here hold long-lived keep-alive NDJSON
+    // streams. This hook is registered before theirs (the hub is created
+    // first in every test), so waiting politely for those streams deadlocks:
+    // the hub waits for the client, and the client's own teardown never gets
+    // to run. That is what surfaced as "Promise resolution is still pending
+    // but the event loop has already resolved" and cancelled every remaining
+    // test in the file. Destroying the sockets makes teardown independent of
+    // hook ordering.
+    server.closeAllConnections?.()
     await new Promise((resolve) => server.close(resolve))
   })
 

@@ -58,10 +58,22 @@ export function isTransientCloudError(error) {
   return false
 }
 
+// Deliberately NOT unref'd. This timer is awaited, and an unref'd timer does
+// not hold the event loop open -- so whenever a backoff was the only pending
+// work, Node drained the loop and the awaited promise simply never settled.
+// In a long-running `hop watch` a listener usually keeps the loop alive and
+// this was invisible, but a one-shot command (`hop sync-once`,
+// `hop remote-pull`) could exit part way through a retry having neither
+// completed the fetch nor reported an error. It also cancelled every
+// remaining test in remote-push.test.js, which had been written off as an
+// environment-only quirk.
+//
+// The cost of holding the loop is bounded: at most `maxDelayMs` (default 5s)
+// of shutdown delay while a retry is in flight, which is the correct
+// trade against silently dropping the retry.
 function defaultSleep(delayMs) {
   return new Promise((resolve) => {
-    const timer = setTimeout(resolve, delayMs)
-    timer.unref?.()
+    setTimeout(resolve, delayMs)
   })
 }
 

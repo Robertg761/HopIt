@@ -110,6 +110,22 @@ Current verified result:
 - Production Clerk sign-in and D1 owner claim were smoke-tested on `https://hopit.dev`; Basic Auth fallback is no longer needed for the owner handoff.
 - Google Auth Platform Audience for project `hopit-auth-prod-rg`: shows `1 user (1 test, 0 other) / 100 user cap` and the test-user row `robertgordon761@gmail.com`.
 
+## 2026-07-25 Retry Backoff Never Held The Event Loop (The "Expected" Cancellations Were A Real Bug)
+
+Every battery run in this repo has reported five cancelled tests in `remote-push.test.js`, recorded across the plans as environment-only Linux noise (loopback sockets hanging). They were not. `npm run agent:test` now reports 542 tests, 540 pass, 0 fail, **0 cancelled**, 2 skipped.
+
+**Root cause.** `defaultSleep` in `packages/agent/src/cloud-retry.js` created its backoff timer and then called `timer.unref()`. An unref'd timer does not hold the event loop open, and that timer is `await`ed -- so whenever a retry backoff was the only pending work, Node drained the loop and the awaited promise never settled. Node's test runner reports that as "Promise resolution is still pending but the event loop has already resolved" and cancels every remaining test in the file, which is exactly the shape the five "environment" cancellations had.
+
+**This was a product bug, not a test artifact.** In a long-running `hop watch` a listener normally keeps the loop alive, which is why it stayed invisible. But a one-shot command -- `hop sync-once`, `hop remote-pull`, hydrate blob fetches -- that hit a transient network fault could exit part way through its retry having neither completed the fetch nor raised an error: no result, no failure, exit code 0. The fix is to stop unref'ing an awaited timer. The cost is bounded: at most `maxDelayMs` (default 5 s) of extra shutdown delay while a retry is genuinely in flight, which is the right trade against silently dropping the retry.
+
+**Why no test caught it.** Every existing retry test in `hydrate-retry.test.js` injects `sleep: noSleep`, so none of them ever executed the real backoff. The new regression test runs `withCloudFetchRetry` with the real default sleep in a child process with nothing else keeping the loop alive, and asserts the retry completes and returns. Verified it fails with the `unref` restored and passes without it.
+
+**Second, smaller fix in the same file.** `startFakePushHub`'s teardown awaited `server.close()`, which only completes once every connection has gone. The hub is created before the push clients in each test, so its `t.after` runs before theirs: the hub waited on a keep-alive NDJSON stream that only the later hook would close. That deadlock made `remote-push watcher periodically reconciles an idle clean device after a missed push` fail intermittently. Teardown now calls `server.closeAllConnections()` first, making it independent of hook ordering; that test went from intermittent to stable across repeated runs.
+
+Evidence: `remote-push.test.js` 17/17 across three consecutive runs (previously 11-12 pass with 5 cancelled and one intermittent failure). Full battery: agent 542 tests / 540 pass / 0 fail / 0 cancelled / 2 skipped; worker 90/90; web 250/250 across 45 files; config 3/3; desktop 140/140; lint, typecheck, typecheck:agent, check:copy-style, build all clean.
+
+Worth noting for future baselines: the "known environment-only cancellations" line that has been carried forward in the plans since Wave 1 was wrong, and it masked both a real product bug and an intermittent test failure for the entire git-replacement effort. A cancelled test is not a passing test.
+
 ## 2026-07-25 Git-Replacement Work Deployed, Scoped-SQL Gap Closed, Descoped Tables Dropped
 
 The git-replacement branch (67 commits) is pushed and live, and production D1 no longer carries the descoped collaboration tables.
