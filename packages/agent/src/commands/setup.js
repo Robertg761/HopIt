@@ -303,6 +303,10 @@ export async function authorizeDeviceWithBrowser({
   openBrowser = true,
   requestedCodebaseId = null,
   requestedCodebaseName = null,
+  // `hop add --all` requests several projects under ONE authorization, so a batch
+  // costs one browser round trip instead of N (and stops tripping the server's
+  // per-device authorization rate limit partway through).
+  requestedCodebases = null,
   commandName = 'hop setup',
 }) {
   const baseUrl = String(authBaseUrl ?? defaultDeviceAuthorizationBaseUrl).replace(/\/+$/, '')
@@ -317,6 +321,9 @@ export async function authorizeDeviceWithBrowser({
         deviceKey: publicDeviceKeyDescriptor(keyring),
         ...(requestedCodebaseId ? { requestedCodebaseId: String(requestedCodebaseId) } : {}),
         ...(requestedCodebaseName ? { requestedCodebaseName: String(requestedCodebaseName) } : {}),
+        ...(Array.isArray(requestedCodebases) && requestedCodebases.length > 0
+          ? { requestedCodebases: requestedCodebases.map((entry) => ({ id: String(entry.id), name: String(entry.name ?? entry.id) })) }
+          : {}),
       }),
     })
     return readJsonResponse(createResponse, 'Could not start device authorization.')
@@ -360,21 +367,43 @@ export async function authorizeDeviceWithBrowser({
       throw new Error(`Device authorization is ${polled.status ?? 'unavailable'}. Run ${commandName} again.`)
     }
     const tokenContext = requireResponseText(polled.tokenContext, 'tokenContext')
-    const wrappedSessionToken = recordValue(polled.wrappedSessionToken)
-    if (!wrappedSessionToken) throw new Error('Device authorization response did not include an encrypted session token.')
-    const sessionToken = unwrapSymmetricKeyFromDevice({
-      wrappedKey: wrappedSessionToken,
-      recipientPrivateKeyPem: keyring.encryption.privateKeyPem,
-      context: tokenContext,
-    }).toString('utf8')
-    if (!sessionToken.startsWith('hst_')) throw new Error('Device authorization returned an invalid session token.')
+    // A batch approval returns one entry per project; a single approval (or a
+    // server running pre-batch code) returns only the scalar fields, which
+    // synthesize the same one-entry list.
+    const approvedEntries = Array.isArray(polled.codebases) && polled.codebases.length > 0
+      ? polled.codebases.map(recordValue).filter(Boolean)
+      : [{
+          codebaseId: polled.codebaseId,
+          sessionId: polled.sessionId,
+          wrappedSessionToken: polled.wrappedSessionToken,
+          requestedCodebaseId: polled.requestedCodebaseId ?? null,
+        }]
+    const codebases = approvedEntries.map((entry) => {
+      const wrappedSessionToken = recordValue(entry.wrappedSessionToken)
+      if (!wrappedSessionToken) throw new Error('Device authorization response did not include an encrypted session token.')
+      const sessionToken = unwrapSymmetricKeyFromDevice({
+        wrappedKey: wrappedSessionToken,
+        recipientPrivateKeyPem: keyring.encryption.privateKeyPem,
+        context: tokenContext,
+      }).toString('utf8')
+      if (!sessionToken.startsWith('hst_')) throw new Error('Device authorization returned an invalid session token.')
+      return {
+        codebaseId: requireResponseText(entry.codebaseId, 'codebaseId'),
+        requestedCodebaseId: optionalResponseText(entry.requestedCodebaseId),
+        sessionId: requireResponseText(entry.sessionId, 'sessionId'),
+        sessionToken,
+      }
+    })
     const apiBaseUrl = requireResponseText(polled.apiBaseUrl, 'apiBaseUrl').replace(/\/+$/, '')
     const blobProvider = optionalResponseText(polled.blobProvider)
     return {
-      codebaseId: requireResponseText(polled.codebaseId, 'codebaseId'),
+      // Scalar fields describe the first approved project so every existing
+      // single-project caller keeps working untouched.
+      codebaseId: codebases[0].codebaseId,
       requesterId: requireResponseText(polled.requesterId, 'requesterId'),
-      sessionId: requireResponseText(polled.sessionId, 'sessionId'),
-      sessionToken,
+      sessionId: codebases[0].sessionId,
+      sessionToken: codebases[0].sessionToken,
+      codebases,
       apiBaseUrl,
       remotePushUrl: deriveRemotePushUrl(apiBaseUrl),
       ...(blobProvider ? {

@@ -10,6 +10,7 @@ import { assertWorkspacePathSafe } from '../paths.js'
 import { defaultAgentStateRoot, defaultWorkspaceRoot, deriveServicePort } from '../options.js'
 import { applyLocalDeviceKeyring, initializeLocalDeviceKeyring, localDeviceKeyringPath } from './keys.js'
 import { authorizeDeviceWithBrowser } from './setup.js'
+import { scanProjectCandidates } from './scan-projects.js'
 import { importGitProject, importLocalProject } from './import.js'
 import { attachWorkspace } from './hydrate.js'
 import { serviceStatus, startService } from '../service.js'
@@ -100,7 +101,63 @@ async function loadLaunchAgent(installOptions, launchAgent) {
 }
 
 /**
+ * Match what the browser approved against what this command asked for.
+ *
+ * Deselecting a project in the approval checklist is legitimate user intent, so a
+ * SUBSET of the requested set is accepted and the remainder reported as skipped.
+ * The two things that abort are an id that was never requested, and an approval
+ * that resolved to a different project than the one requested -- the latter being
+ * the case that would rm -rf and re-import into the wrong managed workspace.
+ *
+ * @param {Array<{codebaseId: string, codebaseName: string, source: string}>} candidates
+ * @param {Array<{codebaseId: string, requestedCodebaseId?: string|null, sessionId: string, sessionToken: string}>} approvedEntries
+ */
+export function reconcileApprovedProjects(candidates, approvedEntries) {
+  const requested = new Map(candidates.map((candidate) => [candidate.codebaseId, candidate]))
+  const connected = []
+  for (const entry of approvedEntries) {
+    const approvedCodebaseId = assertSafeConnectionCodebaseId(entry.codebaseId)
+    const requestedCodebaseId = entry.requestedCodebaseId ?? approvedCodebaseId
+    const candidate = requested.get(requestedCodebaseId)
+    if (!candidate) {
+      throw new Error(
+        `hop add aborted: the browser approved "${approvedCodebaseId}", which this command did not request. `
+        + 'Nothing was changed. Re-run hop add and approve only the projects it asks for.',
+      )
+    }
+    if (approvedCodebaseId !== requestedCodebaseId) {
+      const primaryEnvCodebase = process.env.HOPIT_CODEBASE_ID?.trim()
+      if (primaryEnvCodebase && approvedCodebaseId === primaryEnvCodebase) {
+        throw new Error(
+          `hop add aborted: the browser approved this device's primary project "${approvedCodebaseId}", `
+          + `but this command requested a new project "${requestedCodebaseId}". Continuing would import `
+          + `${candidate.source} into your primary project and destroy its managed workspace. Nothing was changed. `
+          + `Re-run hop add and choose "Create ${requestedCodebaseId}" on the approval page instead of an existing project.`,
+        )
+      }
+      throw new Error(
+        `hop add aborted: the browser approved a different project than requested. Requested `
+        + `"${requestedCodebaseId}" but the approval returned "${approvedCodebaseId}". Nothing was changed. `
+        + `Re-run hop add and choose "Create ${requestedCodebaseId}" on the approval page instead of an existing project.`,
+      )
+    }
+    connected.push({ candidate, entry })
+  }
+
+  if (connected.length === 0) {
+    throw new Error('hop add aborted: no projects were approved in the browser. Nothing was changed.')
+  }
+  const connectedIds = new Set(connected.map((item) => item.candidate.codebaseId))
+  return {
+    connected,
+    skipped: candidates.filter((candidate) => !connectedIds.has(candidate.codebaseId)),
+  }
+}
+
+/**
  * `hop add`: connect any local folder as a new HopIt codebase in one command.
+ * With `--all`, every top-level folder in --source becomes a candidate project and
+ * the whole set is approved in a single browser round trip.
  *
  * @param {Record<string, any>} options
  * @param {{ authorize?: typeof authorizeDeviceWithBrowser }} [inject]
@@ -121,6 +178,11 @@ export async function runAdd(options, inject = {}) {
     throw new Error(`Add source is not a directory: ${source}`)
   }
 
+  const scanMode = Boolean(options.all)
+  if (scanMode && provided.has('codebase-id')) {
+    throw new Error('--codebase-id names a single project. Drop it when using --all.')
+  }
+
   const stateRoot = path.resolve(expandHome(
     options['state-root'] ?? process.env.HOPIT_AGENT_STATE_ROOT ?? defaultAgentStateRoot(),
   ))
@@ -131,27 +193,63 @@ export async function runAdd(options, inject = {}) {
     options['env-path'] ?? path.join(os.homedir(), '.config', 'hopit', 'production.env'),
   ))
 
-  // 1. Derive a sane, collision-checked codebase id.
-  const codebaseName = String(options['codebase-name'] ?? path.basename(source)).trim() || path.basename(source)
+  // 1. Derive sane, collision-checked codebase ids. `takenIds` is threaded across
+  //    the whole batch so two sibling folders can never derive the same id.
   const takenIds = new Set(await listConnectionCodebaseIds({ 'state-root': stateRoot }))
   const envCodebase = process.env.HOPIT_CODEBASE_ID?.trim()
   if (envCodebase) takenIds.add(envCodebase)
-  const requestedCodebaseId = deriveCodebaseId({
-    explicitId: provided.has('codebase-id') ? options['codebase-id'] : null,
-    codebaseName,
-    takenIds,
-  })
+
+  const candidates = []
+  if (scanMode) {
+    const scanned = await scanProjectCandidates(source)
+    // Every top-level folder is a candidate; signals decide what is offered by
+    // DEFAULT. --include-all-folders widens it to folders with no project marker
+    // at all, and the browser checklist is where the final selection happens.
+    const chosen = options['include-all-folders'] === true ? scanned : scanned.filter((entry) => entry.recommended)
+    if (chosen.length === 0) {
+      throw new Error(
+        `No candidate projects found in ${source}. Pass --include-all-folders to offer every top-level folder, `
+        + 'or use --source <folder> without --all to add one directly.',
+      )
+    }
+    for (const entry of chosen) {
+      const codebaseId = deriveCodebaseId({ explicitId: null, codebaseName: entry.name, takenIds })
+      takenIds.add(codebaseId)
+      candidates.push({ codebaseId, codebaseName: entry.name, source: entry.source, signals: entry.signals })
+    }
+  } else {
+    const codebaseName = String(options['codebase-name'] ?? path.basename(source)).trim() || path.basename(source)
+    const codebaseId = deriveCodebaseId({
+      explicitId: provided.has('codebase-id') ? options['codebase-id'] : null,
+      codebaseName,
+      takenIds,
+    })
+    takenIds.add(codebaseId)
+    candidates.push({ codebaseId, codebaseName, source, signals: [] })
+  }
 
   // Fail fast on a nested cloud-sync Workspace Root (Dropbox/iCloud/OneDrive/
   // Google Drive) before any directory is created, keyring is written, or
-  // browser authorization is requested.
-  await assertWorkspacePathSafe({ workspace: path.join(workspaceRoot, requestedCodebaseId) })
+  // browser authorization is requested. EVERY candidate is checked up front so a
+  // batch cannot get halfway through and then refuse.
+  for (const candidate of candidates) {
+    await assertWorkspacePathSafe({ workspace: path.join(workspaceRoot, candidate.codebaseId) })
+  }
 
   if (human) writeLine()
-  say(`  ${accent('◆')} ${bold('Add a project')}  ${muted(source)}`)
-  say(`  ${accent('1/3')}  Requesting codebase ${muted(`${codebaseName} (${requestedCodebaseId})`)}`)
+  say(`  ${accent('◆')} ${bold(scanMode ? 'Add projects' : 'Add a project')}  ${muted(source)}`)
+  if (scanMode) {
+    say(`  ${accent('1/3')}  Requesting ${candidates.length} project${candidates.length === 1 ? '' : 's'}`)
+    for (const candidate of candidates) {
+      const signals = candidate.signals.length > 0 ? ` ${muted(`[${candidate.signals.join(' ')}]`)}` : ''
+      say(`       ${muted('•')} ${candidate.codebaseName} ${muted(`(${candidate.codebaseId})`)}${signals}`)
+    }
+  } else {
+    say(`  ${accent('1/3')}  Requesting codebase ${muted(`${candidates[0].codebaseName} (${candidates[0].codebaseId})`)}`)
+  }
 
-  // 2. Prepare the shared device keyring before anything leaves the device.
+  // 2. Prepare the shared device keyring before anything leaves the device. One
+  //    keyring covers every project on this device.
   const deviceKeysPath = provided.has('device-keys')
     ? path.resolve(expandHome(options['device-keys']))
     : path.join(stateRoot, 'keys', 'device.json')
@@ -160,50 +258,112 @@ export async function runAdd(options, inject = {}) {
   const keyInstallOptions = addRuntimeOptions(options, {
     stateRoot,
     workspaceRoot,
-    codebaseId: requestedCodebaseId,
+    codebaseId: candidates[0].codebaseId,
     deviceKeysPath,
     envFilePath,
   })
   const keyring = await initializeLocalDeviceKeyring(keyInstallOptions)
   const keyringPath = path.resolve(localDeviceKeyringPath(keyInstallOptions))
 
-  // 3. Browser approval for the NEW codebase. The browser user decides; the
-  //    token comes back wrapped to this device's key.
+  // 3. ONE browser approval covering every requested project. The browser user
+  //    decides; each token comes back wrapped to this device's key.
   say(`       ${muted('Waiting for browser approval…')}`)
   const connection = await authorize({
     keyring: keyring.keyring,
     authBaseUrl: options['auth-base-url'] ?? process.env.HOPIT_AUTH_BASE_URL ?? defaultDeviceAuthorizationBaseUrl,
-    requestedCodebaseId,
-    requestedCodebaseName: codebaseName,
+    requestedCodebaseId: candidates[0].codebaseId,
+    requestedCodebaseName: candidates[0].codebaseName,
+    requestedCodebases: candidates.map((candidate) => ({ id: candidate.codebaseId, name: candidate.codebaseName })),
     commandName: 'hop add',
   })
-  const approvedCodebaseId = assertSafeConnectionCodebaseId(connection.codebaseId)
 
-  // 3a. HARD-FAIL on codebase mismatch. The browser user could approve an
-  //     existing project instead of creating the one this command requested.
-  //     If we proceeded, we would store a connection for, resolve the workspace
-  //     path of, and rm -rf + re-import into the WRONG codebase's managed
-  //     workspace. Abort before any connection entry, import/mirror/attach, or
-  //     workspace path is touched. There is no override flag.
-  if (approvedCodebaseId !== requestedCodebaseId) {
-    const primaryEnvCodebase = process.env.HOPIT_CODEBASE_ID?.trim()
-    if (primaryEnvCodebase && approvedCodebaseId === primaryEnvCodebase) {
-      throw new Error(
-        `hop add aborted: the browser approved this device's primary project "${approvedCodebaseId}", `
-        + `but this command requested a new project "${requestedCodebaseId}". Continuing would import `
-        + `${source} into your primary project and destroy its managed workspace. Nothing was changed. `
-        + `Re-run hop add and choose "Create ${requestedCodebaseId}" on the approval page instead of an existing project.`,
-      )
-    }
-    throw new Error(
-      `hop add aborted: the browser approved a different project than requested. Requested `
-      + `"${requestedCodebaseId}" but the approval returned "${approvedCodebaseId}". Nothing was changed. `
-      + `Re-run hop add and choose "Create ${requestedCodebaseId}" on the approval page instead of an existing project.`,
-    )
+  // 3a. Reconcile BEFORE any workspace is touched. A mismatch aborts with nothing
+  //     changed and there is no override flag; see reconcileApprovedProjects.
+  const approvedEntries = Array.isArray(connection.codebases) && connection.codebases.length > 0
+    ? connection.codebases
+    : [{
+        codebaseId: connection.codebaseId,
+        requestedCodebaseId: candidates.length === 1 ? candidates[0].codebaseId : null,
+        sessionId: connection.sessionId,
+        sessionToken: connection.sessionToken,
+      }]
+  const { connected, skipped } = reconcileApprovedProjects(candidates, approvedEntries)
+  say(`  ${success('✓')}  Approved ${muted(connected.map((item) => item.candidate.codebaseId).join(', '))}`)
+  if (skipped.length > 0) {
+    say(`  ${muted(`Not approved in the browser: ${skipped.map((candidate) => candidate.codebaseId).join(', ')}`)}`)
   }
 
-  const codebaseId = approvedCodebaseId
-  say(`  ${success('✓')}  Approved ${muted(codebaseId)}`)
+  const results = []
+  for (const [index, item] of connected.entries()) {
+    if (connected.length > 1) {
+      say(`  ${accent(`${index + 1}/${connected.length}`)}  ${bold(item.candidate.codebaseName)}`)
+    }
+    results.push(await connectApprovedProject({
+      options,
+      provided,
+      human,
+      quiet: connected.length > 1,
+      candidate: item.candidate,
+      connection: { ...connection, ...item.entry },
+      keyring,
+      keyringPath,
+      stateRoot,
+      workspaceRoot,
+      envFilePath,
+      deviceKeysPath,
+    }))
+  }
+
+  if (connected.length === 1 && skipped.length === 0) return results[0]
+
+  const batchResult = {
+    ok: true,
+    action: 'add',
+    mode: 'batch',
+    source,
+    connectedCount: results.length,
+    projects: results,
+    skipped: skipped.map((candidate) => ({ codebaseId: candidate.codebaseId, source: candidate.source })),
+    workspaceRoot,
+    agentStateRoot: stateRoot,
+    nextSteps: results.flatMap((entry) => entry.nextSteps ?? []),
+  }
+  reportResult(options, batchResult, (w) => {
+    w.line()
+    w.line(`  ${w.success('✓')} ${w.bold(`Connected ${results.length} project${results.length === 1 ? '' : 's'}`)}`)
+    for (const entry of results) {
+      w.line(`     ${w.muted(entry.codebaseId.padEnd(24))} ${entry.workspace}`)
+    }
+    if (skipped.length > 0) {
+      w.line()
+      w.line(`  ${w.muted(`Not approved: ${skipped.map((candidate) => candidate.codebaseId).join(', ')}`)}`)
+    }
+    w.line()
+  })
+  return batchResult
+}
+
+/**
+ * Connect ONE approved project: persist its scoped connection, import the folder,
+ * attach the workspace, and optionally install its service. This is the original
+ * single-project sequence, now run once per project in a batch.
+ */
+async function connectApprovedProject({
+  options,
+  provided,
+  human,
+  quiet,
+  candidate,
+  connection,
+  keyring,
+  keyringPath,
+  stateRoot,
+  workspaceRoot,
+  envFilePath,
+  deviceKeysPath,
+}) {
+  const say = (message) => { if (human) writeLine(message) }
+  const { codebaseId, codebaseName, source } = candidate
 
   // 4. Persist the per-codebase scoped connection (0600).
   const stored = await writeConnectionEntry({ 'state-root': stateRoot }, {
@@ -302,7 +462,7 @@ export async function runAdd(options, inject = {}) {
     action: 'add',
     codebaseId,
     codebaseName,
-    requestedCodebaseId,
+    requestedCodebaseId: connection.requestedCodebaseId ?? codebaseId,
     source,
     workspaceRoot,
     agentStateRoot: stateRoot,
@@ -323,6 +483,12 @@ export async function runAdd(options, inject = {}) {
     service,
     created,
     nextSteps,
+  }
+
+  // In a batch, runAdd prints one combined summary instead of N per-project ones.
+  if (quiet) {
+    say(`       ${success('✓')} ${muted(workspace)}`)
+    return result
   }
 
   reportResult(options, result, (w) => {

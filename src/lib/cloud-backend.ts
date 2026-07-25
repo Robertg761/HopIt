@@ -287,10 +287,14 @@ export async function readCloudDeviceAuthorization(userCode: string) {
 
 export async function approveCloudDeviceAuthorization(input: {
   userCode: string
-  codebaseId: string
+  selections: Array<{ codebaseId: string; requestedCodebaseId: string | null; acknowledgedExisting: boolean }>
   actor: CloudActor
 }) {
-  if (configuredCloudBackend() === 'd1') return d1Backend({ 'codebase-id': input.codebaseId }).approveDeviceAuthorization(input)
+  // The client is scoped to the first selection for the outbound codebase header;
+  // the backend re-checks access for every project in the batch individually.
+  if (configuredCloudBackend() === 'd1') {
+    return d1Backend({ 'codebase-id': input.selections[0]?.codebaseId }).approveDeviceAuthorization(input)
+  }
   throw new Error('No HopIt cloud backend is configured for device authorization.')
 }
 

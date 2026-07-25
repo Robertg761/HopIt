@@ -156,6 +156,8 @@ Options:
   --no-launch-agent    setup: skip the macOS start-on-login agent prompt/step
   --secret-scanning    setup: explicitly turn outbound secret scanning on or off (default on; --no-secret-scanning to opt out)
   --service            add: install and load the per-codebase macOS start-on-login service (default off)
+  --all                add: treat every top-level folder in --source as a project and approve them in ONE browser step
+  --include-all-folders add --all: also offer folders with no project marker (git checkout, package.json, Cargo.toml, ...)
   --auth-base-url <url> add/setup: device-authorization dashboard base URL, default https://hopit.dev
   --interactive        setup: force interactive prompts even when stdin is not a TTY (testing/advanced; env HOPIT_SETUP_ASSUME_TTY=1)
   --skip-service-control mirror: do not stop or restart the macOS LaunchAgent

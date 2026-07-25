@@ -183,6 +183,24 @@ export const d1SchemaStatements = [
   `create index if not exists idx_device_authorizations_device_code on device_authorizations(device_code_hash)`,
   `create index if not exists idx_device_authorizations_user_code on device_authorizations(user_code)`,
   `create index if not exists idx_device_authorizations_fingerprint_created on device_authorizations(request_fingerprint, created_at)`,
+  // One row per project in a batch authorization (`hop add --all`). The scalar
+  // codebase columns on device_authorizations above stay populated from the FIRST
+  // entry so agents and browser tabs running pre-batch code keep working through a
+  // rollout; this table is the source of truth for everything else. Authorizations
+  // created before this table existed simply have no rows here, and the read paths
+  // synthesize a single entry from the scalars.
+  `create table if not exists device_authorization_codebases (
+    authorization_id text not null,
+    position integer not null,
+    requested_codebase_id text not null,
+    requested_codebase_name text,
+    codebase_id text,
+    session_id text,
+    wrapped_session_token_json text,
+    state text not null,
+    primary key (authorization_id, requested_codebase_id)
+  )`,
+  `create index if not exists idx_device_authorization_codebases_authorization on device_authorization_codebases(authorization_id, position)`,
   `create table if not exists device_keys (
     device_id text primary key,
     user_id text not null,

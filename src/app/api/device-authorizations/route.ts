@@ -25,6 +25,7 @@ export async function POST(request: Request) {
       requestFingerprint: requestFingerprint(request),
       requestedCodebaseId: optionalText(record.requestedCodebaseId),
       requestedCodebaseName: optionalText(record.requestedCodebaseName),
+      requestedCodebases: requestedCodebaseList(record.requestedCodebases),
     }) as Record<string, unknown>
     const userCode = requireText(authorization.userCode, 'userCode')
     const verificationUri = new URL('/device', request.url)
@@ -65,6 +66,20 @@ export async function GET(request: Request) {
   } catch (error) {
     return deviceAuthorizationError('device_authorization_poll_failed', errorMessage(error), 400)
   }
+}
+
+// `hop add --all` asks for several projects in one authorization. Shape-check
+// only: the backend normalizes ids, drops duplicates, and enforces the batch cap.
+function requestedCodebaseList(value: unknown) {
+  if (!Array.isArray(value)) return undefined
+  const entries: Array<{ id: string; name: string }> = []
+  for (const item of value) {
+    const record = recordValue(item)
+    const id = optionalText(record?.id)
+    if (!id) continue
+    entries.push({ id, name: optionalText(record?.name) ?? id })
+  }
+  return entries.length > 0 ? entries : undefined
 }
 
 function requestFingerprint(request: Request) {

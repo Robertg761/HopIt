@@ -1,11 +1,17 @@
 'use client'
 
 import * as React from 'react'
-import { ArrowRight, CheckCircle2, Clock3, Laptop, LoaderCircle, Plus, ShieldCheck } from 'lucide-react'
+import { ArrowRight, CheckCircle2, Clock3, Laptop, LoaderCircle, Plus, ShieldCheck, TriangleAlert } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { deviceApprovalGate, normalizeDeviceCodebaseOptions, type DeviceCodebaseOption } from './codebase-options'
+import {
+  deviceBatchApprovalGate,
+  normalizeDeviceCodebaseOptions,
+  type DeviceCodebaseOption,
+  type DeviceProjectSelection,
+  type DeviceRequestedProject,
+} from './codebase-options'
 
 type DeviceInfo = {
   id?: string | null
@@ -13,99 +19,169 @@ type DeviceInfo = {
   platform?: string | null
 }
 
+type SelectionState = Record<string, DeviceProjectSelection & { overrideOpen: boolean }>
+
 export function DeviceApproval({
   userCode,
   initialStatus,
   device,
   expiresAt,
   codebases,
-  requestedCodebaseId = null,
-  requestedCodebaseName = null,
+  requestedProjects,
 }: {
   userCode: string
   initialStatus: string
   device: DeviceInfo
   expiresAt: string
   codebases: Array<{ id: string; name: string }>
-  requestedCodebaseId?: string | null
-  requestedCodebaseName?: string | null
+  requestedProjects: DeviceRequestedProject[]
 }) {
-  const requestedId = requestedCodebaseId?.trim() || null
-  const requestedName = requestedCodebaseName?.trim() || requestedId || null
   const [availableCodebases, setAvailableCodebases] = React.useState<DeviceCodebaseOption[]>(codebases)
-  const requestedExists = requestedId ? availableCodebases.some((option) => option.id === requestedId) : false
-  // When the terminal asked to create a project that does not exist yet, we must
-  // NOT pre-select an existing project. Otherwise a single click on "Approve"
-  // would connect the device to the wrong project (the live incident).
-  const [codebaseId, setCodebaseId] = React.useState(
-    requestedId ? (requestedExists ? requestedId : '') : codebases[0]?.id ?? '',
+  const existingIds = React.useMemo(
+    () => availableCodebases.map((option) => option.id),
+    [availableCodebases],
   )
-  const [newCodebaseName, setNewCodebaseName] = React.useState(requestedName ?? '')
+
+  // A requested project that does not exist yet starts with NO resolved target.
+  // Pre-selecting an existing project here is exactly the failure that let a
+  // single click connect a device to the wrong project, so a row stays
+  // un-approvable until it is either created or deliberately pointed elsewhere.
+  const [selections, setSelections] = React.useState<SelectionState>(() => {
+    const initial: SelectionState = {}
+    for (const project of requestedProjects) {
+      const exists = codebases.some((option) => option.id === project.id)
+      initial[project.id] = {
+        requested: project,
+        selected: true,
+        resolvedCodebaseId: exists ? project.id : '',
+        acknowledgedExisting: false,
+        overrideOpen: false,
+      }
+    }
+    return initial
+  })
+
+  // Used only when the terminal named no project at all (plain `hop setup`).
+  const [singleCodebaseId, setSingleCodebaseId] = React.useState(codebases[0]?.id ?? '')
+  const [newCodebaseName, setNewCodebaseName] = React.useState('')
   const [status, setStatus] = React.useState(initialStatus)
   const [error, setError] = React.useState<string | null>(null)
   const [busy, setBusy] = React.useState(false)
-  const [creatingCodebase, setCreatingCodebase] = React.useState(false)
-  // Secondary, deliberately-gated path for approving a DIFFERENT existing project
-  // than the one the terminal requested.
-  const [showExistingOverride, setShowExistingOverride] = React.useState(false)
-  const [overrideAcknowledged, setOverrideAcknowledged] = React.useState(false)
+  const [creating, setCreating] = React.useState<string[]>([])
 
-  const { requestedNeedsCreate, canApprove } = deviceApprovalGate({
-    requestedId,
-    requestedExists,
-    selectedCodebaseId: codebaseId,
-    overrideAcknowledged,
+  const isBatch = requestedProjects.length > 0
+  const rows = React.useMemo(
+    () => requestedProjects.map((project) => selections[project.id]).filter(Boolean),
+    [requestedProjects, selections],
+  )
+  const gate = deviceBatchApprovalGate({
+    selections: isBatch
+      ? rows
+      : [{
+          requested: { id: singleCodebaseId, name: singleCodebaseId },
+          selected: Boolean(singleCodebaseId),
+          resolvedCodebaseId: singleCodebaseId,
+          acknowledgedExisting: false,
+        }],
+    existingCodebaseIds: existingIds,
     busy,
   })
+  const pendingCreates = rows.filter((row) => row.selected && !existingIds.includes(row.requested.id))
 
-  function collapseExistingOverride() {
-    setShowExistingOverride(false)
-    setOverrideAcknowledged(false)
-    setCodebaseId('')
+  function updateRow(requestedId: string, patch: Partial<SelectionState[string]>) {
+    setSelections((current) => ({ ...current, [requestedId]: { ...current[requestedId], ...patch } }))
   }
 
-  // Create a project, optionally with the id the terminal requested, then select it.
+  function applyCreatedOptions(options: DeviceCodebaseOption[]) {
+    setAvailableCodebases((current) => {
+      const merged = [...current]
+      for (const option of options) {
+        if (!merged.some((entry) => entry.id === option.id)) merged.push(option)
+      }
+      return merged
+    })
+  }
+
+  /** Create one project, optionally with the exact id the terminal requested. */
   async function createCodebase(name: string, desiredId?: string | null) {
     const trimmedName = name.trim()
-    if (!trimmedName || creatingCodebase) return
-    setCreatingCodebase(true)
+    if (!trimmedName) return null
+    const response = await fetch('/api/codebases', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(desiredId ? { name: trimmedName, codebaseId: desiredId } : { name: trimmedName }),
+    })
+    const body = await response.json().catch(() => null)
+    if (!response.ok || body?.ok !== true) {
+      throw new Error(body?.error?.message ?? 'Project creation failed.')
+    }
+    const options = normalizeDeviceCodebaseOptions(body.codebases)
+    if (options.length === 0) throw new Error('The project was created, but it could not be selected.')
+    applyCreatedOptions(options)
+    return normalizeDeviceCodebaseOptions([body.codebase])[0]?.id ?? null
+  }
+
+  async function createRequested(project: DeviceRequestedProject) {
+    if (creating.includes(project.id)) return
+    setCreating((current) => [...current, project.id])
     setError(null)
     try {
-      const response = await fetch('/api/codebases', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(desiredId ? { name: trimmedName, codebaseId: desiredId } : { name: trimmedName }),
+      const createdId = await createCodebase(project.name, project.id)
+      updateRow(project.id, {
+        resolvedCodebaseId: createdId ?? project.id,
+        overrideOpen: false,
+        acknowledgedExisting: false,
       })
-      const body = await response.json().catch(() => null)
-      if (!response.ok || body?.ok !== true) {
-        throw new Error(body?.error?.message ?? 'Project creation failed.')
-      }
-      const options = normalizeDeviceCodebaseOptions(body.codebases)
-      if (options.length === 0) throw new Error('The project was created, but it could not be selected.')
-      const createdId = normalizeDeviceCodebaseOptions([body.codebase])[0]?.id
-      setAvailableCodebases(options)
-      setCodebaseId(createdId && options.some((option) => option.id === createdId) ? createdId : options[0].id)
-      if (!desiredId) setNewCodebaseName('')
     } catch (creationError) {
       setError(creationError instanceof Error ? creationError.message : 'Project creation failed.')
     } finally {
-      setCreatingCodebase(false)
+      setCreating((current) => current.filter((id) => id !== project.id))
     }
   }
 
-  function createFirstCodebase() {
-    return createCodebase(newCodebaseName)
+  // Bulk create is offered only for rows that will CREATE the requested project.
+  // Adopting an existing project is never part of a bulk action.
+  async function createAllRequested() {
+    for (const row of pendingCreates) {
+      // Sequential rather than a burst of parallel project-creation writes.
+      // createRequested swallows its own error, so one failure leaves that row
+      // un-created (and therefore un-approvable, per the gate) while the rest
+      // still get made. Partial progress beats losing the whole batch.
+      await createRequested(row.requested)
+    }
+  }
+
+  async function createFirstCodebase() {
+    if (creating.length > 0) return
+    setCreating(['__single__'])
+    setError(null)
+    try {
+      const createdId = await createCodebase(newCodebaseName)
+      if (createdId) setSingleCodebaseId(createdId)
+      setNewCodebaseName('')
+    } catch (creationError) {
+      setError(creationError instanceof Error ? creationError.message : 'Project creation failed.')
+    } finally {
+      setCreating([])
+    }
   }
 
   async function approve() {
-    if (!codebaseId || busy) return
+    if (!gate.canApprove) return
     setBusy(true)
     setError(null)
     try {
+      const payload = isBatch
+        ? rows.filter((row) => row.selected).map((row) => ({
+            codebaseId: row.resolvedCodebaseId,
+            requestedCodebaseId: row.requested.id,
+            acknowledgedExisting: row.acknowledgedExisting,
+          }))
+        : [{ codebaseId: singleCodebaseId, requestedCodebaseId: null, acknowledgedExisting: false }]
       const response = await fetch('/api/device-authorizations/approve', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userCode, codebaseId }),
+        body: JSON.stringify({ userCode, selections: payload }),
       })
       const body = await response.json().catch(() => null)
       if (!response.ok || body?.ok !== true) {
@@ -125,7 +201,9 @@ export function DeviceApproval({
         <div className="mb-5 flex size-12 items-center justify-center rounded-full bg-[#dafbe1] text-[#116329]">
           <CheckCircle2 className="size-7" aria-hidden="true" />
         </div>
-        <h2 className="text-xl font-semibold tracking-[-0.02em]">Device connected</h2>
+        <h2 className="text-xl font-semibold tracking-[-0.02em]">
+          {gate.selectedCount > 1 ? `${gate.selectedCount} projects connected` : 'Device connected'}
+        </h2>
         <p className="mt-2 max-w-md text-sm leading-6 text-[#5d6a62]">
           Return to your terminal. HopIt is finishing the workspace and service setup now.
         </p>
@@ -163,91 +241,178 @@ export function DeviceApproval({
 
       <div className="my-6 h-px bg-[#e1e8e3]" />
 
-      {requestedNeedsCreate ? (
-        <>
-          <div className="mb-5 rounded-xl border border-[#b7dfc1] bg-[#f0fff4] p-4">
-            <p className="text-sm font-semibold text-[#116329]">Create the requested project</p>
-            <p className="mt-1 text-xs leading-5 text-[#3d6b4c]">
-              Your terminal asked to connect a new project. This is the action you almost certainly want.
-            </p>
-            <div className="mt-3 flex items-center justify-between gap-3 rounded-lg border border-[#b7dfc1] bg-white px-3 py-2">
-              <span className="min-w-0">
-                <span className="block truncate text-sm font-semibold text-[#17211b]" title={requestedName ?? requestedId ?? ''}>{requestedName}</span>
-                <span className="block font-mono text-[11px] text-[#5d6a62]">{requestedId}</span>
-              </span>
-              <Button
-                type="button"
-                className="shrink-0 bg-[#1a7f37] text-white hover:bg-[#116329]"
-                disabled={creatingCodebase}
-                onClick={() => void createCodebase(requestedName ?? requestedId ?? '', requestedId)}
-              >
-                {creatingCodebase ? <LoaderCircle className="animate-spin" /> : <Plus />}
-                {creatingCodebase ? 'Creating…' : `Create ${requestedId}`}
-              </Button>
-            </div>
+      {isBatch ? (
+        <div>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-[#637067]">
+              Project access
+            </span>
+            <span className="text-xs text-[#66736b]">
+              {gate.selectedCount} of {rows.length} selected
+            </span>
           </div>
 
-          {availableCodebases.length > 0 ? (
-            <div className="mb-5 rounded-xl border border-[#e4b9bd] bg-[#fff5f5] p-4">
-              {!showExistingOverride ? (
-                <button
-                  type="button"
-                  className="text-xs font-semibold text-[#a40e26] underline underline-offset-2"
-                  onClick={() => setShowExistingOverride(true)}
-                >
-                  Choose an existing project instead…
-                </button>
-              ) : (
-                <div>
-                  <p className="text-sm font-semibold text-[#a40e26]">Connect to an existing project instead</p>
-                  <p className="mt-1 text-xs leading-5 text-[#7d2b34]">
-                    Your terminal asked for <span className="font-mono font-semibold">{requestedId}</span>. Pointing it at
-                    a different existing project makes this device operate on that project. Its managed workspace can be
-                    overwritten by the import. Only do this if you are certain.
-                  </p>
-                  <label className="mt-3 block">
-                    <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-[#7d2b34]">Existing project</span>
-                    <select
-                      value={codebaseId}
-                      onChange={(event) => setCodebaseId(event.target.value)}
-                      className="mt-2 h-11 w-full rounded-lg border border-[#e4b9bd] bg-white px-3 text-sm font-medium shadow-sm outline-none transition focus:border-[#a40e26] focus:ring-4 focus:ring-[#a40e26]/10"
-                    >
-                      <option value="">Select a project…</option>
-                      {availableCodebases.map((codebase) => (
-                        <option key={codebase.id} value={codebase.id}>{codebase.name}</option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="mt-3 flex items-start gap-2 text-xs leading-5 text-[#7d2b34]">
-                    <input
-                      type="checkbox"
-                      className="mt-0.5 size-4 shrink-0 accent-[#a40e26]"
-                      checked={overrideAcknowledged}
-                      onChange={(event) => setOverrideAcknowledged(event.target.checked)}
-                    />
-                    <span>
-                      I understand this device asked for <span className="font-mono font-semibold">{requestedId}</span> and
-                      connecting it to the selected existing project will make it operate on that project.
-                    </span>
-                  </label>
-                  <button
-                    type="button"
-                    className="mt-3 text-xs font-medium text-[#66736b] underline underline-offset-2"
-                    onClick={collapseExistingOverride}
-                  >
-                    Cancel and create {requestedId} instead
-                  </button>
-                </div>
-              )}
+          {rows.length > 1 ? (
+            <div className="mt-2 flex flex-wrap gap-3 text-xs font-semibold">
+              <button
+                type="button"
+                className="text-[#1a7f37] underline underline-offset-2"
+                onClick={() => setSelections((current) => {
+                  const next = { ...current }
+                  for (const key of Object.keys(next)) next[key] = { ...next[key], selected: true }
+                  return next
+                })}
+              >
+                Select all
+              </button>
+              <button
+                type="button"
+                className="text-[#66736b] underline underline-offset-2"
+                onClick={() => setSelections((current) => {
+                  const next = { ...current }
+                  for (const key of Object.keys(next)) next[key] = { ...next[key], selected: false }
+                  return next
+                })}
+              >
+                Clear
+              </button>
             </div>
           ) : null}
-        </>
+
+          <ul className="mt-3 space-y-2">
+            {rows.map((row) => {
+              const exists = existingIds.includes(row.requested.id)
+              const adopting = Boolean(row.resolvedCodebaseId) && row.resolvedCodebaseId !== row.requested.id
+              const isCreating = creating.includes(row.requested.id)
+              return (
+                <li
+                  key={row.requested.id}
+                  className={`rounded-xl border p-3 transition ${
+                    adopting ? 'border-[#e4b9bd] bg-[#fff5f5]' : 'border-[#dce5df] bg-[#fbfcfb]'
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <input
+                      type="checkbox"
+                      className="mt-1 size-4 shrink-0 accent-[#1a7f37]"
+                      checked={row.selected}
+                      aria-label={`Connect ${row.requested.name}`}
+                      onChange={(event) => updateRow(row.requested.id, { selected: event.target.checked })}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-semibold text-[#17211b]" title={row.requested.name}>
+                        {row.requested.name}
+                      </span>
+                      <span className="block font-mono text-[11px] text-[#5d6a62]">{row.requested.id}</span>
+                    </div>
+                    {exists ? (
+                      <span className="shrink-0 rounded-full bg-[#dafbe1] px-2 py-0.5 text-[11px] font-semibold text-[#116329]">
+                        Ready
+                      </span>
+                    ) : (
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="shrink-0 bg-[#1a7f37] text-white hover:bg-[#116329]"
+                        disabled={isCreating}
+                        onClick={() => void createRequested(row.requested)}
+                      >
+                        {isCreating ? <LoaderCircle className="animate-spin" /> : <Plus />}
+                        {isCreating ? 'Creating…' : 'Create'}
+                      </Button>
+                    )}
+                  </div>
+
+                  {row.selected ? (
+                    <div className="mt-2 pl-7">
+                      {!row.overrideOpen ? (
+                        <button
+                          type="button"
+                          className="text-[11px] font-semibold text-[#a40e26] underline underline-offset-2"
+                          onClick={() => updateRow(row.requested.id, { overrideOpen: true })}
+                        >
+                          Use an existing project instead…
+                        </button>
+                      ) : (
+                        <div className="rounded-lg border border-[#e4b9bd] bg-white p-3">
+                          <p className="flex items-start gap-2 text-[11px] leading-5 text-[#7d2b34]">
+                            <TriangleAlert className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+                            <span>
+                              Your terminal asked for <span className="font-mono font-semibold">{row.requested.id}</span>.
+                              Pointing it at a different existing project makes this device operate on that project, and
+                              its managed workspace can be overwritten by the import.
+                            </span>
+                          </p>
+                          <select
+                            value={adopting ? row.resolvedCodebaseId : ''}
+                            aria-label={`Existing project for ${row.requested.name}`}
+                            onChange={(event) => updateRow(row.requested.id, {
+                              resolvedCodebaseId: event.target.value,
+                              acknowledgedExisting: false,
+                            })}
+                            className="mt-2 h-10 w-full rounded-lg border border-[#e4b9bd] bg-white px-3 text-sm font-medium shadow-sm outline-none transition focus:border-[#a40e26] focus:ring-4 focus:ring-[#a40e26]/10"
+                          >
+                            <option value="">Select a project…</option>
+                            {availableCodebases.map((codebase) => (
+                              <option key={codebase.id} value={codebase.id}>{codebase.name}</option>
+                            ))}
+                          </select>
+                          {adopting ? (
+                            <label className="mt-2 flex items-start gap-2 text-[11px] leading-5 text-[#7d2b34]">
+                              <input
+                                type="checkbox"
+                                className="mt-0.5 size-4 shrink-0 accent-[#a40e26]"
+                                checked={row.acknowledgedExisting}
+                                onChange={(event) => updateRow(row.requested.id, {
+                                  acknowledgedExisting: event.target.checked,
+                                })}
+                              />
+                              <span>
+                                I understand this device asked for{' '}
+                                <span className="font-mono font-semibold">{row.requested.id}</span> and will instead
+                                operate on <span className="font-mono font-semibold">{row.resolvedCodebaseId}</span>.
+                              </span>
+                            </label>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="mt-2 text-[11px] font-medium text-[#66736b] underline underline-offset-2"
+                            onClick={() => updateRow(row.requested.id, {
+                              overrideOpen: false,
+                              acknowledgedExisting: false,
+                              resolvedCodebaseId: exists ? row.requested.id : '',
+                            })}
+                          >
+                            Cancel and use {row.requested.id} instead
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ) : null}
+                </li>
+              )
+            })}
+          </ul>
+
+          {pendingCreates.length > 1 ? (
+            <Button
+              type="button"
+              variant="outline"
+              className="mt-3 w-full border-[#b7dfc1] bg-[#f0fff4] text-[#116329] hover:bg-[#dafbe1]"
+              disabled={creating.length > 0}
+              onClick={() => void createAllRequested()}
+            >
+              {creating.length > 0 ? <LoaderCircle className="animate-spin" /> : <Plus />}
+              {creating.length > 0 ? 'Creating…' : `Create all ${pendingCreates.length} new projects`}
+            </Button>
+          ) : null}
+        </div>
       ) : availableCodebases.length > 0 ? (
         <label className="block">
           <span className="font-mono text-[11px] font-semibold uppercase tracking-[0.16em] text-[#637067]">Project access</span>
           <select
-            value={codebaseId}
-            onChange={(event) => setCodebaseId(event.target.value)}
+            value={singleCodebaseId}
+            onChange={(event) => setSingleCodebaseId(event.target.value)}
             className="mt-2 h-11 w-full rounded-lg border border-[#bac8bf] bg-white px-3 text-sm font-medium shadow-sm outline-none transition focus:border-[#1a7f37] focus:ring-4 focus:ring-[#1a7f37]/10"
           >
             {availableCodebases.map((codebase) => (
@@ -279,11 +444,11 @@ export function DeviceApproval({
               type="button"
               variant="outline"
               className="shrink-0 border-[#bac8bf] bg-white text-[#17211b] hover:bg-[#eef5f0]"
-              disabled={!newCodebaseName.trim() || creatingCodebase}
+              disabled={!newCodebaseName.trim() || creating.length > 0}
               onClick={() => void createFirstCodebase()}
             >
-              {creatingCodebase ? <LoaderCircle className="animate-spin" /> : <Plus />}
-              {creatingCodebase ? 'Creating…' : 'Create project'}
+              {creating.length > 0 ? <LoaderCircle className="animate-spin" /> : <Plus />}
+              {creating.length > 0 ? 'Creating…' : 'Create project'}
             </Button>
           </div>
         </div>
@@ -295,7 +460,8 @@ export function DeviceApproval({
           <code className="font-mono text-sm font-semibold tracking-[0.14em] text-[#17211b]">{userCode}</code>
         </div>
         <p className="mt-3 text-xs leading-5 text-[#66736b]">
-          Expires {new Date(expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. Approving grants this device only the permissions you already have for the selected project.
+          Expires {new Date(expiresAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. Approving grants
+          this device only the permissions you already have for {gate.selectedCount > 1 ? 'each selected project' : 'the selected project'}.
         </p>
       </div>
 
@@ -306,11 +472,13 @@ export function DeviceApproval({
       <Button
         size="lg"
         className="mt-6 h-11 w-full rounded-lg bg-[#1a7f37] text-white shadow-[0_8px_20px_rgba(26,127,55,0.2)] hover:bg-[#116329]"
-        disabled={!canApprove}
+        disabled={!gate.canApprove}
         onClick={approve}
       >
         {busy ? <LoaderCircle className="animate-spin" /> : <ShieldCheck />}
-        {busy ? 'Connecting device…' : 'Approve this device'}
+        {busy
+          ? 'Connecting device…'
+          : gate.selectedCount > 1 ? `Approve ${gate.selectedCount} projects` : 'Approve this device'}
         {!busy ? <ArrowRight className="ml-auto" /> : null}
       </Button>
     </div>

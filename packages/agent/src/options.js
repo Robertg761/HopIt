@@ -65,6 +65,8 @@ export function parseOptions(args) {
     'secret-scanning',
     'clear-deploy-key',
     'merge',
+    'all',
+    'include-all-folders',
   ])
 
   for (let i = 0; i < args.length; i += 1) {

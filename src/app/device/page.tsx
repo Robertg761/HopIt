@@ -11,6 +11,7 @@ import {
 } from '@/lib/cloud-backend'
 import { shouldEnableClerkUi } from '@/lib/auth-config'
 import { DeviceApproval } from './device-approval'
+import { normalizeDeviceRequestedProjects, type DeviceRequestedProject } from './codebase-options'
 
 export const dynamic = 'force-dynamic'
 
@@ -80,8 +81,7 @@ export default async function DeviceAuthorizationPage({
               device={authorization.device}
               expiresAt={authorization.expiresAt}
               codebases={codebases}
-              requestedCodebaseId={authorization.requestedCodebaseId ?? null}
-              requestedCodebaseName={authorization.requestedCodebaseName ?? null}
+              requestedProjects={requestedProjects(authorization)}
             />
           )}
         </div>
@@ -120,6 +120,21 @@ function StatePanel({ icon, title, detail }: { icon: React.ReactNode; title: str
       </div>
     </div>
   )
+}
+
+// Batch authorizations carry the full list; an authorization created before that
+// existed (or already in flight during a deploy) still has only the scalar pair,
+// so fall back to it rather than dropping the request on the floor.
+function requestedProjects(authorization: {
+  requestedCodebases?: unknown
+  requestedCodebaseId?: string | null
+  requestedCodebaseName?: string | null
+}): DeviceRequestedProject[] {
+  const projects = normalizeDeviceRequestedProjects(authorization.requestedCodebases)
+  if (projects.length > 0) return projects
+  const id = authorization.requestedCodebaseId?.trim()
+  if (!id) return []
+  return [{ id, name: authorization.requestedCodebaseName?.trim() || id }]
 }
 
 function codebaseOption(value: Record<string, unknown>) {
