@@ -22,12 +22,20 @@
 -- are the only way those columns ever appear.
 with expected(migration, object_name, column_name) as (
   values
-    -- create table if not exists: object-level checks only.
-    ('2026-07-14-service-admin',        'tenant_controls',      null),
-    ('2026-07-14-service-admin',        'service_admin_events', null),
-    ('2026-07-24-divergences',          'divergences',          null),
-    ('2026-07-24-proposals',            'proposals',            null),
-    ('2026-07-24-releases',             'releases',             null),
+    -- `create table if not exists` migrations. These are checked by a
+    -- distinctive *column*, never by table name alone: `if not exists` keys
+    -- off the name, so an unrelated table that happens to share the name
+    -- silently swallows the migration and leaves the real one uncreated.
+    -- That is not hypothetical -- the production database already had a
+    -- `releases` table belonging to a different feature entirely (version /
+    -- number / status / published_at), which a name-only check reported as
+    -- "applied" while `hop release` would have failed on the missing
+    -- `pinned_revision` column.
+    ('2026-07-14-service-admin',        'tenant_controls',      'writes_paused'),
+    ('2026-07-14-service-admin',        'service_admin_events', 'action'),
+    ('2026-07-24-divergences',          'divergences',          'local_entry_json'),
+    ('2026-07-24-proposals',            'proposals',            'pinned_revision'),
+    ('2026-07-24-releases',             'releases',             'pinned_revision'),
 
     -- alter table add column: the non-idempotent ones. These are the rows
     -- that actually decide whether it is safe to run a file.

@@ -211,6 +211,10 @@ Two things make applying these blind unsafe:
   ever appear. A fresh database gets them from the create-table; production
   does not.
 
+**Measured state of the production `hopit` database, 2026-07-24:** only
+`2026-07-14-service-admin` is applied. The other eight are not. One of them
+is *blocked* rather than merely pending — see the `releases` collision below.
+
 **Check before applying.** `cloudflare/d1/migration-status.sql` is a read-only
 report — 15 checks across the 9 files, one row per table or column, each
 `applied = 1` or `applied = 0`. It writes nothing:
@@ -239,6 +243,37 @@ Re-run `migration-status.sql` afterwards; every row should read `applied = 1`.
 If a file fails partway, the status report tells you exactly which columns
 landed, so you can hand-apply the remaining `alter table` lines individually
 rather than re-running the whole file.
+
+**Blocked: the `releases` name collision.** Production already contains a
+`releases` table belonging to a *different* feature — `number`, `version`,
+`title`, `status`, `target_json`, `provenance_json`, `published_at`,
+`created_by`/`updated_by`, several of them `not null`. Nothing in this repo
+defines it, so it came from elsewhere (another project sharing the database,
+or an abandoned schema). It currently holds **0 rows**.
+
+This breaks GR-B4/GR-E3 against production in a way that applying the
+migration does not fix: `create table if not exists releases` keys off the
+name, so it silently no-ops against the foreign table and GR-B4's table is
+never created. `createRelease` (`packages/backend-d1/src/releases-store.js`)
+then inserts `name` / `pinned_revision` / `created_by_user_id`, none of which
+exist there, and would fail — while the foreign table's `not null` columns
+would never be populated either. So `hop release`, and GR-E3's mirror tagging
+downstream of it, cannot work against production until this is resolved.
+
+Resolving it is a decision, not a mechanical step, because it means either
+dropping a table this repo does not own or renaming one it does:
+
+- Drop the empty foreign `releases` table, then apply the migration. Simplest,
+  but it destroys another owner's schema object — only safe once you have
+  confirmed nothing else uses it.
+- Rename HopIt's table (e.g. `codebase_releases`) in
+  `packages/backend-d1/src/schema.js`, `cloudflare/d1/schema.sql`,
+  `releases-store.js`, and the migration file. Touches no foreign object, and
+  the GR-S1 drift test keeps the two schema copies honest.
+
+Because the checker keys the `create table` migrations off a distinctive
+column rather than the table name, this class of collision now shows up as
+`applied = 0` instead of a false "applied".
 
 Take a D1 export first (`npx wrangler d1 export <DB_NAME> --remote --output
 pre-migration.sql`) — these are additive and low risk, but `alter table` has
