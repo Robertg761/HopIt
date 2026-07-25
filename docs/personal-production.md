@@ -188,6 +188,68 @@ The `hopit-d1-api` Worker accepts `HOPIT_D1_PROXY_TOKEN` for trusted server-side
 5. Verify the dashboard and local agent can read D1 status, then remove the old token from every provider/local secret store where it was present.
 6. Run `npm run check:production-config` from a shell with the intended env loaded and confirm it does not print secret values.
 
+### Pending Migration Rollout (git-replacement plan)
+
+Nine files sit in `cloudflare/d1/migrations/`. **Nothing applies them
+automatically.** Production sets `HOPIT_D1_ASSUME_SCHEMA=1`, so
+`ensureSchema()` (`packages/backend-d1/src/schema-methods.js`) returns before
+running a single statement — the self-healing `create table if not exists`
+path that works on a fresh dev database is switched off in production on
+purpose, to protect the free D1 query budget.
+
+Two things make applying these blind unsafe:
+
+- **Most are `alter table ... add column`, which is not idempotent on
+  SQLite/D1.** Re-running one that is already applied errors, and because
+  `wrangler d1 execute --file` runs statements in order, a failure partway
+  through `2026-07-24-mirror-remote-config.sql` (four columns) can leave the
+  table half-migrated.
+- **The newer `codebase_settings` columns exist only inside that table's
+  inline `create table if not exists`** in `packages/backend-d1/src/schema.js`.
+  That statement is a no-op against a table that already exists, so on the
+  live database these migration files are the *only* way those seven columns
+  ever appear. A fresh database gets them from the create-table; production
+  does not.
+
+**Check before applying.** `cloudflare/d1/migration-status.sql` is a read-only
+report — 15 checks across the 9 files, one row per table or column, each
+`applied = 1` or `applied = 0`. It writes nothing:
+
+```sh
+npx wrangler d1 execute <DB_NAME> --remote --file cloudflare/d1/migration-status.sql
+```
+
+Apply only the files whose rows come back `applied = 0`, in this order (date
+order; the only real dependency is that `codebase_settings`, `action_jobs`,
+and `review_decisions` already exist, which they do in production):
+
+```sh
+npx wrangler d1 execute <DB_NAME> --remote --file cloudflare/d1/migrations/2026-07-14-service-admin.sql
+npx wrangler d1 execute <DB_NAME> --remote --file cloudflare/d1/migrations/2026-07-23-derived-path-overrides.sql
+npx wrangler d1 execute <DB_NAME> --remote --file cloudflare/d1/migrations/2026-07-23-large-file-threshold.sql
+npx wrangler d1 execute <DB_NAME> --remote --file cloudflare/d1/migrations/2026-07-23-secret-scanning-setting.sql
+npx wrangler d1 execute <DB_NAME> --remote --file cloudflare/d1/migrations/2026-07-24-action-jobs-proposal-link.sql
+npx wrangler d1 execute <DB_NAME> --remote --file cloudflare/d1/migrations/2026-07-24-divergences.sql
+npx wrangler d1 execute <DB_NAME> --remote --file cloudflare/d1/migrations/2026-07-24-mirror-remote-config.sql
+npx wrangler d1 execute <DB_NAME> --remote --file cloudflare/d1/migrations/2026-07-24-proposals.sql
+npx wrangler d1 execute <DB_NAME> --remote --file cloudflare/d1/migrations/2026-07-24-releases.sql
+```
+
+Re-run `migration-status.sql` afterwards; every row should read `applied = 1`.
+If a file fails partway, the status report tells you exactly which columns
+landed, so you can hand-apply the remaining `alter table` lines individually
+rather than re-running the whole file.
+
+Take a D1 export first (`npx wrangler d1 export <DB_NAME> --remote --output
+pre-migration.sql`) — these are additive and low risk, but `alter table` has
+no undo on D1 short of a restore.
+
+Until they are applied, the features built on them degrade rather than fail
+loudly in every case, so do not read "the dashboard still loads" as evidence
+the schema is current: derived-path overrides, the large-file threshold, the
+per-project secret-scanning toggle, and mirror remote/deploy-key config all
+read `codebase_settings` columns that will not exist.
+
 ### File Versions Migration
 
 WS7c adds per-file version rows for object-backed history reconstruction. Do not run this from Codex; the owner applies it to the existing production D1 database when ready.
