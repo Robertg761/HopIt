@@ -161,6 +161,69 @@ test('release created before the mirror catches up: release still succeeds, tagg
   assert.equal(tags, '', 'no tag was pushed for the un-mirrored revision')
 })
 
+// The case above tags the mirror's branch tip, so on its own it cannot tell
+// "resolved the commit for *this release's* Main revision" apart from
+// "tagged whatever the tip happened to be". The mirror advances one commit
+// per revision in the change set, but a release pins the *Main* revision, so
+// an un-merged change set leaves the mirror tip ahead of Main -- and the tag
+// then has to land on an interior commit, found by its `Main-Revision:`
+// trailer. That is the case this test pins down.
+test('a release tags the mirror commit for its own Main revision even when the mirror tip has moved ahead', async (t) => {
+  const root = await makeTempRoot(t, 'release-tag-history')
+  const options = await makeWorkspace(t, root)
+  const remote = await makeBareRemote(root, 'origin')
+
+  await writeAndSync(options, 'src/a.txt', 'one\n')
+  await writeAndSync(options, 'src/b.txt', 'two\n')
+  const mirroredFirst = await runMirrorSync({ ...options, remote })
+  assert.ok(mirroredFirst.commitsCreated >= 3, 'mirror has a real history, not a single commit')
+
+  const cloudService = createCloudGraphService(options)
+  const beforeMerge = await cloudService.readGraph()
+  const mirrorTip = runGitOrThrow(['rev-parse', 'main'], remote).stdout.trim()
+  assert.ok(
+    beforeMerge.main.revision < mirroredFirst.lastMirroredRevision,
+    'the un-merged change set has pushed the mirror tip past Main',
+  )
+
+  const v1 = await createRelease({ ...options, remote }, { name: 'v1.0', notes: 'before the merge' })
+  assert.ok(v1.mirrorTag, 'released against an interior mirror commit')
+  assert.notEqual(v1.mirrorTag.commitSha, mirrorTip, 'the tag did not simply follow the branch tip')
+  assert.equal(
+    runGitOrThrow(['log', '-1', '--format=%(trailers:key=Main-Revision,valueonly)', v1.mirrorTag.commitSha], remote).stdout.trim(),
+    String(v1.pinnedRevision),
+    'the tagged commit is the one carrying this release pinned Main revision',
+  )
+  assert.equal(treeShaOf(remote, 'refs/tags/v1.0^{}'), v1.mirrorTag.treeSha)
+
+  // Now land the change set on Main and catch the mirror up: the next
+  // release pins a different revision and must tag a different commit, while
+  // the first tag stays exactly where it was.
+  await openChangeSetReview(options)
+  await mergeChangeSet(options)
+  await runMirrorSync({ ...options, remote })
+
+  const v2 = await createRelease({ ...options, remote }, { name: 'v2.0', notes: 'after the merge' })
+  assert.ok(v2.mirrorTag)
+  assert.notEqual(v2.pinnedRevision, v1.pinnedRevision, 'the merge advanced Main')
+  assert.notEqual(v2.mirrorTag.commitSha, v1.mirrorTag.commitSha, 'the second release tagged a different commit')
+  assert.equal(
+    runGitOrThrow(['rev-parse', 'refs/tags/v1.0^{}'], remote).stdout.trim(),
+    v1.mirrorTag.commitSha,
+    'the first tag still points at its own commit after the mirror advanced',
+  )
+
+  // Each tag's tree is that release's content: only the later one has the
+  // files that Main did not contain at v1.0 time.
+  const v1Files = runGitOrThrow(['ls-tree', '-r', '--name-only', 'refs/tags/v1.0^{}'], remote).stdout.trim().split('\n').filter(Boolean)
+  const v2Files = runGitOrThrow(['ls-tree', '-r', '--name-only', 'refs/tags/v2.0^{}'], remote).stdout.trim().split('\n').filter(Boolean)
+  assert.ok(!v1Files.includes('src/b.txt'), 'v1.0s tree predates the un-merged edits')
+  assert.ok(v2Files.includes('src/a.txt') && v2Files.includes('src/b.txt'), 'v2.0s tree has the merged content')
+  for (const files of [v1Files, v2Files]) {
+    assert.ok(files.every((p) => !p.startsWith('.private/')), 'no .private/ path ever enters a tagged tree')
+  }
+})
+
 test('assertSafeGitTagName rejects names that are not valid git refs', () => {
   assert.throws(() => assertSafeGitTagName('has a space'), /not usable as a git tag name/)
   assert.throws(() => assertSafeGitTagName('bad..name'), /not usable as a git tag name/)
