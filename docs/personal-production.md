@@ -291,17 +291,30 @@ Because the checker keys the `create table` migrations off a distinctive
 column rather than the table name, this class of collision now shows up as
 `applied = 0` instead of a false "applied".
 
-**Other leftovers from the same descoping.** Comparing the live schema
-against `cloudflare/d1/schema.sql` shows nine more tables that production
-still carries and this repo no longer defines, all from that same removed
-collaboration surface: `issues`, `issue_comments`, `discussions`,
-`discussion_comments`, `projects`, `project_items`, `collaboration_counters`,
-`release_assets`, and `tenant_quota_overrides`. None currently collides with
-anything HopIt wants, so they are harmless clutter today — but `releases`
-was harmless right up until GR-B4 reused the name, and `create table if not
-exists` fails silently when it does. Worth dropping deliberately rather than
-waiting for the next collision. Not dropped: no one has asked for it, and
-each is a destructive statement that deserves its own row-count check first.
+**Other leftovers from the same descoping — do not drop these yet.** Nine
+more tables survive in production that this repo no longer defines:
+`issues`, `issue_comments`, `discussions`, `discussion_comments`, `projects`,
+`project_items`, `collaboration_counters`, `release_assets`, and
+`tenant_quota_overrides`. All are empty except `tenant_quota_overrides`,
+which holds one row.
+
+Eight of them were, until 2026-07-24, still named by `deleteCodebase`
+(`packages/backend-d1/src/graph.js`) as an unguarded sequence of
+`await this.query("delete from <table> ...")`. Dropping any one of them while
+deployed code still referenced it would have thrown `no such table` partway
+through a codebase deletion, leaving the codebase half-deleted — a much worse
+outcome than the clutter. The dead lines are now removed from
+`deleteCodebase`, but **the drop is still gated on that change being deployed**:
+`origin/main` must contain it before the tables go, or production breaks. The
+ordering is code first, schema second — the reverse of the usual instinct.
+
+`tenant_quota_overrides` is a separate case and should be kept. Current quota
+resolution reads plan defaults and environment variables
+(`packages/backend-d1/src/quota.js`), not this table, so the row is inert —
+but it records a deliberate grant for the owner's own tenant (100 GB storage,
+1,000,000 daily writes, 100 codebases, reason "Owner dogfood workspace
+migration", 2026-07-19) and is the only surviving record of it. Dropping it
+destroys information for no benefit.
 
 Take a D1 export first (`npx wrangler d1 export <DB_NAME> --remote --output
 pre-migration.sql`) — these are additive and low risk, but `alter table` has

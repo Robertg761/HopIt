@@ -875,6 +875,14 @@ export function attachGraphMethods(Backend) {
     const graph = await this.readGraph(codebaseId)
     const access = await this.readAccessContext(graph, actor)
     if (!access.isOwner) throw new Error('Only the codebase owner can delete a codebase.')
+    // The work-items / discussions / boards / old-releases collaboration
+    // surface was removed from scope in 0565f79, so there is nothing here to
+    // clean up for it. Those tables lingered in the production database long
+    // after the code went, and this list kept naming them -- an unguarded
+    // `delete from <missing table>` would abort a deletion half way through.
+    // `proposals` and `divergences` are absent on purpose as well: both
+    // declare `on delete cascade` against `codebases`, so the final delete
+    // below takes their rows with it.
     await this.query(`delete from files where codebase_id = ?`, [codebaseId])
     await this.query(`delete from file_versions where codebase_id = ?`, [codebaseId])
     await this.query(`delete from file_blobs where codebase_id = ?`, [codebaseId])
@@ -882,19 +890,11 @@ export function attachGraphMethods(Backend) {
     await this.query(`delete from codebase_members where codebase_id = ?`, [codebaseId])
     await this.query(`delete from codebase_invitations where codebase_id = ?`, [codebaseId])
     await this.query(`delete from action_jobs where codebase_id = ?`, [codebaseId])
-    await this.query(`delete from collaboration_counters where codebase_id = ?`, [codebaseId])
-    await this.query(`delete from issues where codebase_id = ?`, [codebaseId])
-    await this.query(`delete from issue_comments where codebase_id = ?`, [codebaseId])
-    await this.query(`delete from discussions where codebase_id = ?`, [codebaseId])
-    await this.query(`delete from discussion_comments where codebase_id = ?`, [codebaseId])
     await this.query(`delete from releases where codebase_id = ?`, [codebaseId])
-    await this.query(`delete from release_assets where codebase_id = ?`, [codebaseId])
     await this.query(`delete from review_thread_comments where codebase_id = ?`, [codebaseId])
     await this.query(`delete from review_threads where codebase_id = ?`, [codebaseId])
     await this.query(`delete from review_decisions where codebase_id = ?`, [codebaseId])
     await this.query(`delete from notifications where codebase_id = ?`, [codebaseId])
-    await this.query(`delete from projects where codebase_id = ?`, [codebaseId])
-    await this.query(`delete from project_items where codebase_id = ?`, [codebaseId])
     await this.query(`delete from agent_sessions where codebase_id = ?`, [codebaseId])
     await this.query(`delete from codebase_keyrings where codebase_id = ?`, [codebaseId])
     await this.query(`delete from wrapped_keys where codebase_id = ?`, [codebaseId])
