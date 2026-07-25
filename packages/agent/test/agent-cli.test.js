@@ -471,12 +471,24 @@ async function writeJson(filePath, value) {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, 'utf8')
 }
 
+// Several tests read the journal/events files while a `hop watch` child
+// process is still appending to them, and an append is not atomic: the last
+// line can be a half-written record. Every *complete* line is valid JSON, so
+// only the trailing fragment is parsed defensively -- dropping a torn one is
+// safe because these assertions are all "the entries that landed look like
+// X", never "no more than N entries exist".
 async function readNdjson(filePath) {
-  const content = await fs.readFile(filePath, 'utf8')
-  return content
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => JSON.parse(line))
+  const lines = (await fs.readFile(filePath, 'utf8')).split('\n')
+  const trailing = lines.pop()
+  const rows = lines.filter(Boolean).map((line) => JSON.parse(line))
+  if (trailing) {
+    try {
+      rows.push(JSON.parse(trailing))
+    } catch {
+      // Torn trailing append from the still-running watch process.
+    }
+  }
+  return rows
 }
 
 function parseLastJsonObject(stdout) {
