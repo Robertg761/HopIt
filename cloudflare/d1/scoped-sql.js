@@ -534,6 +534,16 @@ const codebaseScopedTables = new Set([
   'key_audit_events',
   'trail_episodes',
   'codebase_settings',
+  // Git-replacement tables (GR-A2 divergences, GR-B2 proposals, GR-B4
+  // releases). All three are codebase-anchored and carry `codebase_id`, so
+  // they scope exactly like the rows above. Without them here a scoped
+  // `hst_` session -- what an installed device uses for normal D1 proxy
+  // access -- is rejected on every statement touching them, which silently
+  // disables divergence persistence, propose/merge, and releases in
+  // production even once the tables exist.
+  'divergences',
+  'proposals',
+  'releases',
 ])
 
 const allowedGuardSubqueryPattern = /\(\s*select 1 from codebases where codebase_id = \? and revision = \? and updated_at = \?\s*\)/g

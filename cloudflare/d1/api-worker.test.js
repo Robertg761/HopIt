@@ -191,6 +191,30 @@ test('scoped SQL policy accepts known file reads, guards, literals, and conflict
   }
 })
 
+// The git-replacement tables were created by migration but left out of
+// `codebaseScopedTables`, so an installed device's `hst_` session was rejected
+// on every statement touching them -- divergence persistence, propose/merge,
+// and releases all failed in production while working fine against a local
+// fixture backend. This is the positive half of that fix; the cross-tenant
+// list above is the negative half.
+test('scoped SQL policy admits the git-replacement tables when scoped to the session codebase', () => {
+  const session = scopedSession()
+  const statements = [
+    { sql: 'select * from divergences where codebase_id = ? and state = ?', params: ['codebase-1', 'open'] },
+    { sql: 'insert into divergences (divergence_id, codebase_id, path, opened_at, created_at, updated_at) values (?, ?, ?, ?, ?, ?)', params: ['d-1', 'codebase-1', 'README.md', 'now', 'now', 'now'] },
+    { sql: 'update divergences set state = ? where codebase_id = ? and divergence_id = ?', params: ['resolved', 'codebase-1', 'd-1'] },
+    { sql: 'select * from proposals where codebase_id = ? and state = ?', params: ['codebase-1', 'proposed'] },
+    { sql: 'insert into proposals (proposal_id, codebase_id, change_set_id, pinned_revision, pinned_at, base_revision, created_by_user_id, created_at, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?)', params: ['p-1', 'codebase-1', 'cs-1', 2, 'now', 1, 'user-1', 'now', 'now'] },
+    { sql: 'update proposals set state = ? where codebase_id = ? and proposal_id = ?', params: ['merged', 'codebase-1', 'p-1'] },
+    { sql: 'select * from releases where codebase_id = ? order by created_at desc', params: ['codebase-1'] },
+    { sql: 'insert into releases (release_id, codebase_id, name, pinned_revision, created_by_user_id, created_at) values (?, ?, ?, ?, ?, ?)', params: ['r-1', 'codebase-1', 'v1.0', 3, 'user-1', 'now'] },
+  ]
+
+  for (const statement of statements) {
+    assert.doesNotThrow(() => assertScopedSessionStatementAllowed(session, statement), statement.sql)
+  }
+})
+
 test('scoped SQL policy rejects cross-codebase predicates and SQL shape escapes', () => {
   const session = scopedSession()
   const hostileStatements = [
@@ -538,6 +562,9 @@ const crossTenantScopedTables = [
   'key_audit_events',
   'trail_episodes',
   'codebase_settings',
+  'divergences',
+  'proposals',
+  'releases',
 ]
 
 // A read shape that is VALID when scoped to the session's own codebase, so the
