@@ -247,9 +247,16 @@ rather than re-running the whole file.
 **Blocked: the `releases` name collision.** Production already contains a
 `releases` table belonging to a *different* feature — `number`, `version`,
 `title`, `status`, `target_json`, `provenance_json`, `published_at`,
-`created_by`/`updated_by`, several of them `not null`. Nothing in this repo
-defines it, so it came from elsewhere (another project sharing the database,
-or an abandoned schema). It currently holds **0 rows**.
+`created_by`/`updated_by`, several of them `not null`. It currently holds
+**0 rows**.
+
+It is HopIt's own dead table, not a foreign one: it belonged to the
+GitHub-lite collaboration surface (work items, discussions, boards, releases)
+removed in `0565f79` "Remove work items, discussions, boards, and releases
+from scope" on 2026-07-23. That commit deleted the code and the schema
+definition, but D1 migrations here are manual and no drop migration was ever
+written, so the table outlived the feature. GR-B4 then reused the name
+`releases` for an unrelated concept.
 
 This breaks GR-B4/GR-E3 against production in a way that applying the
 migration does not fix: `create table if not exists releases` keys off the
@@ -263,13 +270,15 @@ downstream of it, cannot work against production until this is resolved.
 Resolving it is a decision, not a mechanical step, because it means either
 dropping a table this repo does not own or renaming one it does:
 
-- Drop the empty foreign `releases` table, then apply the migration. Simplest,
-  but it destroys another owner's schema object — only safe once you have
-  confirmed nothing else uses it.
-- Rename HopIt's table (e.g. `codebase_releases`) in
+- **Drop the dead `releases` table, then apply the migration.** Recommended:
+  it is this repo's own descoped table, it holds 0 rows, and the code that
+  used it no longer exists. Still a destructive DDL statement on production,
+  so take the export first.
+- Rename HopIt's new table (e.g. `codebase_releases`) in
   `packages/backend-d1/src/schema.js`, `cloudflare/d1/schema.sql`,
-  `releases-store.js`, and the migration file. Touches no foreign object, and
-  the GR-S1 drift test keeps the two schema copies honest.
+  `releases-store.js`, and the migration file. Avoids touching production
+  schema at all, at the cost of leaving a dead table behind forever; the
+  GR-S1 drift test keeps the two schema copies honest.
 
 Because the checker keys the `create table` migrations off a distinctive
 column rather than the table name, this class of collision now shows up as
