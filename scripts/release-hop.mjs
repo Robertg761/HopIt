@@ -42,6 +42,16 @@ async function main() {
   const dryRun = argv.includes('--dry-run')
   const allowUnsigned = argv.includes('--allow-unsigned')
   const desktopOnly = argv.includes('--desktop-only')
+  // Publishing the CLI channel used to require building the desktop DMG, which
+  // needs macOS-only tools -- so a Linux machine could not ship a `hop` release at
+  // all, even though all four `hop` archives build fine there. --skip-desktop
+  // decouples them: the agent channel moves, the desktop channel is left exactly
+  // as it was, and the previous DMG pointer is carried forward so the website's
+  // Mac download keeps working.
+  const skipDesktop = argv.includes('--skip-desktop')
+  if (skipDesktop && desktopOnly) {
+    throw new Error('--skip-desktop and --desktop-only are contradictory.')
+  }
   assertReleasePublicationAllowed({
     dryRun,
     allowUnsigned,
@@ -66,13 +76,19 @@ async function main() {
   const built = await packageTargets(targets)
   const hasBothMacTargets = ['darwin-arm64', 'darwin-x64']
     .every((target) => built.some((entry) => entry.target === target))
-  const mac = hasBothMacTargets
+  const mac = hasBothMacTargets && !skipDesktop
     ? desktopOnly
       ? await buildMacUpdate({ built, version, builtAt, gitSha })
       : await buildMacDmg({ built, version, builtAt, gitSha })
     : null
 
-  const manifest = buildReleaseManifest({ version, gitSha, builtAt, built, mac })
+  const carryDownloads = skipDesktop ? await fetchPublishedDownloads() : null
+  if (skipDesktop) {
+    console.error(carryDownloads
+      ? 'Skipping the desktop build; carrying the published macOS download forward.'
+      : 'Skipping the desktop build; no published macOS download to carry forward.')
+  }
+  const manifest = buildReleaseManifest({ version, gitSha, builtAt, built, mac, carryDownloads })
   const publishChannel = hasCompleteReleaseTargetSet(built.map((result) => result.target))
   const publishDesktopChannel = Boolean(mac?.update) && (publishChannel || desktopOnly)
 
@@ -168,7 +184,14 @@ function uploadObject(upload, dryRun) {
   }
 }
 
-export function buildReleaseManifest({ version, gitSha, builtAt, built, mac = null }) {
+/**
+ * @param carryDownloads Previously-published `downloads` block, reused when this
+ *   release skips the desktop build. The website's DMG link reads
+ *   `downloads.macos.key`, so dropping the block would 404 the Mac download even
+ *   though the desktop app itself did not change. Carrying it forward keeps the
+ *   last desktop release downloadable while the CLI channel moves on its own.
+ */
+export function buildReleaseManifest({ version, gitSha, builtAt, built, mac = null, carryDownloads = null }) {
   const targets = {}
   for (const result of built) {
     const archiveName = `${result.packageName}.tar.gz`
@@ -209,6 +232,8 @@ export function buildReleaseManifest({ version, gitSha, builtAt, built, mac = nu
         },
       },
     }
+  } else if (carryDownloads && typeof carryDownloads === 'object') {
+    manifest.downloads = carryDownloads
   }
   return manifest
 }
@@ -307,6 +332,24 @@ export function assertReleasePublicationAllowed({
     'Use --dry-run to verify the plan. To publish an explicitly approved unsigned release, ' +
     'use --allow-unsigned with the acknowledgement variable documented in docs/personal-production.md.',
   )
+}
+
+/**
+ * Read the `downloads` block off the currently-published channel manifest. A
+ * network failure returns null rather than throwing: a CLI release should not be
+ * blocked by the desktop pointer being unreadable, it just will not carry it.
+ */
+async function fetchPublishedDownloads() {
+  try {
+    const response = await fetch(`${PUBLIC_BASE_URL}/latest/manifest.json`, {
+      headers: { Accept: 'application/json' },
+    })
+    if (!response.ok) return null
+    const manifest = await response.json()
+    return manifest?.downloads && typeof manifest.downloads === 'object' ? manifest.downloads : null
+  } catch {
+    return null
+  }
 }
 
 export function hasCompleteReleaseTargetSet(targets = []) {

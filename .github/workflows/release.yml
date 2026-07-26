@@ -1,0 +1,76 @@
+name: Release
+
+# Publish a HopIt release to the R2 channel without needing a Mac on hand.
+#
+# `hop` archives for all four targets build on any platform, but the desktop DMG
+# needs macOS-only tools. Rather than couple the two, this workflow offers both:
+#
+#   cli      -- ubuntu runner, `--skip-desktop`. Moves the CLI channel and carries
+#               the previously-published macOS download forward untouched. Cheap.
+#   full     -- macOS runner, builds the DMG too and moves both channels. Bills at
+#               10x, so it is opt-in rather than the default.
+#
+# Publication is unsigned, so it requires the same explicit acknowledgement the
+# local script demands. Run it from the Actions tab.
+
+on:
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: 'What to publish'
+        required: true
+        default: cli
+        type: choice
+        options: [cli, full]
+      acknowledge_unsigned:
+        description: 'Type I_ACCEPT_UNSIGNED_PUBLIC_DISTRIBUTION to confirm unsigned publication'
+        required: true
+        type: string
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish ${{ inputs.scope }} release
+    # The DMG step is the only macOS-dependent piece, so only the full scope pays
+    # for a macOS runner.
+    runs-on: ${{ inputs.scope == 'full' && 'macos-latest' || 'ubuntu-latest' }}
+    timeout-minutes: 40
+    steps:
+      - name: Reject an unconfirmed unsigned publication
+        # Checked before checkout so a mistyped run costs nothing.
+        if: inputs.acknowledge_unsigned != 'I_ACCEPT_UNSIGNED_PUBLIC_DISTRIBUTION'
+        run: |
+          echo "Unsigned publication was not acknowledged. Nothing was published." >&2
+          exit 1
+
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 25
+          cache: npm
+      - run: npm ci
+
+      - name: Publish
+        env:
+          HOPIT_ACKNOWLEDGE_UNSIGNED_PUBLIC_RELEASE: ${{ inputs.acknowledge_unsigned }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: |
+          if [ "${{ inputs.scope }}" = "full" ]; then
+            npm run release:hop -- --allow-unsigned
+          else
+            npm run release:hop -- --allow-unsigned --skip-desktop
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-manifest-${{ inputs.scope }}
+          path: artifacts/release-manifest-*.json
+          if-no-files-found: error
+          retention-days: 30

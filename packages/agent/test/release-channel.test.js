@@ -172,3 +172,76 @@ test('public release publication requires explicit unsigned approval', () => {
     /not signed or notarized/,
   )
 })
+
+test('a desktop-skipped release still moves the CLI channel and uploads no macOS artifacts', () => {
+  // Publishing the CLI channel used to require the macOS-only DMG build, which
+  // meant a Linux machine could not ship a `hop` release at all. With mac = null
+  // the four agent archives still form a complete target set, so the channel
+  // pointer moves, and no DMG/zip upload is planned.
+  const plan = buildReleaseUploadPlan({
+    version: '0.0.9',
+    built,
+    mac: null,
+    manifestPath: '/tmp/manifest.json',
+    publishChannel: hasCompleteReleaseTargetSet(built.map((entry) => entry.target)),
+  })
+  const keys = plan.map((entry) => entry.key)
+  assert.ok(keys.includes('latest/manifest.json'), 'the CLI channel pointer must still publish')
+  assert.equal(keys.some((key) => key.includes('HopIt-macOS')), false)
+  // The desktop channel is a separate pointer and must be left exactly as it was.
+  assert.equal(keys.includes('latest/desktop-manifest.json'), false)
+})
+
+test('a desktop-skipped release carries the published macOS download forward', () => {
+  // The website resolves its DMG link from downloads.macos.key. Dropping the
+  // block on a CLI-only release would 404 the Mac download even though the
+  // desktop app did not change.
+  const previous = {
+    macos: {
+      key: 'releases/0.0.1+old/HopIt-macOS.dmg',
+      sha256: 'oldsha',
+      signed: false,
+      notarized: false,
+      update: { key: 'releases/0.0.1+old/HopIt-macOS.zip', sha256: 'oldzip', format: 'zip' },
+    },
+  }
+  const manifest = buildReleaseManifest({
+    version: '0.0.9',
+    gitSha: 'deadbee',
+    builtAt: '2026-07-26T00:00:00.000Z',
+    built,
+    mac: null,
+    carryDownloads: previous,
+  })
+  assert.equal(manifest.downloads.macos.key, 'releases/0.0.1+old/HopIt-macOS.dmg')
+  assert.equal(manifest.version, '0.0.9')
+})
+
+test('a real desktop build wins over any carried-forward downloads block', () => {
+  const manifest = buildReleaseManifest({
+    version: '0.0.9',
+    gitSha: 'deadbee',
+    builtAt: '2026-07-26T00:00:00.000Z',
+    built,
+    mac: {
+      fileName: 'HopIt-macOS.dmg',
+      sha256: 'newsha',
+      verified: true,
+      update: { fileName: 'HopIt-macOS.zip', sha256: 'newzip', size: 10, verified: true },
+    },
+    carryDownloads: { macos: { key: 'releases/0.0.1+old/HopIt-macOS.dmg' } },
+  })
+  assert.equal(manifest.downloads.macos.key, 'releases/0.0.9/HopIt-macOS.dmg')
+})
+
+test('a manifest with no desktop build and nothing to carry simply omits downloads', () => {
+  const manifest = buildReleaseManifest({
+    version: '0.0.9',
+    gitSha: 'deadbee',
+    builtAt: '2026-07-26T00:00:00.000Z',
+    built,
+    mac: null,
+    carryDownloads: null,
+  })
+  assert.equal('downloads' in manifest, false)
+})
