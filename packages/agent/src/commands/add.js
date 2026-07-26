@@ -348,7 +348,7 @@ export async function runAdd(options, inject = {}) {
  * attach the workspace, and optionally install its service. This is the original
  * single-project sequence, now run once per project in a batch.
  */
-async function connectApprovedProject({
+export async function connectApprovedProject({
   options,
   provided,
   human,

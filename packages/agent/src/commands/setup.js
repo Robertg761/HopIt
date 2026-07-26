@@ -26,6 +26,12 @@ import {
   productionEnvTemplate,
   writeLaunchAgent,
 } from './install.js'
+import { importGitProject, importLocalProject } from './import.js'
+import { scanProjectCandidates } from './scan-projects.js'
+// add.js imports authorizeDeviceWithBrowser from here, so this is a cycle. It is
+// safe because both sides only exchange hoisted function declarations, with no
+// top-level state depending on the other module.
+import { connectApprovedProject, deriveCodebaseId, reconcileApprovedProjects } from './add.js'
 
 const execFileAsync = promisify(execFile)
 const defaultDeviceAuthorizationBaseUrl = 'https://hopit.dev'
@@ -147,6 +153,96 @@ async function promptYesNo(reader, message, defaultYes) {
   const answer = (line ?? '').trim().toLowerCase()
   if (!answer) return defaultYes
   return answer === 'y' || answer === 'yes'
+}
+
+/**
+ * Offer the folders under a projects directory as codebases to connect during
+ * first-run setup.
+ *
+ * Returns [] whenever setup should keep its original single-codebase behavior:
+ * a local-only setup, a non-interactive run without `--projects-source`, a
+ * declined prompt, or a directory with nothing recognizable in it. Only an
+ * explicit opt-in produces candidates.
+ *
+ * @returns {Promise<Array<{codebaseId: string, codebaseName: string, source: string, signals: string[]}>>}
+ */
+async function collectSetupProjectCandidates({ reader, interactive, options, provided, connectRequested }) {
+  if (!connectRequested) return []
+
+  let source = null
+  if (provided.has('projects-source')) {
+    source = path.resolve(expandHome(options['projects-source']))
+  } else if (interactive) {
+    const suggested = path.join(os.homedir(), 'Projects')
+    const wanted = await promptYesNo(
+      reader,
+      'Connect existing projects from a folder now?',
+      true,
+    )
+    if (!wanted) return []
+    source = path.resolve(expandHome(await promptValue(reader, 'Projects folder', suggested)))
+  } else {
+    return []
+  }
+
+  const stat = await fs.stat(source).catch(() => null)
+  if (!stat?.isDirectory()) {
+    if (!interactive) throw new Error(`Projects source is not a directory: ${source}`)
+    writeLine(`  ${caution('That folder does not exist.')} ${muted('Skipping project import.')}`)
+    return []
+  }
+
+  const scanned = await scanProjectCandidates(source)
+  // Signals decide the default offer; --include-all-folders widens it to folders
+  // with no project marker at all.
+  const offered = options['include-all-folders'] === true ? scanned : scanned.filter((entry) => entry.recommended)
+  if (offered.length === 0) {
+    if (interactive) {
+      writeLine(`  ${muted(`No projects found in ${source}. Continuing with a single codebase.`)}`)
+    }
+    return []
+  }
+
+  const takenIds = new Set()
+  const candidates = []
+  for (const entry of offered) {
+    const id = deriveCodebaseId({ explicitId: null, codebaseName: entry.name, takenIds })
+    takenIds.add(id)
+    candidates.push({ codebaseId: id, codebaseName: entry.name, source: entry.source, signals: entry.signals })
+  }
+
+  if (interactive) {
+    writeLine()
+    writeLine(`  ${accent(`Found ${candidates.length} project${candidates.length === 1 ? '' : 's'}`)} ${muted(source)}`)
+    for (const candidate of candidates) {
+      const signals = candidate.signals.length > 0 ? ` ${muted(`[${candidate.signals.join(' ')}]`)}` : ''
+      writeLine(`     ${muted('•')} ${candidate.codebaseName} ${muted(`(${candidate.codebaseId})`)}${signals}`)
+    }
+    writeLine(`  ${muted('Pick which of these to connect on the approval page.')}`)
+  }
+  return candidates
+}
+
+/**
+ * Import one already-wired project's source folder. Used for setup's PRIMARY
+ * project, whose connection, workspace, and env were configured by the main
+ * setup path -- only the file import is left. Mirrors the import step in
+ * `hop add`.
+ */
+async function importProjectSource(installOptions, candidate) {
+  const importOptions = {
+    ...installOptions,
+    source: candidate.source,
+    'codebase-id': candidate.codebaseId,
+    'codebase-name': candidate.codebaseName,
+    'skip-service-control': true,
+    internal: true,
+  }
+  if (existsSync(path.join(candidate.source, '.git'))) {
+    await importGitProject(importOptions)
+    return
+  }
+  await importLocalProject({ ...importOptions, force: true })
 }
 
 async function assertRootSafe(rootPath, options) {
@@ -693,6 +789,26 @@ export async function runSetup(options) {
       throw new Error('Codebase id cannot be empty.')
     }
 
+    // 3b. Existing projects. Connecting several folders is the common first run,
+    //     and every one used to cost its own browser approval. Scanning here lets
+    //     the whole set ride on the SAME approval as the device itself. Declining
+    //     leaves setup byte-for-byte as it was: one codebase, browser-chosen.
+    const projectCandidates = await collectSetupProjectCandidates({
+      reader,
+      interactive,
+      options,
+      provided,
+      connectRequested,
+    })
+    if (projectCandidates.length > 0) {
+      for (const candidate of projectCandidates) {
+        await assertWorkspacePathSafe({
+          workspace: path.join(workspaceRoot, candidate.codebaseId),
+          'allow-unsafe-workspace': options['allow-unsafe-workspace'],
+        })
+      }
+    }
+
     // 4. Env file
     const envFilePath = path.resolve(
       expandHome(options['env-path'] ?? path.join(os.homedir(), '.config', 'hopit', 'production.env')),
@@ -777,13 +893,41 @@ export async function runSetup(options) {
           : 'Skipped for this local-only setup.',
       )
     }
+    let approvedProjects = []
     if (connectRequested) {
       connection = await authorizeDeviceWithBrowser({
         keyring: keyring.keyring,
         authBaseUrl:
           options['auth-base-url'] ?? process.env.HOPIT_AUTH_BASE_URL ?? defaultDeviceAuthorizationBaseUrl,
+        ...(projectCandidates.length > 0
+          ? {
+            requestedCodebaseId: projectCandidates[0].codebaseId,
+            requestedCodebaseName: projectCandidates[0].codebaseName,
+            requestedCodebases: projectCandidates.map((entry) => ({ id: entry.codebaseId, name: entry.codebaseName })),
+          }
+          : {}),
       })
-      codebaseId = connection.codebaseId
+      if (projectCandidates.length > 0) {
+        // Same guarantee hop add gives: an approval that resolved to a project
+        // this command did not request aborts before any workspace is touched.
+        approvedProjects = reconcileApprovedProjects(
+          projectCandidates,
+          Array.isArray(connection.codebases) && connection.codebases.length > 0
+            ? connection.codebases
+            : [{
+                codebaseId: connection.codebaseId,
+                requestedCodebaseId: projectCandidates[0].codebaseId,
+                sessionId: connection.sessionId,
+                sessionToken: connection.sessionToken,
+              }],
+        ).connected
+        // The first approved project becomes this device's primary codebase, so
+        // the rest of setup (workspace, env, service) configures it as usual.
+        codebaseId = approvedProjects[0].candidate.codebaseId
+        connection = { ...connection, ...approvedProjects[0].entry }
+      } else {
+        codebaseId = connection.codebaseId
+      }
       installOptions = {
         ...productionSetupOptions(options, provided, {
           stateRoot,
@@ -864,6 +1008,51 @@ export async function runSetup(options) {
       index = await ensureWorkspaceIndexEntry(installOptions, { codebaseId, workspaceRoot })
     }
 
+    // Import the folders the user picked on the approval page. The primary
+    // project's device wiring is already done above, so it only needs its source
+    // imported; the rest go through the same per-project path `hop add` uses.
+    const importedProjects = []
+    if (approvedProjects.length > 0) {
+      if (interactive) writeLine()
+      for (const [position, item] of approvedProjects.entries()) {
+        if (interactive) {
+          renderProgress(
+            `Importing ${position + 1}/${approvedProjects.length}`,
+            `${item.candidate.codebaseName} (${item.candidate.codebaseId})`,
+          )
+        }
+        if (position === 0) {
+          await importProjectSource(installOptions, item.candidate)
+          importedProjects.push({
+            codebaseId: item.candidate.codebaseId,
+            source: item.candidate.source,
+            primary: true,
+          })
+          continue
+        }
+        const connected = await connectApprovedProject({
+          options,
+          provided,
+          human: false,
+          quiet: true,
+          candidate: item.candidate,
+          connection: { ...connection, ...item.entry },
+          keyring,
+          keyringPath,
+          stateRoot,
+          workspaceRoot,
+          envFilePath,
+          deviceKeysPath: path.join(stateRoot, 'keys', 'device.json'),
+        })
+        importedProjects.push({
+          codebaseId: connected.codebaseId,
+          source: connected.source,
+          workspace: connected.workspace,
+          primary: false,
+        })
+      }
+    }
+
     let secretScanning = { requested: secretScanningRequested, applied: false }
     if (connection) {
       try {
@@ -907,6 +1096,7 @@ export async function runSetup(options) {
       ok: true,
       action: 'setup',
       codebaseId,
+      projects: importedProjects,
       workspaceRoot,
       agentStateRoot: stateRoot,
       workspace,
