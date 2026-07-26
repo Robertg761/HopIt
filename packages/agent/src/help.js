@@ -56,6 +56,7 @@ Commands:
   restore     Verify a backup folder (default), or materialize it into --workspace with --execute
   version     Print the hop version and build target
   install     Prepare production state, workspace, env, and optional launch agent
+  update      Install the newest published hop build over this packaged install (--check to look only)
   trail       Browse labeled trail episodes and manage summarization (episodes, summarize, summaries on|off)
   secrets     Show or change the per-project outbound secret-scanning setting (on|off|status)
   derived     Show/edit derived (local-only, never-synced) path overrides (list, add <path>, remove <path>)

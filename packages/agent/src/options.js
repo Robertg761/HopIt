@@ -67,6 +67,7 @@ export function parseOptions(args) {
     'merge',
     'all',
     'include-all-folders',
+    'check',
   ])
 
   for (let i = 0; i < args.length; i += 1) {

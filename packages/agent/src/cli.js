@@ -11,6 +11,7 @@ import { runMirrorSetRemote, runMirrorSync } from './commands/mirror.js'
 import { installAgent } from './commands/install.js'
 import { runSetup } from './commands/setup.js'
 import { runAdd } from './commands/add.js'
+import { runUpdate } from './commands/update.js'
 import { applyConnectionStore } from './connections.js'
 import { runSessionCommand } from './commands/keys.js'
 import { mergeChangeSet, openChangeSetReview, recoverJournal, refreshWorkspace, syncOnce } from './commands/sync.js'
@@ -50,6 +51,7 @@ const HUMAN_OUTPUT_COMMANDS = new Set([
   'derived',
   'mirror-set-remote',
   'conflicts',
+  'update',
 ])
 
 // `hop watch` runs in the foreground until interrupted. A graceful SIGINT/
@@ -170,6 +172,7 @@ async function main() {
   if (command === 'backup') return backupAgentState(options)
   if (command === 'restore') return restoreAgentState(options)
   if (command === 'install') return installAgent(options)
+  if (command === 'update') return runUpdate(options)
   if (command === 'setup') return runSetup(options)
   if (command === 'add') return runAdd(options)
   if (command === 'workspace') return runWorkspaceCommand(workspaceAction, options)
