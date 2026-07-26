@@ -230,3 +230,66 @@ test('runUpdate refuses politely in a source checkout', async () => {
     await fs.rm(bare, { recursive: true, force: true })
   }
 })
+
+test('runUpdate stages beside the install, not in the system temp dir', async () => {
+  // Regression: staging in os.tmpdir() made the final fs.rename cross filesystems
+  // whenever /tmp is a tmpfs and the install lives on the root disk, which is the
+  // default on most Linux boxes. It failed with EXDEV against a real install even
+  // though every test passed, because the tests staged and installed both inside
+  // /tmp. Assert the staging directory is a sibling of the package root.
+  const { runUpdate } = await import('../src/commands/update.js')
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), 'hopit-update-staging-'))
+  const installed = path.join(root, 'hop-linux-x64')
+  await writePackage(installed, { version: '0.0.1', createdAt: '2026-07-01T00:00:00.000Z', marker: 'OLD' })
+
+  const stage = path.join(root, 'stage')
+  await writePackage(path.join(stage, 'hop-linux-x64'), {
+    version: '0.0.2', createdAt: '2026-08-01T00:00:00.000Z', marker: 'NEW',
+  })
+  const archive = path.join(root, 'hop-linux-x64.tar.gz')
+  await execFileAsync('tar', ['czf', archive, '-C', stage, 'hop-linux-x64'])
+  const sha256 = crypto.createHash('sha256').update(await fs.readFile(archive)).digest('hex')
+
+  const seenStagingDirs = []
+  const realMkdtemp = fs.mkdtemp.bind(fs)
+  fs.mkdtemp = async (prefix, ...rest) => {
+    const made = await realMkdtemp(prefix, ...rest)
+    seenStagingDirs.push(made)
+    return made
+  }
+
+  const realFetch = globalThis.fetch
+  globalThis.fetch = async (url) => {
+    const href = String(url)
+    if (href.endsWith('/latest/manifest.json')) {
+      return new Response(JSON.stringify({
+        schemaVersion: 2,
+        version: '0.0.2',
+        builtAt: '2026-08-01T00:00:00.000Z',
+        targets: { 'linux-x64': { key: 'releases/0.0.2/hop-linux-x64.tar.gz', sha256 } },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } })
+    }
+    return new Response(await fs.readFile(archive), { status: 200 })
+  }
+
+  try {
+    const result = await runUpdate({ 'package-root': path.join(installed, 'app'), json: true })
+    assert.equal(result.state, 'updated')
+    assert.equal(seenStagingDirs.length, 1, 'expected exactly one staging directory')
+    assert.equal(
+      path.dirname(seenStagingDirs[0]),
+      path.dirname(installed),
+      'staging must be a sibling of the package root so the swap stays on one filesystem',
+    )
+    // Specifically rules out the original bug: staging directly in the system
+    // temp dir. (The fixture itself lives under /tmp, so a blanket "not under
+    // tmpdir" check would be vacuous here.)
+    assert.notEqual(path.dirname(seenStagingDirs[0]), os.tmpdir())
+    // And it must not be left behind.
+    assert.equal((await fs.readdir(root)).some((e) => e.startsWith('.hopit-update-')), false)
+  } finally {
+    fs.mkdtemp = realMkdtemp
+    globalThis.fetch = realFetch
+    await fs.rm(root, { recursive: true, force: true })
+  }
+})

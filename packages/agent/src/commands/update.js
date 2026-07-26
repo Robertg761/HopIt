@@ -7,7 +7,6 @@
 // source checkout has no package root to replace, so it reports that and stops.
 import crypto from 'node:crypto'
 import fs from 'node:fs/promises'
-import os from 'node:os'
 import path from 'node:path'
 import { execFile } from 'node:child_process'
 import { createWriteStream } from 'node:fs'
@@ -193,7 +192,11 @@ export async function runUpdate(options = {}) {
   }
 
   const archiveUrl = assertReleaseAssetUrl(`${releaseBaseUrl}/${target.key}`)
-  const staging = await fs.mkdtemp(path.join(os.tmpdir(), 'hopit-update-'))
+  // Stage as a SIBLING of the installed package, never in os.tmpdir(). The final
+  // swap is an fs.rename, which fails with EXDEV across filesystems -- and /tmp is
+  // commonly a tmpfs while the install lives on the root disk. Staging here keeps
+  // the rename within one filesystem, the same thing install.sh does.
+  const staging = await fs.mkdtemp(path.join(path.dirname(packageRoot), '.hopit-update-'))
   const archivePath = path.join(staging, 'package.tar.gz')
 
   try {
