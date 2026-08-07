@@ -121,7 +121,12 @@ Work items:
   silently when nothing else held the event loop open.
 - Run a real backup/restore drill.
 - Code signing plus notarization so installs are clean.
-- Linux agent parity check.
+- ~~Linux agent parity check~~ **done** (verified 2026-07-23). The packaged
+  `linux-x64` artifact passed init, hydrate, edit, sync, status, review, merge,
+  export, publish, doctor, systemd support, XDG state-path, and case-sensitive
+  materialization checks. The drill found and fixed the packaged demo-fixture
+  path defect; see the 2026-07-23 production-readiness entry in
+  [docs/progress.md](progress.md).
 
 Exit criterion: two weeks without touching GitHub.
 

@@ -124,7 +124,7 @@ Wall time alone would not have settled it, because the local fixture backend mak
 
 **Hydrate retry** is implemented as `hydrateFetchRetry` wrapping every per-file fetch in `withCloudFetchRetry`. Worth recording that it was only *effective* as of today: the backoff timer was `unref`'d, so retries could be silently dropped (see the entry below).
 
-No code changed. The roadmap is updated to mark both done with the evidence, so neither gets re-investigated. Remaining Phase 1: migrate every project in, backup/restore drill, code signing plus notarization, Linux parity check.
+No code changed. The roadmap is updated to mark both done with the evidence, so neither gets re-investigated. Remaining Phase 1: migrate every project in, backup/restore drill, and code signing plus notarization. The Linux parity check was already completed on 2026-07-23 and is now also marked done in the roadmap.
 
 ## 2026-07-25 Retry Backoff Never Held The Event Loop (The "Expected" Cancellations Were A Real Bug)
 
